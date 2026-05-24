@@ -1,0 +1,23 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+
+# Local Cargo overrides (Phase 7+ fork patch). The .example template is committed.
+/.cargo/config.toml
+
+# Claude Code project-local state
+/.claude/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Misc
+*.log

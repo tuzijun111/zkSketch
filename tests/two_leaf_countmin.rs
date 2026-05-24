@@ -1,0 +1,67 @@
+//! Integration test for the §4.2 recursive Count-Min chain.
+//!
+//! Mirrors `tests/two_leaf_recursive.rs` but the leaves are real Count-Min
+//! update epochs (paper §5.1 strawman: per-cell additive delta enforced in
+//! the leaf circuit). Two adjacent epochs produced by `prove_countmin_leaf`
+//! are aggregated by `merge_two_countmin` into one recursive batch-STARK,
+//! then re-verified end-to-end via `verify_chain_countmin` — exercising the
+//! whole §4.2 chain through the public API only.
+
+use zksketch::recursion::recursive::countmin_leaf::{D, W, prove_countmin_leaf};
+use zksketch::recursion::recursive::countmin_merge::{
+    CountMinMergeError, merge_two_countmin, verify_chain_countmin,
+};
+use zksketch::sketch::Sketch;
+use zksketch::sketch::countmin::{CountMin, CountMinParams, CountMinUpdate};
+
+fn empty_state() -> zksketch::sketch::countmin::CountMinState {
+    CountMin::new(&CountMinParams { d: D, w: W })
+}
+
+#[test]
+fn honest_two_leaf_countmin_chain_end_to_end() {
+    let s0 = empty_state();
+    let b1 = [
+        CountMinUpdate { key: 42, value: 7 },
+        CountMinUpdate { key: 99, value: 1 },
+    ];
+    let l1 = prove_countmin_leaf(s0.clone(), b1);
+
+    let mut s1 = s0;
+    for u in &b1 {
+        CountMin::update(&mut s1, u);
+    }
+
+    let b2 = [
+        CountMinUpdate { key: 42, value: 3 },
+        CountMinUpdate { key: 7, value: 9 },
+    ];
+    let l2 = prove_countmin_leaf(s1, b2);
+
+    let chain = merge_two_countmin(&l1, &l2).expect("merge");
+    verify_chain_countmin(&chain).expect("verify");
+}
+
+#[test]
+fn mismatched_boundary_countmin_rejected() {
+    let s0 = empty_state();
+    let b1 = [
+        CountMinUpdate { key: 42, value: 7 },
+        CountMinUpdate { key: 99, value: 1 },
+    ];
+    let l1 = prove_countmin_leaf(s0, b1);
+
+    // Wrong starting state for leaf 2 — boundary won't match.
+    let s1_wrong = empty_state();
+    let b2 = [
+        CountMinUpdate { key: 42, value: 3 },
+        CountMinUpdate { key: 7, value: 9 },
+    ];
+    let l2 = prove_countmin_leaf(s1_wrong, b2);
+
+    match merge_two_countmin(&l1, &l2) {
+        Err(CountMinMergeError::BoundaryMismatch { .. }) => {}
+        Err(other) => panic!("expected BoundaryMismatch, got {other:?}"),
+        Ok(_) => panic!("merge must reject mismatched boundary"),
+    }
+}

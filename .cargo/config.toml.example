@@ -1,0 +1,20 @@
+# Template for `.cargo/config.toml` (which is gitignored).
+#
+# Phase 7+ work requires a local checkout of Plonky3-recursion at the rev pinned
+# in Cargo.toml (`524665d0c2e1d294722c064786ae11dff8d9f33b`). To enable the
+# fork-based override on your machine:
+#
+#   1. cp .cargo/config.toml.example .cargo/config.toml
+#   2. Replace `/path/to/Plonky3-recursion-fork` below with the absolute path to
+#      your local clone (see `docs/EXPERIMENTS.md` § "Step 7a-0: Fork setup").
+#   3. cargo build --release  → should now compile the four crates from your path.
+#
+# Without this file (the default for a fresh clone), Cargo will use the pinned
+# git revs from Cargo.toml and everything builds, but you can't extend the NPO
+# system (PermuteAir / LexSortAir / etc. — Phase 7 work) without a fork.
+
+[patch."https://github.com/Plonky3/Plonky3-recursion"]
+p3-recursion             = { path = "/path/to/Plonky3-recursion-fork/recursion" }
+p3-circuit               = { path = "/path/to/Plonky3-recursion-fork/circuit" }
+p3-circuit-prover        = { path = "/path/to/Plonky3-recursion-fork/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "/path/to/Plonky3-recursion-fork/poseidon2-circuit-air" }
