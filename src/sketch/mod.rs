@@ -6,6 +6,7 @@
 //! now — Phase 2 fills it in following §5.4 of the paper.
 
 pub mod countmin;
+pub mod countmin_v3;
 pub mod greenwald_khanna;
 pub mod hyperloglog;
 pub mod spacesaving;

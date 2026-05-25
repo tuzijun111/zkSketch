@@ -721,9 +721,68 @@ cargo test --release --lib greenwald_khanna
 
 ---
 
+### Phase 8 — Count-Min v3 (§5.2 database-style maintenance plan)
+
+**Goal.** Implement the new §5.2 Count-Min Circuit Design from the freshly-updated paper. The §5.2 plan reorganises the per-batch update as a database-style maintenance pipeline:
+
+```
+B ──group by key──▶ G ──compute counter ids──▶ U_ctr ──group by counter──▶ A ──sparse patch──▶ S_t
+```
+
+The v3 leaf lands additively beside v1 (`countmin_leaf.rs`, §5.1 strawman) and v2 (`countmin_leaf_v2.rs`, §5.4 structural seam) per the **"Keep baselines when adding new methods"** rule.
+
+**Design choices** (from the AskUserQuestion pre-plan exchange):
+- **No range-checked sortedness.** Per the user's clarification, the key-sort and counter-sort steps in §5.2 do not need range-checks. Instead we use PoneglyphDB-style group-by gates (PoneglyphDB §4.3, Equations 7–8) — multiset equality plus adjacent-equality tags. For the in-circuit leaf, we go a step further and skip the permutation+multiset machinery entirely, binding A's rows to per-record contributions via one-hot selectors (the same "soundness primitive" as v1/v2's per-cell selectors, applied at a different level).
+- **Same PI layout as v1/v2.** v3 keeps `(initial_commit, final_commit, [per-record (key, value, pos[0..d])])` so the v3 leaf plugs into the existing `merge_two_countmin` / `verify_chain_countmin` / `CountMinChainState::extend` / `flat_merge_two_countmin` paths and cross-merges with v1 and v2 leaves. The paper's true §5.2 PI (`C_B, C_old, C_new`) is a follow-up requiring a new batch-commitment type and a v3-specific merge function.
+- **Key-grouping skipped, counter-grouping kept.** Steps 2–3 of §5.2 (key-sort + key-aggregate) are an optimisation: they reduce hash invocations on the prover side when the batch has duplicate keys. In our prototype, hashes are computed natively (outside the circuit) and exposed as `pos_k[r]` PIs, so this optimisation has nothing to bite. Steps 5–6 of §5.2 (counter-sort + counter-aggregate) are the structural innovation; v3 implements those.
+
+**Plaintext pipeline** (`src/sketch/countmin_v3.rs`):
+- `pub struct V3Pipeline { b_sorted, g, u_ctr, u_ctr_sorted, a }` — full §5.2 maintenance plan as a typed Rust pipeline.
+- `pub fn build(state, batch) -> V3Pipeline`, `pub fn apply(state, pipeline) -> CountMinState`.
+- Reuses `hash_cell` from `src/sketch/countmin.rs`.
+
+**In-circuit leaf** (`src/recursion/recursive/countmin_leaf_v3.rs`):
+- Same PIs as v1/v2; merge-compatible.
+- Private witnesses: packed cells (same as v1/v2), sparse patch `A` (`m·d` rows of `(active, row, bucket, delta)`), per-record-per-row → A-row selectors (`n_ctr × n_ctr` boolean), per-A-row → cell selectors (`n_ctr × num_cells` boolean).
+- Constraints (in order): hash gates, cell decomposition, selector booleans + sums + weighted-sums binding each (k, i) record contribution to one A row, A.delta as the sum of accounted contributions, per-A-row cell selectors binding A to a specific `(row * w + bucket)` cell, per-cell delta from A, and the per-cell transition `final = initial + delta`.
+- Constraint shape at `(d=2, w=4, batch=2)`: ~200 §5.2-specific constraints on top of the v1/v2 hash + decomposition baseline.
+
+**Tests added (8).**
+
+| File | Test | Purpose |
+| --- | --- | --- |
+| `src/sketch/countmin_v3.rs` | `build_then_apply_matches_naive` | Pipeline output matches per-record replay at `(2, 4)`. |
+| `src/sketch/countmin_v3.rs` | `build_then_apply_matches_naive_at_4_4` | Same at `(4, 4)` with duplicate keys. |
+| `src/sketch/countmin_v3.rs` | `duplicate_key_in_batch_aggregates_once` | `|G| < |B|` when duplicate keys present; aggregates are per-key sums. |
+| `src/sketch/countmin_v3.rs` | `hash_collision_aggregates_at_counter` | Distinct keys colliding on row 0 (under `w = 6`) end up in one A row; row 1 stays distinct. |
+| `src/recursion/recursive/countmin_leaf_v3.rs` | `v3_leaf_round_trip` | `(D=2, W=4, BATCH=2)` round-trip — leaf prove + verify + final-commit match. |
+| `src/recursion/recursive/countmin_leaf_v3.rs` | `v3_leaf_round_trip_at_4_4_4` | Runtime-param at `(4, 4, 4)` — exercises the larger U_ctr / A tables. |
+| `src/recursion/recursive/countmin_leaf_v3.rs` | `v3_leaf_merges_with_v1` | v3 left leaf + v1 right leaf chained via `merge_two_countmin`. |
+| `src/recursion/recursive/countmin_leaf_v3.rs` | `v3_leaf_merges_with_v2` | v3 left + v2 right — three-way structural interop. |
+
+**Soundness simplification (documented).** At `w = 4` the public hash family `(k * prime_i) ^ offset_i mod w` has a structural property: `h_i(k) mod 2^L` depends only on `k mod 2^L` (XOR is bit-local, primes are odd). So at any power-of-2 width, two distinct (mod w) keys either collide on EVERY row or on NO row. The `hash_collision_aggregates_at_counter` test uses `w = 6` (non-power-of-2) where the rows are properly independent and a row-0-only collision exists.
+
+**How to run.**
+
+```bash
+cargo test --release --lib countmin_v3 countmin_leaf_v3
+```
+
+**Test count.** Plaintext (4) + in-circuit (4) = **8 new tests**. Full suite is now **89 tests passed; 0 failed** (was 81; +8 v3; zero regressions on v1/v2/HLL/SS/GK).
+
+**What "real" §5.2 would still need** (follow-up):
+- A `CountMinBatchCommit` type to bind `C_B` privately, replacing per-record PIs.
+- A v3-specific merge function consuming the new `(C_B, C_old, C_new)` PI shape.
+- In-circuit recomputation of `h_i(k_u)` from grouped-row keys (needs a field-friendly hash family or a lookup against a public hash table).
+- Permutation + LexSort AIRs in the fork to bind multi-column rows during sort steps (Phase 7a-2..3 in the existing roadmap).
+
+The §5.2 *shape* (sparse patch A applied per-cell, A bound to records via group-by-style selectors) is what v3 delivers — the rest is performance optimisation that pays for itself only under a sparse commitment scheme.
+
+---
+
 ## Test inventory
 
-Total: **64 unit tests + 17 integration tests = 81 tests** (through Phase 6a). All `#[ignore]`-free (the one `ignored` line in `cargo test` output is an unrelated doctest in `backend.rs`). Everything passes in release.
+Total: **72 unit tests + 17 integration tests = 89 tests** (through Phase 8). All `#[ignore]`-free (the one `ignored` line in `cargo test` output is an unrelated doctest in `backend.rs`). Everything passes in release.
 
 Phase-by-phase test deltas:
 - Phases 1–3d: 31 lib + 11 integration = 42 tests.
@@ -804,8 +863,16 @@ Run everything: `cargo test --release` (≈ 3 minutes). Run a specific group wit
 | 62 | `commit_is_deterministic` (GK) | `src/commitment/greenwald_khanna.rs` | 6a | GK commit determinism |
 | 63 | `commit_distinguishes_states` (GK) | `src/commitment/greenwald_khanna.rs` | 6a | GK commit sensitivity |
 | 64 | `commit_matches_make_perm` (GK) | `src/commitment/greenwald_khanna.rs` | 6a | GK commit drift guard |
+| 65 | `build_then_apply_matches_naive` | `src/sketch/countmin_v3.rs` | 8 | §5.2 v3 pipeline equals naive replay |
+| 66 | `build_then_apply_matches_naive_at_4_4` | `src/sketch/countmin_v3.rs` | 8 | §5.2 v3 pipeline at (4, 4) |
+| 67 | `duplicate_key_in_batch_aggregates_once` | `src/sketch/countmin_v3.rs` | 8 | §5.2 key-group reduces \|G\| |
+| 68 | `hash_collision_aggregates_at_counter` | `src/sketch/countmin_v3.rs` | 8 | §5.2 counter-group at hash collisions |
+| 69 | `v3_leaf_round_trip` | `src/recursion/recursive/countmin_leaf_v3.rs` | 8 | §5.2 v3 leaf (2,4,2) round trip |
+| 70 | `v3_leaf_round_trip_at_4_4_4` | `src/recursion/recursive/countmin_leaf_v3.rs` | 8 | §5.2 v3 leaf at (4,4,4) |
+| 71 | `v3_leaf_merges_with_v1` | `src/recursion/recursive/countmin_leaf_v3.rs` | 8 | v3 ↔ v1 merge interop |
+| 72 | `v3_leaf_merges_with_v2` | `src/recursion/recursive/countmin_leaf_v3.rs` | 8 | v3 ↔ v2 merge interop |
 
-(64 items total — matches the `cargo test --release --lib` count.)
+(72 items total — matches the `cargo test --release --lib` count.)
 
 ### Integration tests (`cargo test --release --test <name>`)
 

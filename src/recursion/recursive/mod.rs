@@ -18,6 +18,7 @@ pub mod config;
 pub mod countmin_chain;
 pub mod countmin_leaf;
 pub mod countmin_leaf_v2;
+pub mod countmin_leaf_v3;
 pub mod countmin_merge;
 pub mod hll_chain;
 pub mod hll_leaf;
