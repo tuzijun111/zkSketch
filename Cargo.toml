@@ -7,29 +7,34 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 # Plonky3 core, pinned to the rev used by plonky3-recursion's workspace.
+# The `parallel` feature on the crates that support it pulls in Rayon so the
+# STARK prover scales across CPU cores; `bench_v3_prover` in
+# `src/sketch/countmin_v3.rs` lets callers cap the thread count per call via
+# a custom `rayon::ThreadPool`.
 p3-air         = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
 p3-baby-bear   = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-batch-stark = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
+p3-batch-stark = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
 p3-challenger  = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
 p3-commit      = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-dft         = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
+p3-dft         = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
 p3-field       = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
 p3-fri         = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-lookup      = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
+p3-lookup      = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
 p3-matrix      = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
 p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
 p3-poseidon2   = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
 p3-symmetric   = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-uni-stark   = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-util        = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
+p3-uni-stark   = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
+p3-util        = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
 
 # Plonky3-recursion: in-circuit STARK verifier for the merge atom.
 p3-recursion             = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "524665d0c2e1d294722c064786ae11dff8d9f33b" }
 p3-circuit               = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "524665d0c2e1d294722c064786ae11dff8d9f33b" }
-p3-circuit-prover        = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "524665d0c2e1d294722c064786ae11dff8d9f33b" }
-p3-poseidon2-circuit-air = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "524665d0c2e1d294722c064786ae11dff8d9f33b" }
+p3-circuit-prover        = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "524665d0c2e1d294722c064786ae11dff8d9f33b", features = ["parallel"] }
+p3-poseidon2-circuit-air = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "524665d0c2e1d294722c064786ae11dff8d9f33b", features = ["parallel"] }
 
 rand               = "0.10"
+rayon              = "1.10"
 serde              = { version = "1.0", features = ["derive"] }
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

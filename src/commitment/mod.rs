@@ -8,12 +8,14 @@
 
 pub mod boundary;
 pub mod countmin;
+pub mod countmin_batch;
 pub mod greenwald_khanna;
 pub mod hyperloglog;
 pub mod spacesaving;
 
 pub use boundary::Boundary;
 pub use countmin::CountMinCommit;
+pub use countmin_batch::CountMinBatchCommit;
 pub use greenwald_khanna::GKCommit;
 pub use hyperloglog::HyperLogLogCommit;
 pub use spacesaving::SpaceSavingCommit;

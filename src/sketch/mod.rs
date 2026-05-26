@@ -7,6 +7,7 @@
 
 pub mod countmin;
 pub mod countmin_v3;
+pub mod countmin_v9;
 pub mod greenwald_khanna;
 pub mod hyperloglog;
 pub mod spacesaving;

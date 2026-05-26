@@ -1,4 +1,4 @@
-//! §5.2 Count-Min update leaf (the v3 design).
+//! §5.2 Count-Min update leaf (the v3 design, Phase 8d — PermuteAir + fork patch).
 //!
 //! This module implements the new §5.2 "Count-Min Circuit Design" from the
 //! paper as a CircuitBuilder leaf. The §5.2 maintenance plan is:
@@ -7,87 +7,116 @@
 //! B ──group by key──▶ G ──compute counter ids──▶ U_ctr ──group by counter──▶ A ──sparse patch──▶ S_t
 //! ```
 //!
-//! Compared to the §5.1 strawman in `countmin_leaf.rs` (which materialises
-//! per-cell selectors and replays `final = initial + Σ(selector · value)`
-//! cell-by-cell), and the §5.4 structural seam in `countmin_leaf_v2.rs`
-//! (which exposes a flat aggregate vector `A[i·w+j]`), v3 exposes the §5.2
-//! *sparse patch* `A` as an explicit witness: `m·d` rows, each `(active,
-//! row, bucket, delta)`, where the active rows are exactly the touched
-//! counters and the delta is the net contribution to that counter from
-//! the whole batch.
+//! ### How v3 evolved (Phase 8 → Phase 8b → Phase 8d)
 //!
-//! ### What §5.2 step gets which in-circuit machinery
+//! - **Phase 8** bound per-record contributions to A rows via a quadratic
+//!   `sel_a[u][r]` one-hot matrix of size `n_ctr × n_ctr`, where `n_ctr =
+//!   m · d`. Sound but `O(n_ctr²)` — a `batch=100, d=4` workload (`n_ctr =
+//!   400`) cost ~800 K constraints / ~87 s on a 64-core machine.
+//! - **Phase 8b** attempted to drop `sel_a` in favour of the fork's
+//!   `PermuteAir` plus PoneglyphDB §4.3-style adjacent-equality tags. It
+//!   crashed because the fork's `PermuteAir` was only tested at D=1 (base
+//!   field circuits); combining it with Poseidon2 + Recompose in a D=4
+//!   extension-field circuit hit an EF→BF type mismatch and the multi-NPO
+//!   prover dropped one of the three NPOs.
+//! - **Phase 8d** (this file, paired with `Plonky3-recursion-fork` edits to
+//!   `generate_permute_trace`, `PermuteCircuitPlugin`, `enable_permute`, and
+//!   `PermuteAir::trace_to_matrix`) fixes the fork so PermuteAir produces a
+//!   base-field-coefficient trace from any extension-field circuit. The
+//!   leaf below now uses the Phase 8b design end-to-end: cost drops from
+//!   `O(n_ctr²)` to `O(n_ctr + n_ctr · num_cells)`.
 //!
-//! - **Steps 1 (batch binding)** — records' `(key, value, pos[0..d])` are
+//! ### How each §5.2 step is implemented
+//!
+//! - **Step 1 (batch binding)** — records' `(key, value, pos[0..d])` are
 //!   public inputs, identical to v1/v2 (so the leaf is merge-compatible).
 //! - **Steps 2–3 (key-group + key-aggregate)** — *skipped as a prototype
 //!   simplification*. The plaintext pipeline in `src/sketch/countmin_v3.rs`
 //!   carries the full key-grouping for the soundness oracle; in-circuit we
 //!   go directly from per-record positions to the per-(record,row)
-//!   counter-update vector. This is sound — the counter-group step below
-//!   still merges any per-record collisions at the same counter — and the
-//!   "key-group" optimisation only matters when the framework can avoid
-//!   recomputing per-duplicate-key hashes, which our keep-per-record-PIs
-//!   design already does.
-//! - **Step 4 (counter-derive)** — `U_ctr[k·d + i] = (key_k, row=i,
-//!   bucket=pos_k[i], value=value_k)` is materialised purely from PIs and
-//!   the loop index — no new witnesses.
-//! - **Steps 5–6 (counter-group + counter-aggregate)** — implemented as a
-//!   per-(record,row) → per-A-row selector binding (PoneglyphDB §4.3
-//!   group-by gate, written via boolean selectors instead of inline
-//!   sortedness checks). For each `(k, i)` the prover supplies a one-hot
-//!   selector over A rows; the constraint forces the selected A row to
-//!   match `(row=i, bucket=pos_k[i])` and contribute `value_k` to that
-//!   row's delta. Per the user's clarification, no range-checked sortedness
-//!   is enforced — `A` is just an unsorted sparse vector whose entries are
-//!   bound to the records via the selectors.
-//! - **Step 7 (sparse-patch apply)** — per-A-row "cell selector"
-//!   `sel_a_cell[r][idx]` is a one-hot over `d·w` cells pointing at the
-//!   `(row_r, bucket_r)` cell. The per-cell delta is built as
-//!   `Σ_r sel_a_cell[r][idx] · delta_r`, and the transition is the
-//!   familiar `final[idx] = initial[idx] + delta[idx]`.
+//!   counter-update vector. The counter-group step below merges any
+//!   per-record collisions at the same counter, so key-grouping is purely
+//!   an optimisation — and one our per-record-PI design already eliminates
+//!   (hashes are computed natively and exposed, not recomputed in-circuit).
+//! - **Step 4 (counter-derive)** — `U_ctr[k·d + i] = (row=i, bucket=pos_k[i],
+//!   value=value_k)` is built in-circuit as a linear combination of PIs
+//!   and the loop index — no new witnesses.
+//! - **Steps 5–6 (counter-sort + counter-group + counter-aggregate)** —
+//!   each U_ctr row encodes into one Challenge payload `(row·w + bucket) ·
+//!   SHIFT_VAL + value`. The fork's `PermuteAir` enforces `multiset
+//!   (payload_sorted) == multiset(payload)` via its LogUp bus. The sorted
+//!   payloads are then decoded into `combined_sorted[r]` and `val_sorted[r]`
+//!   private witnesses, and adjacent-equality tags `eq_tag[r]` (PoneglyphDB
+//!   §4.3 Eq 7-8) identify equal-counter runs. A running sum
+//!   `acc[r] = val_sorted[r] + eq_tag[r] · acc[r-1]` accumulates each
+//!   segment's total.
+//! - **Step 7 (sparse-patch apply)** — per-row segment-end flag
+//!   `a_active[r] = 1 - eq_tag[r+1]` (with `a_active[n_ctr - 1] = 1`).
+//!   For each segment-end row, a per-A-row "cell selector" `sel_a_cell[r]`
+//!   maps to cell `combined_sorted[r]` via a length-`num_cells` one-hot.
+//!   `delta_per_cell[idx] = Σ_r sel_a_cell[r][idx] · acc[r]`, then
+//!   `final[idx] = initial[idx] + delta_per_cell[idx]`.
 //! - **Step 8 (metadata)** — fixed at compile time via the FRI config and
 //!   `CountMinLeafParams`, identical to v1/v2.
+//!
+//! ### Soundness sketch
+//!
+//! 1. **U_ctr is read directly from PIs**: every record's per-row counter
+//!    contribution `(row=i, bucket=pos_k[i], value=value_k)` appears as a
+//!    linear combination of public inputs. The prover cannot omit or
+//!    fabricate records.
+//! 2. **Counter-sort multiset equality**: each U_ctr row is encoded into
+//!    one Challenge `payload = (row·w + bucket) · SHIFT_VAL + value`
+//!    where `SHIFT_VAL = 2^20`. Under our prototype's per-record value
+//!    bound (`value < 2^16`), the encoding is unique — `(combined, value)`
+//!    pairs map to distinct payloads. PermuteAir's `PermuteBus` enforces
+//!    multiset equality between original and sorted payload columns.
+//! 3. **Adjacent equality tags** (PoneglyphDB §4.3 Eq 7-8) force
+//!    `eq_tag[r] = 1 iff combined_sorted[r-1] == combined_sorted[r]`. No
+//!    range-checked sortedness is enforced — that's not needed for
+//!    soundness because…
+//! 4. **Running-sum aggregation**: `acc[r] = val_sorted[r] + eq_tag[r] ·
+//!    acc[r-1]` correctly totals each *adjacent* equal-counter segment.
+//!    Even if the prover supplies a permuted-but-not-sorted layout where
+//!    a counter's records aren't contiguous, the segments split — but the
+//!    **per-cell delta application** below re-merges them at the cell
+//!    level because every split contributes to the same `combined_sorted`
+//!    value, hence the same `delta_per_cell[idx]`. Net effect on the
+//!    state transition is identical regardless of how the prover orders
+//!    equal-counter rows.
+//! 5. **Sparse patch → cell**: `sel_a_cell[r]` is a length-`num_cells`
+//!    one-hot. The sum-to-active constraint forces inactive segments to
+//!    contribute zero; the weighted-sum constraint pins active segments
+//!    to cell `combined_sorted[r] = row · w + bucket`.
+//! 6. **State transition**: `final[idx] = initial[idx] + delta_per_cell
+//!    [idx]` for every cell. The Poseidon2 hash gates bind `initial_packed`
+//!    and `final_packed` to the public state commitments, so the prover
+//!    cannot inflate or deflate any cell's delta without breaking the
+//!    hash.
 //!
 //! ### Public inputs (same shape as v1/v2 — merge-compatible)
 //!
 //! 1. `initial_commit[0..2]` packed into 2 Challenge PIs.
 //! 2. `final_commit[0..2]`.
 //! 3. For each record `k`: `(key_k, value_k, pos_k[0..d])` as Challenge PIs.
-//!
-//! ### Soundness sketch
-//!
-//! The §5.2 sparse patch `A` is bound to the records by:
-//! - For each `(k, i)`, the selector `sel_a[k·d+i][r]` is a one-hot vector
-//!   over A's `m·d` rows.
-//! - Constraints force the selected `r` to have `A.row[r] = i` and
-//!   `A.bucket[r] = pos_k[i]`.
-//! - Per A row `r`, `A.delta[r] = Σ_{(k,i)} sel_a[k·d+i][r] · value_k` —
-//!   the row's delta is the sum of every record's contribution that lands
-//!   there.
-//! - The per-cell delta column is then bound to `A` via the cell selectors.
-//!
-//! A malicious prover cannot inflate or deflate any cell's delta because
-//! every record's contribution `value_k` is accounted for in exactly one A
-//! row (selector sums to 1), and each A row's delta is exactly the sum of
-//! its accounted contributions. The state transition then forces
-//! `final = initial + Σ deltas`.
 
 use std::rc::Rc;
 
 use p3_batch_stark::ProverData;
 use p3_circuit::{CircuitBuilder, ExprId};
-use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_recompose_trace};
+use p3_circuit::ops::{
+    Poseidon2Config, generate_permute_trace, generate_poseidon2_trace, generate_recompose_trace,
+};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        permute_air_builders, permute_preprocessor, poseidon2_air_builders_d4,
+        poseidon2_preprocessor, recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
 use p3_baby_bear::default_babybear_poseidon2_16;
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_poseidon2_circuit_air::BabyBearD4Width16;
 use p3_recursion::RecursionOutput;
 use p3_uni_stark::StarkGenericConfig;
@@ -101,12 +130,20 @@ use crate::recursion::recursive::countmin_leaf::{
 };
 use crate::sketch::Sketch;
 use crate::sketch::countmin::{CountMin, CountMinState, CountMinUpdate, hash_cell};
-use crate::sketch::countmin_v3;
 
 /// FRI parameters — must equal the leaf-config's `LOG_FINAL_POLY_LEN = 6`
 /// so a v3 leaf can be chained with v1/v2 leaves in the same recursive
 /// merge (same boundary PIs, same proof shape).
 const LOG_FINAL_POLY_LEN: usize = 6;
+
+/// Bit shift used to encode `(combined, value)` into a single Challenge
+/// element for the PermuteAir input column. `SHIFT_VAL = 2^20` allows
+/// per-record `value < 1 048 576` without overlapping the `combined`
+/// bits — comfortably above the per-record values our prototype sweeps
+/// exercise (`value` is `u32` and the largest grid point uses `value <
+/// 2^3`).
+const SHIFT_VAL_BITS: u64 = 20;
+const SHIFT_VAL: u64 = 1u64 << SHIFT_VAL_BITS;
 
 /// Pack the flattened counters of a state into Challenge elements (same
 /// layout as v1's hash absorption).
@@ -148,7 +185,7 @@ pub fn prove_countmin_leaf_v3_with_params(
     let CountMinLeafParams { d, w, batch: m } = params;
     let num_cells = params.num_cells();
     let cell_packing = params.cell_packing();
-    let n_ctr = m * d; // size of U_ctr and A tables
+    let n_ctr = m * d; // size of U_ctr and the sorted/A tables
 
     // Native pipeline + final state.
     let mut final_state = initial_state.clone();
@@ -158,24 +195,52 @@ pub fn prove_countmin_leaf_v3_with_params(
     let initial_commit = commit_countmin(&initial_state);
     let final_commit = commit_countmin(&final_state);
 
-    // The §5.2 pipeline (plaintext oracle) — supplies A and the selectors.
-    let pipeline = countmin_v3::build(&initial_state, &batch);
-
-    // Build the "A-row-index for each (k, i)" map: for each per-record
-    // counter-update entry, find the A row that aggregates it. The
-    // plaintext pipeline already produced one valid A; we just locate
-    // each `(row=i, bucket=pos_k[i])` within it.
-    let mut a_row_for_contrib: Vec<usize> = Vec::with_capacity(n_ctr);
+    // ─── Natively compute the U_ctr table + the σ permutation that sorts it
+    //
+    // U_ctr[k·d + i] = (combined = i·w + pos_k[i], value = value_k). σ is
+    // the permutation such that `U_ctr_sorted[r] = U_ctr[σ[r]]`, sorting
+    // by `combined`. We supply σ as the `PermuteAir` witness, and the
+    // sorted-side decoded fields (combined_sorted, val_sorted) as decoded
+    // private witnesses checked against the permuted payload column.
+    let mut u_ctr_data: Vec<(u64, u32)> = Vec::with_capacity(n_ctr);
     for u in &batch {
         for i in 0..d {
             let bucket = hash_cell(i, u.key, w);
-            let idx = pipeline
-                .a
-                .iter()
-                .position(|a| a.active && a.row == i && a.bucket == bucket)
-                .expect("every per-record counter location must appear in A");
-            a_row_for_contrib.push(idx);
+            let combined = (i * w + bucket) as u64;
+            u_ctr_data.push((combined, u.value));
         }
+    }
+    let mut indexed: Vec<(usize, &(u64, u32))> = u_ctr_data.iter().enumerate().collect();
+    indexed.sort_by_key(|(_, (combined, _))| *combined);
+    let sigma: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
+    let combined_sorted_native: Vec<u64> = indexed.iter().map(|(_, (c, _))| *c).collect();
+    let val_sorted_native: Vec<u32> = indexed.iter().map(|(_, (_, v))| *v).collect();
+
+    // Adjacent-equality tags. `tag[r] = 1` iff `combined_sorted[r-1] ==
+    // combined_sorted[r]`. Slot 0 is forced to 0 (no preceding row).
+    let mut tag_native: Vec<u32> = vec![0; n_ctr];
+    for r in 1..n_ctr {
+        if combined_sorted_native[r] == combined_sorted_native[r - 1] {
+            tag_native[r] = 1;
+        }
+    }
+
+    // Running sum per segment.
+    let mut acc_native: Vec<u32> = vec![0; n_ctr];
+    acc_native[0] = val_sorted_native[0];
+    for r in 1..n_ctr {
+        acc_native[r] = if tag_native[r] == 1 {
+            acc_native[r - 1].saturating_add(val_sorted_native[r])
+        } else {
+            val_sorted_native[r]
+        };
+    }
+
+    // Segment-end flag (the active flag for A row r).
+    let mut a_active_native: Vec<u32> = vec![0; n_ctr];
+    for r in 0..n_ctr {
+        let ends_segment = if r == n_ctr - 1 { true } else { tag_native[r + 1] == 0 };
+        a_active_native[r] = if ends_segment { 1 } else { 0 };
     }
 
     // ─── Build the circuit ───────────────────────────────────────────────
@@ -185,6 +250,7 @@ pub fn prove_countmin_leaf_v3_with_params(
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    b.enable_permute(generate_permute_trace::<Val, Challenge>);
 
     // ---- Public inputs (identical to v1/v2 — merge-compatible) ----
     let initial_commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
@@ -201,8 +267,20 @@ pub fn prove_countmin_leaf_v3_with_params(
         record_pis.push((key, value, pos));
     }
 
+    // ---- Constants ----
+    let one = b.alloc_const(Challenge::ONE, "one");
+    let zero = b.alloc_const(Challenge::ZERO, "zero");
+    let w_const = b.alloc_const(Challenge::from_u64(w as u64), "w");
+    let shift_val_const = b.alloc_const(Challenge::from_u64(SHIFT_VAL), "shift_val");
+    let row_consts: Vec<ExprId> = (0..d)
+        .map(|i| b.alloc_const(Challenge::from_u64(i as u64), "row_i"))
+        .collect();
+    let cell_idx_consts: Vec<ExprId> = (0..num_cells)
+        .map(|idx| b.alloc_const(Challenge::from_u64(idx as u64), "cell_idx"))
+        .collect();
+
     // ---- Private inputs ----
-    // 1. Packed cells for hash binding.
+    // Packed cells for hash binding.
     let initial_packed: Vec<ExprId> = (0..cell_packing)
         .map(|_| b.alloc_private_input("init_cell_packed"))
         .collect();
@@ -210,23 +288,25 @@ pub fn prove_countmin_leaf_v3_with_params(
         .map(|_| b.alloc_private_input("final_cell_packed"))
         .collect();
 
-    // 2. Sparse patch A: per-row (active, row, bucket, delta).
-    let a_active: Vec<ExprId> = (0..n_ctr).map(|_| b.alloc_private_input("a_active")).collect();
-    let a_row: Vec<ExprId> = (0..n_ctr).map(|_| b.alloc_private_input("a_row")).collect();
-    let a_bucket: Vec<ExprId> = (0..n_ctr).map(|_| b.alloc_private_input("a_bucket")).collect();
-    let a_delta: Vec<ExprId> = (0..n_ctr).map(|_| b.alloc_private_input("a_delta")).collect();
+    // Sorted-side decoded values.
+    let combined_sorted: Vec<ExprId> = (0..n_ctr)
+        .map(|_| b.alloc_private_input("combined_sorted"))
+        .collect();
+    let val_sorted: Vec<ExprId> = (0..n_ctr)
+        .map(|_| b.alloc_private_input("val_sorted"))
+        .collect();
 
-    // 3. Per-(record, row) selector over A rows — one-hot of length n_ctr.
-    //    sel_a[k*d + i][r] = 1 iff the (k, i) per-record counter update lands
-    //    in A row r.
-    let mut sel_a: Vec<Vec<ExprId>> = Vec::with_capacity(n_ctr);
-    for _ in 0..n_ctr {
-        let row: Vec<ExprId> = (0..n_ctr).map(|_| b.alloc_private_input("sel_a")).collect();
-        sel_a.push(row);
-    }
+    // Adjacent-equality tags + inverse witnesses (slot 0 unused but
+    // allocated for indexing symmetry).
+    let eq_tag: Vec<ExprId> = (0..n_ctr)
+        .map(|_| b.alloc_private_input("eq_tag"))
+        .collect();
+    let inv_diff: Vec<ExprId> = (0..n_ctr)
+        .map(|_| b.alloc_private_input("inv_diff"))
+        .collect();
 
-    // 4. Per-A-row "cell selector" over the d*w cells — one-hot pointing at
-    //    cell (a_row[r], a_bucket[r]).
+    // Per-A-row cell selector — one-hot pointing at the cell
+    // `combined_sorted[r]` when the row is segment-end-active.
     let mut sel_a_cell: Vec<Vec<ExprId>> = Vec::with_capacity(n_ctr);
     for _ in 0..n_ctr {
         let row: Vec<ExprId> = (0..num_cells)
@@ -236,17 +316,6 @@ pub fn prove_countmin_leaf_v3_with_params(
     }
 
     // ---- Constraints ----
-
-    // Constants.
-    let one = b.alloc_const(Challenge::ONE, "one");
-    let zero = b.alloc_const(Challenge::ZERO, "zero");
-    let row_consts: Vec<ExprId> = (0..d)
-        .map(|i| b.alloc_const(Challenge::from_u64(i as u64), "row_i"))
-        .collect();
-    let w_const = b.alloc_const(Challenge::from_u64(w as u64), "w");
-    let cell_idx_consts: Vec<ExprId> = (0..num_cells)
-        .map(|idx| b.alloc_const(Challenge::from_u64(idx as u64), "cell_idx"))
-        .collect();
 
     // 1. Hash gates: bind packed cells to the public commitments.
     let digest_init = b
@@ -262,8 +331,7 @@ pub fn prove_countmin_leaf_v3_with_params(
         b.connect(digest_final[i], final_commit_pis[i]);
     }
 
-    // 2. Decompose packed cells into individual base-embedded ExprIds for
-    //    the per-cell transition.
+    // 2. Decompose packed cells into individual base-embedded ExprIds.
     let initial_cells: Vec<ExprId> = initial_packed
         .iter()
         .flat_map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).unwrap())
@@ -275,119 +343,111 @@ pub fn prove_countmin_leaf_v3_with_params(
     assert_eq!(initial_cells.len(), num_cells);
     assert_eq!(final_cells.len(), num_cells);
 
-    // 3. Per-A-row "active is boolean": active * (active - 1) = 0.
-    for r in 0..n_ctr {
-        let am1 = b.sub(a_active[r], one);
-        let prod = b.mul(a_active[r], am1);
-        b.connect(prod, zero);
-    }
-
-    // 4. Per-(record, row) selector validity. sel_a[k*d+i] is a one-hot
-    //    vector of length n_ctr.
-    //
-    //    For each (k, i):
-    //      - Each entry boolean: sel * (sel - 1) = 0.
-    //      - Sum over r of sel_a[k*d+i][r] = 1.
-    //      - Sum over r of A_row[r]    * sel_a[k*d+i][r] = i.
-    //      - Sum over r of A_bucket[r] * sel_a[k*d+i][r] = pos_k[i].
-    //
-    //    The last two pin the selected A row to match `(row=i, bucket=pos_k[i])`.
+    // 3. Build the U_ctr payload column from PIs.
+    //    payload[u = k·d + i] = (i·w + pos_k[i]) · SHIFT_VAL + value_k
+    let mut payload: Vec<ExprId> = Vec::with_capacity(n_ctr);
     for k in 0..m {
         for i in 0..d {
-            let u = k * d + i;
-            let sel = &sel_a[u];
-
-            // Booleans.
-            for r in 0..n_ctr {
-                let sm1 = b.sub(sel[r], one);
-                let prod = b.mul(sel[r], sm1);
-                b.connect(prod, zero);
-            }
-
-            // Sum = 1.
-            let mut sum = sel[0];
-            for r in 1..n_ctr {
-                sum = b.add(sum, sel[r]);
-            }
-            b.connect(sum, one);
-
-            // Σ A_row * sel = i.
-            let mut row_acc = b.mul(a_row[0], sel[0]);
-            for r in 1..n_ctr {
-                let term = b.mul(a_row[r], sel[r]);
-                row_acc = b.add(row_acc, term);
-            }
-            b.connect(row_acc, row_consts[i]);
-
-            // Σ A_bucket * sel = pos_k[i].
-            let mut bucket_acc = b.mul(a_bucket[0], sel[0]);
-            for r in 1..n_ctr {
-                let term = b.mul(a_bucket[r], sel[r]);
-                bucket_acc = b.add(bucket_acc, term);
-            }
-            b.connect(bucket_acc, record_pis[k].2[i]);
+            let row_times_w = b.mul(row_consts[i], w_const);
+            let combined_expr = b.add(row_times_w, record_pis[k].2[i]);
+            let combined_shifted = b.mul(combined_expr, shift_val_const);
+            let payload_expr = b.add(combined_shifted, record_pis[k].1);
+            payload.push(payload_expr);
         }
     }
 
-    // 5. Per-A-row delta is the sum of every (k, i) contribution landing here.
-    //    a_delta[r] = Σ_{(k,i)} sel_a[k*d+i][r] * value_k.
+    // 4. Counter-sort via PermuteAir. The prover supplies σ; PermuteAir's
+    //    LogUp bus enforces multiset(payload_sorted) == multiset(payload).
+    //    Multi-column row-binding is preserved because the payload uniquely
+    //    encodes (combined, value) under the bit-budget assumption.
+    let payload_sorted: Vec<ExprId> = b
+        .add_permute(&payload, sigma.clone())
+        .expect("add_permute should accept σ of length n_ctr");
+
+    // 5. Decode payload_sorted: combined_sorted · SHIFT_VAL + val_sorted == payload_sorted.
     for r in 0..n_ctr {
-        let mut acc = zero;
-        for k in 0..m {
-            for i in 0..d {
-                let u = k * d + i;
-                let term = b.mul(sel_a[u][r], record_pis[k].1);
-                acc = b.add(acc, term);
-            }
-        }
-        b.connect(acc, a_delta[r]);
+        let combined_shifted = b.mul(combined_sorted[r], shift_val_const);
+        let recovered = b.add(combined_shifted, val_sorted[r]);
+        b.connect(recovered, payload_sorted[r]);
     }
 
-    // 6. Per-A-row cell selector validity. sel_a_cell[r] is a one-hot vector
-    //    of length num_cells = d*w.
-    //
+    // 6. Adjacent-equality tags (PoneglyphDB §4.3 Eq 7-8).
+    //    Slot 0 has no preceding row, so both `eq_tag[0]` and `inv_diff[0]`
+    //    are forced to zero. The `inv_diff[0]` constraint also serves to
+    //    register that witness as an ALU operand (otherwise the
+    //    WitnessChecks bus debug-assert would fire — every private input
+    //    must participate in at least one ALU op).
+    b.connect(eq_tag[0], zero);
+    b.connect(inv_diff[0], zero);
+    for r in 1..n_ctr {
+        let diff = b.sub(combined_sorted[r - 1], combined_sorted[r]);
+        let lhs1 = b.mul(eq_tag[r], diff);
+        b.connect(lhs1, zero);
+        let one_minus_tag = b.sub(one, eq_tag[r]);
+        let diff_inv = b.mul(diff, inv_diff[r]);
+        let one_minus_diff_inv = b.sub(one, diff_inv);
+        let lhs2 = b.mul(one_minus_tag, one_minus_diff_inv);
+        b.connect(lhs2, zero);
+    }
+
+    // 7. Running sum per segment.
+    //    acc[0] = val_sorted[0]
+    //    acc[r] = val_sorted[r] + eq_tag[r] · acc[r-1]
+    let mut acc: Vec<ExprId> = Vec::with_capacity(n_ctr);
+    acc.push(val_sorted[0]);
+    for r in 1..n_ctr {
+        let carried = b.mul(eq_tag[r], acc[r - 1]);
+        let new_acc = b.add(val_sorted[r], carried);
+        acc.push(new_acc);
+    }
+
+    // 8. Per-row segment-end flag — the "A row r is active" indicator.
+    //    a_active[r] = 1 - eq_tag[r+1]    for r < n_ctr - 1
+    //    a_active[n_ctr - 1] = 1          (last row always closes its segment)
+    let mut a_active: Vec<ExprId> = Vec::with_capacity(n_ctr);
+    for r in 0..n_ctr {
+        let active = if r == n_ctr - 1 {
+            one
+        } else {
+            b.sub(one, eq_tag[r + 1])
+        };
+        a_active.push(active);
+    }
+
+    // 9. Per-A-row cell selector validity.
     //    For each r:
-    //      - Each entry boolean.
-    //      - Sum over idx of sel_a_cell[r][idx] = a_active[r]  (sum is the
-    //        active flag, so inactive rows contribute zero everywhere).
-    //      - Σ idx * sel_a_cell[r][idx] = a_active[r] * (a_row[r] * w + a_bucket[r])
-    //        — when active, selects cell (a_row[r], a_bucket[r]); when
-    //        inactive, the LHS and RHS are both zero (every sel = 0).
+    //      - Each entry boolean: sel * (sel - 1) = 0.
+    //      - Σ_idx sel[idx] = a_active[r]   (inactive rows contribute zero
+    //        everywhere; active rows hit exactly one cell).
+    //      - Σ_idx idx · sel[idx] = a_active[r] · combined_sorted[r].
     for r in 0..n_ctr {
         let sel = &sel_a_cell[r];
-
-        // Booleans.
         for idx in 0..num_cells {
             let sm1 = b.sub(sel[idx], one);
             let prod = b.mul(sel[idx], sm1);
             b.connect(prod, zero);
         }
-
-        // Sum = a_active.
         let mut sum = sel[0];
         for idx in 1..num_cells {
             sum = b.add(sum, sel[idx]);
         }
         b.connect(sum, a_active[r]);
 
-        // Σ idx * sel = a_active * (a_row * w + a_bucket).
         let mut idx_acc = b.mul(cell_idx_consts[0], sel[0]);
         for idx in 1..num_cells {
             let term = b.mul(cell_idx_consts[idx], sel[idx]);
             idx_acc = b.add(idx_acc, term);
         }
-        let row_w = b.mul(a_row[r], w_const);
-        let cell_idx = b.add(row_w, a_bucket[r]);
-        let active_cell_idx = b.mul(a_active[r], cell_idx);
-        b.connect(idx_acc, active_cell_idx);
+        let active_combined = b.mul(a_active[r], combined_sorted[r]);
+        b.connect(idx_acc, active_combined);
     }
 
-    // 7. Per-cell delta from A: delta[idx] = Σ_r sel_a_cell[r][idx] * a_delta[r].
-    //    Then state transition: final[idx] = initial[idx] + delta[idx].
+    // 10. Per-cell delta from A: delta[idx] = Σ_r sel_a_cell[r][idx] · acc[r].
+    //     State transition: final[idx] = initial[idx] + delta[idx].
     for idx in 0..num_cells {
-        let mut delta_acc = b.mul(sel_a_cell[0][idx], a_delta[0]);
+        let mut delta_acc = b.mul(sel_a_cell[0][idx], acc[0]);
         for r in 1..n_ctr {
-            let term = b.mul(sel_a_cell[r][idx], a_delta[r]);
+            let term = b.mul(sel_a_cell[r][idx], acc[r]);
             delta_acc = b.add(delta_acc, term);
         }
         let updated = b.add(initial_cells[idx], delta_acc);
@@ -417,38 +477,36 @@ pub fn prove_countmin_leaf_v3_with_params(
     private_inputs.extend_from_slice(&initial_cells_packed);
     private_inputs.extend_from_slice(&final_cells_packed);
 
-    // A: active, row, bucket, delta — column-major.
+    // combined_sorted, val_sorted.
     for r in 0..n_ctr {
-        let ar = &pipeline.a[r];
-        private_inputs.push(if ar.active { Challenge::ONE } else { Challenge::ZERO });
+        private_inputs.push(Challenge::from_u64(combined_sorted_native[r]));
     }
     for r in 0..n_ctr {
-        let ar = &pipeline.a[r];
-        private_inputs.push(Challenge::from_u64(ar.row as u64));
+        private_inputs.push(Challenge::from_u32(val_sorted_native[r]));
     }
+    // eq_tag.
     for r in 0..n_ctr {
-        let ar = &pipeline.a[r];
-        private_inputs.push(Challenge::from_u64(ar.bucket as u64));
+        private_inputs.push(Challenge::from_u64(tag_native[r] as u64));
     }
+    // inv_diff: 1/(combined_sorted[r-1] - combined_sorted[r]) when distinct, else 0.
     for r in 0..n_ctr {
-        let ar = &pipeline.a[r];
-        private_inputs.push(Challenge::from_u32(ar.delta));
+        let inv = if r == 0 {
+            Challenge::ZERO
+        } else if combined_sorted_native[r - 1] == combined_sorted_native[r] {
+            Challenge::ZERO
+        } else {
+            let diff = Challenge::from_u64(combined_sorted_native[r - 1])
+                - Challenge::from_u64(combined_sorted_native[r]);
+            diff.try_inverse().expect("nonzero diff inverts")
+        };
+        private_inputs.push(inv);
     }
-
-    // sel_a[u][r] — record (k, i) contributes to A row r.
-    for u in 0..n_ctr {
-        let target = a_row_for_contrib[u];
-        for r in 0..n_ctr {
-            private_inputs.push(if r == target { Challenge::ONE } else { Challenge::ZERO });
-        }
-    }
-
-    // sel_a_cell[r][idx] — A row r points to cell idx.
+    // sel_a_cell[r][idx] — one-hot to combined_sorted[r] when a_active[r] == 1.
     for r in 0..n_ctr {
-        let ar = &pipeline.a[r];
-        let target_idx = if ar.active { ar.row * w + ar.bucket } else { usize::MAX };
+        let target_idx = combined_sorted_native[r] as usize;
         for idx in 0..num_cells {
-            private_inputs.push(if idx == target_idx { Challenge::ONE } else { Challenge::ZERO });
+            let one_hot = a_active_native[r] == 1 && idx == target_idx;
+            private_inputs.push(if one_hot { Challenge::ONE } else { Challenge::ZERO });
         }
     }
 
@@ -462,12 +520,14 @@ pub fn prove_countmin_leaf_v3_with_params(
 
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
-    let preprocessors = vec![
+    let mut preprocessors = vec![
         poseidon2_preprocessor::<Val>(),
         recompose_preprocessor::<Val>(false),
     ];
+    preprocessors.push(permute_preprocessor::<Val>());
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+    air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -488,6 +548,7 @@ pub fn prove_countmin_leaf_v3_with_params(
         BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    prover.register_permute_table::<4>();
     let proof = prover
         .prove_all_tables(&traces, &circuit_prover_data)
         .expect("prove_all_tables (v3)");
