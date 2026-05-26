@@ -23,6 +23,7 @@ pub mod countmin_leaf_v9;
 pub mod countmin_leaf_v9h;
 pub mod countmin_merge;
 pub mod countmin_merge_v9;
+pub mod countmin_merge_v9_additive;
 pub mod hll_chain;
 pub mod hll_leaf;
 pub mod hll_leaf_v2;

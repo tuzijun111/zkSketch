@@ -16,16 +16,17 @@ If you only have two minutes, jump to:
 3. [The §5.2 pipeline at a glance](#the-§52-pipeline-at-a-glance)
 4. [Public-input shape (privacy)](#public-input-shape-privacy)
 5. [How to run the prover](#how-to-run-the-prover)
-6. [Parameters that affect proving time](#parameters-that-affect-proving-time)
+6. [Merge composition — sequential vs additive](#merge-composition--sequential-vs-additive)
+7. [Parameters that affect proving time](#parameters-that-affect-proving-time)
    - [Circuit-shape parameters](#circuit-shape-parameters-d-w-batch-distinct_bound)
    - [Workload-shape parameters](#workload-shape-parameters-batch-composition--key-distribution)
    - [Runtime parameters](#runtime-parameters-thread-count)
-7. [Measured numbers](#measured-numbers)
-8. [Choosing `distinct_bound`](#choosing-distinct_bound)
-9. [Sweep tests — how to reproduce](#sweep-tests--how-to-reproduce)
-10. [Earlier baselines](#earlier-baselines-kept-side-by-side)
-11. [Soundness notes](#soundness-notes)
-12. [References](#references)
+8. [Measured numbers](#measured-numbers)
+9. [Choosing `distinct_bound`](#choosing-distinct_bound)
+10. [Sweep tests — how to reproduce](#sweep-tests--how-to-reproduce)
+11. [Earlier baselines](#earlier-baselines-kept-side-by-side)
+12. [Soundness notes](#soundness-notes)
+13. [References](#references)
 
 ---
 
@@ -47,8 +48,9 @@ The leaf is **chain-mergeable** via the existing Phase 9d merge function — two
 | `src/commitment/countmin_batch.rs` | `CountMinBatchCommit` + `commit_batch(records)` — Poseidon2-over-(key_lo, key_hi, value, padding). The PI binding for the *raw* batch. |
 | **`src/recursion/recursive/countmin_leaf_v9h.rs`** | **The latest leaf — Phase 9h.** `CountMinLeafParamsV9h { d, w, batch, distinct_bound }` and `prove_countmin_leaf_v9h_with_params(...)`. |
 | `src/recursion/recursive/countmin_leaf_v9.rs` | Phase 9g leaf — same privacy guarantees, *no* compact G (every raw row pays the hash cost). Kept as baseline. |
-| `src/recursion/recursive/countmin_merge_v9.rs` | `merge_two_countmin_v9` + `verify_chain_countmin_v9` — §4.2 recursive merge over v9/v9h leaves. |
-| `src/sketch/countmin_v3.rs` | Plaintext §5.2 pipeline + benchmark/sweep helpers (`bench_v9h_prover_on_batch`, `gen_batch_with_distinct_keys`, `analyze_batch`, `aggregate_by_key`). |
+| `src/recursion/recursive/countmin_merge_v9.rs` | `merge_two_countmin_v9` + `verify_chain_countmin_v9` — **sequential** §4.2 recursive merge (boundary-chained: `l_1.final == l_2.initial`). |
+| `src/recursion/recursive/countmin_merge_v9_additive.rs` | `merge_two_countmin_v9_additive` + `verify_additive_merge` — **parallel/additive** merge. Both leaves prove `0 → A_i` from an empty initial state; the merge proves `M[i][j] = A_1[i][j] + A_2[i][j]` cell-wise *in-circuit* and exposes the merged state's cells natively for queries. |
+| `src/sketch/countmin_v3.rs` | Plaintext §5.2 pipeline + benchmark/sweep helpers (`bench_v9h_prover_on_batch`, `bench_v9_merge`, `bench_v9_merge_additive`, `gen_batch_with_distinct_keys`, `analyze_batch`, `aggregate_by_key`). |
 
 ## The §5.2 pipeline at a glance
 
@@ -137,6 +139,73 @@ let params = CountMinLeafParamsV9h { d: 4, w: 8, batch: 1000, distinct_bound: 10
 let duration = bench_v9h_prover_on_batch(params, batch, Some(8));
 ```
 
+## Merge composition — sequential vs additive
+
+Two leaves can be composed into one chain proof in two distinct shapes, both implemented:
+
+| Pattern | What each leaf proves | What the merge proves | What the chain exposes | Use when |
+| ------- | --------------------- | --------------------- | ---------------------- | -------- |
+| **Sequential** (`countmin_merge_v9.rs`) | `l_i: s_{i-1} → s_i` (each leaf's `final` = next leaf's `initial`) | `l_1.final == l_2.initial` (native) + recursive-verify both leaves' STARKs | `Com(s_E)` as `chain.final_`; cells of `s_E` held off-proof by the prover | You're streaming consecutive epochs of a single evolving sketch |
+| **Additive** (`countmin_merge_v9_additive.rs`) | `l_i: 0 → A_i` (each leaf from an *empty* initial state) | `M[i][j] = A_1[i][j] + A_2[i][j]` cell-wise *in-circuit* (cell-sum STARK) + recursive-verify both leaves' STARKs | `Com(M)` *and* the cells of `M` materialized in `proof.merged_state` | You have two independent shards and want to combine them post-hoc |
+
+### Sequential merge
+
+```rust
+use zksketch::recursion::recursive::countmin_merge_v9::{
+    merge_two_countmin_v9, verify_chain_countmin_v9,
+};
+
+// Each leaf threads state: l1: s_0 → s_1, l2: s_1 → s_2.
+let chain = merge_two_countmin_v9(&l1, &l2).expect("sequential merge");
+verify_chain_countmin_v9(&chain).expect("verify");
+
+// chain.final_ commits to s_2; to answer queries, the prover holds s_2's cells
+// in memory and opens them via Poseidon2.
+```
+
+The merge step does **not** include per-cell accumulation work — the per-cell math happens inside each leaf circuit when computing `s_{i-1} → s_i`. The merge just chains the existing transition proofs via the boundary identity and recursively verifies both STARKs.
+
+### Additive (parallel) merge
+
+```rust
+use zksketch::recursion::recursive::countmin_merge_v9_additive::{
+    merge_two_countmin_v9_additive, verify_additive_merge,
+};
+
+// Both leaves prove from empty: l1: 0 → A_1, l2: 0 → A_2.
+// The caller supplies the cells of A_1 and A_2 (recomputed natively from the batches).
+let proof = merge_two_countmin_v9_additive(&l1, &a1_cells, &l2, &a2_cells)
+    .expect("additive merge");
+verify_additive_merge(&proof).expect("verify");
+
+// proof.merged_state directly holds the cells of M = A_1 + A_2 for queries.
+// proof.m == Com(merged_state).
+```
+
+The merge step here **does** include per-cell accumulation: a small standalone cell-sum STARK proves `a1_packed[c] + a2_packed[c] = m_packed[c]` at the packed Challenge level for every cell-packing chunk `c` (which implies the per-cell relation since Challenge addition is per-coefficient). The cell-sum STARK is bound by Poseidon2 hashes of `A_1`, `A_2`, `M` to the same commitments the leaves expose.
+
+### Cost comparison (`d, w, batch = 4, 8, 1000`, 8 threads)
+
+| Step | Sequential | Additive |
+| ---- | ---------- | -------- |
+| Leaf 1 prove | 7.52 s | 7.61 s |
+| Leaf 2 prove | 7.36 s | 7.53 s |
+| **Merge step total** | **2.64 s** | **2.74 s** |
+| &nbsp;&nbsp;↳ cell-sum STARK | — | 33.9 ms |
+| &nbsp;&nbsp;↳ recursive aggregation | 2.64 s | 2.70 s |
+| Total wall-clock | 17.53 s | 17.88 s |
+
+The cell-sum STARK is ~34 ms regardless of `batch` (it operates on `d·w = 32` cells, batch-independent). The recursive aggregation grows logarithmically with batch size, not linearly — see [why merge is roughly batch-independent](#why-merge-is-roughly-batch-independent).
+
+### Why merge is roughly batch-independent
+
+STARK **proving** scales as `~O(T·log T)` in trace length `T`; STARK **verification** scales as `~O(log T)`. The merge step's substantive cost is the recursive aggregation, which *verifies* the leaf STARKs inside a new circuit — so going from `batch = 1000` to `batch = 10 000`:
+
+- Each leaf's prove time grows ~10× (linear in trace).
+- Each leaf's verify-inside-the-merge work grows by `log₂(10000) − log₂(1000) ≈ 3.3` extra FRI rounds — i.e. a small additive bump, not a 10× multiplier.
+
+So large batches make leaves expensive but barely move the needle on the merge step. The additive merge adds a fixed ~30-40 ms for the cell-sum STARK on top — also batch-independent.
+
 ## Parameters that affect proving time
 
 ### Circuit-shape parameters (`d`, `w`, `batch`, `distinct_bound`)
@@ -187,7 +256,9 @@ Empirically: Rayon scales well up to ~8 threads; past that, contention on the sm
 
 ## Measured numbers
 
-Phase 9h compact-G sweep, fixed `(d, w, batch) = (4, 8, 1000)`, 8 threads, measured 2026-05-26 on the user's local machine:
+All numbers below at fixed `(d, w, batch) = (4, 8, 1000)`, 8 threads, measured 2026-05-26 on the user's local machine.
+
+### Phase 9h compact-G sweep — single leaf prove vs `distinct_bound`
 
 | `distinct_bound` | actual distinct | prove time |
 | ---------------- | --------------- | ---------- |
@@ -202,6 +273,32 @@ Phase 9h compact-G sweep, fixed `(d, w, batch) = (4, 8, 1000)`, 8 threads, measu
 For comparison, Phase 9g (no compaction) at the same `(d, w, batch)` is **flat at ~7 s** regardless of how many distinct keys the batch actually contains — the §5.2 promise was not realized without `distinct_bound`.
 
 Reproduce: `V3_SWEEP_THREADS=8 cargo test --release --lib v9h_duplicate_key_compact_sweep -- --ignored --nocapture`.
+
+### Merge timings — sequential vs additive
+
+Two v9 leaves (Phase 9g, no compaction) at the same `(d, w, batch) = (4, 8, 1000)`:
+
+| Step | Sequential (`v9_merge_proving_time`) | Additive (`v9_merge_additive_proving_time`) |
+| ---- | ----------------------------------- | ------------------------------------------- |
+| Leaf 1 prove | 7.52 s | 7.61 s |
+| Leaf 2 prove | 7.36 s | 7.53 s |
+| **Merge step total** | **2.64 s** | **2.74 s** |
+| &nbsp;&nbsp;↳ cell-sum STARK | — | 33.9 ms |
+| &nbsp;&nbsp;↳ recursive aggregation | 2.64 s | 2.70 s |
+| Total wall-clock | 17.53 s | 17.88 s |
+
+Reproduce:
+
+```bash
+V3_SWEEP_THREADS=8 cargo test --release --lib v9_merge_proving_time          -- --ignored --nocapture
+V3_SWEEP_THREADS=8 cargo test --release --lib v9_merge_additive_proving_time -- --ignored --nocapture
+```
+
+Key observations:
+
+- The **merge step cost is roughly the same** for sequential and additive (~2.7 s) — the recursive aggregation dominates both. Additive adds a constant ~34 ms cell-sum STARK on top.
+- The merge cost is **roughly independent of `batch`** because it verifies leaf proofs (logarithmic) rather than re-executing them. Bumping `batch` from 1000 to 10000 grows leaf prove time ~10× but the merge step only by a few hundred ms (extra FRI rounds).
+- The cell-sum STARK operates on `d·w = 32` cells regardless of batch — its cost is set by sketch dimensions, not record count.
 
 ## Choosing `distinct_bound`
 
@@ -231,6 +328,16 @@ V3_SWEEP_THREADS=8 cargo test --release --lib v9_proving_time_sweep -- --ignored
 
 # v3 (positions-as-PIs) (d, w, batch) workload sweep.
 V3_SWEEP_THREADS=8 cargo test --release --lib v3_proving_time_sweep -- --ignored --nocapture
+
+# Sequential merge proving-time check at (d, w, batch) = (4, 8, 1000).
+# Reports per-leaf prove time + the §4.2 recursive merge step time.
+V3_SWEEP_THREADS=8 cargo test --release --lib v9_merge_proving_time -- --ignored --nocapture
+
+# Additive (parallel) merge proving-time check at (d, w, batch) = (4, 8, 1000).
+# Same shape but the merge step explicitly includes per-cell accumulation
+# via the cell-sum STARK (M = A_1 + A_2 cell-wise, in-circuit). Reports
+# the cell-sum and recursive-agg components separately.
+V3_SWEEP_THREADS=8 cargo test --release --lib v9_merge_additive_proving_time -- --ignored --nocapture
 ```
 
 The `--nocapture` flag is needed because the timing tables are printed via `println!`. Drop `V3_SWEEP_THREADS` to use Rayon's default global pool.

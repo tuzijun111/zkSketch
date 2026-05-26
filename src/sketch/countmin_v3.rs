@@ -624,6 +624,215 @@ pub fn bench_v9h_prover_on_batch(
     }
 }
 
+/// Bench the **§4.2 recursive merge** over two freshly-proven v9 leaves.
+/// Returns `(leaf1_prove, leaf2_prove, merge)` so the caller can attribute
+/// cost between the leaf-proving step and the merge step.
+///
+/// Workflow: builds an empty v9 state, proves a leaf for batch `b1`,
+/// applies `b1` natively, proves a second leaf for batch `b2`, and then
+/// invokes `merge_two_countmin_v9` to aggregate both leaves into one
+/// recursive batch-STARK. All three calls are timed with `Instant::now()`.
+///
+/// Both batches are deterministic — `b1` uses `gen_default_batch(params)`
+/// (all distinct keys); `b2` reuses the same generator with the indices
+/// shifted by `params.batch` to give a structurally similar but distinct
+/// second batch.
+///
+/// Set `num_threads = Some(n)` to confine the prover to a dedicated
+/// Rayon pool of `n` threads; `None` uses the global Rayon pool.
+pub fn bench_v9_merge(
+    params: crate::recursion::recursive::countmin_leaf::CountMinLeafParams,
+    num_threads: Option<usize>,
+) -> (std::time::Duration, std::time::Duration, std::time::Duration) {
+    use crate::recursion::recursive::countmin_leaf_v9::prove_countmin_leaf_v9_with_params;
+    use crate::recursion::recursive::countmin_merge_v9::merge_two_countmin_v9;
+    use crate::sketch::countmin_v9::CountMinV9;
+    use std::time::Instant;
+
+    params.validate();
+    let crate::recursion::recursive::countmin_leaf::CountMinLeafParams { d, w, batch: m } =
+        params;
+
+    let bench = move || {
+        let s0 = CountMinV9::new(&CountMinParams { d, w });
+
+        // Batch 1 — `gen_default_batch` (all distinct keys).
+        let b1 = gen_default_batch(params);
+        let t1 = Instant::now();
+        let l1 = prove_countmin_leaf_v9_with_params(params, s0.clone(), b1.clone());
+        let leaf1_time = t1.elapsed();
+
+        // Apply b1 natively → s1, which becomes the input state for l2.
+        let mut s1 = s0;
+        for u in &b1 {
+            CountMinV9::update(&mut s1, u);
+        }
+
+        // Batch 2 — same generator but shifted indices, so b2 ≠ b1 (still
+        // all-distinct keys, deterministic).
+        let salt = (d * w * m) as u64;
+        let b2: Vec<CountMinUpdate> = (0..m)
+            .map(|i| {
+                let key_idx = (i as u64 + m as u64).wrapping_mul(0x9E37_79B9);
+                CountMinUpdate {
+                    key: key_idx ^ salt,
+                    value: 1 + (i as u32 % 7),
+                }
+            })
+            .collect();
+        let t2 = Instant::now();
+        let l2 = prove_countmin_leaf_v9_with_params(params, s1, b2);
+        let leaf2_time = t2.elapsed();
+
+        // §4.2 merge step — the thing we actually came here to time.
+        let tm = Instant::now();
+        let _chain = merge_two_countmin_v9(&l1, &l2).expect("merge_two_countmin_v9");
+        let merge_time = tm.elapsed();
+
+        (leaf1_time, leaf2_time, merge_time)
+    };
+
+    match num_threads {
+        None => bench(),
+        Some(n) => {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .thread_name(|i| format!("v9-merge-bench-{i}"))
+                .build()
+                .expect("build rayon thread pool");
+            pool.install(bench)
+        }
+    }
+}
+
+/// Bench the **§4.2 additive (parallel) merge** over two freshly-proven
+/// v9 leaves built from an *empty* initial state. Unlike `bench_v9_merge`
+/// (sequential), the merge step here **explicitly includes per-cell
+/// accumulation** — `M[i][j] = A_1[i][j] + A_2[i][j]` is proven in-
+/// circuit alongside the recursive verification of both leaves' STARKs.
+///
+/// Returns `(leaf1, leaf2, cell_sum_prove, recursive_agg)` so the caller
+/// can see exactly where each piece of work lands. `cell_sum_prove` is
+/// the proving time of the small cell-add STARK; `recursive_agg` is the
+/// time of `build_and_prove_aggregation_layer` (verifying both leaves).
+/// The "merge step" in this design is `cell_sum_prove + recursive_agg`.
+///
+/// Both leaves use deterministic batches via `gen_default_batch(params)`
+/// (b1) and a shifted-index variant (b2).
+pub fn bench_v9_merge_additive(
+    params: crate::recursion::recursive::countmin_leaf::CountMinLeafParams,
+    num_threads: Option<usize>,
+) -> (
+    std::time::Duration,
+    std::time::Duration,
+    std::time::Duration,
+    std::time::Duration,
+) {
+    use crate::commitment::countmin::commit_countmin;
+    use crate::recursion::recursive::countmin_leaf_v9::prove_countmin_leaf_v9_with_params;
+    use crate::recursion::recursive::countmin_merge_v9_additive::prove_cell_sum;
+    use crate::sketch::countmin_v9::CountMinV9;
+    use p3_recursion::{BatchOnly, build_and_prove_aggregation_layer};
+    use std::time::Instant;
+
+    params.validate();
+    let crate::recursion::recursive::countmin_leaf::CountMinLeafParams { d, w, batch: m } =
+        params;
+
+    let bench = move || {
+        // Both leaves start from empty.
+        let s0 = CountMinV9::new(&CountMinParams { d, w });
+
+        // Batch 1 — all-distinct keys.
+        let b1 = gen_default_batch(params);
+        let t1 = Instant::now();
+        let l1 = prove_countmin_leaf_v9_with_params(params, s0.clone(), b1.clone());
+        let leaf1_time = t1.elapsed();
+
+        // Batch 2 — same generator, shifted indices (so b2 ≠ b1).
+        let salt = (d * w * m) as u64;
+        let b2: Vec<CountMinUpdate> = (0..m)
+            .map(|i| {
+                let key_idx = (i as u64 + m as u64).wrapping_mul(0x9E37_79B9);
+                CountMinUpdate {
+                    key: key_idx ^ salt,
+                    value: 1 + (i as u32 % 7),
+                }
+            })
+            .collect();
+        let t2 = Instant::now();
+        let l2 = prove_countmin_leaf_v9_with_params(params, s0.clone(), b2.clone());
+        let leaf2_time = t2.elapsed();
+
+        // Materialize a1 = apply(b1, empty), a2 = apply(b2, empty) cells.
+        let mut a1 = s0.clone();
+        for u in &b1 {
+            CountMinV9::update(&mut a1, u);
+        }
+        let mut a2 = s0;
+        for u in &b2 {
+            CountMinV9::update(&mut a2, u);
+        }
+        assert_eq!(commit_countmin(&a1), l1.final_, "a1 commit mismatch");
+        assert_eq!(commit_countmin(&a2), l2.final_, "a2 commit mismatch");
+
+        // Materialize M = A_1 + A_2 cell-wise.
+        let mut merged = a1.clone();
+        for i in 0..d {
+            for j in 0..w {
+                merged.counters[i][j] = a1.counters[i][j].saturating_add(a2.counters[i][j]);
+            }
+        }
+
+        // Time the cell-sum STARK on its own (the per-cell accumulation).
+        let t_cs = Instant::now();
+        let _cs = prove_cell_sum(&a1, &a2, &merged).expect("cell-sum prove");
+        let cell_sum_time = t_cs.elapsed();
+
+        // Time the recursive aggregation (verifies both leaves' STARKs).
+        let config = crate::recursion::recursive::countmin_leaf::make_leaf_config();
+        let backend = crate::recursion::recursive::backend::make_backend();
+        let recursion_params = p3_recursion::ProveNextLayerParams {
+            table_packing:
+                p3_circuit_prover::TablePacking::new(2, 2).with_fri_params(6, crate::config::LOG_BLOWUP),
+            constraint_profile: p3_circuit_prover::ConstraintProfile::Standard,
+        };
+        let left_input = l1.output.into_recursion_input::<BatchOnly>();
+        let right_input = l2.output.into_recursion_input::<BatchOnly>();
+        let t_agg = Instant::now();
+        let _agg = build_and_prove_aggregation_layer::<
+            crate::recursion::recursive::config::ConfigWithFriParams,
+            BatchOnly,
+            BatchOnly,
+            crate::recursion::recursive::backend::Backend,
+            { crate::recursion::recursive::config::D },
+        >(
+            &left_input,
+            &right_input,
+            &config,
+            &backend,
+            &recursion_params,
+            None,
+        )
+        .expect("aggregate");
+        let recursive_agg_time = t_agg.elapsed();
+
+        (leaf1_time, leaf2_time, cell_sum_time, recursive_agg_time)
+    };
+
+    match num_threads {
+        None => bench(),
+        Some(n) => {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .thread_name(|i| format!("v9-merge-additive-bench-{i}"))
+                .build()
+                .expect("build rayon thread pool");
+            pool.install(bench)
+        }
+    }
+}
+
 /// Step 7: apply the sparse patch `A` to a Count-Min state. The in-circuit
 /// leaf checks the same per-cell relation; this is the plaintext oracle.
 pub fn apply(state: &CountMinState, pipeline: &V3Pipeline) -> CountMinState {
@@ -1130,6 +1339,130 @@ mod tests {
                 prove_time
             );
         }
+    }
+
+    /// **§4.2 recursive merge proving-time check** at `(d, w, batch) =
+    /// (4, 8, 1000)` — two v9 (privacy-preserving) leaves are proven and
+    /// then aggregated via `merge_two_countmin_v9`. Reports per-leaf
+    /// prove time and merge time separately.
+    ///
+    /// To bench a different `(d, w, batch)`, edit the constants below or
+    /// call `bench_v9_merge(params, num_threads)` directly. Both batches
+    /// use the same generator so prove time per leaf matches what
+    /// `v9_duplicate_key_sweep` reports at `distinct = batch` (no
+    /// duplicates).
+    ///
+    /// Run on demand:
+    ///
+    /// ```bash
+    /// V3_SWEEP_THREADS=8 cargo test --release --lib v9_merge_proving_time -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn v9_merge_proving_time() {
+        use crate::recursion::recursive::countmin_leaf::CountMinLeafParams;
+
+        let num_threads: Option<usize> = std::env::var("V3_SWEEP_THREADS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok());
+        let (effective_threads, source) = match num_threads {
+            Some(n) => (n, format!("V3_SWEEP_THREADS={n}")),
+            None => {
+                let n = rayon::current_num_threads();
+                let src = match std::env::var("RAYON_NUM_THREADS") {
+                    Ok(v) => format!("Rayon global pool, RAYON_NUM_THREADS={v}"),
+                    Err(_) => "Rayon global pool, default = num_cpus::get()".to_string(),
+                };
+                (n, src)
+            }
+        };
+
+        let (d, w) = (4usize, 8usize);
+        let raw_batch_size = 1000usize;
+        let params = CountMinLeafParams { d, w, batch: raw_batch_size };
+
+        println!();
+        println!("v9 merge proving-time check — §4.2 recursive merge over two leaves");
+        println!("====================================================================");
+        println!("  threads: {effective_threads}  ({source})");
+        println!("  d={d}, w={w}, batch={raw_batch_size}");
+        println!("  workflow: prove l1 → apply → prove l2 → merge_two_countmin_v9");
+        println!();
+
+        let (l1_time, l2_time, m_time) = bench_v9_merge(params, num_threads);
+
+        println!("  leaf 1 prove:        {l1_time:>10.2?}");
+        println!("  leaf 2 prove:        {l2_time:>10.2?}");
+        println!("  §4.2 merge step:     {m_time:>10.2?}");
+        println!("  ─────────────────────────────────");
+        println!(
+            "  total wall-clock:    {:>10.2?}",
+            l1_time + l2_time + m_time
+        );
+    }
+
+    /// **§4.2 ADDITIVE merge proving-time check** at `(d, w, batch) =
+    /// (4, 8, 1000)`. Unlike `v9_merge_proving_time` (sequential), this
+    /// uses the parallel/additive design — both leaves prove `0 → A_i`
+    /// from an *empty* initial state, and the merge step **explicitly
+    /// includes per-cell accumulation** (`M[i][j] = A_1[i][j] + A_2[i][j]`
+    /// proven in-circuit by the small cell-sum STARK) alongside the
+    /// recursive verification of both leaves' STARKs.
+    ///
+    /// Run on demand:
+    ///
+    /// ```bash
+    /// V3_SWEEP_THREADS=8 cargo test --release --lib v9_merge_additive_proving_time -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn v9_merge_additive_proving_time() {
+        use crate::recursion::recursive::countmin_leaf::CountMinLeafParams;
+
+        let num_threads: Option<usize> = std::env::var("V3_SWEEP_THREADS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok());
+        let (effective_threads, source) = match num_threads {
+            Some(n) => (n, format!("V3_SWEEP_THREADS={n}")),
+            None => {
+                let n = rayon::current_num_threads();
+                let src = match std::env::var("RAYON_NUM_THREADS") {
+                    Ok(v) => format!("Rayon global pool, RAYON_NUM_THREADS={v}"),
+                    Err(_) => "Rayon global pool, default = num_cpus::get()".to_string(),
+                };
+                (n, src)
+            }
+        };
+
+        let (d, w) = (4usize, 8usize);
+        let raw_batch_size = 10000usize;
+        let params = CountMinLeafParams { d, w, batch: raw_batch_size };
+
+        println!();
+        println!("v9 ADDITIVE merge proving-time check — parallel §4.2");
+        println!("======================================================");
+        println!("  threads: {effective_threads}  ({source})");
+        println!("  d={d}, w={w}, batch={raw_batch_size}");
+        println!("  workflow: prove l1 (0→A_1), prove l2 (0→A_2),");
+        println!("            cell-sum STARK (M = A_1 + A_2 cell-wise),");
+        println!("            recursive aggregation (verify l1, l2 STARKs)");
+        println!();
+
+        let (l1_time, l2_time, cell_sum_time, recursive_agg_time) =
+            bench_v9_merge_additive(params, num_threads);
+        let merge_step_total = cell_sum_time + recursive_agg_time;
+
+        println!("  leaf 1 prove (0→A_1):       {l1_time:>10.2?}");
+        println!("  leaf 2 prove (0→A_2):       {l2_time:>10.2?}");
+        println!("  ───── merge step ───────────────────────");
+        println!("  cell-sum STARK (per-cell):  {cell_sum_time:>10.2?}");
+        println!("  recursive agg (verify l1, l2): {recursive_agg_time:>7.2?}");
+        println!("  merge step subtotal:        {merge_step_total:>10.2?}");
+        println!("  ─────────────────────────────────────────");
+        println!(
+            "  total wall-clock:           {:>10.2?}",
+            l1_time + l2_time + merge_step_total
+        );
     }
 
     /// `aggregate_by_key` on a batch of all-distinct keys is the identity.
