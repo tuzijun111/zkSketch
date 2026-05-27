@@ -79,7 +79,7 @@ use crate::recursion::recursive::countmin_leaf::{
 };
 use crate::recursion::recursive::countmin_leaf_v9::CountMinLeafProofV9;
 use crate::sketch::Sketch;
-use crate::sketch::countmin::{CountMinState, CountMinUpdate};
+use crate::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
 use crate::sketch::countmin_v9::{CountMinV9, hash_cell_v9};
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -807,13 +807,145 @@ pub fn prove_countmin_final(
 
 // ─── Tests ───────────────────────────────────────────────────────────────
 
+// ─── User-facing convenience API ─────────────────────────────────────────
+
+/// A real, self-verified count-min update proof.
+///
+/// Returned by [`generate_proof`]. Carries both the STARK proof itself
+/// (in `proof.output`) and the resulting sketch state's cells (in
+/// `final_state`) so callers can immediately answer queries against the
+/// sketch the proof certifies — no prover re-run needed.
+///
+/// ### Proof anatomy
+///
+/// - `proof.initial`: Poseidon2 commitment to the initial sketch state
+///   (here, always the empty sketch).
+/// - `proof.final_`: Poseidon2 commitment to the final sketch state.
+///   `commit_countmin(&self.final_state) == proof.final_` by construction.
+/// - `proof.batch_commit`: Poseidon2 commitment to the raw batch — the
+///   only public binding of the per-record data (keys and values stay
+///   private).
+/// - `proof.output`: the actual STARK proof bytes (a `RecursionOutput`).
+///
+/// ### Verification
+///
+/// The proof is *self-verified* inside [`prove_countmin_final`] before
+/// being returned, so a `CountMinFinalProof` you hold is guaranteed
+/// valid. Independent re-verification (e.g. after deserializing) is
+/// available via the batch-STARK verifier — see how
+/// `merge_two_countmin_v9` and `verify_chain_countmin_v9` consume the
+/// `output` field for the pattern.
+pub struct CountMinFinalProof {
+    /// The STARK leaf proof. `proof.output` is the actual proof data;
+    /// the other fields are the public commitments it binds.
+    pub proof: CountMinLeafProofV9,
+    /// Materialized cells of the resulting sketch — for querying counts
+    /// against the same state the proof commits to.
+    pub final_state: CountMinState,
+}
+
+impl CountMinFinalProof {
+    /// Count-min point estimate for `key` against the certified final
+    /// state. Returns the minimum of the `d` cells `key` hashes into —
+    /// the standard count-min estimator.
+    pub fn query(&self, key: u64) -> u32 {
+        let d = self.final_state.params.d;
+        let w = self.final_state.params.w;
+        let mut min_est = u32::MAX;
+        for i in 0..d {
+            let j = crate::sketch::countmin_v9::hash_cell_v9(i, key, w);
+            min_est = min_est.min(self.final_state.counters[i][j]);
+        }
+        min_est
+    }
+}
+
+/// **Generate a real STARK proof for a batch of count-min updates.**
+///
+/// Convenience entry point on top of [`prove_countmin_final`] that:
+/// 1. Constructs an empty initial sketch of shape `(params.d, params.w)`.
+/// 2. Computes the resulting state natively (for query access).
+/// 3. Runs the §5.2 leaf prover (which self-verifies before returning).
+/// 4. Bundles everything into a [`CountMinFinalProof`].
+///
+/// Returns a proof object that is **already self-verified** and ready
+/// to use — pass it to a chain-merge function, serialize it to disk,
+/// or query the resulting sketch immediately via `result.query(key)`.
+///
+/// # Parameters
+///
+/// - `params`: circuit shape `(d, w, batch, distinct_bound)`. Must
+///   satisfy `params.validate()`'s constraints (in particular, `w` must
+///   be a power of 2 in `{2, 4, 8, 16}`, `d·w` divisible by 4,
+///   `1 ≤ distinct_bound ≤ batch`).
+/// - `updates`: exactly `params.batch` count-min updates. The actual
+///   number of distinct keys must be `≤ params.distinct_bound`.
+///
+/// # Panics
+///
+/// - On `params.validate()` failure (alignment / range checks).
+/// - If `updates.len() != params.batch`.
+/// - If `updates` contains more than `params.distinct_bound` distinct keys.
+///
+/// # Example
+///
+/// ```ignore
+/// use zksketch::sketch::countmin::CountMinUpdate;
+/// use zksketch::sketch::countmin_final::{CountMinFinalParams, generate_proof};
+///
+/// // 10 updates, at most 3 distinct keys per epoch.
+/// let params = CountMinFinalParams {
+///     d: 4, w: 8, batch: 10, distinct_bound: 3,
+/// };
+/// let updates: Vec<CountMinUpdate> = (0..10)
+///     .map(|i| CountMinUpdate { key: (i % 3) as u64 + 1, value: 1 })
+///     .collect();
+///
+/// let result = generate_proof(params, updates);
+///
+/// // result.proof  — the STARK proof (already self-verified, chain-mergeable).
+/// // result.final_state — the resulting sketch (queryable directly).
+/// // result.proof.batch_commit — public commitment to the raw batch.
+/// // result.proof.final_     — public commitment to the resulting state.
+/// assert!(result.query(1) >= 1);
+/// ```
+pub fn generate_proof(
+    params: CountMinFinalParams,
+    updates: Vec<CountMinUpdate>,
+) -> CountMinFinalProof {
+    params.validate();
+    assert_eq!(
+        updates.len(),
+        params.batch,
+        "updates length ({}) must equal params.batch ({})",
+        updates.len(),
+        params.batch
+    );
+
+    // Build an empty initial state at the requested shape.
+    let initial_state = CountMinV9::new(&CountMinParams { d: params.d, w: params.w });
+
+    // Materialize the resulting state natively (used both as a private
+    // witness inside the prover and as the query target afterwards).
+    let mut final_state = initial_state.clone();
+    for u in &updates {
+        CountMinV9::update(&mut final_state, u);
+    }
+
+    // Run the prover (self-verifies before returning).
+    let proof = prove_countmin_final(params, initial_state, updates);
+
+    CountMinFinalProof { proof, final_state }
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recursion::recursive::countmin_merge_v9::{
         merge_two_countmin_v9, verify_chain_countmin_v9,
     };
-    use crate::sketch::countmin::CountMinParams;
 
     /// Deterministic batch generator: `batch` records distributed across
     /// exactly `distinct` distinct keys, cycling through key indices.
@@ -913,6 +1045,38 @@ mod tests {
         }
     }
 
+    /// Sanity check: `generate_proof` produces a valid proof whose
+    /// final-state commitment matches `commit_countmin(&final_state)`,
+    /// and the `query` helper returns the expected count-min estimate.
+    /// Small shape `(d=2, w=4, batch=2)` keeps this test fast (~1s).
+    #[test]
+    fn generate_proof_round_trip() {
+        use crate::commitment::countmin::commit_countmin;
+
+        let params = CountMinFinalParams { d: 2, w: 4, batch: 2, distinct_bound: 2 };
+        let updates = vec![
+            CountMinUpdate { key: 7, value: 3 },
+            CountMinUpdate { key: 11, value: 5 },
+        ];
+
+        let result = generate_proof(params, updates.clone());
+
+        // The proof's final commit matches the materialized final state.
+        assert_eq!(commit_countmin(&result.final_state).0, result.proof.final_.0);
+
+        // Each unique-key update contributes its value to every row it
+        // hashes into, so the min-of-d estimate is at least the update
+        // value for that key.
+        assert!(result.query(7) >= 3);
+        assert!(result.query(11) >= 5);
+
+        // A never-seen key sees at most the max-seen value (since count-
+        // min over-estimates due to collisions, but here only two updates
+        // landed in the sketch).
+        let unseen = result.query(999_999);
+        assert!(unseen <= 5);
+    }
+
     /// **Test 2 — proving time to merge two leaves.**
     ///
     /// Prove two leaves (each over a deterministic 1000-record batch
@@ -986,5 +1150,97 @@ mod tests {
             "  total wall-clock:   {:>10.2?}",
             l1_time + l2_time + m_time
         );
+    }
+
+    /// **Generate a real proof and persist it to `src/proofs/`.**
+    ///
+    /// Calls [`generate_proof`] at a small `(d=2, w=4, batch=2)` shape
+    /// (fast — runs in ~1s) and serializes the resulting STARK proof
+    /// via `postcard` into `src/proofs/countmin_final_example.bin`.
+    /// Also writes a sidecar `.meta.txt` with the public commitments and
+    /// params in human-readable form, so a future verifier knows what
+    /// to feed back into the verifier alongside the proof bytes.
+    ///
+    /// File layout after the test runs:
+    ///
+    /// ```text
+    /// src/proofs/
+    ///   countmin_final_example.bin       — postcard-serialized STARK proof
+    ///   countmin_final_example.meta.txt  — params + public-input commitments
+    /// ```
+    ///
+    /// Run:
+    ///
+    /// ```bash
+    /// cargo test --release --lib generate_and_store_proof -- --nocapture
+    /// ```
+    #[test]
+    fn generate_and_store_proof() {
+        use crate::commitment::countmin::commit_countmin;
+        use std::fs;
+        use std::path::PathBuf;
+
+        // Small shape — keeps the test under ~1s.
+        let params = CountMinFinalParams { d: 2, w: 4, batch: 2, distinct_bound: 2 };
+        let updates = vec![
+            CountMinUpdate { key: 7, value: 3 },
+            CountMinUpdate { key: 11, value: 5 },
+        ];
+
+        let result = generate_proof(params, updates.clone());
+
+        // Sanity: the stored proof certifies a state whose commit matches
+        // what `commit_countmin` derives natively from `final_state`.
+        assert_eq!(commit_countmin(&result.final_state).0, result.proof.final_.0);
+
+        // Resolve src/proofs/ relative to the crate root (not the test
+        // process's cwd, which can vary).
+        let crate_root = env!("CARGO_MANIFEST_DIR");
+        let out_dir = PathBuf::from(crate_root).join("src/proofs");
+        fs::create_dir_all(&out_dir).expect("create src/proofs directory");
+
+        // Serialize the STARK proof. `output.0` is the inner `Proof<SC>`,
+        // which is what's actually postcard-serializable
+        // (`output.1: Arc<CircuitProverData<...>>` is prover-side scaffolding,
+        // reconstructed from params on the verifier side).
+        let proof_bytes = postcard::to_allocvec(&result.proof.output.0)
+            .expect("postcard serialize proof");
+        let proof_path = out_dir.join("countmin_final_example.bin");
+        fs::write(&proof_path, &proof_bytes).expect("write proof file");
+
+        // Sidecar metadata — what a verifier needs in addition to the proof
+        // bytes: the public-input commitments and the circuit-shape params.
+        let mut meta = String::new();
+        meta.push_str("# Count-Min final-design proof — sidecar metadata\n");
+        meta.push_str("# This file is paired with `countmin_final_example.bin`.\n");
+        meta.push_str("# To verify the proof, reconstruct the circuit from `params`\n");
+        meta.push_str("# below, set the public-input vector to the three commitments\n");
+        meta.push_str("# below, and run the batch-STARK verifier on the deserialized\n");
+        meta.push_str("# proof.\n");
+        meta.push('\n');
+        meta.push_str(&format!("params.d              = {}\n", params.d));
+        meta.push_str(&format!("params.w              = {}\n", params.w));
+        meta.push_str(&format!("params.batch          = {}\n", params.batch));
+        meta.push_str(&format!("params.distinct_bound = {}\n", params.distinct_bound));
+        meta.push('\n');
+        meta.push_str(&format!("initial_commit  = {:?}\n", result.proof.initial.0));
+        meta.push_str(&format!("final_commit    = {:?}\n", result.proof.final_.0));
+        meta.push_str(&format!("batch_commit    = {:?}\n", result.proof.batch_commit.0));
+        meta.push('\n');
+        meta.push_str(&format!("proof_size_bytes = {}\n", proof_bytes.len()));
+        let meta_path = out_dir.join("countmin_final_example.meta.txt");
+        fs::write(&meta_path, &meta).expect("write meta file");
+
+        eprintln!(
+            "wrote {} bytes of proof to {}",
+            proof_bytes.len(),
+            proof_path.display()
+        );
+        eprintln!("wrote sidecar metadata to {}", meta_path.display());
+
+        // Postconditions.
+        assert!(proof_path.exists(), "proof file should exist after write");
+        assert!(meta_path.exists(), "meta file should exist after write");
+        assert!(!proof_bytes.is_empty(), "proof should serialize to non-empty bytes");
     }
 }
