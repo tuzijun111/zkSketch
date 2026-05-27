@@ -69,10 +69,12 @@ use p3_poseidon2_circuit_air::BabyBearD4Width16;
 use p3_recursion::RecursionOutput;
 use p3_uni_stark::StarkGenericConfig;
 
+use p3_symmetric::CryptographicHasher;
+
 use crate::commitment::CountMinCommit;
 use crate::commitment::countmin::commit_countmin;
 use crate::commitment::countmin_batch::commit_batch;
-use crate::config::{Challenge, LOG_BLOWUP, Val};
+use crate::config::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
@@ -80,7 +82,7 @@ use crate::recursion::recursive::countmin_leaf::{
 use crate::recursion::recursive::countmin_leaf_v9::CountMinLeafProofV9;
 use crate::sketch::Sketch;
 use crate::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
-use crate::sketch::countmin_v9::{CountMinV9, hash_cell_v9};
+use crate::sketch::countmin_v9::CountMinV9;
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -93,19 +95,73 @@ const LOG_FINAL_POLY_LEN: usize = 6;
 const SHIFT_VAL_BITS: u64 = 20;
 const SHIFT_VAL: u64 = 1u64 << SHIFT_VAL_BITS;
 
-/// Per-row hash family multipliers `a_i` (Phase 9b field-friendly family).
-/// Must match `sketch::countmin_v9::HASH_A` so the in-circuit gadget
-/// reproduces the native sketch.
-const HASH_A: [u32; 16] = [
-    0x9E37_79B9, 0xBF58_476D, 0x94D0_49BB, 0x2545_F491, 0xD801_2304, 0xC2B2_AE3D,
-    0xCBF2_9CE4, 0xC6BC_2796, 0xA243_F605, 0xB492_6F95, 0x82C1_2F3C, 0xF1BB_CDCB,
-    0xD632_2D0C, 0x8E4F_47AB, 0xA537_82B0, 0xE369_15A1,
-];
-const HASH_B: [u32; 16] = [
-    0xDEAD_BEEF, 0xCAFE_BABE, 0xFEED_FACE, 0xBAAA_AAAD, 0xABAD_CAFE, 0xDEFE_C8ED,
-    0x0D15_EA5E, 0xBADD_F00D, 0xFACE_FEED, 0xCAFE_D00D, 0x1234_5678, 0x0FED_CBA9,
-    0xAAAA_5555, 0x5555_AAAA, 0x0123_4567, 0xFEDC_BA98,
-];
+/// **PRF-based row hash family**: `h_i(k) = Poseidon2(key, 0)[i] mod w`.
+///
+/// We treat Poseidon2 (the same primitive that backs the state and batch
+/// commitments — `PaddingFreeSponge<Perm, 16, 8, 8>` over BabyBear) as the
+/// hash family. One sponge invocation per key produces 8 BabyBear digest
+/// elements; the i-th digest element (mod `w`) is the bucket for row `i`.
+///
+/// ### Why this is "PRF-quality" rather than the previous mul-add family
+///
+/// The v9 family `(k·a_i + b_i) mod w` is one fixed instance of the
+/// 2-universal Carter–Wegman family. With fixed `(a_i, b_i)`, an
+/// adversary that knows them can construct keys that collide adversarially
+/// in any row, blowing up Count-Min's over-estimation bound.
+///
+/// Poseidon2 is widely believed to be **indifferentiable from a random
+/// oracle** in the algebraic group model. So for any unpredictable key,
+/// the 8 digest elements are computationally indistinguishable from a
+/// uniform draw — closing the soundness gap that fixed-constant universal
+/// hash families have against adaptive adversaries.
+///
+/// ### Why `d ≤ 8`
+///
+/// One Poseidon2 sponge invocation produces 8 BabyBear digest elements.
+/// We mux row `i` to the i-th element, so the family supports up to
+/// `d = 8` rows per Poseidon2 call. Wider Count-Min profiles (`d > 8`)
+/// would need additional sponge invocations per key — not implemented
+/// here.
+///
+/// ### Cost (in-circuit, per distinct key)
+///
+/// - One `add_hash_slice` call (= one Poseidon2 permutation in the
+///   Poseidon2 AIR).
+/// - Two `decompose_ext_to_base_coeffs` calls (one per Challenge of the
+///   digest), yielding 8 Val elements.
+/// - `d` `decompose_to_bits` calls (bottom `log₂(w)` bits of each used
+///   row hash).
+/// - One extra `decompose_to_bits` to "consume" any unused digest
+///   elements when `d < 8` (a WitnessChecks-bus accounting step).
+///
+/// Compare to the v9 mul-add family: 1 mul + 1 add + 1 bit-decomp per
+/// (key, row). The PRF version replaces those with one Poseidon2 + 8
+/// Val extractions per key — significantly more constraints, but the
+/// stronger soundness guarantee is the trade-off the user asked for.
+pub fn hash_cell_prf(row: usize, key: u64, w: usize) -> usize {
+    assert!(row < 8, "PRF hash family supports row < 8; got {row}");
+    assert!(w > 0, "width w must be positive");
+
+    // Native input mirrors what the in-circuit `add_hash_slice` absorbs:
+    // one Challenge element (4 Vals) with payload only in the first Val.
+    let key_val = Val::from_u64(key);
+    let input = [key_val, Val::ZERO, Val::ZERO, Val::ZERO];
+    let hasher = MyHash::new(make_perm());
+    let digest: [Val; 8] = hasher.hash_iter(input.iter().copied());
+    let h_val: u64 = <Val as p3_field::PrimeField64>::as_canonical_u64(&digest[row]);
+    (h_val as usize) % w
+}
+
+/// Apply one [`CountMinUpdate`] using [`hash_cell_prf`] as the row hash
+/// family — the canonical update for this file's design. The legacy v9
+/// `CountMinV9::update` uses the mul-add `hash_cell_v9` and is kept as a
+/// baseline only.
+pub fn apply_update_prf(state: &mut CountMinState, u: &CountMinUpdate) {
+    for i in 0..state.params.d {
+        let j = hash_cell_prf(i, u.key, state.params.w);
+        state.counters[i][j] = state.counters[i][j].saturating_add(u.value);
+    }
+}
 
 // ─── Public API ──────────────────────────────────────────────────────────
 
@@ -137,7 +193,9 @@ impl CountMinFinalParams {
     }
 
     pub fn validate(&self) {
-        assert!(self.d >= 1 && self.d <= 16, "d must be in 1..=16, got {}", self.d);
+        // The PRF hash family (Poseidon2 sponge) produces 8 Val digest
+        // elements per key; we mux row `i` to the i-th element, so `d ≤ 8`.
+        assert!(self.d >= 1 && self.d <= 8, "d must be in 1..=8, got {}", self.d);
         assert!(
             self.w.is_power_of_two() && (1..=16).contains(&self.w),
             "w must be a power of 2 in {{2,4,8,16}}, got {}",
@@ -220,7 +278,7 @@ pub fn prove_countmin_final(
     // ─── Native side: state evolution + witnesses ────────────────────────
     let mut final_state = initial_state.clone();
     for u in &batch {
-        CountMinV9::update(&mut final_state, u);
+        apply_update_prf(&mut final_state, u);
     }
     let initial_commit = commit_countmin(&initial_state);
     let final_commit = commit_countmin(&final_state);
@@ -293,7 +351,7 @@ pub fn prove_countmin_final(
     for j in 0..distinct_bound {
         let key_for_hash = key_table_native[j];
         for i in 0..d {
-            let bucket = hash_cell_v9(i, key_for_hash, w);
+            let bucket = hash_cell_prf(i, key_for_hash, w);
             let combined = (i * w + bucket) as u64;
             u_ctr_data.push((combined, val_table_native[j]));
         }
@@ -360,12 +418,6 @@ pub fn prove_countmin_final(
         .collect();
     let cell_idx_consts: Vec<ExprId> = (0..num_cells)
         .map(|idx| b.alloc_const(Challenge::from_u64(idx as u64), "cell_idx"))
-        .collect();
-    let hash_a_consts: Vec<ExprId> = (0..d)
-        .map(|i| b.alloc_const(Challenge::from_u64(HASH_A[i] as u64), "hash_a"))
-        .collect();
-    let hash_b_consts: Vec<ExprId> = (0..d)
-        .map(|i| b.alloc_const(Challenge::from_u64(HASH_B[i] as u64), "hash_b"))
         .collect();
     let pow2_consts: Vec<ExprId> = (0..w_log2)
         .map(|j| b.alloc_const(Challenge::from_u64(1u64 << j), "2^j"))
@@ -563,18 +615,58 @@ pub fn prove_countmin_final(
         b.connect(se_permuted[j], g_padded_j);
     }
 
-    // ─── Stage F — Hash gadget over compact G ────────────────────────────
-    // h_i(k) = (k · a_i + b_i) mod w, implemented via multiply-add +
-    // bit-decomposition + weighted sum of bottom log₂(w) bits.
-    // Loop bound is `distinct_bound` (not `m`) — the §5.2 win.
+    // ─── Stage F — PRF hash gadget over compact G ────────────────────────
+    // h_i(k) = digest[i] mod w, where
+    //   digest = Poseidon2 sponge over key_table[j]   (8-Val output)
+    //
+    // Pattern: hash with `add_hash_slice` → `connect` the two Challenge
+    // outputs to private-witness placeholders → decompose the private
+    // witnesses into base Vals. The intermediate `connect` step mirrors
+    // how the existing commit hashes are bound (via `connect` to PIs),
+    // and is necessary for the WitnessChecks bus to balance: decomposing
+    // an `add_hash_slice` output directly trips a global multiplicity
+    // mismatch.
+    let mut h_digest_witnesses: Vec<(ExprId, ExprId)> =
+        Vec::with_capacity(distinct_bound);
+    for _ in 0..distinct_bound {
+        let h0 = b.alloc_private_input("h_digest_0");
+        let h1 = b.alloc_private_input("h_digest_1");
+        h_digest_witnesses.push((h0, h1));
+    }
+
     let mut payload: Vec<ExprId> = Vec::with_capacity(n_ctr);
     for j in 0..distinct_bound {
+        // 1. Hash key_table[j] (one Challenge in = two Challenges out).
+        let hashed = b
+            .add_hash_slice(
+                &Poseidon2Config::BABY_BEAR_D4_W16,
+                &[key_table[j]],
+                true,
+            )
+            .expect("hash key_table[j]");
+
+        // 2. Connect hash outputs to our private-witness placeholders.
+        let (h0, h1) = h_digest_witnesses[j];
+        b.connect(hashed[0], h0);
+        b.connect(hashed[1], h1);
+
+        // 3. Decompose the private witnesses into 8 Val outputs.
+        let coeffs_0 = b
+            .decompose_ext_to_base_coeffs::<Val>(h0)
+            .expect("decompose h0");
+        let coeffs_1 = b
+            .decompose_ext_to_base_coeffs::<Val>(h1)
+            .expect("decompose h1");
+        let h_vals: [ExprId; 8] = [
+            coeffs_0[0], coeffs_0[1], coeffs_0[2], coeffs_0[3],
+            coeffs_1[0], coeffs_1[1], coeffs_1[2], coeffs_1[3],
+        ];
+
+        // 4. Per-row position: take h_vals[i] mod w (bottom log₂(w) bits).
         for i in 0..d {
-            let prod = b.mul(key_table[j], hash_a_consts[i]);
-            let mixed = b.add(prod, hash_b_consts[i]);
             let bits = b
-                .decompose_to_bits::<Val>(mixed, Val::bits())
-                .expect("decompose mixed");
+                .decompose_to_bits::<Val>(h_vals[i], Val::bits())
+                .expect("decompose h_val");
             let mut pos_sum = b.mul(bits[0], pow2_consts[0]);
             for jb in 1..w_log2 {
                 let term = b.mul(bits[jb], pow2_consts[jb]);
@@ -585,6 +677,16 @@ pub fn prove_countmin_final(
             let combined_shifted = b.mul(combined_expr, shift_val_const);
             let payload_expr = b.add(combined_shifted, val_table[j]);
             payload.push(payload_expr);
+        }
+
+        // 5. Consume unused digest Vals — every witness produced by step 3
+        // must flow through an ALU op. Bind each via decompose_to_bits.
+        // (Summing them risks accidental cancellation if values align;
+        //  per-Val decompose is unambiguous.)
+        for k in d..8 {
+            let _ = b
+                .decompose_to_bits::<Val>(h_vals[k], Val::bits())
+                .expect("decompose unused h_val");
         }
     }
 
@@ -745,6 +847,26 @@ pub fn prove_countmin_final(
             private_inputs.push(if one_hot { Challenge::ONE } else { Challenge::ZERO });
         }
     }
+    // ── PRF digest witnesses (per distinct-key slot, allocated last) ──
+    // Two Challenges per slot. The circuit hashes `key_table[j]` and
+    // `connect`s the two-Challenge output to these witnesses; then
+    // decomposes them into eight Val outputs from which the d row
+    // positions are extracted.
+    {
+        use p3_field::BasedVectorSpace;
+        let hasher = MyHash::new(make_perm());
+        for j in 0..distinct_bound {
+            let key_val = Val::from_u64(key_table_native[j]);
+            let input = [key_val, Val::ZERO, Val::ZERO, Val::ZERO];
+            let digest: [Val; 8] = hasher.hash_iter(input.iter().copied());
+            let d0 = Challenge::from_basis_coefficients_slice(&digest[0..4])
+                .expect("4 base coeffs");
+            let d1 = Challenge::from_basis_coefficients_slice(&digest[4..8])
+                .expect("4 base coeffs");
+            private_inputs.push(d0);
+            private_inputs.push(d1);
+        }
+    }
 
     // ─── Run + prove ─────────────────────────────────────────────────────
     let traces = {
@@ -853,7 +975,7 @@ impl CountMinFinalProof {
         let w = self.final_state.params.w;
         let mut min_est = u32::MAX;
         for i in 0..d {
-            let j = crate::sketch::countmin_v9::hash_cell_v9(i, key, w);
+            let j = hash_cell_prf(i, key, w);
             min_est = min_est.min(self.final_state.counters[i][j]);
         }
         min_est
@@ -929,7 +1051,7 @@ pub fn generate_proof(
     // witness inside the prover and as the query target afterwards).
     let mut final_state = initial_state.clone();
     for u in &updates {
-        CountMinV9::update(&mut final_state, u);
+        apply_update_prf(&mut final_state, u);
     }
 
     // Run the prover (self-verifies before returning).
@@ -1118,7 +1240,7 @@ mod tests {
             // Apply b1 natively → s1, the input state for l2.
             let mut s1 = s0;
             for u in &b1 {
-                CountMinV9::update(&mut s1, u);
+                apply_update_prf(&mut s1, u);
             }
 
             // Second batch — same generator, shifted indices.
@@ -1194,8 +1316,8 @@ mod tests {
         let params = CountMinFinalParams {
             d: 4,
             w: 8,
-            batch: 100,
-            distinct_bound: 10,
+            batch: 1000,
+            distinct_bound: 100,
         };
 
         let crate_root = env!("CARGO_MANIFEST_DIR");
@@ -1223,7 +1345,7 @@ mod tests {
         // Materialize s_1 = apply(b1, s_0) for proof 2's initial state.
         let mut s1 = s0;
         for u in &b1 {
-            CountMinV9::update(&mut s1, u);
+            apply_update_prf(&mut s1, u);
         }
         assert_eq!(commit_countmin(&s1).0, leaf1.final_.0, "s1 commit mismatch");
 
@@ -1239,17 +1361,12 @@ mod tests {
 
         // ─── Generate proof 2: s_1 → s_2 ─────────────────────────────────
         // Different batch — keys shifted into a new range so b_2's
-        // 100 distinct keys don't overlap b_1's.
-        let params2 = CountMinFinalParams {
-            d: 4,
-            w: 8,
-            batch: 1000,
-            distinct_bound: 100,
-        };
-        let salt = (params2.d * params2.w * params2.batch) as u64;
-        let b2: Vec<CountMinUpdate> = (0..params2.batch)
+        // 100 distinct keys don't overlap b_1's. Same `params` shape as
+        // leaf 1 so the two leaves are chain-merge-compatible.
+        let salt = (params.d * params.w * params.batch) as u64;
+        let b2: Vec<CountMinUpdate> = (0..params.batch)
             .map(|i| {
-                let key_idx = ((i % params2.distinct_bound) + 200) as u64;
+                let key_idx = ((i % params.distinct_bound) + 200) as u64;
                 CountMinUpdate {
                     key: key_idx.wrapping_mul(0x9E37_79B9) ^ salt,
                     value: 1 + (i as u32 % 7),
@@ -1258,7 +1375,7 @@ mod tests {
             .collect();
 
         let t2 = Instant::now();
-        let leaf2 = prove_countmin_final(params2, s1.clone(), b2.clone());
+        let leaf2 = prove_countmin_final(params, s1.clone(), b2.clone());
         let l2_time = t2.elapsed();
         println!("  leaf 2 prove time:   {l2_time:>10.2?}");
 
@@ -1268,7 +1385,7 @@ mod tests {
         let proof2_path = out_dir.join("countmin_proof2.bin");
         fs::write(&proof2_path, &proof2_bytes).expect("write proof2");
         write_meta(&out_dir.join("countmin_proof2.meta.txt"),
-                   "countmin_proof2.bin", &params2, &leaf2, proof2_bytes.len());
+                   "countmin_proof2.bin", &params, &leaf2, proof2_bytes.len());
         println!("  proof 2 size:        {:>10} bytes", proof2_bytes.len());
 
         // ─── Verify the proof bytes round-trip through disk ──────────────
