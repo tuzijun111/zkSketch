@@ -28,10 +28,14 @@ p3-uni-stark   = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1
 p3-util        = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
 
 # Plonky3-recursion: in-circuit STARK verifier for the merge atom.
-p3-recursion             = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "524665d0c2e1d294722c064786ae11dff8d9f33b" }
-p3-circuit               = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "524665d0c2e1d294722c064786ae11dff8d9f33b" }
-p3-circuit-prover        = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "524665d0c2e1d294722c064786ae11dff8d9f33b", features = ["parallel"] }
-p3-poseidon2-circuit-air = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "524665d0c2e1d294722c064786ae11dff8d9f33b", features = ["parallel"] }
+# Sourced from a fork that adds D > 1 PermuteAir support (Phase 8d patch);
+# necessary for this project's PermuteAir + Recompose + Poseidon2 combined
+# circuits at extension degree D = 4. Upstream Plonky3-recursion at the
+# parent commit (524665d) only exercises D = 1 and panics for D > 1.
+p3-recursion             = { git = "https://github.com/tuzijun111/Plonky3_Permute", rev = "b63b88d0579f996eae98a607621bb92c54b84bdc" }
+p3-circuit               = { git = "https://github.com/tuzijun111/Plonky3_Permute", rev = "b63b88d0579f996eae98a607621bb92c54b84bdc" }
+p3-circuit-prover        = { git = "https://github.com/tuzijun111/Plonky3_Permute", rev = "b63b88d0579f996eae98a607621bb92c54b84bdc", features = ["parallel"] }
+p3-poseidon2-circuit-air = { git = "https://github.com/tuzijun111/Plonky3_Permute", rev = "b63b88d0579f996eae98a607621bb92c54b84bdc", features = ["parallel"] }
 
 rand               = "0.10"
 rayon              = "1.10"
@@ -47,7 +51,9 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 
-# NOTE: Phase 7+ work overrides the four Plonky3-recursion crates with a local fork.
-# The override is *not* checked in (absolute paths are user-specific). To enable it
-# locally, copy `.cargo/config.toml.example` to `.cargo/config.toml` and adjust the
-# paths to your clone. See `docs/EXPERIMENTS.md` § "Step 7a-0: Fork setup".
+# NOTE: The four Plonky3-recursion crates above are pulled from a GitHub fork
+# (https://github.com/tuzijun111/Plonky3_Permute) that adds D > 1 PermuteAir
+# support — no local clone needed for a fresh checkout. If you want to edit the
+# fork against this project (faster iteration), copy `.cargo/config.toml.example`
+# to `.cargo/config.toml` and adjust the paths to point at a local clone of the
+# fork; the `[patch]` section there will override the GitHub deps.

@@ -1,20 +1,23 @@
 # Template for `.cargo/config.toml` (which is gitignored).
 #
-# Phase 7+ work requires a local checkout of Plonky3-recursion at the rev pinned
-# in Cargo.toml (`524665d0c2e1d294722c064786ae11dff8d9f33b`). To enable the
-# fork-based override on your machine:
+# By default, `Cargo.toml` pulls the four Plonky3-recursion crates from the
+# GitHub fork at https://github.com/tuzijun111/Plonky3_Permute (pinned to a
+# specific commit). A fresh `git clone` of this project + `cargo build` works
+# without any local fork setup.
 #
-#   1. cp .cargo/config.toml.example .cargo/config.toml
-#   2. Replace `/path/to/Plonky3-recursion-fork` below with the absolute path to
-#      your local clone (see `docs/EXPERIMENTS.md` § "Step 7a-0: Fork setup").
-#   3. cargo build --release  → should now compile the four crates from your path.
+# This template exists for the *development* workflow: if you want to edit the
+# fork's source against this project (live iteration without a push round-trip),
+# point Cargo at a local clone of the fork.
 #
-# Without this file (the default for a fresh clone), Cargo will use the pinned
-# git revs from Cargo.toml and everything builds, but you can't extend the NPO
-# system (PermuteAir / LexSortAir / etc. — Phase 7 work) without a fork.
+# To enable the local override on your machine:
+#
+#   1. git clone https://github.com/tuzijun111/Plonky3_Permute /path/to/Plonky3_Permute
+#   2. cp .cargo/config.toml.example .cargo/config.toml
+#   3. Replace `/path/to/Plonky3_Permute` below with the absolute path to step-1's clone.
+#   4. cargo build --release  → now compiles the four crates from your local path.
 
-[patch."https://github.com/Plonky3/Plonky3-recursion"]
-p3-recursion             = { path = "/path/to/Plonky3-recursion-fork/recursion" }
-p3-circuit               = { path = "/path/to/Plonky3-recursion-fork/circuit" }
-p3-circuit-prover        = { path = "/path/to/Plonky3-recursion-fork/circuit-prover" }
-p3-poseidon2-circuit-air = { path = "/path/to/Plonky3-recursion-fork/poseidon2-circuit-air" }
+[patch."https://github.com/tuzijun111/Plonky3_Permute"]
+p3-recursion             = { path = "/path/to/Plonky3_Permute/recursion" }
+p3-circuit               = { path = "/path/to/Plonky3_Permute/circuit" }
+p3-circuit-prover        = { path = "/path/to/Plonky3_Permute/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "/path/to/Plonky3_Permute/poseidon2-circuit-air" }
