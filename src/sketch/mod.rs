@@ -9,9 +9,15 @@ pub mod countmin;
 pub mod countmin_final;
 pub mod countmin_v3;
 pub mod countmin_v9;
+pub mod gk_final;
+pub mod gk_final_full;
 pub mod greenwald_khanna;
+pub mod hll_final;
+pub mod hll_final_full;
 pub mod hyperloglog;
 pub mod spacesaving;
+pub mod ss_final;
+pub mod ss_final_full;
 
 /// One streaming sketch family. Matches the paper's `A_τ.Update(S, u)` style.
 pub trait Sketch {
