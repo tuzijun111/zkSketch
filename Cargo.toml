@@ -37,14 +37,12 @@ p3-circuit               = { git = "https://github.com/tuzijun111/Plonky3_Permut
 p3-circuit-prover        = { git = "https://github.com/tuzijun111/Plonky3_Permute", rev = "b63b88d0579f996eae98a607621bb92c54b84bdc", features = ["parallel"] }
 p3-poseidon2-circuit-air = { git = "https://github.com/tuzijun111/Plonky3_Permute", rev = "b63b88d0579f996eae98a607621bb92c54b84bdc", features = ["parallel"] }
 
+postcard           = { version = "1.1", features = ["alloc"] }
 rand               = "0.10"
 rayon              = "1.10"
 serde              = { version = "1.0", features = ["derive"] }
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-[dev-dependencies]
-postcard = { version = "1.1", features = ["alloc"] }
 
 [profile.release]
 opt-level = 3

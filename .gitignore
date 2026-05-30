@@ -23,3 +23,12 @@ Thumbs.db
 *.log
 
 /src/proofs/
+
+# Downloaded/processed datasets (regenerate via scripts/fetch_datasets.py)
+/data/*.keys
+
+# Experiment outputs (regenerate via `cargo run --release --example exp_*`
+# then `python3 scripts/plot_experiments.py`)
+/results/
+
+/latex/

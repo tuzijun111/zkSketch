@@ -21,6 +21,7 @@ pub mod chain;
 pub mod countmin_flat;
 pub mod digest;
 pub mod flat;
+pub mod framework;
 pub mod hll_flat;
 pub mod recursive;
 
