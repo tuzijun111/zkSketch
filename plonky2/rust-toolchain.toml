@@ -1,0 +1,5 @@
+# plonky2 requires nightly Rust — its `plonky2_field` crate uses
+# `#![feature(specialization)]`, which is unavailable on stable. This pins the
+# whole project (build, test, examples) to the nightly channel automatically.
+[toolchain]
+channel = "nightly"

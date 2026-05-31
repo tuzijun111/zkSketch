@@ -1,0 +1,33 @@
+[package]
+name = "zksketch_snark"
+version = "0.1.0"
+edition = "2021"
+description = "SNARK (plonky2) re-implementation of the zkSketch recursive sketch-proof framework"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# plonky2: PLONK-ish arithmetization + FRI over Goldilocks, with first-class
+# recursion. This is the "SNARK" backend standing in for the plonky3 +
+# plonky3-recursion STARK stack used by ../zkSketch.
+#
+# NOTE: the crates.io release (0.2.2) requires nightly (`#![feature(specialization)]`);
+# the git `main` branch builds on stable Rust, so we pin to that.
+plonky2 = { git = "https://github.com/0xPolygonZero/plonky2", branch = "main" }
+anyhow = "1.0"
+# Used only to report the prover thread count in the benchmark output, matching
+# the plonky3 `countmin_final` benchmarks. plonky2 already depends on rayon.
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# Proving is far faster in release; tests that touch recursion are slow in dev.
+# Keep our crate at low opt for fast iteration, but compile the heavy plonky2
+# dependencies at opt-level 3 so in-circuit proving stays fast under `cargo test`.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

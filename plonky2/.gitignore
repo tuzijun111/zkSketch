@@ -1,0 +1,5 @@
+/target
+*.log
+# Cargo.lock is committed: it pins the exact plonky2 git revision (branch=main
+# is a moving target), so checkouts reproduce this build.
+
