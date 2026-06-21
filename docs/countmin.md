@@ -393,6 +393,6 @@ batch touches ≤4 cells).
 
 - **Paper**: `paper/zkSketch.pdf` §5.2 — the database-style maintenance plan; §4.2 — recursive merge atom; §4.1 — flat chain (baseline).
 - **PoneglyphDB §4.3 (Eq 7-8)**: the multiset-equality + adjacent-equality group-by gate this design uses.
-- **Plan file**: `/home/binbin/.claude/plans/velvet-hatching-flask.md` — phase-by-phase design notes.
+- **Design notes**: phase-by-phase design notes kept alongside the implementation.
 - **Experiment log**: [`docs/EXPERIMENTS.md`](EXPERIMENTS.md) — every measured number with reproduction commands.
 - **Plonky3 fork patch (Phase 8d)**: `/home/binbin/Plonky3-recursion-fork` — enables multi-NPO PermuteAir at extension degree `D > 1`.

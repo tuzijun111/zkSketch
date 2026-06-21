@@ -1036,7 +1036,7 @@ HLL prove time is slightly higher than Count-Min's at comparable workloads (8 ce
 
 ## Phase 7 setup checklist — pending (multi-session work)
 
-Phase 7 (optimized batch update circuits via custom AIRs with LogUp bus) is approved in the plan file at `/home/binbin/.claude/plans/this-project-is-to-hashed-wind.md`. The first step is **forking Plonky3-recursion** via a `[patch]` override so we can extend `p3-circuit`'s NPO type system with new primitives. This is a multi-session effort; the steps below give a concrete checklist for picking it up in fresh sessions.
+Phase 7 (optimized batch update circuits via custom AIRs with LogUp bus) is approved in the project design notes. The first step is **forking Plonky3-recursion** via a `[patch]` override so we can extend `p3-circuit`'s NPO type system with new primitives. This is a multi-session effort; the steps below give a concrete checklist for picking it up in fresh sessions.
 
 ### Why a fork
 
@@ -1126,7 +1126,7 @@ The conversation that approved Phase 7 had already burned considerable context o
 
 ### Recommended next session prompt
 
-When picking this up, the user should start a fresh Claude Code session with something like:
+When picking this up, start a fresh working session with something like:
 
 > "Begin Phase 7a-0: set up the plonky3-recursion fork per the recipe in docs/EXPERIMENTS.md. Clone the upstream repo to /home/binbin/Plonky3-recursion-fork at rev 524665d, add the [patch] override in Cargo.toml, verify all 81 prior tests still pass, then add a no-op comment in the fork and confirm the patch flow picks it up. Stop after the no-op verification — Phase 7a-1 (PermuteAir) is the next session."
 
