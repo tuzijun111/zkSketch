@@ -1,0 +1,17 @@
+dataset,family,epochs,batch,total_prove_ms,mean_epoch_ms,max_epoch_ms,final_answer,all_correct
+aol,CM,4,8,446.478,111.620,118.843,4.000,true
+aol,GK,4,8,435.446,108.861,111.781,10.000,true
+aol,HLL,4,8,628.586,157.147,159.405,61.098,true
+aol,SS,4,8,270.057,67.514,68.445,1.000,true
+netflix,CM,4,8,426.534,106.633,107.604,4.000,true
+netflix,GK,4,8,442.404,110.601,113.893,0.000,true
+netflix,HLL,4,8,622.769,155.692,159.266,60.413,true
+netflix,SS,4,8,266.318,66.580,67.231,0.000,true
+gaussian,CM,4,8,432.705,108.176,109.060,3.000,true
+gaussian,GK,4,8,429.728,107.432,110.040,10.000,true
+gaussian,HLL,4,8,616.010,154.003,154.985,64.918,true
+gaussian,SS,4,8,266.736,66.684,67.585,0.000,true
+uniform,CM,4,8,437.765,109.441,109.968,4.000,true
+uniform,GK,4,8,441.014,110.253,112.338,0.000,true
+uniform,HLL,4,8,614.922,153.731,156.241,61.127,true
+uniform,SS,4,8,267.375,66.844,68.375,1.000,true

@@ -29,6 +29,6 @@ Thumbs.db
 
 # Experiment outputs (regenerate via `cargo run --release --example exp_*`
 # then `python3 scripts/plot_experiments.py`)
-/results/
+# /results/
 
 /latex/

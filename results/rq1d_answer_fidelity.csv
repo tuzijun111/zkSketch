@@ -1,0 +1,5 @@
+family,zk_answer,plaintext_answer,ground_truth,abs_error,round_trip_ok
+CM,2.000,2.000,2.000,0.000,true
+GK,6.000,6.000,6.000,0.000,true
+HLL,58.355,58.355,22.000,36.355,true
+SS,2.000,2.000,2.000,0.000,true

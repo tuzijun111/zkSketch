@@ -1,0 +1,5 @@
+family,trials,detected,detection_rate
+CM,5,5,1.000
+GK,5,5,1.000
+HLL,5,5,1.000
+SS,5,5,1.000

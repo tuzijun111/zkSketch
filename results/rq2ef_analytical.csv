@@ -1,0 +1,7 @@
+panel,n_or_param,metric,predicted,kind
+2-e,n=2^15,exact_index/CM_per_record,250x,analytical
+2-e,n=2^20,exact_index/CM_per_record,333x,analytical
+2-e,n=2^25,exact_index/CM_per_record,417x,analytical
+2-e,n=2^30,exact_index/CM_per_record,500x,analytical
+2-f,RISC0,per_batch_prove_gap,100-1000x,analytical
+2-f,SP1,per_batch_prove_gap,100-1000x,analytical

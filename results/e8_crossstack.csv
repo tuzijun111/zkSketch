@@ -1,0 +1,6 @@
+backend,op,families,prove_total_ms_median,verify_ms_median,proof_size_bytes,peak_rss_mb_median
+plonky3,leaf,cm,140.575,13.399,431322,167.1
+plonky3,recursive_merge,cm,1138.973,14.627,496290,932.4
+plonky3,cross_family_merge,cm+hll,0.009,0.003,96,249.5
+plonky2,leaf,cm,78.377,3.078,127048,163.9
+plonky2,recursive_merge,cm,521.876,3.298,132888,353.4
