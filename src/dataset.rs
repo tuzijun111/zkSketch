@@ -170,6 +170,74 @@ pub fn netflix() -> Option<Vec<u32>> {
     load_keys("netflix")
 }
 
+// ─── Canonical *materialized* synthetic datasets ──────────────────────────
+//
+// The synthetic streams are deterministic in their seed, so storing them is not
+// strictly required — but the Gaussian/Zipf path uses libm transcendentals
+// (`ln/cos/sin/powf`) whose last-ULP rounding can differ across platforms/libc,
+// so a *frozen* copy is the only way to guarantee byte-identical inputs on every
+// machine (Uniform is pure integer ops and is already bit-portable). We freeze a
+// canonical trio into `data/<name>.keys`, beside the real `aol.keys`/`netflix.keys`,
+// via `examples/gen_synthetic.rs`, which calls the SAME generators below — one
+// source of truth, no re-implementation drift. The loaders mirror `aol()`/
+// `netflix()` and return `None` when the files are absent, so the in-code
+// generators remain the offline fallback (per the "keep baselines" rule).
+
+/// Canonical length of a materialized synthetic stream — matches the real
+/// datasets' default cap, so each is a drop-in sibling of `aol.keys`/`netflix.keys`.
+pub const SYNTH_N: usize = 200_000;
+/// Canonical seed for the materialized **Gaussian** stream.
+pub const GAUSSIAN_SEED: u64 = 1;
+/// Canonical seed for the materialized **Uniform** stream.
+pub const UNIFORM_SEED: u64 = 2;
+/// Canonical skew for the materialized **Zipf** stream.
+pub const ZIPF_ALPHA: f64 = 1.0;
+/// Canonical universe size for the materialized **Zipf** stream.
+pub const ZIPF_UNIVERSE: usize = 1 << 16;
+/// Canonical seed for the materialized **Zipf** stream.
+pub const ZIPF_SEED: u64 = 1;
+
+/// Build a canonical synthetic stream of `n` keys by name
+/// (`"gaussian" | "uniform" | "zipf"`) at the documented canonical seeds/params.
+/// This is what `examples/gen_synthetic.rs` freezes to disk, and what the
+/// prefix-equivalence test checks the frozen files against.
+pub fn canonical_stream(name: &str, n: usize) -> Option<Vec<u32>> {
+    match name {
+        "gaussian" => Some(synthetic_stream(Synthetic::Gaussian, n, GAUSSIAN_SEED)),
+        "uniform" => Some(synthetic_stream(Synthetic::Uniform, n, UNIFORM_SEED)),
+        "zipf" => Some(zipf_stream(ZIPF_ALPHA, ZIPF_UNIVERSE, n, ZIPF_SEED)),
+        _ => None,
+    }
+}
+
+/// Write a key stream to `data/<name>.keys` as a flat little-endian `u32` stream
+/// (the exact format the real loaders read). Returns the path written.
+pub fn write_keys(name: &str, keys: &[u32]) -> std::io::Result<PathBuf> {
+    let path = keys_path(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut bytes = Vec::with_capacity(keys.len() * 4);
+    for &k in keys {
+        bytes.extend_from_slice(&k.to_le_bytes());
+    }
+    std::fs::write(&path, &bytes)?;
+    Ok(path)
+}
+
+/// Materialized canonical **Gaussian** stream (`data/gaussian.keys`), if present.
+pub fn gaussian() -> Option<Vec<u32>> {
+    load_keys("gaussian")
+}
+/// Materialized canonical **Uniform** stream (`data/uniform.keys`), if present.
+pub fn uniform() -> Option<Vec<u32>> {
+    load_keys("uniform")
+}
+/// Materialized canonical **Zipf** stream (`data/zipf.keys`), if present.
+pub fn zipf() -> Option<Vec<u32>> {
+    load_keys("zipf")
+}
+
 /// The "small part of the dataset" the circuit tests use: the first `k`
 /// keys (or all, if fewer).
 pub fn take(keys: &[u32], k: usize) -> Vec<u32> {
@@ -240,10 +308,24 @@ mod tests {
 
     /// All key-sources to drive a circuit test on a `batch`-sized slice:
     /// the two synthetic distributions plus any fetched real datasets.
+    ///
+    /// The synthetic slices prefer the **frozen** `data/{gaussian,uniform}.keys`
+    /// (byte-portable across platforms) and fall back to in-code generation at
+    /// the canonical seeds when the files haven't been materialized. The two are
+    /// byte-identical by construction (the file is the canonical seeded stream),
+    /// so this changes no test input — only its portability.
     fn sources(batch: usize) -> Vec<(String, Vec<u32>)> {
+        let gauss = match gaussian() {
+            Some(k) if k.len() >= batch => take(&k, batch),
+            _ => take(&synthetic_stream(Synthetic::Gaussian, batch, GAUSSIAN_SEED), batch),
+        };
+        let unif = match uniform() {
+            Some(k) if k.len() >= batch => take(&k, batch),
+            _ => take(&synthetic_stream(Synthetic::Uniform, batch, UNIFORM_SEED), batch),
+        };
         let mut v: Vec<(String, Vec<u32>)> = vec![
-            ("gaussian".into(), take(&synthetic_stream(Synthetic::Gaussian, batch, 1), batch)),
-            ("uniform".into(), take(&synthetic_stream(Synthetic::Uniform, batch, 2), batch)),
+            ("gaussian".into(), gauss),
+            ("uniform".into(), unif),
         ];
         if let Some(k) = aol() {
             v.push(("aol".into(), take(&k, batch)));
@@ -252,6 +334,36 @@ mod tests {
             v.push(("netflix".into(), take(&k, batch)));
         }
         v
+    }
+
+    #[test]
+    fn materialized_synthetic_is_prefix_equivalent_when_present() {
+        // If the frozen files exist, their prefix must equal in-code generation
+        // at the canonical seed — proof that the file is a faithful frozen copy
+        // and that loading it (rather than generating) changes no downstream
+        // bytes. If absent, the test is a no-op (run `gen_synthetic` to create).
+        for name in ["gaussian", "uniform", "zipf"] {
+            let loaded = match name {
+                "gaussian" => gaussian(),
+                "uniform" => uniform(),
+                "zipf" => zipf(),
+                _ => None,
+            };
+            match loaded {
+                Some(k) => {
+                    let n = 1000.min(k.len());
+                    assert_eq!(
+                        &k[..n],
+                        &canonical_stream(name, n).unwrap()[..n],
+                        "{name}.keys must be the canonical seeded stream's prefix"
+                    );
+                    println!("dataset {name}: {} frozen keys, prefix matches generator", k.len());
+                }
+                None => println!(
+                    "dataset {name}: not materialized (run: cargo run --release --example gen_synthetic)"
+                ),
+            }
+        }
     }
 
     #[test]

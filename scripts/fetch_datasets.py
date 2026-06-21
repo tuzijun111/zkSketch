@@ -26,9 +26,17 @@ direct comparability. The recipe is copied from S³'s own data generator,
 
 Note: the synthetic streams (Gaussian μ=2^31 σ=2^13, Uniform, Zipf) are
 generated in `src/dataset.rs` to match S³'s `genGaussianData`/`genUniformData`
-— there is nothing to download for them. The `data/stream/synthetic_data.dat`
-committed in mpc4j belongs to a *different* (DP-streaming) module, not S³'s
-sketches, so we do not use it.
+— there is nothing to *download* for them. They are materialized (frozen,
+deterministically) by the Rust generator, NOT by this Python script, to keep a
+single source of truth and avoid re-implementation drift:
+
+    cargo run --release --example gen_synthetic   # → data/{gaussian,uniform,zipf}.keys + manifest
+
+The frozen synthetic files are git-tracked (deterministic, non-copyright — they
+ship with the repo); the real AOL/Netflix files this script produces are
+git-ignored. The
+`data/stream/synthetic_data.dat` committed in mpc4j belongs to a *different*
+(DP-streaming) module, not S³'s sketches, so we do not use it.
 
 Output: `data/<name>.keys`, a flat little-endian `u32` stream (4 bytes/key);
 the Rust loader (`src/dataset.rs`) reads `file_len / 4` keys. Downloads are

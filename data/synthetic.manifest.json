@@ -1,0 +1,13 @@
+{
+  "generator": "cargo run --release --example gen_synthetic",
+  "source_of_truth": "src/dataset.rs (synthetic_stream / zipf_stream)",
+  "format": "flat little-endian u32 (4 bytes/key)",
+  "keys_per_file": 200000,
+  "seeds": { "gaussian": 1, "uniform": 2, "zipf": 1 },
+  "zipf": { "alpha": 1.0, "universe": 65536 },
+  "files": [
+    { "file": "gaussian.keys", "description": "Gaussian mu=2^31 sigma=2^13, seed=1", "keys": 200000, "distinct": 38121 },
+    { "file": "uniform.keys", "description": "Uniform over [0,2^32), seed=2", "keys": 200000, "distinct": 199996 },
+    { "file": "zipf.keys", "description": "Zipf alpha=1.0 universe=65536, seed=1", "keys": 200000, "distinct": 32311 }
+  ]
+}

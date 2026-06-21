@@ -42,8 +42,17 @@ EXP_DATASET=aol scripts/run_experiments.sh
 
 | Dataset | Kind | Needs fetching? |
 | ------- | ---- | --------------- |
-| `uniform`, `gaussian`, `zipf` | synthetic (generated, S³-matched) | no — fully offline |
+| `uniform`, `gaussian`, `zipf` | synthetic (deterministic, S³-matched) | no — shipped as `data/{gaussian,uniform,zipf}.keys` (git-tracked), or regenerate (below) |
 | `aol`, `netflix` | real S³ datasets (S³'s exact key recipe) | **yes** — see below |
+
+The synthetic datasets are **git-tracked** (frozen, byte-portable — un-ignored so
+they ship with the repo) and also regenerable deterministically — no download.
+The in-code generators are the offline fallback if the files are absent:
+
+```bash
+cargo run --release --example gen_synthetic        # → data/{gaussian,uniform,zipf}.keys + manifest
+GEN_SYNTH_N=1000000 cargo run --release --example gen_synthetic   # larger streams
+```
 
 Fetch the real datasets (capped, streamed — only a small prefix downloads):
 
@@ -54,7 +63,8 @@ python3 scripts/fetch_datasets.py aol             # just one
 python3 scripts/fetch_datasets.py --force         # re-download
 ```
 
-Keys land in `data/*.keys` (shared by both crates; git-ignored). The keys use
+Keys land in `data/aol.keys` / `data/netflix.keys` (shared by both crates; these
+real datasets are git-ignored — only the synthetic trio is tracked). The keys use
 **S³'s exact derivation** (AOL = `CRC32(normalised ClickURL) & 2³²−1`, Netflix =
 per-record customer id), so our inputs match S³ bit-for-bit. See
 [datasets.md](datasets.md).
@@ -122,8 +132,9 @@ verify_ms_median, peak_rss_mb_median, peak_rss_mb_p95, status
   backend).
 - `env.json` records CPU/cores/RAM/OS/rustc + backend field/hash/extension.
 
-Outputs (`results/`, `plonky2/results/`, `data/*.keys`) are git-ignored;
-re-run the commands above to regenerate.
+Outputs (`results/`, `plonky2/results/`, and the real `data/aol.keys` /
+`data/netflix.keys`) are git-ignored; re-run the commands above to regenerate.
+The synthetic `data/{gaussian,uniform,zipf}.keys` are tracked (deterministic).
 
 ## E2 — integrity (tamper + fidelity)
 

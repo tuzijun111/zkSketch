@@ -92,8 +92,18 @@ fn sources(n: usize) -> Vec<(String, Vec<u32>)> {
     if let Some(k) = dataset::netflix() {
         v.push(("netflix".into(), dataset::take(&k, n)));
     }
-    v.push(("gaussian".into(), dataset::synthetic_stream(Synthetic::Gaussian, n, 1)));
-    v.push(("uniform".into(), dataset::synthetic_stream(Synthetic::Uniform, n, 2)));
+    // Prefer the frozen canonical synthetic files (byte-portable); fall back to
+    // in-code generation at the same canonical seeds. Byte-identical either way.
+    let gauss = match dataset::gaussian() {
+        Some(k) if k.len() >= n => dataset::take(&k, n),
+        _ => dataset::synthetic_stream(Synthetic::Gaussian, n, dataset::GAUSSIAN_SEED),
+    };
+    let unif = match dataset::uniform() {
+        Some(k) if k.len() >= n => dataset::take(&k, n),
+        _ => dataset::synthetic_stream(Synthetic::Uniform, n, dataset::UNIFORM_SEED),
+    };
+    v.push(("gaussian".into(), gauss));
+    v.push(("uniform".into(), unif));
     v
 }
 

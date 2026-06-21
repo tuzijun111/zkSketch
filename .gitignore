@@ -24,8 +24,16 @@ Thumbs.db
 
 /src/proofs/
 
-# Downloaded/processed datasets (regenerate via scripts/fetch_datasets.py)
-/data/*.keys
+# Real datasets — copyrighted/large; regenerate via scripts/fetch_datasets.py
+# /data/*.keys
+
+
+# …but DO ship the deterministic, non-copyright synthetic datasets so others can
+# reproduce byte-for-byte (regenerate via `cargo run --release --example gen_synthetic`).
+!/data/gaussian.keys
+!/data/uniform.keys
+!/data/zipf.keys
+!/data/synthetic.manifest.json
 
 # Experiment outputs (regenerate via `cargo run --release --example exp_*`
 # then `python3 scripts/plot_experiments.py`)
