@@ -32,9 +32,9 @@ single source of truth and avoid re-implementation drift:
 
     cargo run --release --example gen_synthetic   # → data/{gaussian,uniform,zipf}.keys + manifest
 
-The frozen synthetic files are git-tracked (deterministic, non-copyright — they
-ship with the repo); the real AOL/Netflix files this script produces are
-git-ignored. The
+All `data/*.keys` ship with the repo (git-tracked): the synthetic files are
+deterministic/non-copyright, and the real AOL/Netflix files this script produces
+are the derived 32-bit key streams only (not the raw corpora). The
 `data/stream/synthetic_data.dat` committed in mpc4j belongs to a *different*
 (DP-streaming) module, not S³'s sketches, so we do not use it.
 

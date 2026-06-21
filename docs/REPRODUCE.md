@@ -63,11 +63,11 @@ python3 scripts/fetch_datasets.py aol             # just one
 python3 scripts/fetch_datasets.py --force         # re-download
 ```
 
-Keys land in `data/aol.keys` / `data/netflix.keys` (shared by both crates; these
-real datasets are git-ignored — only the synthetic trio is tracked). The keys use
-**S³'s exact derivation** (AOL = `CRC32(normalised ClickURL) & 2³²−1`, Netflix =
-per-record customer id), so our inputs match S³ bit-for-bit. See
-[datasets.md](datasets.md).
+Keys land in `data/aol.keys` / `data/netflix.keys` (shared by both crates). These
+processed 32-bit key streams are tracked in git (the raw corpora are not); re-run
+the script to refresh or grow them. The keys use **S³'s exact derivation**
+(AOL = `CRC32(normalised ClickURL) & 2³²−1`, Netflix = per-record customer id), so
+our inputs match S³ bit-for-bit. See [datasets.md](datasets.md).
 
 ## Partial (testing) vs whole (real-run) dataset
 
@@ -132,9 +132,10 @@ verify_ms_median, peak_rss_mb_median, peak_rss_mb_p95, status
   backend).
 - `env.json` records CPU/cores/RAM/OS/rustc + backend field/hash/extension.
 
-Outputs (`results/`, `plonky2/results/`, and the real `data/aol.keys` /
-`data/netflix.keys`) are git-ignored; re-run the commands above to regenerate.
-The synthetic `data/{gaussian,uniform,zipf}.keys` are tracked (deterministic).
+All `data/*.keys` (synthetic + real) and the root `results/*.csv` are tracked in
+git, so a fresh clone has them; everything is regenerable by re-running the
+commands above. Only `plonky2/results/` is git-ignored (the merged combined CSVs
+live under the root `results/`).
 
 ## E2 — integrity (tamper + fidelity)
 

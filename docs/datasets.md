@@ -47,7 +47,7 @@ To test the four zkSketch circuits on the **same data** S³
 | Materialize the synthetic datasets (deterministic) | `examples/gen_synthetic.rs` |
 | Download + process the real datasets | `scripts/fetch_datasets.py` |
 | Synthetic key files (**tracked in git** — un-ignored, commit alongside the code) | `data/gaussian.keys`, `data/uniform.keys`, `data/zipf.keys`, `data/synthetic.manifest.json` |
-| Real key files (git-ignored — copyright/size) | `data/aol.keys`, `data/netflix.keys` |
+| Real key files (**tracked in git** — processed 32-bit keys only, not the raw corpora) | `data/aol.keys`, `data/netflix.keys` |
 
 All key files are a flat **little-endian `u32`** stream (4 bytes/key);
 `dataset::load_keys` reads `file_len / 4` keys. Loaders: `dataset::{gaussian,
@@ -103,7 +103,9 @@ and the Netflix `tar.gz`) and aborts once the cap is reached, so only a small
 prefix of each multi-hundred-MB corpus is downloaded. Caps keep "a small part"
 for testing. If a download fails (network/restriction), the script reports it
 and the synthetic datasets still work offline. A processed pair lives in
-`data/aol.keys` / `data/netflix.keys` (git-ignored, flat LE-`u32`).
+`data/aol.keys` / `data/netflix.keys` (tracked in git — these are the derived
+32-bit key streams, flat LE-`u32`; the raw corpora are not included). Re-run the
+script (raise `*_MAX_KEYS`) to refresh or grow them.
 
 ## Using the data
 
