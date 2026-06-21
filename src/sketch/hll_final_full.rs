@@ -614,12 +614,14 @@ pub fn prove_hll_full(
     }
 
     // ─── Run + prove ────────────────────────────────────────────────────
+    let __t_w = std::time::Instant::now();
     let traces = {
         let mut runner = circuit.runner();
         runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
         runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
         runner.run().expect("run hll_full circuit")
     };
+    let __witness = __t_w.elapsed(); // witness_gen = trace generation only
 
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
@@ -644,8 +646,17 @@ pub fn prove_hll_full(
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    let __t_p = std::time::Instant::now();
     let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove_all_tables (hll_full)");
+    let __prove = __t_p.elapsed();
+    let __t_v = std::time::Instant::now();
     prover.verify_all_tables(&proof).expect("self-verify hll_full leaf");
+    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
+        witness: __witness,
+        prove: __prove,
+        verify: __t_v.elapsed(),
+        trace_rows: ext_degrees.iter().map(|&d| d as u64).sum(),
+    });
 
     let _ = blog2;
     HllFullLeafProof {

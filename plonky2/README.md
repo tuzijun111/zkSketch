@@ -49,14 +49,22 @@ Because Goldilocks is 64-bit, a counter / register is a single field element, so
 
 ## What's implemented
 
-- **Sketches** (`src/sketch/`): Count-Min (Pattern A linear) and HyperLogLog (Pattern A max) —
+- **Sketches** (`src/sketch/`): all four families — Count-Min (Pattern A linear), HyperLogLog
+  (Pattern A max), SpaceSaving (Pattern B top-`s`), and Greenwald–Khanna (Pattern B fusion) —
   plaintext update rules + native Poseidon commitments.
 - **Leaves** (`src/leaf/`): in-circuit update epochs.
   - `countmin`: one-hot selector per `(record, row)`, `final = initial + Σ selector·value`, with
     in-circuit Poseidon binding both state commits.
+  - `countmin_final`: the §5.2 distinct-key-compacted leaf (sort + group + sparse patch).
   - `hyperloglog`: one-hot selector, and a **sound `max`** via product-of-differences
     (`Π(final − candidate) = 0`, so `final` is *some* candidate) plus range checks
     (`final − candidate ∈ [0, 2^6)`, so `final ≥ every` candidate) ⇒ `final = max`.
+  - `spacesaving`: §G top-`s` retention — union → key-group-sum → count-sort → top-`s` split,
+    with the grouping tags forced by an `is_zero` gadget (Pattern B needs exact grouping).
+  - `greenwald_khanna`: §5.4 quantile fusion — union → value-sort → `⌈log₂(total)⌉` parity-0
+    fusion rounds → split. Each round's fuse + resort is a grand-product permutation.
+  - The Pattern-B permutations are plonky2 grand-product arguments (`leaf/gadgets.rs`:
+    `assert_perm_cols`), the SNARK stand-in for plonky3's `PermuteAir`.
   - `fib`: a toy leaf used to smoke-test the recursion plumbing.
 - **Recursion** (`src/recursion/`): sketch-agnostic, everything is a [`Node`].
   - `merge` — §4.2 two-input recursive merge: verifies both children in-circuit, glues the shared
@@ -97,8 +105,13 @@ cargo run --release --example countmin_chain   # timings / proof sizes
 
 ## Status / not yet ported
 
-- **SpaceSaving / Greenwald-Khanna** (Pattern B) — the original only ships their plaintext+commit;
-  the four-gate in-circuit pipeline is future work here too.
+- **All four families now have in-circuit leaves** (Pattern A: Count-Min, HyperLogLog;
+  Pattern B: SpaceSaving, Greenwald–Khanna), each with round-trip, two-epoch recursive-merge,
+  and wrong-final soundness tests. SS/GK are the faithful counterparts of plonky3's
+  `ss_final_full` / `gk_final_full`.
+- GK fusion uses the same one-directional eligibility latitude as the plonky3 original
+  (`decision ⇒ eligible`; an honest prover fully fuses, matching the native update), and the
+  exact value-equality fusion policy (no band-merge of different values).
 - The `key → (pos / register_idx, leading_run)` hash relation is exposed as public input but
   checked **natively** (as in the original), not re-derived in-circuit.
 - §4.3 `merge` rebuilds a recursion circuit per extension (correct, O(1) verify, but extra prover

@@ -7,4 +7,7 @@
 pub mod countmin;
 pub mod countmin_final;
 pub mod fib;
+pub mod gadgets;
+pub mod greenwald_khanna;
 pub mod hyperloglog;
+pub mod spacesaving;

@@ -5,4 +5,6 @@
 //! independently and recursively merged). Mirrors `../src/sketch/`.
 
 pub mod countmin;
+pub mod greenwald_khanna;
 pub mod hyperloglog;
+pub mod spacesaving;

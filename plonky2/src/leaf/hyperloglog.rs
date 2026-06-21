@@ -174,6 +174,18 @@ pub fn build_hll_leaf(params: HllLeafParams) -> HllLeaf {
 impl HllLeaf {
     /// Prove one HLL epoch. `index` is the 1-based leaf position.
     pub fn prove(&self, initial: &HllState, batch: &[HllUpdate], index: u64) -> Result<Node> {
+        self.prove_timed(initial, batch, index).map(|(n, _, _)| n)
+    }
+
+    /// Like [`prove`](Self::prove) but also returns `(witness_gen, prove)`
+    /// durations — the EVAL_SPEC §1 phase split.
+    pub fn prove_timed(
+        &self,
+        initial: &HllState,
+        batch: &[HllUpdate],
+        index: u64,
+    ) -> Result<(Node, std::time::Duration, std::time::Duration)> {
+        let t_w = std::time::Instant::now();
         assert_eq!(batch.len(), self.params.batch, "batch length mismatch");
         assert_eq!(initial.b, self.params.b, "state.b mismatch");
 
@@ -207,8 +219,11 @@ impl HllLeaf {
             }
         }
 
+        let witness = t_w.elapsed();
+        let t_p = std::time::Instant::now();
         let proof = self.data.prove(pw)?;
-        Ok(Node::leaf(self.data.clone(), proof, init_commit, final_commit, index))
+        let prove = t_p.elapsed();
+        Ok((Node::leaf(self.data.clone(), proof, init_commit, final_commit, index), witness, prove))
     }
 }
 

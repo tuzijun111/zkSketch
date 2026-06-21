@@ -48,7 +48,15 @@ fn splitmix64(state: &mut u64) -> u64 {
 }
 
 /// Generate `n` 32-bit keys from a synthetic distribution (deterministic in
-/// `seed`). Keys land in `[0, 2^32)`, matching the paper's key domain.
+/// `seed`). Keys land in `[0, 2^32)`, the `[2^32]` domain S³ uses.
+///
+/// Matches S³'s `DataGenerator`/`TestDataGenerator` (mpc4j, Apache-2.0):
+/// **Gaussian** = `nextGaussian(μ=2^31, σ=2^13)` with the same clamp
+/// (`bitLen=32`, `GaussianSTD=13`); **Uniform** = a random 32-bit value.
+/// We match S³ at the *distribution* level (S³ seeds with an unseeded
+/// `new Random()`, so even their own synthetic keys aren't reproducible
+/// run-to-run); ours are deterministic in `seed`. The real AOL/Netflix
+/// streams, by contrast, match S³ byte-for-byte (see `scripts/fetch_datasets.py`).
 pub fn synthetic_stream(dist: Synthetic, n: usize, seed: u64) -> Vec<u32> {
     let mut s = seed ^ 0xD1B5_4A32_D192_ED03;
     let mut out = Vec::with_capacity(n);
@@ -70,8 +78,17 @@ pub fn synthetic_stream(dist: Synthetic, n: usize, seed: u64) -> Vec<u32> {
                 let z1 = r * (2.0 * std::f64::consts::PI * u2).sin();
                 for z in [z0, z1] {
                     let v = mu + sigma * z;
-                    // Clamp into the 32-bit domain.
-                    let k = v.clamp(0.0, (u32::MAX as f64) - 1.0).round() as u32;
+                    // S³'s clamp (genGaussianData): values ≥ 2^32 → 2^31,
+                    // values ≤ 0 → 1; otherwise truncate toward zero like
+                    // Java's `(long)` cast. (For μ=2^31, σ=2^13 the clamp
+                    // essentially never fires — it's 2^18 σ to either edge.)
+                    let k: u32 = if v >= 4_294_967_296.0 {
+                        1u32 << 31
+                    } else if v <= 0.0 {
+                        1
+                    } else {
+                        v as u32
+                    };
                     out.push(k);
                     if out.len() == n {
                         break;

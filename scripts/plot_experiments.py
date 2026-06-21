@@ -286,6 +286,139 @@ def fig_casestudy():
     save(fig, "fig_casestudy_ingest")
 
 
+# ─── E4: scalability sweeps (a/b linear, d flat in stream length) ─────────────
+def fig_e4():
+    data = load("e4_scaling")
+    if not data:
+        return
+    _, rows = data
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3))
+    # left: e4a (batch m) and e4b (touched-cell capacity T_max) scaling
+    a = sorted([r for r in rows if r["sweep"] == "a"], key=lambda r: int(r["m"]))
+    b = sorted([r for r in rows if r["sweep"] == "b"], key=lambda r: int(r["T_max"]))
+    if a:
+        ax1.plot([int(r["m"]) for r in a], [float(r["prove_total_ms_median"]) for r in a],
+                 "o-", label="e4a: batch $m$ (all distinct)")
+    if b:
+        ax1.plot([int(r["T_max"]) for r in b], [float(r["prove_total_ms_median"]) for r in b],
+                 "s-", label="e4b: $T_{max}=$ distinct·$d$")
+    ax1.set_xlabel("sweep axis")
+    ax1.set_ylabel("prove_total (ms)")
+    ax1.set_title("E4-a/b: scaling")
+    ax1.legend(fontsize=8)
+    # right: e4d per-batch prove flat in stream length n
+    d = sorted([r for r in rows if r["sweep"] == "d"], key=lambda r: int(r["batch_index"]))
+    if d:
+        idx = [int(r["batch_index"]) for r in d]
+        pv = [float(r["prove_total_ms_median"]) for r in d]
+        ax2.plot(idx, pv, "o-", color="green")
+        ax2.set_ylim(0, max(pv) * 1.5)
+        ax2.set_xlabel("batch index (epoch in stream)")
+        ax2.set_ylabel("prove_total (ms)")
+        ax2.set_title("E4-d: per-batch prove flat in $n$")
+    fig.tight_layout()
+    save(fig, "fig_e4_scaling")
+
+
+# ─── E5: composition ladder (verifier cost Θ(E)→O(1)) ────────────────────────
+def fig_e5():
+    data = load("e5_ladder")
+    if not data:
+        return
+    _, rows = data
+    settings = ["no_composition", "per_batch_chain", "recursive_linear", "streaming_forest"]
+    fig, ax = plt.subplots(figsize=(5, 3))
+    for s in settings:
+        sr = sorted([r for r in rows if r["setting"] == s], key=lambda r: int(r["E"]))
+        if not sr:
+            continue
+        E = [int(r["E"]) for r in sr]
+        checks = [int(r["verifier_checks"]) for r in sr]
+        ax.plot(E, checks, "o-", label=s)
+    ax.set_xlabel("audit window $E$")
+    ax.set_ylabel("verifier checks")
+    ax.set_xscale("log", base=2)
+    ax.set_yscale("log", base=2)
+    ax.set_title("E5: auditor cost $\\Theta(E)\\to O(1)$")
+    ax.legend(fontsize=8)
+    save(fig, "fig_e5_ladder")
+
+
+# ─── E6: streaming-forest core scaling ───────────────────────────────────────
+def fig_e6():
+    data = load("e6_forest")
+    if not data:
+        return
+    _, rows = data
+    ms = sorted({int(r["m"]) for r in rows})
+    fig, ax = plt.subplots(figsize=(5, 3))
+    for m in ms:
+        mr = sorted([r for r in rows if int(r["m"]) == m], key=lambda r: int(r["k"]))
+        k = [int(r["k"]) for r in mr]
+        sp = [float(r["speedup_vs_1core"]) for r in mr]
+        ax.plot(k, sp, "o-", label=f"m={m}")
+    if rows:
+        kmax = max(int(r["k"]) for r in rows)
+        ax.plot([1, kmax], [1, kmax], "k--", alpha=0.4, label="ideal linear")
+    ax.set_xlabel("cores $k$")
+    ax.set_ylabel("speedup vs 1 core")
+    ax.set_title("E6: streaming-forest parallel ingest")
+    ax.legend(fontsize=8)
+    save(fig, "fig_e6_forest")
+
+
+# ─── E7: maintenance-policy latency trade-off ────────────────────────────────
+def fig_e7():
+    data = load("e7_policy")
+    if not data:
+        return
+    import numpy as np
+    _, rows = data
+    pol = [r for r in rows if r["q"] == "1/sec" and r["backlog"] == "-"]
+    order = ["lazy", "smoothed", "smoothed", "smoothed", "eager"]
+    pol = [r for r in pol]  # keep file order (lazy, eager, smoothed1/2/4)
+    labels = [f"{r['policy']}" + (f"(c={r['c']})" if r["policy"] == "smoothed" else "") for r in pol]
+    q = [float(r["query_latency_ms_median"]) for r in pol]
+    ins = [float(r["insert_tail_latency_ms_p95"]) for r in pol]
+    x = np.arange(len(pol))
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.bar(x - 0.2, q, 0.4, label="query latency (median)")
+    ax.bar(x + 0.2, ins, 0.4, label="insert tail (p95)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=20, fontsize=8)
+    ax.set_ylabel("latency (ms)")
+    ax.set_title("E7: lazy↔eager query/insert trade-off (q=1/sec)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    save(fig, "fig_e7_policy")
+
+
+# ─── E8: cross-stack head-to-head (plonky2 vs plonky3) ───────────────────────
+def fig_e8():
+    data = load("e8_crossstack")
+    if not data:
+        return
+    import numpy as np
+    _, rows = data
+    ops = ["leaf", "recursive_merge"]  # the real-recursive head-to-head
+    backends = ["plonky3", "plonky2"]
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3))
+    x = np.arange(len(ops))
+    for i, b in enumerate(backends):
+        pv = [next((float(r["prove_total_ms_median"]) for r in rows if r["op"] == op and r["backend"] == b), 0) for op in ops]
+        sz = [next((float(r["proof_size_bytes"]) / 1024 for r in rows if r["op"] == op and r["backend"] == b), 0) for op in ops]
+        ax1.bar(x + (i - 0.5) * 0.4, pv, 0.4, label=b)
+        ax2.bar(x + (i - 0.5) * 0.4, sz, 0.4, label=b)
+    for ax, ylab, title in [(ax1, "prove_total (ms)", "E8: prove time"), (ax2, "proof size (KB)", "E8: proof size")]:
+        ax.set_xticks(x)
+        ax.set_xticklabels(ops, fontsize=8)
+        ax.set_ylabel(ylab)
+        ax.set_title(title)
+        ax.legend(fontsize=8)
+    fig.tight_layout()
+    save(fig, "fig_e8_crossstack")
+
+
 FIGURES = {
     "rq1a": fig_rq1a,
     "rq2a": fig_rq2a,
@@ -298,6 +431,11 @@ FIGURES = {
     "rq4ab": fig_rq4ab,
     "rq4cd": fig_rq4cd,
     "casestudy": fig_casestudy,
+    "e4": fig_e4,
+    "e5": fig_e5,
+    "e6": fig_e6,
+    "e7": fig_e7,
+    "e8": fig_e8,
 }
 
 

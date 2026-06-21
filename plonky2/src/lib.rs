@@ -25,6 +25,9 @@
 
 pub mod commitment;
 pub mod config;
+pub mod dataset;
+pub mod decode;
 pub mod leaf;
+pub mod metrics;
 pub mod recursion;
 pub mod sketch;

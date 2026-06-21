@@ -1,5 +1,33 @@
 # Evaluation — implementing `latex/zk1.tex` §Evaluation
 
+> **Reproducing the EVAL_SPEC experiments (E1 on both backends, dataset config,
+> full vs partial):** see **[REPRODUCE.md](REPRODUCE.md)** and
+> `scripts/run_experiments.sh`. This file documents the original RQ1–RQ4 runners.
+
+## EVAL_SPEC E1–E10 status (all implemented)
+
+The `latex/EVAL_SPEC.md` experiment suite is fully wired via
+`scripts/run_experiments.sh <e1..e10>` (see [REPRODUCE.md](REPRODUCE.md) for
+per-experiment detail). The RQ1–RQ4 runners below are the earlier framing and
+remain valid; the E-series is the spec-aligned, both-backends version.
+
+| Exp | What | Backends | Runner | CSV |
+| --- | ---- | -------- | ------ | --- |
+| E1 | per-family circuit cost (certified + CM replay) | plonky3 + plonky2 | `exp_e1` / `e1_metrics_demo` | `e1_circuit.csv` |
+| E2 | integrity (tamper + fidelity) | both | `exp_e2` / `e2_integrity` | `e2_integrity.csv` |
+| E3 | decode/query cost vs `s` | plonky2 | `e3_decode` | `e3_decode.csv` |
+| E4 | scalability sweeps a/b/c/d (incl. stream-length flatness) | plonky3 | `exp_e4` | `e4_scaling.csv` |
+| E5 | composition ladder (verifier Θ(E)→O(1)) | plonky3 | `exp_e5` | `e5_ladder.csv` |
+| E6 | streaming-forest cores × batch | plonky3 | `exp_e6` | `e6_forest.csv` |
+| E7 | maintenance policy × query rate | plonky3 | `exp_e7` | `e7_policy.csv` |
+| E8 | cross-stack head-to-head | both | `exp_e8` / `e8_crossstack` | `e8_crossstack.csv` |
+| E9 | optimisation ablations | plonky3 | `exp_e9` | `e9_optim.csv` |
+| E10 | cost-model validation (post-processing) | — | `cost_model_e10.py` | `e10_costmodel.csv` |
+
+Genuine future work (large new circuits, not in this prototype): a plonky3
+**decode AIR** (E3 on the STARK backend) and a **recursive cross-family merge**
+(E8 currently composes cm+hll only via the §4 framework digest, on plonky3).
+
 This document maps every experiment in the paper's **Evaluation** section
 (`\section{Evaluation (in progress)}`, RQ1–RQ4 + end-to-end case study +
 cost-model validation) to a runnable experiment in this repo, says how to run

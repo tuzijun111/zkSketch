@@ -386,6 +386,18 @@ pub fn build_countmin_final_leaf(params: CmFinalParams) -> CountMinFinalLeaf {
 impl CountMinFinalLeaf {
     /// Prove one §5.2 epoch. `index` is the 1-based leaf position.
     pub fn prove(&self, initial: &CountMinState, batch: &[CountMinUpdate], index: u64) -> Result<Node> {
+        self.prove_timed(initial, batch, index).map(|(n, _, _)| n)
+    }
+
+    /// Like [`prove`](Self::prove) but also returns `(witness_gen, prove)`
+    /// durations — the EVAL_SPEC §1 phase split.
+    pub fn prove_timed(
+        &self,
+        initial: &CountMinState,
+        batch: &[CountMinUpdate],
+        index: u64,
+    ) -> Result<(Node, std::time::Duration, std::time::Duration)> {
+        let t_w = std::time::Instant::now();
         let CmFinalParams { d, w, batch: m, distinct_bound } = self.params;
         assert_eq!(batch.len(), m);
         assert_eq!(initial.d, d);
@@ -504,8 +516,11 @@ impl CountMinFinalLeaf {
             pw.set_target(*t, v)?;
         }
 
+        let witness = t_w.elapsed();
+        let t_p = std::time::Instant::now();
         let proof = self.data.prove(pw)?;
-        Ok(Node::leaf(self.data.clone(), proof, init_commit, final_commit, index))
+        let prove = t_p.elapsed();
+        Ok((Node::leaf(self.data.clone(), proof, init_commit, final_commit, index), witness, prove))
     }
 }
 

@@ -1,23 +1,38 @@
-# Datasets — same suite as `paper/Streaming_MPC.pdf` §6.2.3
+# Datasets — identical key derivation to S³
 
-To test the four zkSketch circuits on the **same data** the Streaming-MPC
-paper evaluates on, we reproduce its dataset suite: two synthetic
-distributions (generated in-process) and two real datasets (downloaded +
-processed). All keys are 32-bit, drawn from the domain `[2^32]`.
+To test the four zkSketch circuits on the **same data** S³
+([Yu et al. 2026](https://doi.org/10.1145/3802110)) evaluates on, we reproduce
+**S³'s exact dataset recipe**, copied from their own data generator
+(`mpc4j-work-db-sketch/.../utils/{TestDataGenerator,DataGenerator}.java` in
+[alibaba-edu/mpc4j](https://github.com/alibaba-edu/mpc4j), Apache-2.0). S³ uses
+`bitLen = 32` (key domain `[2^32]`), `GaussianSTD = 13`, and `mask = 2^32 − 1`.
 
-## What the paper uses (§6.2.3)
+## What S³ uses (and exactly how we match it)
 
-| Dataset | Kind | Key = | Our source |
-| ------- | ---- | ----- | ---------- |
-| **Gaussian** | synthetic | `N(μ=2³¹, σ=2¹³)` clamped to `[0,2³²)` | generated (`dataset::Synthetic::Gaussian`) |
-| **Uniform** | synthetic | uniform over `[0,2³²)` | generated (`dataset::Synthetic::Uniform`) |
-| **AOL** | real | "hash the website of each record into 32-bit" | `AOL-user-ct-collection` web log → request URL hashed (FNV-1a) to `u32` |
-| **Netflix-Prize** | real | "user ID number as input data" | `nf_prize_dataset.tar` → rating-file user IDs |
+| Dataset | Kind | S³'s key = | Our source / match |
+| ------- | ---- | ---------- | ------------------ |
+| **Gaussian** | synthetic | `nextGaussian(μ=2³¹, σ=2¹³)`, clamp ≥2³²→2³¹, ≤0→1 | generated (`dataset::Synthetic::Gaussian`); **distribution-match** |
+| **Uniform** | synthetic | random 32-bit value | generated (`dataset::Synthetic::Uniform`); **distribution-match** |
+| **Zipf** | synthetic | (our skew knob for RQ3; S³ uses `DISTINCT`) | generated (`dataset::zipf_stream(α, …)`) |
+| **AOL** | real | extract first `https?://\S+` (the *ClickURL*) → normalize (lowercase, strip scheme/`www.`/trailing `/`) → `CRC32(norm) & mask` | search-query log → **byte-exact match** |
+| **Netflix-Prize** | real | first integer per line `& mask` (= CustomerID) | `nf_prize_dataset.tar` rating lines → **byte-exact match** |
 
-> AOL note: the archive.org `AOL-user-ct-collection` item serves web **access
-> logs** (the original search-query log is privacy-restricted). We hash each
-> record's request URL to a 32-bit key, faithful to the paper's "hash the
-> website → 32-bit." Document/source URLs are in `scripts/fetch_datasets.py`.
+> **Synthetic = distribution-match (not byte-exact), and that's the best
+> possible:** S³ seeds its generator with an unseeded `new Random()`, so even
+> S³'s own synthetic keys aren't reproducible run-to-run — only the
+> *distribution* is defined. Ours are deterministic in `seed`.
+>
+> **Real = byte-exact match:** AOL keys use `CRC32` (Java's `java.util.zip.CRC32`
+> = the IEEE-802.3 CRC-32 = Python's `zlib.crc32`), so on the same source file
+> our keys equal S³'s bit-for-bit. The AOL source is the **search-query log**
+> (archive.org `aolsearchdata2006`, the `user-ct-test-collection` files whose
+> *ClickURL* column carries the clicked website) — **not** the access-log in the
+> mislabelled `AOL-user-ct-collection` item, and **not** FNV-1a. Netflix is the
+> Netflix-Prize ratings; the first integer of a rating line is the CustomerID.
+>
+> Note: the only stream file committed in mpc4j, `data/stream/synthetic_data.dat`,
+> belongs to a *different* (DP-streaming) module — **not** S³'s sketches — so we
+> do not use it.
 
 ## Where the code lives
 
@@ -42,10 +57,12 @@ AOL_MAX_KEYS=200000 NETFLIX_MAX_KEYS=200000 python3 scripts/fetch_datasets.py
 python3 scripts/fetch_datasets.py --force        # re-download
 ```
 
-The script **streams** the Netflix `tar.gz` and aborts once the cap is
-reached, so only a small prefix of the 665 MB corpus is downloaded. Caps
-keep "a small part" for testing. If a download fails (network/restriction),
-the script reports it and the synthetic datasets still work offline.
+The script **streams** both sources (the AOL `user-ct-test-collection-01.txt`
+and the Netflix `tar.gz`) and aborts once the cap is reached, so only a small
+prefix of each multi-hundred-MB corpus is downloaded. Caps keep "a small part"
+for testing. If a download fails (network/restriction), the script reports it
+and the synthetic datasets still work offline. A processed pair lives in
+`data/aol.keys` / `data/netflix.keys` (git-ignored, flat LE-`u32`).
 
 ## Using the data
 

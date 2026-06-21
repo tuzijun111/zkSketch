@@ -15,6 +15,7 @@
 
 pub mod backend;
 pub mod config;
+pub mod timing;
 pub mod countmin_chain;
 pub mod countmin_leaf;
 pub mod countmin_leaf_v2;
