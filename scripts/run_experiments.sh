@@ -63,7 +63,9 @@ case "$EXPERIMENT" in
   e8) CSV="e8_crossstack.csv"; P3_EX="exp_e8"; P2_EX="e8_crossstack"; export EXP_M="${EXP_M:-n/a}" ;;
   # E9 optimisation ablations → plonky3 only.
   e9) CSV="e9_optim.csv";     P3_EX="exp_e9";  P2_EX="";  BACKENDS="plonky3"; export EXP_M="${EXP_M:-n/a}" ;;
-  *) echo "unknown experiment '$EXPERIMENT' (supported: e1, e2, e3, e4, e5, e6, e7, e8, e9, e10)"; exit 1 ;;
+  # Input-commitment + history-fold over real batches → plonky3 only.
+  inputfold) CSV="input_fold.csv"; P3_EX="exp_inputfold"; P2_EX=""; BACKENDS="plonky3"; export EXP_M="${EXP_M:-n/a}" ;;
+  *) echo "unknown experiment '$EXPERIMENT' (supported: e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, inputfold)"; exit 1 ;;
 esac
 if [[ -z "$P3_EX" && ( "$BACKENDS" == "plonky3" || "$BACKENDS" == "both" ) ]]; then
   echo "note: $EXPERIMENT has no plonky3 runner; forcing BACKENDS=plonky2"

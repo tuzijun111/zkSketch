@@ -5,9 +5,21 @@
 //! the committed final registers, with `final[r] = max(initial[r], selected runs)`.
 //!
 //! ## Public inputs (in order)
-//! 1. `initial_commit[0..4]`, 2. `final_commit[0..4]`, 3. per record: `key`, `idx`, `lr`.
-//! (Same `[initial | final]` prefix as the Count-Min leaf, so [`crate::recursion::merge`]
-//! treats both uniformly.)
+//! 1. `initial_commit[0..4]` = `Com(S_{t-1})`, 2. `final_commit[0..4]` = `Com(S_t)`,
+//! 3. `batch_commit[0..4]` = `Com(B_t)`. The batch records `(key, idx, lr)` are
+//! **private** and opened in-circuit from `batch_commit` (zk1.tex Step 1, "bind the
+//! batch"). Same `[initial | final]` 8-element prefix as the Count-Min leaf, so
+//! [`crate::recursion::merge`] treats all families uniformly.
+//!
+//! ## In-circuit routing (S2), matching the plonky3 HLL
+//! The register index and leading-run are **derived from the committed key
+//! in-circuit**, not trusted: `digest = Poseidon(key)`, `idx = digest[0] mod 2^b`
+//! (low `b` bits), `ρ = 1 + trailing_zeros(digest[1])` over `RHO_WINDOW` bits
+//! (running product). The decomposition is taken **canonically** (see
+//! [`canonical_bits_64`]) so a grinding prover cannot exploit the Goldilocks
+//! 64-bit wraparound to pick a different register. So the committed batch
+//! `Com(B_t)` (over the raw keys) fully determines the update — `sketch::
+//! hyperloglog::hash_register` is the native mirror of this exact derivation.
 //!
 //! ## Max via product-of-differences + range checks
 //! For each register `r` let the candidate set be `{initial[r]} ∪ {lr_k : selector[k][r]=1}`.
@@ -22,14 +34,15 @@ use anyhow::Result;
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::HashOutTarget;
 use plonky2::hash::poseidon::PoseidonHash;
-use plonky2::iop::target::Target;
+use plonky2::iop::target::{BoolTarget, Target};
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::config::Hasher;
 
 use crate::config::{C, D, F};
 use crate::recursion::Node;
-use crate::sketch::hyperloglog::{hash_register, HllState, HllUpdate};
+use crate::sketch::hyperloglog::{hash_register, HllState, HllUpdate, RHO_WINDOW};
 
 /// Register width in bits. For `b >= 2`, leading-runs are `<= 63`, so 6 bits suffice.
 pub const REGISTER_WIDTH: usize = 6;
@@ -60,8 +73,10 @@ impl Default for HllLeafParams {
 struct HllTargets {
     init_commit: HashOutTarget,
     final_commit: HashOutTarget,
-    /// `(key, idx, lr)` per record.
-    records: Vec<(Target, Target, Target)>,
+    batch_commit: HashOutTarget,
+    /// Raw keys per record — **private**, opened from `batch_commit`; `(idx, ρ)`
+    /// are derived from each key in-circuit.
+    keys: Vec<Target>,
     init_regs: Vec<Target>,
     final_regs: Vec<Target>,
     /// `selectors[k][r]`.
@@ -79,6 +94,33 @@ fn virtual_hash(b: &mut CircuitBuilder<F, D>) -> HashOutTarget {
     HashOutTarget { elements: core::array::from_fn(|_| b.add_virtual_target()) }
 }
 
+/// Canonical little-endian 64-bit decomposition of a Goldilocks element.
+///
+/// `split_le(_, 64)` alone is **ambiguous near the field wraparound**: when
+/// `x < 2^64 − p` (≈ `2^32`), both `x` and `x + p` are valid 64-bit residues with
+/// different low bits, which would let a grinding prover pick between two register
+/// routings. Goldilocks `p − 1 = 0xFFFFFFFF_00000000`, so a 64-bit value is
+/// canonical (`< p`) unless its high 32 bits are all 1 **and** some low 32 bit is
+/// set; we forbid exactly that, pinning the unique canonical bits.
+fn canonical_bits_64(b: &mut CircuitBuilder<F, D>, x: Target) -> Vec<BoolTarget> {
+    let bits = b.split_le(x, 64);
+    let one = b.one();
+    let zero = b.zero();
+    let mut all_hi = one; // 1 iff bits[32..64] are all 1
+    for bit in bits.iter().skip(32) {
+        all_hi = b.mul(all_hi, bit.target);
+    }
+    let mut none_lo = one; // 1 iff bits[0..32] are all 0
+    for bit in bits.iter().take(32) {
+        let omb = b.sub(one, bit.target);
+        none_lo = b.mul(none_lo, omb);
+    }
+    let any_lo = b.sub(one, none_lo);
+    let bad = b.mul(all_hi, any_lo); // (all high ones) AND (some low one) ⇒ ≥ p
+    b.connect(bad, zero);
+    bits
+}
+
 /// Build the HLL update circuit for the given shape.
 pub fn build_hll_leaf(params: HllLeafParams) -> HllLeaf {
     params.validate();
@@ -86,24 +128,23 @@ pub fn build_hll_leaf(params: HllLeafParams) -> HllLeaf {
     let batch = params.batch;
     let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
 
-    // ---- Public inputs ----
+    // ---- Public inputs: (Com(S_{t-1}), Com(S_t), Com(B_t)) ----
+    // Same `[initial | final]` 8-element prefix as every other leaf, so
+    // `crate::recursion::merge` treats all families uniformly; `batch_commit`
+    // follows, matching the CM/SS/GK leaves and zk1.tex's leaf interface
+    // `(r_t, Com(S_{t-1}), Com(B_t), Com(S_t))`.
     let init_commit = virtual_hash(&mut b);
     b.register_public_inputs(&init_commit.elements);
     let final_commit = virtual_hash(&mut b);
     b.register_public_inputs(&final_commit.elements);
+    let batch_commit = virtual_hash(&mut b);
+    b.register_public_inputs(&batch_commit.elements);
 
-    let mut records = Vec::with_capacity(batch);
-    for _ in 0..batch {
-        let key = b.add_virtual_target();
-        let idx = b.add_virtual_target();
-        let lr = b.add_virtual_target();
-        b.register_public_input(key);
-        b.register_public_input(idx);
-        b.register_public_input(lr);
-        records.push((key, idx, lr));
-    }
-
-    // ---- Private witness ----
+    // ---- Private witness: batch keys (opened from Com(B_t)), registers ----
+    // Only the raw keys are witnessed; the (register index, leading-run) are
+    // DERIVED in-circuit from each key (the S2 routing), so the committed batch
+    // fully determines the update — matching the plonky3 `hll_final_full`.
+    let keys = b.add_virtual_targets(batch);
     let init_regs = b.add_virtual_targets(m);
     let final_regs = b.add_virtual_targets(m);
     let mut selectors = Vec::with_capacity(batch);
@@ -111,7 +152,11 @@ pub fn build_hll_leaf(params: HllLeafParams) -> HllLeaf {
         selectors.push(b.add_virtual_targets(m));
     }
 
-    // ---- Constraint 1: hash binds ----
+    // ---- Constraint 1: open the batch (over keys) + bind the state commitments ----
+    let hb = b.hash_n_to_hash_no_pad::<PoseidonHash>(keys.clone());
+    for i in 0..4 {
+        b.connect(hb.elements[i], batch_commit.elements[i]);
+    }
     let hi = b.hash_n_to_hash_no_pad::<PoseidonHash>(init_regs.clone());
     for i in 0..4 {
         b.connect(hi.elements[i], init_commit.elements[i]);
@@ -124,9 +169,21 @@ pub fn build_hll_leaf(params: HllLeafParams) -> HllLeaf {
     let one = b.one();
     let zero = b.zero();
     let rconsts: Vec<Target> = (0..m).map(|r| b.constant(F::from_canonical_u64(r as u64))).collect();
+    let pow2b: Vec<Target> = (0..params.b).map(|j| b.constant(F::from_canonical_u64(1u64 << j))).collect();
 
-    // ---- Constraint 2: selector validity ----
+    // ---- Constraint 2: derive (idx, ρ) from each key in-circuit, bind selector ----
+    // `digest = Poseidon(key)`; `idx = digest[0] mod 2^b` (low b bits);
+    // `ρ = 1 + trailing_zeros(digest[1])` over `RHO_WINDOW` bits via a running
+    // product. Mirrors `sketch::hyperloglog::hash_register` exactly.
+    let mut lrs = Vec::with_capacity(batch);
     for k in 0..batch {
+        let digest = b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![keys[k]]);
+        let d0_bits = canonical_bits_64(&mut b, digest.elements[0]);
+        let mut idx_t = zero;
+        for j in 0..params.b {
+            idx_t = b.mul_add(d0_bits[j].target, pow2b[j], idx_t);
+        }
+        // selector one-hot, picking the derived register `idx_t`.
         for r in 0..m {
             let s = selectors[k][r];
             let sm1 = b.sub(s, one);
@@ -140,10 +197,19 @@ pub fn build_hll_leaf(params: HllLeafParams) -> HllLeaf {
         b.connect(sum, one); // one-hot
         let mut weighted = zero;
         for r in 0..m {
-            let term = b.mul(selectors[k][r], rconsts[r]);
-            weighted = b.add(weighted, term);
+            weighted = b.mul_add(selectors[k][r], rconsts[r], weighted);
         }
-        b.connect(weighted, records[k].1); // == idx_k
+        b.connect(weighted, idx_t); // selected register == derived idx
+        // ρ = 1 + trailing_zeros(digest[1]) over the low RHO_WINDOW bits.
+        let d1_bits = canonical_bits_64(&mut b, digest.elements[1]);
+        let mut prod = one;
+        let mut tz = zero;
+        for bit in d1_bits.iter().take(RHO_WINDOW) {
+            let omb = b.sub(one, bit.target);
+            prod = b.mul(prod, omb); // ∏_{j<=i}(1 - bit_j)
+            tz = b.add(tz, prod);
+        }
+        lrs.push(b.add(one, tz));
     }
 
     // ---- Constraint 3: per-register max (product-of-differences + range) ----
@@ -152,8 +218,8 @@ pub fn build_hll_leaf(params: HllLeafParams) -> HllLeaf {
         let mut prod = b.sub(final_regs[r], init_regs[r]);
         let _ = b.split_le(prod, REGISTER_WIDTH);
         for k in 0..batch {
-            // candidate_k = initial[r] + selector[k][r] * (lr_k - initial[r])
-            let lr_minus_init = b.sub(records[k].2, init_regs[r]);
+            // candidate_k = initial[r] + selector[k][r] * (ρ_k - initial[r])
+            let lr_minus_init = b.sub(lrs[k], init_regs[r]);
             let scaled = b.mul(selectors[k][r], lr_minus_init);
             let cand = b.add(init_regs[r], scaled);
             let diff = b.sub(final_regs[r], cand);
@@ -166,7 +232,7 @@ pub fn build_hll_leaf(params: HllLeafParams) -> HllLeaf {
     let data = Arc::new(b.build::<C>());
     HllLeaf {
         data,
-        t: HllTargets { init_commit, final_commit, records, init_regs, final_regs, selectors },
+        t: HllTargets { init_commit, final_commit, batch_commit, keys, init_regs, final_regs, selectors },
         params,
     }
 }
@@ -199,11 +265,12 @@ impl HllLeaf {
         let mut pw = PartialWitness::<F>::new();
         pw.set_hash_target(self.t.init_commit, init_commit)?;
         pw.set_hash_target(self.t.final_commit, final_commit)?;
-        for (k, u) in batch.iter().enumerate() {
-            let (idx, lr) = hash_register(self.params.b, u.key);
-            pw.set_target(self.t.records[k].0, F::from_canonical_u64(u.key))?;
-            pw.set_target(self.t.records[k].1, F::from_canonical_u64(idx as u64))?;
-            pw.set_target(self.t.records[k].2, F::from_canonical_u64(lr))?;
+        // Com(B_t) over the raw keys (idx/ρ are derived in-circuit from each key).
+        let keys_f: Vec<F> = batch.iter().map(|u| F::from_canonical_u64(u.key)).collect();
+        let batch_commit = PoseidonHash::hash_no_pad(&keys_f);
+        pw.set_hash_target(self.t.batch_commit, batch_commit)?;
+        for (t, v) in self.t.keys.iter().zip(&keys_f) {
+            pw.set_target(*t, *v)?;
         }
         for (t, v) in self.t.init_regs.iter().zip(initial.cells()) {
             pw.set_target(*t, v)?;
@@ -245,6 +312,41 @@ mod tests {
         }
         assert_eq!(node.final_, expected.commit());
         verify_node(&node)
+    }
+
+    #[test]
+    fn hll_leaf_rejects_wrong_register_routing() {
+        // The register a key routes to is derived from the committed key
+        // in-circuit; a witness that points the selector at the wrong register
+        // must be rejected (the `weighted == idx_t` binding fails).
+        let params = HllLeafParams { b: 3, batch: 1 };
+        let leaf = build_hll_leaf(params);
+        let m = params.m();
+        let key = 42u64;
+        let (idx, _) = hash_register(params.b, key);
+        let initial = HllState::new(&HllParams { b: params.b });
+        let mut final_state = initial.clone();
+        final_state.update(&HllUpdate { key });
+
+        let mut pw = PartialWitness::<F>::new();
+        pw.set_hash_target(leaf.t.init_commit, initial.commit()).unwrap();
+        pw.set_hash_target(leaf.t.final_commit, final_state.commit()).unwrap();
+        let keys_f = vec![F::from_canonical_u64(key)];
+        pw.set_hash_target(leaf.t.batch_commit, PoseidonHash::hash_no_pad(&keys_f)).unwrap();
+        pw.set_target(leaf.t.keys[0], F::from_canonical_u64(key)).unwrap();
+        for (t, v) in leaf.t.init_regs.iter().zip(initial.cells()) {
+            pw.set_target(*t, v).unwrap();
+        }
+        for (t, v) in leaf.t.final_regs.iter().zip(final_state.cells()) {
+            pw.set_target(*t, v).unwrap();
+        }
+        // Point the selector at the WRONG register (idx+1), not the derived idx.
+        let wrong = (idx + 1) % m;
+        for r in 0..m {
+            let v = if r == wrong { F::ONE } else { F::ZERO };
+            pw.set_target(leaf.t.selectors[0][r], v).unwrap();
+        }
+        assert!(leaf.data.prove(pw).is_err(), "wrong register routing must be rejected");
     }
 
     #[test]

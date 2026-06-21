@@ -366,6 +366,47 @@ since an affine fit is exact at 2 points.) Columns: `experiment, backend, family
 config, predicted_constraints, measured_constraint_count, measured_prove_total_ms,
 ratio_prove, within_1.5x, note`.
 
+## Input-commitment + history-fold over real batches
+
+```bash
+scripts/run_experiments.sh inputfold           # plonky3 only → results/input_fold.csv
+EXP_IF_BATCHES=8 EXP_IF_M=16 scripts/run_experiments.sh inputfold
+```
+
+Ties the **input commitment** to the **history root** end-to-end (the piece E5/E6
+don't: they measure composition over *synthetic* leaves). For each family it
+ingests `n` **real** batches — every leaf binds the batch's records to `Com(B_t)`
+in circuit (the §5 S1 step; its prove time is the *input-binding* cost) — then
+folds the **real** `Com(B_t)` (carried in each `EpochLeaf`) into one history root
+`R(t)` via the streaming forest (its merge count is the *fold* cost). The library
+test `inputfold::real_batch_commitments_bind_and_fold_into_root` additionally
+checks that **tampering one real `Com(B_t)` changes `R(t)`** — so the root binds
+the committed inputs.
+
+It also builds, over the **same** real `Com(B_t)`, a **standalone MMR upload-log
+(ULog)** — `src/recursion/mmr.rs`, an append-only Merkle Mountain Range with O(1)
+amortized append, a single published 32-byte root, and O(log t) inclusion proofs —
+and verifies a membership proof for one batch. This is the input-commitment log as
+a *separate artifact* (the transparency-log pattern: CT / Grin / FlyClient),
+decoupled from the `R(t)` proof composition. Its unit tests
+(`recursion::mmr::tests`) cover inclusion across many sizes, tamper-rejection, and
+append-only size-binding (an old proof doesn't verify against the grown root).
+
+Columns: `phase, family, batch_index, n_batches, input_records, leaf_prove_ms,
+proof_size_bytes, fold_merges, worst_cascade, verifier_checks, root_proof_bytes`.
+- `phase=ingest` — per-batch input-binding cost (`leaf_prove_ms`, `proof_size_bytes`).
+- `phase=fold` — the unified history fold (`verifier_checks=1`, 96-byte `R(t)` root).
+- `phase=mmr` — the standalone ULog: `fold_merges`=peaks (`popcount(t)`),
+  `proof_size_bytes`=inclusion-proof size, `root_proof_bytes`=32 (MMR root),
+  `verifier_checks`=1 (membership verified).
+
+Measured (small slice): all four families bind their real per-batch input
+commitments (`bound=true`); they fold to one `R(t)` in `n−1` merges; and the ULog
+MMR over the same commitments has `popcount(t)` peaks with O(log t)-size inclusion
+proofs (e.g. 152 B at `t=6`). (Same option-(i) digest caveat as E5/E6 for the
+`R(t)` fold; the per-batch input binding is a real STARK; the MMR is a native
+transparency-log structure.)
+
 ## What's wired so far
 
 - **E1** (per-family circuit cost, certified + CM replay) — both backends.
@@ -387,6 +428,9 @@ ratio_prove, within_1.5x, note`.
 - **E10** (cost-model validation) — post-processing; 100% of `≥3`-point groups
   within 1.5× (affine `c_lin + k·predicted` fit on the prove-time proxy; log-degree
   unit caveat).
+- **inputfold** (input-commitment + history-fold over real batches) — plonky3, all
+  four families; real per-batch `Com(B_t)` bound + folded into `R(t)`, tamper
+  detected.
 - **E1–E10 complete.** Remaining future work: the plonky3 decode AIR (E3 on the
   STARK backend) and a recursive cross-family merge (E8).
 ```

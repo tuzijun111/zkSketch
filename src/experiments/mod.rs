@@ -42,6 +42,7 @@ pub mod e5_ladder;
 pub mod e6_forest;
 pub mod e7_policy;
 pub mod families;
+pub mod inputfold;
 pub mod metrics;
 pub mod rq1_capability;
 pub mod rq2_scalability;

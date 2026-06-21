@@ -6,6 +6,7 @@
 
 pub mod countmin;
 pub mod countmin_final;
+pub mod countmin_merkle;
 pub mod fib;
 pub mod gadgets;
 pub mod greenwald_khanna;

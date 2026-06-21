@@ -4,28 +4,34 @@
 //! maximum observed leading-run; updates are idempotent and the per-register
 //! merge is `max`, so epochs aggregate recursively just like Count-Min.
 
-use plonky2::field::types::Field;
+use plonky2::field::types::{Field, PrimeField64};
 use plonky2::hash::hash_types::HashOut;
+use plonky2::hash::poseidon::PoseidonHash;
+use plonky2::plonk::config::Hasher;
 
 use crate::commitment::commit;
 use crate::config::F;
 
-const HASH_PRIME: u64 = 0x9E37_79B9_7F4A_7C15;
-const HASH_OFFSET: u64 = 0xDEAD_BEEF_C0DE_F00D;
+/// Trailing-zero window for the `ρ` (leading-run) derivation. The in-circuit
+/// routing in [`crate::leaf::hyperloglog`] re-derives `ρ` over exactly this many
+/// low bits of the digest, so this constant MUST match there (native ↔ circuit).
+/// `ρ = 1 + tz ∈ [1, RHO_WINDOW+1]`, kept `< 2^REGISTER_WIDTH`.
+pub const RHO_WINDOW: usize = 48;
 
-/// Map a key to `(register_index, leading_run)`. `leading_run` is 1-indexed and,
-/// for `b >= 2`, fits in [`REGISTER_WIDTH`](crate::leaf::hyperloglog::REGISTER_WIDTH) bits.
+/// Map a key to `(register_index, leading_run)` via a **field-native Poseidon**
+/// hash, so the routing is re-derivable in-circuit (matching the plonky3 HLL):
+/// `idx = digest[0] mod m` (low `b` bits) and `ρ = 1 + trailing_zeros(digest[1])`
+/// over the low [`RHO_WINDOW`] bits. `ρ` is 1-indexed and, for `b >= 2`, fits in
+/// [`REGISTER_WIDTH`](crate::leaf::hyperloglog::REGISTER_WIDTH) bits.
 pub fn hash_register(b: usize, key: u64) -> (usize, u64) {
-    let mixed = key.wrapping_mul(HASH_PRIME) ^ HASH_OFFSET;
+    let digest = PoseidonHash::hash_no_pad(&[F::from_canonical_u64(key)]);
+    let d0 = digest.elements[0].to_canonical_u64();
+    let d1 = digest.elements[1].to_canonical_u64();
     let m = 1u64 << b;
-    let idx = (mixed & (m - 1)) as usize;
-    let tail = mixed >> b;
-    let leading = if tail == 0 {
-        (64 - b) as u32
-    } else {
-        tail.leading_zeros() - b as u32
-    };
-    (idx, (leading + 1) as u64)
+    let idx = (d0 % m) as usize;
+    let low = d1 & ((1u64 << RHO_WINDOW) - 1);
+    let tz = if low == 0 { RHO_WINDOW as u64 } else { low.trailing_zeros() as u64 };
+    (idx, tz + 1)
 }
 
 /// HLL shape: `m = 2^b` registers.

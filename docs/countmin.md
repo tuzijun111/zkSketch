@@ -364,6 +364,31 @@ v1, v2, v3 all expose `(key, value, pos)` per record as PIs and are cross-mergea
 - **Per-record `value` and aggregated segment totals must be `< 2²⁰`** because the encoding `key · 2²⁰ + value` needs to be uniquely decodable. The bound is `α = SHIFT_VAL_BITS = 20`; widen by changing the constant in both `countmin_leaf_v9.rs` and `countmin_leaf_v9h.rs` together (and re-checking the Challenge-field bit budget).
 - **The Count-Min upper-bound property (every estimate `≥` true count)** is preserved — v9's field-friendly `h_i` distributes reasonably, so the standard `δ = e/w`, `error = ε` bounds still apply with `d` hash rows.
 
+## Sparse-patch rebind via a Merkle vector commitment (plonky2)
+
+The flat-commit leaves above re-hash **all** `w` cells every epoch, so a rebind
+costs `Θ(w)` (the documented RQ2-c caveat). `plonky2/src/leaf/countmin_merkle.rs`
+realizes the §5.2 Step-7 **sparse patch**: `Com(S)` is a **Merkle root** over the
+`w` cells, and the rebind opens only the `T` *touched* cells via a **Merkle update
+chain** — thread the root `r₀ = Com(S_{t-1}) → … → r_T = Com(S_t)` through `T`
+single-leaf updates, each verifying the old value against `r_{c-1}` and the new
+value against `r_c` with the **same** sibling path. Untouched cells carry through
+the shared siblings, so the rebind is `Θ(T·log w)`, **independent of `w`**
+(test `cm_merkle_large_state_small_patch`: a 1024-cell state rebound by a 4-record
+batch touches ≤4 cells).
+
+- **Sound for overlapping/repeat touches** because the root is threaded: a second
+  touch of a cell sees the first update already folded into the current root.
+- **Records → cells** are routed by a one-hot selector tied to the in-circuit
+  derived position `pos = digest[0] mod w` (canonical low bits, same Goldilocks
+  wraparound gadget as the HLL routing), so every batch contribution lands at the
+  right cell.
+- **Mergeable:** the `Node` boundary is just two opaque `HashOut` commitments, so
+  Merkle-root leaves chain + `recursion::merge` exactly like the flat-commit ones
+  (test `cm_merkle_two_leaf_merge`).
+- Single-row (`d = 1`) demonstration; a full `d`-row CM uses `d` such trees. The
+  flat-commit `countmin_final` leaf remains the baseline.
+
 ## References
 
 - **Paper**: `paper/zkSketch.pdf` §5.2 — the database-style maintenance plan; §4.2 — recursive merge atom; §4.1 — flat chain (baseline).

@@ -23,6 +23,7 @@ pub mod digest;
 pub mod flat;
 pub mod framework;
 pub mod hll_flat;
+pub mod mmr;
 pub mod recursive;
 
 pub use chain::ChainState;
