@@ -51,9 +51,29 @@ fn main() {
         push("hll_dedup", format!("alpha={alpha};n={n}"), "hash_saving_x", format!("{saving:.3}"), "analytical");
     }
 
-    // ── hll_wide_output: hashes per distinct key (1 wide split vs 2 hashes) ────
-    push("hll_wide_output", "two_hashes".into(), "hashes_per_distinct", "2".into(), "analytical");
-    push("hll_wide_output", "wide_split".into(), "hashes_per_distinct", "1".into(), "analytical");
+    // ── hll_wide_output: MEASURED — default single wide-output hash/record vs
+    //    the pre-optimisation two-hashes/record baseline (Appendix F). Times the
+    //    real HLL leaf both ways; the delta is the measured wide-output saving. ─
+    {
+        use zksketch::recursion::recursive::timing;
+        use zksketch::sketch::hll_final_full::{
+            prove_hll_full, prove_hll_full_two_hashes, HllFullParams, HllFullState, HllFullUpdate,
+        };
+        let hp = HllFullParams { b: 4, batch: 16 };
+        let ups: Vec<HllFullUpdate> = (0..hp.batch as u32)
+            .map(|i| HllFullUpdate::real((i.wrapping_mul(0x9E37_79B9) | 1) as u64))
+            .collect();
+        let _ = prove_hll_full(hp, HllFullState::empty(hp), ups.clone());
+        let tw = timing::take();
+        let wide_ms = (tw.witness + tw.prove).as_secs_f64() * 1e3;
+        let _ = prove_hll_full_two_hashes(hp, HllFullState::empty(hp), ups.clone());
+        let t2 = timing::take();
+        let two_ms = (t2.witness + t2.prove).as_secs_f64() * 1e3;
+        let p = format!("b={};batch={}", hp.b, hp.batch);
+        push("hll_wide_output", format!("two_hashes;{p}"), "prove_ms", format!("{two_ms:.3}"), "measured");
+        push("hll_wide_output", format!("wide_split;{p}"), "prove_ms", format!("{wide_ms:.3}"), "measured");
+        push("hll_wide_output", p, "speedup_x", format!("{:.3}", two_ms / wide_ms.max(0.001)), "measured");
+    }
 
     // ── sparse_rebind: re-commit T_max touched cells vs whole s-cell state ─────
     let s = 1usize << 14;

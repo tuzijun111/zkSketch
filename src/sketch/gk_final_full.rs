@@ -1390,7 +1390,7 @@ pub fn prove_gk_full_with_rounds(
         witness: __witness,
         prove: __prove,
         verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| d as u64).sum(),
+        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
     });
 
     GKFullLeafProof {

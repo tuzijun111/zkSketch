@@ -1,15 +1,42 @@
-//! HyperLogLog **cardinality** decode circuit (E3).
+//! HyperLogLog **cardinality** decode circuit (E3), estimator mode.
 //!
-//! HLL's cardinality estimate `α·m²/Σ 2^{-rᵢ}` is floating-point, so the decode
-//! *circuit* certifies the integer harmonic surrogate
-//! `Z = Σ_r 2^{B − reg_r}` (with a fixed base `B`, registers forced into
-//! `[0, B]` by a one-hot exponent selector); the float estimate `α·m²·2^B / Z`
-//! is then a deterministic **native** post-processing of the certified `Z`.
-//! Re-hashes the registers (binds them to the committed state) first.
+//! Implements the paper's HLL query relation (zk1.tex app:hll, "HLL estimator
+//! mode") in **fixed-point** arithmetic. Unlike the previous integer harmonic
+//! surrogate `Σ 2^(B−reg)`, this certifies the fixed-point cardinality
 //!
-//! `B = HLL_B` caps the largest register value the surrogate represents; small
-//! streams keep registers far below it (a huge-cardinality stream would need a
-//! larger `B`). Proven answer = `Z`.
+//! ```text
+//!   Z   = Σ_b Pow2Neg[S_t[b]]            (fixed-point harmonic sum, scale 2^β)
+//!   res = α_s · s² · Inv_β(Z)            (fixed-point cardinality, scale 2^β)
+//!   ans = release(res)
+//! ```
+//!
+//! where `Pow2Neg[x] = round(2^β / 2^x)` is a **public** fixed-point lookup table
+//! selected per register by a one-hot over the register value `0..=MU_MAX`, and
+//! `Inv_β(Z)` is a **witnessed** reciprocal `invZ` certified by the
+//! range-checked rounding residual `Z·invZ − T ∈ [0, Z)` with reciprocal target
+//! `T = 2^(2β)` (so `invZ ≈ 2^β / Z` retains β fractional bits). `res` is then
+//! the exact in-circuit product `K_num · invZ`, `K_num = round(α_s · s²)` a
+//! public integer constant; `ans = release(res)`.
+//!
+//! Goldilocks (`p ≈ 2^64`) leaves ample headroom for a **fully sound** in-circuit
+//! reciprocal at `BETA = 20` (the BabyBear/STARK counterpart in the plonky3 crate
+//! uses `BETA = 8` for the same soundness inside the ~31-bit field):
+//! * `Z ≤ m·2^β ≤ 2^(6+20) = 2^26`;
+//! * `T = 2^(2β) = 2^40`, `invZ = ceil(T/Z) ≤ T/Pow2Neg[0] = 2^β = 2^20`;
+//! * `Z·invZ < T + Z < 2^41`  (residual range check sound);
+//! * `res = K_num·invZ ≤ round(0.78·64²)·2^20 ≈ 2^11.7·2^20 ≈ 2^31.7 ≪ p`.
+//!
+//! Stages:
+//! 1. Re-hash the `m` registers → bind to the committed digest (the `Θ(s)` cost).
+//! 2. Per register: a one-hot selector over `[0, MU_MAX]` picks `Pow2Neg[reg]`
+//!    and binds the selected index to the register value.
+//! 3. Sum the picked fixed-point weights → `Z`.
+//! 4. Reciprocal: witness `invZ`, certify `Z·invZ − T ∈ [0, Z)`, then
+//!    `res = K_num · invZ`.
+//! 5. Apply the release policy and bind the released value to the public answer.
+//!
+//! Proven answer = `release(res)`. The `(params, state)` prove signature is kept
+//! (no query key for cardinality).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,23 +50,36 @@ use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
 
 use crate::config::{C, D, F};
-use crate::decode::DecodeProof;
+use crate::decode::{DecodeProof, ReleasePolicy};
 use crate::leaf::gadgets::{bind_commit, vhash};
 use crate::sketch::hyperloglog::HllState;
 
-/// Exponent base for the harmonic surrogate (registers must be `≤ B`).
-pub const HLL_B: usize = 24;
+/// Fixed-point precision (mantissa bits) for the estimator. Public metadata.
+pub const BETA: usize = 20;
+
+/// Max register value the `Pow2Neg` one-hot table covers (`0..=MU_MAX`). Entries
+/// past `BETA` round to 0. Replaces the old integer-surrogate `HLL_B` base.
+pub const MU_MAX: usize = 24;
+
+/// Range-check window for the reciprocal residual `Z·invZ − T` and the gated
+/// threshold diff. Wide enough to contain `Z ≤ 2^(b+β)` (and small thresholds)
+/// yet far below the 64-bit field so a "negative" value wraps and overflows the
+/// check (sound `≥ 0`).
+const DIFF_BITS: usize = 40;
 
 #[derive(Copy, Clone, Debug)]
 pub struct HllDecodeParams {
     pub b: usize, // log2(register count)
+    pub release: ReleasePolicy,
 }
 
 struct Tgt {
     commit: HashOutTarget,
     answer: Target,
     cells: Vec<Target>,    // m registers
-    sel: Vec<Vec<Target>>, // [m][B+1] one-hot exponent selectors
+    sel: Vec<Vec<Target>>, // [m][MU_MAX+1] one-hot exponent selectors
+    invz: Target,          // witnessed reciprocal
+    flag: Option<Target>,  // threshold release flag
 }
 
 pub struct HllDecodeLeaf {
@@ -48,13 +88,60 @@ pub struct HllDecodeLeaf {
     pub params: HllDecodeParams,
 }
 
-/// Native harmonic surrogate `Z = Σ_r 2^{B - reg_r}` from the registers.
-pub fn surrogate(regs: &[u64]) -> u64 {
-    regs.iter().map(|&r| 1u64 << (HLL_B as u64 - r)).sum()
+/// Public fixed-point lookup table `Pow2Neg[x] = round(2^β / 2^x)` for
+/// `x ∈ {0,…,MU_MAX}` (round-half-up). Entry 0 is `2^β`; entries past `β`
+/// underflow to 0.
+pub fn pow2neg(x: usize) -> u64 {
+    if x == 0 {
+        1u64 << BETA
+    } else if x > BETA + 1 {
+        0
+    } else {
+        let num: u128 = (1u128 << BETA) + (1u128 << (x - 1));
+        (num >> x) as u64
+    }
+}
+
+/// HLL bias-correction `α_s` for `m` registers (matches the sketch estimator).
+fn alpha(m: usize) -> f64 {
+    match m {
+        16 => 0.673,
+        32 => 0.697,
+        64 => 0.709,
+        _ => 0.7213 / (1.0 + 1.079 / m as f64),
+    }
+}
+
+/// Public integer constant `K_num = round(α_s · s²)` (`s = m`). `res = K_num·invZ`.
+pub fn k_num(m: usize) -> u64 {
+    (alpha(m) * (m as f64) * (m as f64)).round() as u64
+}
+
+/// Reciprocal target `T = 2^(2β)`.
+const fn recip_target() -> u64 {
+    1u64 << (2 * BETA)
+}
+
+/// Native fixed-point harmonic sum `Z = Σ_b Pow2Neg[reg_b]`.
+pub fn fixed_z(regs: &[u64]) -> u64 {
+    regs.iter().map(|&r| pow2neg(r as usize)).sum()
+}
+
+/// Native witnessed reciprocal `invZ = ceil(T / Z)` (so `Z·invZ − T ∈ [0, Z)`).
+pub fn inv_z(z: u64) -> u64 {
+    let t = recip_target();
+    (t + z - 1) / z
+}
+
+/// Native fixed-point cardinality `res = K_num · invZ` (scale `2^β`).
+pub fn fixed_res(m: usize, regs: &[u64]) -> u64 {
+    let z = fixed_z(regs);
+    k_num(m) * inv_z(z)
 }
 
 pub fn build_hll_decode(params: HllDecodeParams) -> HllDecodeLeaf {
     let m = 1usize << params.b;
+    let knum = k_num(m);
     let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
     let one = b.one();
     let zero = b.zero();
@@ -65,21 +152,27 @@ pub fn build_hll_decode(params: HllDecodeParams) -> HllDecodeLeaf {
     b.register_public_input(answer);
 
     let cells = b.add_virtual_targets(m);
-    let sel: Vec<Vec<Target>> = (0..m).map(|_| b.add_virtual_targets(HLL_B + 1)).collect();
+    let sel: Vec<Vec<Target>> = (0..m).map(|_| b.add_virtual_targets(MU_MAX + 1)).collect();
+    let invz = b.add_virtual_target();
 
     bind_commit(&mut b, cells.clone(), &commit);
 
-    // exponent constants: 2^(B-j) for j in 0..=B; index constants j.
-    let pow: Vec<Target> = (0..=HLL_B).map(|j| b.constant(F::from_canonical_u64(1u64 << (HLL_B - j) as u64))).collect();
-    let idx: Vec<Target> = (0..=HLL_B).map(|j| b.constant(F::from_canonical_u64(j as u64))).collect();
+    // Fixed-point Pow2Neg weights and index constants j, for j in 0..=MU_MAX.
+    let pow: Vec<Target> =
+        (0..=MU_MAX).map(|j| b.constant(F::from_canonical_u64(pow2neg(j)))).collect();
+    let idx: Vec<Target> =
+        (0..=MU_MAX).map(|j| b.constant(F::from_canonical_u64(j as u64))).collect();
+    let target = b.constant(F::from_canonical_u64(recip_target()));
+    let knum_c = b.constant(F::from_canonical_u64(knum));
 
+    // ── Stages 2 + 3: per-register one-hot Pow2Neg selector → Z ──
     let mut z = zero;
     for r in 0..m {
         let row = &sel[r];
         let mut sum = zero;
         let mut idx_acc = zero;
         let mut term = zero;
-        for j in 0..=HLL_B {
+        for j in 0..=MU_MAX {
             let sm1 = b.sub(row[j], one);
             let bchk = b.mul(row[j], sm1);
             b.connect(bchk, zero);
@@ -91,10 +184,50 @@ pub fn build_hll_decode(params: HllDecodeParams) -> HllDecodeLeaf {
         b.connect(idx_acc, cells[r]); // selected exponent index == register value
         z = b.add(z, term);
     }
-    b.connect(z, answer);
+
+    // ── Stage 4: witnessed reciprocal invZ, residual range check, res = K·invZ ──
+    // Certify Z·invZ − T ∈ [0, Z): the rounding residual of invZ = ceil(T/Z).
+    //   residual = Z·invZ − T        (≥ 0 ⇔ invZ ≥ ceil(T/Z))
+    //   Z − 1 − residual             (≥ 0 ⇔ residual < Z)
+    // Both range-checked ≥ 0 pin invZ = ceil(T/Z) uniquely.
+    let z_invz = b.mul(z, invz);
+    let residual = b.sub(z_invz, target);
+    let _ = b.split_le(residual, DIFF_BITS); // residual >= 0
+    let zm1 = b.sub(z, one);
+    let upper = b.sub(zm1, residual);
+    let _ = b.split_le(upper, DIFF_BITS); // residual < Z
+    let res = b.mul(knum_c, invz); // fixed-point cardinality, scale 2^β
+
+    // ── Stage 5: release policy → answer ──
+    let flag = match params.release {
+        ReleasePolicy::Identity => {
+            b.connect(res, answer);
+            None
+        }
+        ReleasePolicy::Threshold(t) => {
+            let theta = b.constant(F::from_canonical_u64(t));
+            let fl = b.add_virtual_target();
+            let fm1 = b.sub(fl, one);
+            let bchk = b.mul(fl, fm1);
+            b.connect(bchk, zero);
+            // chosen = fl*(res-θ) + (1-fl)*(θ-res-1) >= 0 ⇒ fl = [res>=θ].
+            let res_minus_t = b.sub(res, theta);
+            let t_minus_res_m1 = {
+                let tm = b.sub(theta, res);
+                b.sub(tm, one)
+            };
+            let nf = b.sub(one, fl);
+            let a = b.mul(fl, res_minus_t);
+            let chosen = b.mul_add(nf, t_minus_res_m1, a);
+            let _ = b.split_le(chosen, DIFF_BITS);
+            let released = b.mul(fl, res);
+            b.connect(released, answer);
+            Some(fl)
+        }
+    };
 
     let data = Arc::new(b.build::<C>());
-    HllDecodeLeaf { data, t: Tgt { commit, answer, cells, sel }, params }
+    HllDecodeLeaf { data, t: Tgt { commit, answer, cells, sel, invz, flag }, params }
 }
 
 impl HllDecodeLeaf {
@@ -102,27 +235,35 @@ impl HllDecodeLeaf {
         let m = 1usize << self.params.b;
         let regs: Vec<u64> = state.cells().iter().map(|c| c.to_canonical_u64()).collect();
         assert_eq!(regs.len(), m);
-        assert!(regs.iter().all(|&r| (r as usize) <= HLL_B), "register exceeds HLL_B; raise HLL_B");
+        assert!(regs.iter().all(|&r| (r as usize) <= MU_MAX), "register exceeds MU_MAX; raise MU_MAX");
         let t_w = Instant::now();
-        let z = surrogate(&regs);
+        let z = fixed_z(&regs);
+        let invz = inv_z(z);
+        let res = k_num(m) * invz;
+        let answer = self.params.release.apply(res);
 
         let mut pw = PartialWitness::<F>::new();
         pw.set_hash_target(self.t.commit, state.commit())?;
-        pw.set_target(self.t.answer, F::from_canonical_u64(z))?;
+        pw.set_target(self.t.answer, F::from_canonical_u64(answer))?;
         for (tt, v) in self.t.cells.iter().zip(state.cells()) {
             pw.set_target(*tt, v)?;
         }
         for r in 0..m {
             let rv = regs[r] as usize;
-            for j in 0..=HLL_B {
+            for j in 0..=MU_MAX {
                 pw.set_target(self.t.sel[r][j], if j == rv { F::ONE } else { F::ZERO })?;
             }
+        }
+        pw.set_target(self.t.invz, F::from_canonical_u64(invz))?;
+        if let Some(fl) = self.t.flag {
+            let t = if let ReleasePolicy::Threshold(t) = self.params.release { t } else { 0 };
+            pw.set_target(fl, if res >= t { F::ONE } else { F::ZERO })?;
         }
         let witness = t_w.elapsed();
         let t_p = Instant::now();
         let proof = self.data.prove(pw)?;
         let prove = t_p.elapsed();
-        Ok((DecodeProof { data: self.data.clone(), proof, answer: z }, witness, prove))
+        Ok((DecodeProof { data: self.data.clone(), proof, answer }, witness, prove))
     }
 }
 
@@ -140,33 +281,95 @@ mod tests {
     }
 
     #[test]
+    fn pow2neg_table() {
+        assert_eq!(pow2neg(0), 1 << BETA);
+        assert_eq!(pow2neg(1), 1 << (BETA - 1));
+        assert_eq!(pow2neg(BETA), 1);
+        assert_eq!(pow2neg(MU_MAX), 0);
+    }
+
+    #[test]
+    fn reciprocal_residual_in_range() {
+        let s = state();
+        let regs: Vec<u64> = s.cells().iter().map(|c| c.to_canonical_u64()).collect();
+        let z = fixed_z(&regs);
+        let invz = inv_z(z);
+        let resid = z * invz - recip_target();
+        assert!(resid < z, "Z·invZ − T must lie in [0, Z); got resid={resid}, Z={z}");
+    }
+
+    #[test]
     fn hll_decode_round_trip() -> Result<()> {
-        let leaf = build_hll_decode(HllDecodeParams { b: 4 });
+        let leaf =
+            build_hll_decode(HllDecodeParams { b: 4, release: ReleasePolicy::Identity });
         let s = state();
         let (proof, _, _) = leaf.prove_timed(&s)?;
         let regs: Vec<u64> = s.cells().iter().map(|c| c.to_canonical_u64()).collect();
-        assert_eq!(proof.answer, surrogate(&regs));
+        assert_eq!(proof.answer, fixed_res(16, &regs), "answer == native fixed-point res");
         proof.verify()
     }
 
     #[test]
-    fn hll_decode_rejects_wrong_z() {
-        let leaf = build_hll_decode(HllDecodeParams { b: 4 });
+    fn fixed_res_tracks_native_estimate() {
+        // The fixed-point res / 2^β should be close to the native float estimate
+        // α·m²/Σ2^{-reg}.
+        let s = state();
+        let regs: Vec<u64> = s.cells().iter().map(|c| c.to_canonical_u64()).collect();
+        let res = fixed_res(16, &regs) as f64 / (1u64 << BETA) as f64;
+        let z_real: f64 = regs.iter().map(|&r| 2f64.powi(-(r as i32))).sum();
+        let est = 0.673 * 16.0 * 16.0 / z_real;
+        let rel = (res - est).abs() / est.max(1.0);
+        assert!(rel < 0.05, "fixed-point res {res} vs float estimate {est} (rel err {rel})");
+    }
+
+    #[test]
+    fn hll_decode_threshold_passes() -> Result<()> {
+        let leaf =
+            build_hll_decode(HllDecodeParams { b: 4, release: ReleasePolicy::Threshold(1) });
+        let s = state();
+        let regs: Vec<u64> = s.cells().iter().map(|c| c.to_canonical_u64()).collect();
+        let (proof, _, _) = leaf.prove_timed(&s)?;
+        assert_eq!(proof.answer, fixed_res(16, &regs), "res >= θ ⇒ released res");
+        proof.verify()
+    }
+
+    #[test]
+    fn hll_decode_threshold_suppresses() -> Result<()> {
+        let s = state();
+        let regs: Vec<u64> = s.cells().iter().map(|c| c.to_canonical_u64()).collect();
+        let res = fixed_res(16, &regs);
+        let theta = res + (1u64 << 24); // above res, within DIFF_BITS window
+        assert!(theta < (1u64 << DIFF_BITS));
+        let leaf =
+            build_hll_decode(HllDecodeParams { b: 4, release: ReleasePolicy::Threshold(theta) });
+        let (proof, _, _) = leaf.prove_timed(&s)?;
+        assert_eq!(proof.answer, 0, "res < θ ⇒ released 0");
+        proof.verify()
+    }
+
+    #[test]
+    fn hll_decode_rejects_wrong_res() {
+        let leaf =
+            build_hll_decode(HllDecodeParams { b: 4, release: ReleasePolicy::Identity });
         let s = state();
         let regs: Vec<u64> = s.cells().iter().map(|c| c.to_canonical_u64()).collect();
         let m = 16;
+        let z = fixed_z(&regs);
+        let invz = inv_z(z);
         let mut pw = PartialWitness::<F>::new();
         pw.set_hash_target(leaf.t.commit, s.commit()).unwrap();
-        pw.set_target(leaf.t.answer, F::from_canonical_u64(surrogate(&regs) + 1)).unwrap(); // wrong
+        // wrong answer: claim res+1 with consistent invZ ⇒ res = K·invZ binding fails.
+        pw.set_target(leaf.t.answer, F::from_canonical_u64(k_num(m) * invz + 1)).unwrap();
         for (tt, v) in leaf.t.cells.iter().zip(s.cells()) {
             pw.set_target(*tt, v).unwrap();
         }
         for r in 0..m {
             let rv = regs[r] as usize;
-            for j in 0..=HLL_B {
+            for j in 0..=MU_MAX {
                 pw.set_target(leaf.t.sel[r][j], if j == rv { F::ONE } else { F::ZERO }).unwrap();
             }
         }
-        assert!(leaf.data.prove(pw).is_err(), "wrong Z must be rejected");
+        pw.set_target(leaf.t.invz, F::from_canonical_u64(invz)).unwrap();
+        assert!(leaf.data.prove(pw).is_err(), "wrong res must be rejected");
     }
 }

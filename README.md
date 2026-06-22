@@ -189,7 +189,7 @@ BACKENDS=plonky2 scripts/run_experiments.sh e8
 | --- | --- | --- | --- | --- |
 | **E1** | per-family circuit cost (witness/prove/verify split, proof size, peak RSS) | both | `run_experiments.sh e1` | `results/e1_circuit.csv` |
 | **E2** | integrity: tamper-rejection + fidelity vs. plaintext | both | `run_experiments.sh e2` | `results/e2_integrity.csv` |
-| **E3** | decode / query cost vs. state size `s` | plonky2 | `run_experiments.sh e3` | `results/e3_decode.csv` |
+| **E3** | decode / query cost vs. state size `s` (all 4 families) | both | `run_experiments.sh e3` | `results/e3_decode.csv` |
 | **E4** | scalability sweeps (certified Count-Min) | plonky3 | `run_experiments.sh e4` | `results/e4_scaling.csv` |
 | **E5** | composition ladder — verifier cost flat vs. recursive | plonky3 | `run_experiments.sh e5` | `results/e5_ladder.csv` |
 | **E6** | streaming forest: cores × batch size | plonky3 | `run_experiments.sh e6` | `results/e6_forest.csv` |
@@ -198,6 +198,7 @@ BACKENDS=plonky2 scripts/run_experiments.sh e8
 | **E9** | optimisation ablations | plonky3 | `run_experiments.sh e9` | `results/e9_optim.csv` |
 | **E10** | cost-model validation (post-processes E1/E3/E4 CSVs) | — | `run_experiments.sh e10` | console report |
 | **inputfold** | input-commitment binding + history-fold into `R(t)` + MMR ULog over real `Com(B_t)` | plonky3 | `run_experiments.sh inputfold` | `results/input_fold.csv` |
+| **casestudy** | AOL/Netflix end-to-end: ingest + audit + tamper across all four families | plonky3 | `run_experiments.sh casestudy` | `results/casestudy_{ingest,audit}.csv` |
 
 **Config (env vars, forwarded to the runners):**
 

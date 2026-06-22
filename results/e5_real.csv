@@ -1,0 +1,5 @@
+setting,E,verifier_checks,verify_ms,root_proof_bytes,merge_prove_total_ms,leaf_prove_total_ms
+no_composition,2,2,19.385,547130,0.000,87.861
+recursive_linear,2,1,16.431,514481,764.946,87.861
+no_composition,4,4,37.685,1096932,0.000,166.577
+recursive_linear,4,1,14.346,485389,2489.463,166.577

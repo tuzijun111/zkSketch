@@ -114,6 +114,7 @@ fn fuse_pairs(
     ime: &[Target],
     ia: &[Target],
     dec: &[Target],
+    theta_t: Target,
 ) -> (Vec<Target>, Vec<Target>, Vec<Target>, Vec<Target>) {
     let total = iv.len();
     let one = b.one();
@@ -139,6 +140,21 @@ fn fuse_pairs(
         let vdiff = b.sub(iv[l], iv[r]);
         let c3 = b.mul(de, vdiff);
         b.connect(c3, zero);
+
+        // Step 4 (§5.4 GK band-threshold gate): fusion is decided by the
+        // threshold, not freely by the prover — a fused pair's merged band
+        // (count_l + count_r + maxerr_l + maxerr_r) must fit under θ_t. We take
+        // θ_t = N_t (total active mass), the GK band at ε = 1/2 — a generous
+        // calibration that never blocks a legitimate exact-value merge yet
+        // installs the real gate (mirrors the plonky3 gk_final_full Step 4).
+        // Encoding: range-check `decision · (θ_t − band) ≥ 0`; when decision = 0
+        // the product is 0 (no constraint), when decision = 1 it forces band ≤ θ_t.
+        let band_ab = b.add(ic[l], ic[r]);
+        let band_err = b.add(ime[l], ime[r]);
+        let band = b.add(band_ab, band_err);
+        let slack = b.sub(theta_t, band);
+        let gated_slack = b.mul(de, slack);
+        let _ = b.split_le(gated_slack, VALUE_BITS + 1); // de=1 ⇒ band ≤ θ_t
 
         let keep = b.sub(one, de); // 1 - decision
         // slot 2i: dummied when fused.
@@ -245,10 +261,17 @@ pub fn build_gk_leaf(params: GkLeafParams) -> GreenwaldKhannaLeaf {
     assert_perm_cols(&mut b, &[&comb_v, &comb_c, &comb_me, &comb_a], &[&uv, &uc, &ume, &ua]);
     assert_value_sorted(&mut b, &uv, &ua);
 
+    // θ_t = N_t = total active mass of the union (Σ active·count); the Step-4
+    // band gate (in `fuse_pairs`) bounds every fused pair under it.
+    let mut theta_t = zero;
+    for r in 0..total {
+        theta_t = b.mul_add(ua[r], uc[r], theta_t); // ua[r]·uc[r] + acc
+    }
+
     // ---- Stage C: L fusion rounds ----
     let (mut iv, mut ic, mut ime_cur, mut ia) = (uv.clone(), uc.clone(), ume.clone(), ua.clone());
     for rd in &rounds {
-        let (fv, fc, fme, fa) = fuse_pairs(&mut b, &iv, &ic, &ime_cur, &ia, &rd.dec);
+        let (fv, fc, fme, fa) = fuse_pairs(&mut b, &iv, &ic, &ime_cur, &ia, &rd.dec, theta_t);
         // resorted = perm(fused), sorted by (active asc, value asc).
         assert_perm_cols(&mut b, &[&fv, &fc, &fme, &fa], &[&rd.rv, &rd.rc, &rd.rme, &rd.ra]);
         assert_value_sorted(&mut b, &rd.rv, &rd.ra);

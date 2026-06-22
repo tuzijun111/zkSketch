@@ -543,6 +543,23 @@ pub fn prove_countmin_final(
     let key_payload_sorted: Vec<ExprId> = b
         .add_permute(&key_payload, sigma_key.clone())
         .expect("add_permute (key sort)");
+    // NOTE on the paper's Step-2 "sorted by key" check (zk1.tex §5.2): unlike the
+    // plonky2 (Goldilocks) leaf, this plonky3 backend does NOT add an explicit
+    // adjacent-difference sortedness range-check, for two reasons. (1) Keys here
+    // live in the **Challenge (degree-4) extension field** — `key_field = key_lo
+    // + key_hi·2^32` packs the full u64 — and the bit-decomposition range-check
+    // (`decompose_to_bits::<Val>`) only bounds base-field values, so a faithful
+    // sortedness check is not portable to BabyBear the way `split_le` is in
+    // Goldilocks. (2) It is not needed for soundness of the certified final-state
+    // relation: `add_permute` already proves `key_payload_sorted` is a true
+    // permutation (multiset equality) of the batch, and the adjacent-equality
+    // tags (Stage C) honestly reflect whatever order the prover supplies. If a
+    // key were split across two non-adjacent runs, each run emits a partial
+    // (key, partial_sum) into G, and the counter-grouping + running sum
+    // (Stages F–H) **re-merges** them at the counter level (both runs hash the
+    // key to the same d counters), so the per-counter deltas — hence Com(S_t) —
+    // are correct regardless of sortedness. Sortedness would only canonicalise G
+    // to one row per key; it changes performance, not the proven relation.
 
     // Decode each sorted payload into (key_field_sorted, val_sorted_by_key).
     for r in 0..m {
@@ -922,7 +939,7 @@ pub fn prove_countmin_final(
         witness: __witness,
         prove: __prove,
         verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| d as u64).sum(),
+        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
     });
 
     CountMinLeafProofV9 {

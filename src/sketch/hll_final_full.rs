@@ -292,6 +292,16 @@ thread_local! {
     static TAMPER_RHO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+// Benchmark hook (NOT test-gated — used by Experiment E9): when set, the prover
+// performs a SECOND Poseidon2 hash per record (its output fully consumed),
+// modelling the paper's pre-optimisation "two separate hashes" HLL baseline.
+// The default single wide-output hash (one call, two lanes c0[0]=index,
+// c0[1]=ρ) is the §App-F optimisation; the prove-time delta between the two is
+// the measured saving. See [`prove_hll_full_two_hashes`].
+thread_local! {
+    static HLL_TWO_HASHES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 // ─── Prover ────────────────────────────────────────────────────────────────
 
 pub fn prove_hll_full(
@@ -494,6 +504,21 @@ pub fn prove_hll_full(
         for k in 0..4 {
             let _ = b.decompose_to_bits::<Val>(c1[k], Val::bits()).expect("consume c1");
         }
+
+        // Wide-output ablation BASELINE (Experiment E9): a SECOND Poseidon2 hash
+        // per record, output fully consumed — the pre-optimisation "two separate
+        // hashes" cost. The default path skips this (single wide hash above).
+        if HLL_TWO_HASHES.with(|c| c.get()) {
+            let extra = b
+                .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &[batch_packed[j]], true)
+                .expect("baseline second hash");
+            let e0 = b.decompose_ext_to_base_coeffs::<Val>(extra[0]).expect("d e0");
+            let e1c = b.decompose_ext_to_base_coeffs::<Val>(extra[1]).expect("d e1");
+            for k in 0..4 {
+                let _ = b.decompose_to_bits::<Val>(e0[k], Val::bits()).expect("consume e0");
+                let _ = b.decompose_to_bits::<Val>(e1c[k], Val::bits()).expect("consume e1");
+            }
+        }
     }
 
     // ─── Stage 3–5: register-wise max-patch via one-hot scatter ─────────
@@ -655,7 +680,7 @@ pub fn prove_hll_full(
         witness: __witness,
         prove: __prove,
         verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| d as u64).sum(),
+        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
     });
 
     let _ = blog2;
@@ -666,6 +691,23 @@ pub fn prove_hll_full(
         batch_commit,
         params,
     }
+}
+
+/// **Wide-output ablation baseline** (Experiment E9 / Appendix F): proves the
+/// exact same HLL leaf as [`prove_hll_full`] but with TWO Poseidon2 hashes per
+/// record instead of the default single wide-output hash. The proof and final
+/// state are identical; only the per-record hash invocation count (and hence
+/// prove time) differs, so timing both quantifies the wide-output saving as a
+/// **measured** number rather than an analytical 2×.
+pub fn prove_hll_full_two_hashes(
+    params: HllFullParams,
+    initial_state: HllFullState,
+    batch: Vec<HllFullUpdate>,
+) -> HllFullLeafProof {
+    HLL_TWO_HASHES.with(|c| c.set(true));
+    let proof = prove_hll_full(params, initial_state, batch);
+    HLL_TWO_HASHES.with(|c| c.set(false));
+    proof
 }
 
 pub fn generate_proof(params: HllFullParams, updates: Vec<HllFullUpdate>) -> HllFullProof {
@@ -724,6 +766,28 @@ mod tests {
         let updates = vec![HllFullUpdate::real(7), HllFullUpdate::real(11)];
         let result = generate_proof(params, updates);
         assert_eq!(commit_hll_state(&result.final_state).0, result.proof.final_.0);
+    }
+
+    /// Wide-output ablation (E9): the two-hashes-per-record baseline must
+    /// prove (its second hash balances the WitnessChecks bus and self-verifies)
+    /// and yield the IDENTICAL final-state commitment as the default single
+    /// wide-output hash — i.e. it's a faithful cost baseline, not a different
+    /// circuit relation.
+    #[test]
+    fn hll_full_two_hashes_matches_wide() {
+        let params = HllFullParams { b: 4, batch: 4 };
+        let updates = vec![
+            HllFullUpdate::real(7),
+            HllFullUpdate::real(11),
+            HllFullUpdate::real(20240101),
+            HllFullUpdate::real(99),
+        ];
+        let wide = prove_hll_full(params, HllFullState::empty(params), updates.clone());
+        let two = prove_hll_full_two_hashes(params, HllFullState::empty(params), updates);
+        // Same boundary commitments (both prove the same transition).
+        assert_eq!(wide.initial.0, two.initial.0);
+        assert_eq!(wide.final_.0, two.final_.0);
+        assert_eq!(wide.batch_commit.0, two.batch_commit.0);
     }
 
     /// In-circuit max-patch: two keys landing in distinct registers both

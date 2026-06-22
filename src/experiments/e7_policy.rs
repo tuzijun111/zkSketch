@@ -61,6 +61,36 @@ pub fn measure_merge_us() -> f64 {
     t.elapsed().as_secs_f64() * 1e6 / reps as f64
 }
 
+/// **Real** per-merge cost `(τ_ms, verify_base_ms)`: times one real recursive
+/// Count-Min aggregation merge (`CountMinChainState::init`, the actual STARK
+/// fold behind a peak merge) and one real chain verify. Used by the
+/// `EXP_E7_REAL=1` mode so the policy simulation runs on the genuine per-merge
+/// cost instead of the option-(i) boundary-digest cost. ~1 s (one aggregation).
+pub fn measure_real_merge_ms() -> (f64, f64) {
+    use crate::recursion::recursive::countmin_chain::CountMinChainState;
+    use crate::recursion::recursive::countmin_leaf::{prove_countmin_leaf, D, W};
+    use crate::recursion::recursive::countmin_merge::verify_chain_countmin;
+    use crate::sketch::countmin::{CountMin, CountMinParams, CountMinUpdate};
+    use crate::sketch::Sketch;
+
+    let mut state = CountMin::new(&CountMinParams { d: D, w: W });
+    let b0 = [CountMinUpdate { key: 1, value: 3 }, CountMinUpdate { key: 8, value: 5 }];
+    let l1 = prove_countmin_leaf(state.clone(), b0);
+    for u in &b0 {
+        CountMin::update(&mut state, u);
+    }
+    let b1 = [CountMinUpdate { key: 14, value: 3 }, CountMinUpdate { key: 21, value: 5 }];
+    let l2 = prove_countmin_leaf(state.clone(), b1);
+
+    let t = Instant::now();
+    let chain = CountMinChainState::init(&l1, &l2).expect("real merge");
+    let tau_ms = t.elapsed().as_secs_f64() * 1e3;
+    let t = Instant::now();
+    verify_chain_countmin(&chain.root).expect("verify real chain");
+    let verify_ms = t.elapsed().as_secs_f64() * 1e3;
+    (tau_ms, verify_ms)
+}
+
 /// Microseconds to re-check one composed root (the auditor's `verify_base`).
 pub fn measure_root_verify_us() -> f64 {
     let leaves = synth_chain(2);

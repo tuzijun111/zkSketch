@@ -9,7 +9,8 @@
 //! Output: results/e7_policy.csv
 
 use zksketch::experiments::e7_policy::{
-    agg, measure_merge_us, measure_root_verify_us, query_with_backlog_ms, simulate, Policy,
+    agg, measure_merge_us, measure_real_merge_ms, measure_root_verify_us, query_with_backlog_ms,
+    simulate, Policy,
 };
 use zksketch::experiments::metrics::{append_csv, write_env_json};
 use zksketch::experiments::{env_usize, results_dir};
@@ -17,14 +18,21 @@ use zksketch::experiments::{env_usize, results_dir};
 fn main() {
     let t = env_usize("EXP_E7_STREAM", 65535) as u64;
     let v = env_usize("EXP_E7_V", 100) as u64; // inserts/sec
-    let tau_ms = measure_merge_us() / 1000.0;
-    let verify_ms = measure_root_verify_us() / 1000.0;
-    println!("E7 policy (plonky3) — stream t={t} v={v}/s  τ={tau_ms:.5}ms verify_base={verify_ms:.5}ms");
+    // EXP_E7_REAL=1 drives the simulation with the REAL recursive-merge cost
+    // (one real STARK fold + verify) instead of the option-(i) digest cost.
+    let real = std::env::var("EXP_E7_REAL").map(|s| s == "1").unwrap_or(false);
+    let (tau_ms, verify_ms, comp) = if real {
+        let (tau, ver) = measure_real_merge_ms();
+        (tau, ver, "real_recursive_aggregation")
+    } else {
+        (measure_merge_us() / 1000.0, measure_root_verify_us() / 1000.0, "option_i_boundary_digest")
+    };
+    println!("E7 policy (plonky3) — stream t={t} v={v}/s  τ={tau_ms:.5}ms verify_base={verify_ms:.5}ms  [{comp}]");
 
     let dir = results_dir();
     write_env_json(&dir, &[
         ("backend", "plonky3".into()), ("experiment", "e7_policy".into()),
-        ("composition", "option_i_boundary_digest".into()),
+        ("composition", comp.into()),
         ("tau_ms", format!("{tau_ms:.6}")), ("verify_base_ms", format!("{verify_ms:.6}")),
     ]);
     let hdr: Vec<String> = ["policy", "c", "v", "q", "backlog", "query_latency_ms_median",

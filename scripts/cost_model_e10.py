@@ -2,28 +2,28 @@
 """E10 — cost-model validation (EVAL_SPEC E10).
 
 Reads the measured E1/E3/E4 CSVs, computes the paper's closed-form per-family
-constraint prediction for each config, and checks that the measured cost tracks
-the prediction (target deviation <= 1.5x).
+constraint prediction for each config, and checks that the measured **circuit
+size** tracks the prediction (target deviation <= 1.5x).
 
-Honest unit caveat
-------------------
+Unit
+----
 The paper's cost model (App. constraint-budget) is stated in *arithmetic-circuit
-constraints*. The prototype's reported ``constraint_count`` is NOT in that unit:
-- plonky3 reports the summed FRI log-degrees (Sigma log2 of each padded table
-  height) -- it grows ~logarithmically, so it does NOT track the arithmetic
-  model linearly.
-- plonky2 reports degree * num_wires (closer to a raw constraint count).
+constraints*. We validate it against each backend's real measured **circuit
+size** (``constraint_count``), which is now a genuine size on both backends:
+- plonky3: total padded trace rows summed across the batch-STARK tables
+  (``Sigma 2^ext_degree_i`` — the documented "sum of padded heights").
+- plonky2: ``degree * num_wires`` (the constraint-polynomial cell count).
 
-So a raw predicted-arithmetic vs measured-log-degree ratio is meaningless on
-plonky3. The cost model is therefore validated against ``prove_total_ms`` -- the
-backend-independent cost proxy the paper itself recommends -- calibrated per
-(experiment, backend, family) group with a single scale constant (the gadget
-constants c_* are absorbed into that constant). ``predicted_constraints`` and
-``measured_constraints`` are still reported for reference, with the unit flagged.
+Both are real determinants of prover work (not the earlier ``Sigma log2`` proxy),
+so the predicted-vs-measured ratio is meaningful. The per-(experiment, backend,
+family) affine fit ``size ≈ c_lin + k·predicted`` absorbs the backend's
+fixed-overhead rows (c_lin) and the per-family gadget constants (k); the residual
+ratio is what the 1.5x target bounds. ``measured_prove_total_ms`` is still
+reported for reference.
 
 Output: results/e10_costmodel.csv
   experiment, backend, family, config, predicted_constraints,
-  measured_constraint_count, measured_prove_total_ms, ratio_prove, within_1.5x, note
+  measured_constraint_count, measured_prove_total_ms, ratio_size, within_1.5x, note
 """
 import csv
 import math
@@ -117,8 +117,8 @@ def main():
         print("E10: no input CSVs found in results/ (run e1/e3/e4 first).")
         return
     # Group by (experiment, backend, family); fit the paper's model shape
-    # `prove_ms ≈ c_lin + k · predicted` (affine least-squares — c_lin is the
-    # cost model's own constant term, k absorbs the gadget constants), then check
+    # `size ≈ c_lin + k · predicted` (affine least-squares — c_lin is the
+    # backend's fixed overhead rows, k absorbs the gadget constants), then check
     # each config's residual ratio. A group needs >= 3 points to be a real test
     # (an affine fit is exact at 2 points), so only those count toward the
     # validated total.
@@ -128,7 +128,7 @@ def main():
 
     out = [[
         "experiment", "backend", "family", "config", "predicted_constraints",
-        "measured_constraint_count", "measured_prove_total_ms", "ratio_prove",
+        "measured_constraint_count", "measured_prove_total_ms", "ratio_size",
         "within_1.5x", "note",
     ]]
     n_within = 0
@@ -136,7 +136,7 @@ def main():
     for key, grp in sorted(groups.items()):
         grp = sorted(grp, key=lambda x: x[4])  # by predicted
         xs = [g[4] for g in grp]
-        ys = [g[6] for g in grp]
+        ys = [float(g[5]) for g in grp]  # measured circuit size (constraint_count)
         n = len(grp)
         # affine least-squares: ys ≈ a + k·xs.
         if n == 1:
@@ -153,14 +153,10 @@ def main():
                 a = (sy - k * sx) / n
         testable = n >= 3
         for (exp, backend, fam, cfg, pred, cc, ms) in grp:
-            pred_ms = a + k * pred
-            ratio = (ms / pred_ms) if pred_ms > 0 else float("nan")
+            pred_size = a + k * pred
+            ratio = (cc / pred_size) if pred_size > 0 else float("nan")
             within = (not math.isnan(ratio)) and (1.0 / 1.5 <= ratio <= 1.5)
-            note = []
-            if not testable:
-                note.append(f"n={n}<3(underdetermined)")
-            if backend == "plonky3":
-                note.append("cc=log_degree")
+            note = [] if testable else [f"n={n}<3(underdetermined)"]
             out.append([
                 exp, backend, fam, cfg, f"{pred:.1f}", str(cc), f"{ms:.3f}",
                 f"{ratio:.3f}" if not math.isnan(ratio) else "nan",
@@ -179,9 +175,9 @@ def main():
     print(f"E10 cost-model validation → {path}")
     print(f"  configs within 1.5x of the fitted cost model (>=3-point groups): "
           f"{n_within}/{n_total} ({frac:.0f}%)")
-    print("  (model: prove_ms ≈ c_lin + k·predicted, affine fit per group; "
-          "validated against prove_total_ms — plonky3's constraint_count is summed "
-          "FRI log-degrees, see header.)")
+    print("  (model: size ≈ c_lin + k·predicted, affine fit per group; validated "
+          "against measured circuit size = Σ2^d padded rows on plonky3, "
+          "degree·wires on plonky2.)")
 
 
 if __name__ == "__main__":

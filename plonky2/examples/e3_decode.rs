@@ -95,18 +95,18 @@ fn main() {
         let keys = keys_for(&dataset, cap);
         let ups: Vec<SsUpdate> = keys.iter().map(|&k| SsUpdate::real(((k & 0x3FFF_FFFF) | 1) as u64, 1)).collect();
         let (st, _) = ss_apply(&SsState::empty(SsParams { capacity: cap, batch: cap }), &ups);
-        let query = st.rows.iter().find(|r| r.active == 1).map(|r| r.key).unwrap_or(1);
+        let c = (cap / 4).max(1); // top-c query size
         for rp in [ReleasePolicy::Identity, ReleasePolicy::Threshold(1)] {
-            let leaf = build_ss_decode(SsDecodeParams { capacity: cap, release: rp });
+            let leaf = build_ss_decode(SsDecodeParams { capacity: cap, c, release: rp });
             let tr = leaf.data.common.degree() as u64;
             let nc = leaf.data.common.config.num_wires as u64;
             let agg = bench(cfg, || {
-                let (dp, wg, pv) = leaf.prove_timed(&st, query).expect("ss decode");
+                let (dp, wg, pv) = leaf.prove_timed(&st, c).expect("ss decode");
                 let (vr, verify) = time_it(|| dp.verify());
                 vr.expect("verify");
                 RunOutcome { witness_gen: wg, prove: pv, verify, proof_size_bytes: dp.proof_bytes() as u64, trace_rows: tr, num_columns: nc }
             });
-            push("ss", "frequency", cap, rp, &agg);
+            push("ss", "topc", cap, rp, &agg);
         }
     }
 
@@ -136,13 +136,13 @@ fn main() {
         let keys = keys_for(&dataset, m * 4);
         let mut st = HllState::new(&HllParams { b });
         for &k in &keys { st.update(&HllUpdate { key: k as u64 }); }
-        // guard: registers must be ≤ HLL_B (small slices keep them tiny).
+        // guard: registers must be ≤ MU_MAX (small slices keep them tiny).
         let max_reg = st.cells().iter().map(|c| c.to_canonical_u64()).max().unwrap_or(0);
-        if max_reg as usize > zksketch_snark::decode::hyperloglog::HLL_B {
-            eprintln!("  hll b={b}: max register {max_reg} > HLL_B; skipping (raise HLL_B)");
+        if max_reg as usize > zksketch_snark::decode::hyperloglog::MU_MAX {
+            eprintln!("  hll b={b}: max register {max_reg} > MU_MAX; skipping (raise MU_MAX)");
             continue;
         }
-        let leaf = build_hll_decode(HllDecodeParams { b });
+        let leaf = build_hll_decode(HllDecodeParams { b, release: ReleasePolicy::Identity });
         let tr = leaf.data.common.degree() as u64;
         let nc = leaf.data.common.config.num_wires as u64;
         let agg = bench(cfg, || {

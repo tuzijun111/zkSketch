@@ -16,7 +16,7 @@ scripts/run_experiments.sh
 #   results/env.json, plonky2/results/env.json
 
 scripts/run_experiments.sh e2   # integrity (tamper + fidelity) → results/e2_integrity.csv
-scripts/run_experiments.sh e3   # decode/query cost vs. state size s → results/e3_decode.csv (plonky2 only)
+scripts/run_experiments.sh e3   # decode/query cost vs. state size s → results/e3_decode.csv (both backends)
 ```
 
 On a small AOL slice instead (fetch first, see below):
@@ -158,7 +158,7 @@ covered by the unit tests — `cargo test --release --lib soundness rejects`
 ## E3 — decode / query cost vs. state size `s`
 
 ```bash
-scripts/run_experiments.sh e3                 # plonky2 only → results/e3_decode.csv
+scripts/run_experiments.sh e3                 # both backends → results/e3_decode.csv
 EXP_DATASET=aol EXP_TRIALS=5 scripts/run_experiments.sh e3
 # manual:
 cd plonky2 && EXP_DATASET=uniform EXP_TRIALS=5 cargo run --release --example e3_decode
@@ -187,11 +187,13 @@ prove_total_ms_median, verify_ms_median, proof_size_bytes, peak_rss_mb_median`.
 `constraint_count` (= `degree · num_wires`) rises with `s` — the whole-state
 re-hash — confirming the `Θ(s)` decode dependence.
 
-**E3 is plonky2-only for now**: the decode circuits live in
-`plonky2/src/decode/` (`countmin`, `spacesaving`, `greenwald_khanna`,
-`hyperloglog`); the plonky3 decode AIR is future work, so `e3` forces
-`BACKENDS=plonky2`. The decode circuits themselves are unit-tested
-(round-trip + reject) via `cd plonky2 && cargo test --release --lib decode`.
+**E3 runs on BOTH backends** (all four families each). The decode circuits live
+in `plonky2/src/decode/` (SNARK) and `src/decode/` (plonky3 STARK:
+`countmin`, `spacesaving`, `greenwald_khanna`, `hyperloglog`) — the latter
+re-hashes the committed state in-circuit (Poseidon2), derives the query
+relation, and binds the released answer, mirroring the plonky2 relations. Both
+legs are unit-tested (round-trip + threshold): `cargo test --release --lib
+decode::` (plonky3) and `cd plonky2 && cargo test --release --lib decode`.
 
 ## E4 — scalability sweeps
 
@@ -423,8 +425,8 @@ transparency-log structure.)
 
 - **E1** (per-family circuit cost, certified + CM replay) — both backends.
 - **E2** (integrity) — both backends, all four families (tamper + fidelity).
-- **E3** (decode/query cost vs. `s`) — plonky2, all four families, two release
-  policies; `Θ(s)` dependence confirmed.
+- **E3** (decode/query cost vs. `s`) — both backends, all four families, two
+  release policies; `Θ(s)` dependence confirmed.
 - **E4** (scalability sweeps a/b/c/d) — plonky3, certified CM; linear-in-`m`,
   linear-in-`T_max`, and stream-length flatness (E4d) confirmed.
 - **E5** (composition ladder) — plonky3, four settings × audit window; auditor
@@ -443,6 +445,7 @@ transparency-log structure.)
 - **inputfold** (input-commitment + history-fold over real batches) — plonky3, all
   four families; real per-batch `Com(B_t)` bound + folded into `R(t)`, tamper
   detected.
-- **E1–E10 complete.** Remaining future work: the plonky3 decode AIR (E3 on the
-  STARK backend) and a recursive cross-family merge (E8).
+- **E1–E10 complete on both backends** (E3 decode now runs on plonky3 too).
+  Remaining future work: a recursive cross-family merge (E8) and a sparse-opening
+  state commitment folded into E4c.
 ```

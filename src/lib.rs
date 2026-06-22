@@ -9,6 +9,7 @@ pub mod air;
 pub mod commitment;
 pub mod config;
 pub mod dataset;
+pub mod decode;
 pub mod experiments;
 pub mod prover;
 pub mod recursion;

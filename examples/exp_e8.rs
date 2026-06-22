@@ -125,5 +125,39 @@ fn main() {
     append_csv(&dir, "e8_crossstack", &hdr, &row("cross_family_merge", "cm+hll", &agg));
     println!("  cross_family    prove={:.4}ms verify={:.4}ms size=96B (framework digest, NOT recursive; synthetic cm→hll boundary — composition-layer cost only)", agg.prove_total_ms_median, agg.verify_ms_median);
 
+    // ── op = cross_family_merge_recursive (cm+hll, REAL recursive batch-STARK) ──
+    // Genuinely aggregates a CM leaf proof AND an HLL leaf proof into ONE
+    // recursive proof that re-verifies BOTH leaves (vs. the digest row above).
+    // There is no shared boundary (independent families); the proof binds both
+    // leaves' (initial, final) commitments under one combined digest.
+    {
+        use zksketch::recursion::recursive::countmin_leaf::{prove_countmin_leaf, D as CMD, W as CMW};
+        use zksketch::recursion::recursive::cross_family_merge::{merge_cm_hll, verify_cm_hll};
+        use zksketch::recursion::recursive::hll_leaf::{prove_hll_leaf, B as HLLB};
+        use zksketch::sketch::countmin::{CountMin, CountMinParams, CountMinUpdate};
+        use zksketch::sketch::hyperloglog::{HyperLogLog, HyperLogLogParams, HyperLogLogUpdate};
+        use zksketch::sketch::Sketch;
+        let cmleaf = prove_countmin_leaf(
+            CountMin::new(&CountMinParams { d: CMD, w: CMW }),
+            [CountMinUpdate { key: 7, value: 3 }, CountMinUpdate { key: 11, value: 5 }],
+        );
+        let hllleaf = prove_hll_leaf(
+            HyperLogLog::new(&HyperLogLogParams { b: HLLB }),
+            [HyperLogLogUpdate { key: 0xDEAD_BEEF }, HyperLogLogUpdate { key: 0xC0FFEE }],
+        );
+        let agg = bench(merge_cfg, || {
+            let (m2, tm) = time_it(|| merge_cm_hll(&cmleaf, &hllleaf).expect("real cross-family merge"));
+            let (vr, tv) = time_it(|| verify_cm_hll(&m2));
+            vr.expect("verify cross-family");
+            RunOutcome {
+                witness_gen: Duration::ZERO, prove: tm, verify: tv,
+                proof_size_bytes: proof_size(&m2.recursive_proof.0) as u64, trace_rows: 0, num_columns: 0,
+            }
+        });
+        append_csv(&dir, "e8_crossstack", &hdr, &row("cross_family_merge_recursive", "cm+hll", &agg));
+        println!("  cross_family(REAL) prove={:.1}ms verify={:.2}ms size={}B (real recursive STARK aggregating a CM leaf + an HLL leaf)",
+            agg.prove_total_ms_median, agg.verify_ms_median, agg.proof_size_bytes);
+    }
+
     println!("done → {}", dir.join("e8_crossstack.csv").display());
 }
