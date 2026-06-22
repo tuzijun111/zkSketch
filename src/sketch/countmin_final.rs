@@ -171,9 +171,13 @@ pub fn apply_update_prf(state: &mut CountMinState, u: &CountMinUpdate) {
 /// two leaves chain-merge only when all four match.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct CountMinFinalParams {
-    /// Number of sketch rows (depth). Must be `1 ≤ d ≤ 16`.
+    /// Number of sketch rows (depth). Must be `1 ≤ d ≤ 8` (the PRF digest
+    /// has 8 `Val` elements; row `i` muxes to the i-th).
     pub d: usize,
-    /// Number of buckets per row. Must be a power of 2 in `{2, 4, 8, 16}`.
+    /// Number of buckets per row. Must be a power of two `≥ 2`. There is no
+    /// fixed upper bound, but the selector budget (`distinct_bound·d·(d·w)`,
+    /// see [`Self::validate`]) caps the practical size; raise it with the
+    /// `COUNTMIN_MAX_SEL_CELLS` env var.
     pub w: usize,
     /// Number of raw records per epoch. `d · w` must be a multiple of 4.
     pub batch: usize,
@@ -196,9 +200,13 @@ impl CountMinFinalParams {
         // The PRF hash family (Poseidon2 sponge) produces 8 Val digest
         // elements per key; we mux row `i` to the i-th element, so `d ≤ 8`.
         assert!(self.d >= 1 && self.d <= 8, "d must be in 1..=8, got {}", self.d);
+        // `w` must be a power of two: the in-circuit position is the low
+        // `log2(w)` bits of the PRF digest, which equals `% w` only for
+        // powers of two. There is no fixed upper bound on `w` — the real
+        // limit is the selector-budget guard below.
         assert!(
-            self.w.is_power_of_two() && (1..=16).contains(&self.w),
-            "w must be a power of 2 in {{2,4,8,16}}, got {}",
+            self.w.is_power_of_two() && self.w >= 2,
+            "w must be a power of two ≥ 2, got {}",
             self.w
         );
         assert!(self.batch >= 1, "batch must be ≥ 1, got {}", self.batch);
@@ -211,6 +219,32 @@ impl CountMinFinalParams {
             self.distinct_bound >= 1 && self.distinct_bound <= self.batch,
             "distinct_bound ({}) must be in 1..=batch ({})",
             self.distinct_bound, self.batch
+        );
+        // Cost guard. The sparse-patch selector `sel_a_cell` is the circuit's
+        // dominant cost: `n_ctr × num_cells = (distinct_bound·d) × (d·w)`
+        // private witnesses. The old `w ≤ 16` cap was a crude proxy for this;
+        // bounding the real product lets width grow freely when the batch /
+        // distinct_bound is small, while still rejecting the catastrophic case
+        // (e.g. d=7,w=16384,distinct_bound=1024 ≈ 822M witnesses → clean panic
+        // instead of an OOM). Raise the ceiling for a bigger machine via
+        // `COUNTMIN_MAX_SEL_CELLS` (proofs get very RAM/time-heavy past a few
+        // million selector cells).
+        let sel_cells = self
+            .distinct_bound
+            .saturating_mul(self.d)
+            .saturating_mul(self.num_cells());
+        let max_sel = std::env::var("COUNTMIN_MAX_SEL_CELLS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(16_000_000);
+        assert!(
+            sel_cells <= max_sel,
+            "selector budget exceeded: distinct_bound·d·(d·w) = {sel_cells} > {max_sel} \
+             (d={}, w={}, distinct_bound={}). Reduce w / batch / distinct_bound, or raise \
+             COUNTMIN_MAX_SEL_CELLS (expect heavy RAM/time).",
+            self.d,
+            self.w,
+            self.distinct_bound
         );
     }
 }

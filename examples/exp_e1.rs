@@ -59,7 +59,7 @@ fn keys_for(name: &str, n: usize) -> Option<Vec<u32>> {
 }
 
 fn cfg() -> BenchCfg {
-    BenchCfg { warmup: env_usize("EXP_WARMUP", 1), trials: env_usize("EXP_TRIALS", 5) }
+    BenchCfg { warmup: env_usize("EXP_WARMUP", 0), trials: env_usize("EXP_TRIALS", 1) }
 }
 
 fn outcome(proof_bytes: u64) -> RunOutcome {
@@ -88,7 +88,14 @@ fn main() {
     let dataset = env_str("EXP_DATASET", "uniform");
     let ms = env_list("EXP_M", &[4, 8, 16, 32]);
     let max_m = *ms.iter().max().unwrap_or(&32);
-    println!("E1 (plonky3 STARK) — dataset={dataset}  m={ms:?}  trials={}", cfg().trials);
+    // EXP_FAMILY filters which families run: "all" (default) or a comma-list of
+    // cm|gk|hll|ss (e.g. EXP_FAMILY=cm runs only Count-Min, both variants).
+    let family_sel = env_str("EXP_FAMILY", "all");
+    let want = |f: &str| family_sel == "all" || family_sel.split(',').any(|x| x.trim() == f);
+    println!(
+        "E1 (plonky3 STARK) — dataset={dataset}  m={ms:?}  family={family_sel}  trials={}",
+        cfg().trials
+    );
 
     let Some(keys) = keys_for(&dataset, max_m) else {
         eprintln!(
@@ -118,44 +125,69 @@ fn main() {
     };
 
     let c = cfg();
+    // Count-Min width-sweep knobs (used when EXP_FAMILY includes cm):
+    //   EXP_D            depth d                      (default 4, must be 1..=8)
+    //   EXP_W            comma-list of widths w        (default 8; powers of two)
+    //   EXP_CM_VARIANT   certified | replay | both     (default both)
+    // The certified §5.2 circuit guards its selector budget; for big widths set
+    // EXP_CM_VARIANT=certified (the replay strawman is O(d·w·batch) and has no
+    // guard), and raise COUNTMIN_MAX_SEL_CELLS if you hit the budget panic.
+    let cm_d = env_usize("EXP_D", 4);
+    let cm_ws = env_list("EXP_W", &[8]);
+    let cm_variant = env_str("EXP_CM_VARIANT", "both");
     for &m in &ms {
         let slice = take(&keys, m);
         let me = m.max(2) + (m % 2); // even batch for GK/SS/HLL
         let slice_e = take(&keys, me);
 
-        // CM (d=4, w=8, distinct_bound=m) — certified (§5.2) circuit.
-        let p = CountMinFinalParams { d: 4, w: 8, batch: m, distinct_bound: m };
-        let ups: Vec<CountMinUpdate> = slice.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
-        let agg = bench(c, || { let r = cm_prove(p, ups.clone()); outcome(proof_size(&r.proof.output.0) as u64) });
-        append_csv(&dir, "e1_circuit", &hdr, &row("cm", "certified", m, 4, 8, 32, &agg));
+        if want("cm") {
+            let ups: Vec<CountMinUpdate> =
+                slice.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
+            for &cm_w in &cm_ws {
+                let s_cells = cm_d * cm_w;
+                // CM certified (§5.2) circuit (distinct_bound = m).
+                if cm_variant == "certified" || cm_variant == "both" {
+                    let p = CountMinFinalParams { d: cm_d, w: cm_w, batch: m, distinct_bound: m };
+                    let agg = bench(c, || { let r = cm_prove(p, ups.clone()); outcome(proof_size(&r.proof.output.0) as u64) });
+                    append_csv(&dir, "e1_circuit", &hdr, &row("cm", "certified", m, cm_d, cm_w, s_cells, &agg));
+                }
+                // CM replay baseline (§5.1 strawman: naive per-record in-circuit replay).
+                if cm_variant == "replay" || cm_variant == "both" {
+                    let lp = CountMinLeafParams { d: cm_d, w: cm_w, batch: m };
+                    let agg = bench(c, || {
+                        let leaf = prove_countmin_leaf_with_params(lp, cm_empty(cm_d, cm_w), ups.clone());
+                        outcome(proof_size(&leaf.output.0) as u64)
+                    });
+                    append_csv(&dir, "e1_circuit", &hdr, &row("cm", "replay", m, cm_d, cm_w, s_cells, &agg));
+                }
+            }
+        }
 
-        // CM replay baseline (§5.1 strawman: naive per-record in-circuit replay).
-        let lp = CountMinLeafParams { d: 4, w: 8, batch: m };
-        let agg = bench(c, || {
-            let leaf = prove_countmin_leaf_with_params(lp, cm_empty(4, 8), ups.clone());
-            outcome(proof_size(&leaf.output.0) as u64)
-        });
-        append_csv(&dir, "e1_circuit", &hdr, &row("cm", "replay", m, 4, 8, 32, &agg));
+        if want("gk") {
+            // GK (capacity 8).
+            let p = GKFullParams { capacity: 8, batch: me };
+            let ups: Vec<GKFullUpdate> = slice_e.iter().map(|&k| GKFullUpdate::real(k & 0x003F_FFFF)).collect();
+            let agg = bench(c, || { let r = gk_prove(p, ups.clone()); outcome(proof_size(&r.proof.output.0) as u64) });
+            append_csv(&dir, "e1_circuit", &hdr, &row("gk", "certified", me, 0, 0, 8, &agg));
+        }
 
-        // GK (capacity 8).
-        let p = GKFullParams { capacity: 8, batch: me };
-        let ups: Vec<GKFullUpdate> = slice_e.iter().map(|&k| GKFullUpdate::real(k & 0x003F_FFFF)).collect();
-        let agg = bench(c, || { let r = gk_prove(p, ups.clone()); outcome(proof_size(&r.proof.output.0) as u64) });
-        append_csv(&dir, "e1_circuit", &hdr, &row("gk", "certified", me, 0, 0, 8, &agg));
+        if want("hll") {
+            // HLL (b=4 → 16 registers).
+            let p = HllFullParams { b: 4, batch: me };
+            let ups: Vec<HllFullUpdate> = slice_e.iter().map(|&k| HllFullUpdate::real(k as u64)).collect();
+            let agg = bench(c, || { let r = hll_prove(p, ups.clone()); outcome(proof_size(&r.proof.output.0) as u64) });
+            append_csv(&dir, "e1_circuit", &hdr, &row("hll", "certified", me, 0, 0, 16, &agg));
+        }
 
-        // HLL (b=4 → 16 registers).
-        let p = HllFullParams { b: 4, batch: me };
-        let ups: Vec<HllFullUpdate> = slice_e.iter().map(|&k| HllFullUpdate::real(k as u64)).collect();
-        let agg = bench(c, || { let r = hll_prove(p, ups.clone()); outcome(proof_size(&r.proof.output.0) as u64) });
-        append_csv(&dir, "e1_circuit", &hdr, &row("hll", "certified", me, 0, 0, 16, &agg));
+        if want("ss") {
+            // SS (capacity 8).
+            let p = SsFullParams { capacity: 8, batch: me };
+            let ups: Vec<SsFullUpdate> = slice_e.iter().map(|&k| SsFullUpdate::real(((k & 0x3FFF_FFFF) | 1) as u64, 1)).collect();
+            let agg = bench(c, || { let r = ss_prove(p, ups.clone()); outcome(proof_size(&r.proof.output.0) as u64) });
+            append_csv(&dir, "e1_circuit", &hdr, &row("ss", "certified", me, 0, 0, 8, &agg));
+        }
 
-        // SS (capacity 8).
-        let p = SsFullParams { capacity: 8, batch: me };
-        let ups: Vec<SsFullUpdate> = slice_e.iter().map(|&k| SsFullUpdate::real(((k & 0x3FFF_FFFF) | 1) as u64, 1)).collect();
-        let agg = bench(c, || { let r = ss_prove(p, ups.clone()); outcome(proof_size(&r.proof.output.0) as u64) });
-        let path = append_csv(&dir, "e1_circuit", &hdr, &row("ss", "certified", me, 0, 0, 8, &agg));
-
-        println!("  m={m:<4} done (cm/gk/hll/ss) → {}", path.display());
+        println!("  m={m:<4} done (family={family_sel}) → {}", dir.display());
     }
     println!("done. results in {}", dir.display());
 }

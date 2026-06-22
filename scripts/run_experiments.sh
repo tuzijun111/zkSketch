@@ -18,6 +18,14 @@
 #
 # Config (env, forwarded to both runners):
 #   EXP_DATASET  uniform|gaussian|zipf|aol|netflix     (default uniform)
+#   EXP_FAMILY   E1: which families — all | comma-list of cm,gk,hll,ss
+#                (e.g. EXP_FAMILY=cm runs only Count-Min)   (default all)
+#   EXP_D        E1/cm: Count-Min depth d (1..=8)           (default 4)
+#   EXP_W        E1/cm: comma-list of widths w (powers of 2, sweeps width)
+#                                                            (default 8)
+#   EXP_CM_VARIANT  E1/cm: certified|replay|both            (default both)
+#   COUNTMIN_MAX_SEL_CELLS  cap on the certified circuit's selector budget
+#                (distinct_bound·d·d·w); raise for big widths (default 16M)
 #   EXP_M        E1: comma-separated batch sizes (default 4,8,16,32)
 #                E2: single batch size (default 16)
 #   EXP_TRIALS   E1 measured trials (median/p95)        (default 5)

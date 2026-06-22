@@ -72,8 +72,12 @@ fn main() {
     let dataset = env_str("EXP_DATASET", "uniform");
     let ms = env_list("EXP_M", &[4, 8, 16, 32]);
     let max_m = *ms.iter().max().unwrap_or(&32);
+    // EXP_FAMILY filters which families run: "all" (default) or a comma-list of
+    // cm|gk|hll|ss (e.g. EXP_FAMILY=cm runs only Count-Min).
+    let family_sel = env_str("EXP_FAMILY", "all");
+    let want = |f: &str| family_sel == "all" || family_sel.split(',').any(|x| x.trim() == f);
     let cfg = BenchCfg { warmup: env_usize("EXP_WARMUP", 1), trials: env_usize("EXP_TRIALS", 5) };
-    println!("E1 (plonky2 SNARK) — dataset={dataset}  m={ms:?}  trials={}", cfg.trials);
+    println!("E1 (plonky2 SNARK) — dataset={dataset}  m={ms:?}  family={family_sel}  trials={}", cfg.trials);
 
     let Some(keys) = keys_for(&dataset, max_m) else {
         eprintln!("dataset '{dataset}' unavailable (real ones need ../scripts/fetch_datasets.py). Use EXP_DATASET=uniform offline.");
@@ -93,7 +97,7 @@ fn main() {
     for &m in &ms {
         let slice = take(&keys, m);
         // CM (d=4, w=8).
-        {
+        if want("cm") {
             let leaf = build_countmin_final_leaf(CmFinalParams { d: 4, w: 8, batch: m, distinct_bound: m });
             let ups: Vec<CountMinUpdate> = slice.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
             let tr = leaf.data.common.degree() as u64;
@@ -108,7 +112,7 @@ fn main() {
             append_csv(&dir, "e1_circuit", &header, &row("cm", m, 4, 8, 32, &agg));
         }
         // HLL (b=4 → 16 registers).
-        {
+        if want("hll") {
             let leaf = build_hll_leaf(HllLeafParams { b: 4, batch: m });
             let ups: Vec<HllUpdate> = slice.iter().map(|&k| HllUpdate { key: k as u64 }).collect();
             let st = HllState::new(&HllParams { b: 4 });
@@ -124,7 +128,7 @@ fn main() {
             append_csv(&dir, "e1_circuit", &header, &row("hll", m, 0, 0, 16, &agg));
         }
         // SS (capacity 8).
-        {
+        if want("ss") {
             let leaf = build_spacesaving_leaf(SsLeafParams { capacity: 8, batch: m });
             let ups: Vec<SsUpdate> = slice.iter().map(|&k| SsUpdate::real(((k & 0x3FFF_FFFF) | 1) as u64, 1)).collect();
             let tr = leaf.data.common.degree() as u64;
@@ -139,7 +143,7 @@ fn main() {
             append_csv(&dir, "e1_circuit", &header, &row("ss", m, 0, 0, 8, &agg));
         }
         // GK (capacity 8; batch must be even).
-        if m % 2 == 0 {
+        if want("gk") && m % 2 == 0 {
             let leaf = build_gk_leaf(GkLeafParams { capacity: 8, batch: m });
             let ups: Vec<GkUpdate> = slice.iter().map(|&k| GkUpdate::real((k & 0x000F_FFFF) as u64)).collect();
             let tr = leaf.data.common.degree() as u64;
