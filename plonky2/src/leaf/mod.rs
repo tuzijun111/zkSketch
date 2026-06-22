@@ -10,5 +10,6 @@ pub mod countmin_merkle;
 pub mod fib;
 pub mod gadgets;
 pub mod greenwald_khanna;
+pub mod hll_merkle;
 pub mod hyperloglog;
 pub mod spacesaving;

@@ -164,11 +164,91 @@ re-ordered, dropped, or tampered epoch breaks a boundary and/or changes the
 digest, so it is rejected (see the reject-tests below).
 
 > Note on full recursion: a production deployment runs the SNARK verifier
-> *in-circuit* in the merge atom (true recursive composition). Our prototype
-> verifies each leaf proof natively and binds the composition via the
-> boundary + digest checks above — the paper's "option (i)" lifting
-> (`view Π[j,j] as π_j presented with its public record`). The schedule
-> logic (the §4.3 topologies) is identical either way.
+> *in-circuit* in the merge atom (true recursive composition). The generic
+> `framework` module above verifies each leaf proof natively and binds the
+> composition via the boundary + digest checks — the paper's "option (i)"
+> lifting (`view Π[j,j] as π_j presented with its public record`). The
+> §4.3 topologies are identical either way. The **recursive** realization of
+> option (ii) — every merge recursively verifies its children inside one
+> aggregation proof — is implemented for Count-Min v9 in
+> `recursion::recursive::countmin_forest_v9` (see next section).
+
+## §4.3(c) realized recursively — `countmin_forest_v9`
+
+`framework::StreamingForest` composes per-epoch *digests*. The module
+`recursion::recursive::countmin_forest_v9` composes the actual STARK proofs
+in the **same** Bentley–Saxe/MMR schedule: `prove_countmin_forest_v9(&[leaf])`
+runs a binary-counter cascade where each merge is one
+`build_and_prove_aggregation_layer` call that **recursively verifies both
+children in-circuit**, so the single root proof recursively verifies *all*
+leaves. The cascade folds `agg+agg` (≥ 4 leaves) and `agg+leaf` (e.g. 3
+leaves) — the `agg+agg` case the linear `countmin_chain` never exercises.
+
+**Verified property — the root folds the intermediates away.** An aggregation
+proof's public inputs are FRI proof-structure values *only*, fixed by the FRI
+config and independent of how many leaves are underneath
+(`recursion::recursive::tests::probe_aggregation_public_inputs` measures this:
+a leaf's own boundary value is provably *absent* from the parent's public
+inputs). So the per-epoch state commitments `Com(S_i)` are **not** exposed,
+and the root proof is `O(1)`. Measured (`forest_root_size_does_not_grow_with_leaves`):
+
+| epochs `E` | root recursive-proof size |
+| ---------- | ------------------------- |
+| 4          | ~486 KB                   |
+| 8          | ~486 KB                   |
+
+Doubling the history leaves the root proof flat — the root only verifies its
+two direct children, never the whole history. This is the literal "single
+proof over the intermediates, folded away" property at the proof level.
+
+In `countmin_forest_v9` the outer boundaries `Com(S_0)` / `Com(S_E)` and the
+tree-schedule digest are carried alongside the proof and checked natively at
+`O(1)` (`verify_forest_countmin_v9` replays the cascade to recompute the
+digest). The **in-circuit** binding of those outer boundaries is realized
+separately — see the next section.
+
+## In-circuit boundary binding — `expose_forest`
+
+`recursion::recursive::expose_forest` closes the last gap: a recursive
+streaming forest whose **single root proof's public values are exactly
+`(Com(S_0), Com(S_E))`, bound in-circuit** — intermediates neither exposed nor
+natively trusted, contiguity enforced by the proof itself.
+
+The enabling primitive is a new **"Expose" non-primitive op** (in the
+recursion fork): the only NPO whose AIR declares `num_public_values() > 0` and
+whose table prover sets `BatchTableInstance.public_values`. It binds
+`public_value == trace_cell == witness` and surfaces those values as the
+proof's recursion `air_public_targets` — the one channel that carries an
+application value from a verified child into the parent's public statement.
+(Primitive `public_input()` values are bound by trace verification but are
+*not* re-exposed to a verifying parent — verified by
+`tests::probe_aggregation_public_inputs`.)
+
+On that primitive:
+
+- **Leaf** (`prove_boundary_leaf`) surfaces its `(Com_before, Com_after)` via
+  `add_expose`.
+- **Hiding merge** (`prove_hiding_merge`) recursively verifies both children,
+  reads their surfaced boundaries as `air_public_targets`, binds
+  `left.final == right.initial` in-circuit, repacks (recompose) the outer
+  boundary to stay `O(1)`, and re-exposes only `(left.initial, right.final)`.
+- **Forest** (`prove_bound_forest`) runs the Bentley–Saxe cascade over hiding
+  merges; the root surfaces exactly `(Com(S_0), Com(S_E))`, read with
+  `read_exposed_boundary`.
+
+Tests (`expose_forest::tests`): a known value surfaces through aggregation
+(vs. provably absent for a primitive public input); a 2-leaf merge exposes
+*only* the outer boundary and verifies; a non-contiguous history is rejected
+*in-circuit* (the merge proof can't be produced); a 4-leaf forest (exercising
+`agg+agg`) yields a root exposing only `(Com(S_0), Com(S_4))`.
+
+**Real Count-Min.** `prove_countmin_leaf_v9_exposed_with_params` is the v9
+Count-Min leaf with the boundary `add_expose` added (behind a flag, so the
+unexposed v9 baseline is unchanged). Test
+`real_v9_bound_forest_exposes_outer_boundary` composes two such leaves —
+proving actual Count-Min updates — through the hiding merge; the root surfaces
+only the real `(Com(S_0), Com(S_2))`. So the bound forest runs over genuine
+sketch transitions, not just the minimal boundary-claim leaf.
 
 ## Composing real sketch leaves (end-to-end)
 

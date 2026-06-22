@@ -17,12 +17,15 @@ pub mod backend;
 pub mod config;
 pub mod timing;
 pub mod countmin_chain;
+pub mod countmin_forest_v9;
+pub mod expose_forest;
 pub mod countmin_leaf;
 pub mod countmin_leaf_v2;
 pub mod countmin_leaf_v3;
 pub mod countmin_leaf_v9;
 pub mod countmin_leaf_v9h;
 pub mod countmin_merge;
+pub mod countmin_merge_merkle;
 pub mod countmin_merge_v9;
 pub mod countmin_merge_v9_additive;
 pub mod cross_family_merge;
@@ -287,6 +290,52 @@ mod tests {
             D,
         >(&left_input, &right_input, &config, &backend, &params, None)
         .expect("aggregate two dummy circuits");
+    }
+
+    /// PROBE (Stage 0a): measure what an aggregation proof exposes as public
+    /// inputs, to decide the recursive-forest design. Builds the aggregation
+    /// circuit over two dummy leaves with distinct public values (111, 222)
+    /// and reports: the parent circuit's `public_flat_len`, each child's
+    /// packed-public-input length, and whether the leaf's own public value
+    /// (111 / 222) propagates into the parent's public inputs.
+    #[test]
+    fn probe_aggregation_public_inputs() {
+        use p3_recursion::{VerifierCircuitResult, build_aggregation_layer_circuit};
+
+        use crate::config::{Challenge, Val};
+        use p3_field::PrimeCharacteristicRing;
+
+        let left = prove_upstream_dummy(111);
+        let right = prove_upstream_dummy(222);
+        let config = make_config();
+        let backend = make_backend();
+        let left_input = left.into_recursion_input::<BatchOnly>();
+        let right_input = right.into_recursion_input::<BatchOnly>();
+
+        let (circuit, (lr, rr)) = build_aggregation_layer_circuit::<
+            ConfigWithFriParams,
+            BatchOnly,
+            BatchOnly,
+            Backend,
+            D,
+        >(&left_input, &right_input, &config, &backend)
+        .expect("build aggregation circuit");
+
+        let lpis = lr.pack_public_inputs(&left_input).expect("left pis");
+        let rpis = rr.pack_public_inputs(&right_input).expect("right pis");
+
+        let v111 = Challenge::from(Val::from_u32(111));
+        let v222 = Challenge::from(Val::from_u32(222));
+
+        println!("PROBE: agg public_flat_len = {}", circuit.public_flat_len);
+        println!("PROBE: left  pack_public_inputs len = {}", lpis.len());
+        println!("PROBE: right pack_public_inputs len = {}", rpis.len());
+        println!("PROBE: 111 present in left  pis = {}", lpis.contains(&v111));
+        println!("PROBE: 222 present in right pis = {}", rpis.contains(&v222));
+        println!(
+            "PROBE: total parent pis (lpis+rpis) = {}",
+            lpis.len() + rpis.len()
+        );
     }
 
     /// Honest two-leaf recursive chain accepts.

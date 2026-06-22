@@ -39,8 +39,8 @@ use crate::config::{C, D, F};
 use crate::leaf::gadgets::{assert_perm_cols, bind_commit, vhash};
 use crate::recursion::Node;
 use crate::sketch::greenwald_khanna::{
-    apply_batch, batch_cells, build_union, fuse_all_rounds, num_fusion_rounds, GkParams, GkState,
-    GkUpdate,
+    apply_batch, apply_batch_with_rounds, batch_cells, build_union, fuse_all_rounds,
+    num_fusion_rounds, GkParams, GkState, GkUpdate,
 };
 
 const VALUE_BITS: usize = 32;
@@ -196,10 +196,23 @@ fn assert_value_sorted(b: &mut CircuitBuilder<F, D>, value: &[Target], active: &
 
 /// Build the GK fusion circuit for the given shape.
 pub fn build_gk_leaf(params: GkLeafParams) -> GreenwaldKhannaLeaf {
+    let total = params.capacity + params.batch;
+    build_gk_leaf_with_rounds(params, num_fusion_rounds(total))
+}
+
+/// Like [`build_gk_leaf`] but builds the circuit with exactly `fusion_rounds`
+/// parity-0 fusion rounds — the paper-sanctioned public round-count knob
+/// (mirrors plonky3's `prove_gk_full_with_rounds`). Capping below the worst
+/// case `num_fusion_rounds(capacity+batch)` cuts prover cost ~linearly in the
+/// round count; it is exact when no value repeats more than `2^fusion_rounds`
+/// times within the union, else it under-fuses gracefully (still sorted +
+/// mass-conserved). The verification key depends on `fusion_rounds`, so two
+/// leaves chain-merge only when they share it.
+pub fn build_gk_leaf_with_rounds(params: GkLeafParams, fusion_rounds: usize) -> GreenwaldKhannaLeaf {
     params.validate();
+    assert!(fusion_rounds >= 1, "need at least one fusion round");
     let GkLeafParams { capacity: cap, batch: m } = params;
     let total = cap + m;
-    let fusion_rounds = num_fusion_rounds(total);
 
     let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
     let zero = b.zero();
@@ -330,7 +343,9 @@ impl GreenwaldKhannaLeaf {
 
         let union = build_union(initial, batch);
         let (_fused_final, round_data) = fuse_all_rounds(&union, self.fusion_rounds);
-        let (final_state, _excess) = apply_batch(initial, batch);
+        // Final state from EXACTLY `self.fusion_rounds` rounds, so it matches the
+        // round witness above (the leaf may be built with a capped round count).
+        let (final_state, _excess) = apply_batch_with_rounds(initial, batch, self.fusion_rounds);
 
         let init_commit = PoseidonHash::hash_no_pad(&initial.cells());
         let final_commit = PoseidonHash::hash_no_pad(&final_state.cells());
@@ -398,6 +413,21 @@ mod tests {
             vec![GkUpdate::real(5), GkUpdate::real(5), GkUpdate::real(9), GkUpdate::real(5)];
         let node = leaf.prove(&empty_state(4, 4), &batch, 1)?;
         let (expected, _) = apply_batch(&empty_state(4, 4), &batch);
+        assert_eq!(node.final_, expected.commit());
+        verify_node(&node)
+    }
+
+    /// The fusion-round knob: a leaf built with fewer than the worst-case
+    /// rounds proves + verifies, and binds the matching capped-round final
+    /// state. (cap=4, batch=4 ⇒ worst case num_fusion_rounds(8)=3; here 1.)
+    #[test]
+    fn gk_capped_rounds_round_trip() -> Result<()> {
+        let leaf = build_gk_leaf_with_rounds(p(), 1);
+        assert_eq!(leaf.fusion_rounds, 1);
+        let batch =
+            vec![GkUpdate::real(5), GkUpdate::real(5), GkUpdate::real(9), GkUpdate::real(5)];
+        let node = leaf.prove(&empty_state(4, 4), &batch, 1)?;
+        let (expected, _) = apply_batch_with_rounds(&empty_state(4, 4), &batch, 1);
         assert_eq!(node.final_, expected.commit());
         verify_node(&node)
     }

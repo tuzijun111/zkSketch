@@ -46,14 +46,16 @@ use std::rc::Rc;
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
 use p3_circuit::ops::{
-    Poseidon2Config, generate_permute_trace, generate_poseidon2_trace, generate_recompose_trace,
+    Poseidon2Config, generate_expose_trace, generate_permute_trace, generate_poseidon2_trace,
+    generate_recompose_trace,
 };
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
-        permute_air_builders, permute_preprocessor, poseidon2_air_builders_d4,
-        poseidon2_preprocessor, recompose_air_builders, recompose_preprocessor,
+        expose_air_builders, expose_preprocessor, permute_air_builders, permute_preprocessor,
+        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
+        recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -166,6 +168,30 @@ pub fn prove_countmin_leaf_v9_with_params(
     params: CountMinLeafParams,
     initial_state: CountMinState,
     batch: Vec<CountMinUpdate>,
+) -> CountMinLeafProofV9 {
+    prove_countmin_leaf_v9_inner(params, initial_state, batch, false)
+}
+
+/// Like [`prove_countmin_leaf_v9_with_params`] but also **surfaces the
+/// boundary** `(Com(S_{i-1}), Com(S_i))` via the Expose NPO, so the proof's
+/// public values carry the boundary into recursion. Used by the in-circuit
+/// boundary-bound forest (`expose_forest`) to compose real Count-Min leaves;
+/// the unexposed variant is left untouched so existing baselines are stable.
+pub fn prove_countmin_leaf_v9_exposed_with_params(
+    params: CountMinLeafParams,
+    initial_state: CountMinState,
+    batch: Vec<CountMinUpdate>,
+) -> CountMinLeafProofV9 {
+    prove_countmin_leaf_v9_inner(params, initial_state, batch, true)
+}
+
+/// Shared body for the v9 leaf prover. `expose_boundary` adds an Expose NPO
+/// surfacing `(initial_commit, final_commit)` as the proof's public values.
+fn prove_countmin_leaf_v9_inner(
+    params: CountMinLeafParams,
+    initial_state: CountMinState,
+    batch: Vec<CountMinUpdate>,
+    expose_boundary: bool,
 ) -> CountMinLeafProofV9 {
     params.validate();
     assert_eq!(initial_state.params.d, params.d);
@@ -298,6 +324,9 @@ pub fn prove_countmin_leaf_v9_with_params(
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
+    if expose_boundary {
+        b.enable_expose(generate_expose_trace::<Val, Challenge>);
+    }
 
     // ---- Public inputs: (initial, final, batch) commits = 6 Challenge slots ----
     let initial_commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
@@ -309,6 +338,20 @@ pub fn prove_countmin_leaf_v9_with_params(
     let batch_commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
         b.alloc_public_input(if i == 0 { "batch_commit_lo" } else { "batch_commit_hi" })
     });
+
+    // Surface the boundary (initial, final) commitments via the Expose NPO so
+    // they propagate into recursion as `air_public_targets` (consumed by the
+    // in-circuit boundary-bound forest). These PI wires get connected to the
+    // hashed commitments below, so the exposed values equal the real commits.
+    if expose_boundary {
+        b.add_expose(&[
+            initial_commit_pis[0],
+            initial_commit_pis[1],
+            final_commit_pis[0],
+            final_commit_pis[1],
+        ])
+        .expect("add_expose boundary");
+    }
 
     // ---- Constants ----
     let one = b.alloc_const(Challenge::ONE, "one");
@@ -755,6 +798,10 @@ pub fn prove_countmin_leaf_v9_with_params(
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
+    if expose_boundary {
+        preprocessors.push(expose_preprocessor::<Val>());
+        air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
+    }
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -776,6 +823,9 @@ pub fn prove_countmin_leaf_v9_with_params(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
+    if expose_boundary {
+        prover.register_expose_table::<4>();
+    }
     let proof = prover
         .prove_all_tables(&traces, &circuit_prover_data)
         .expect("prove_all_tables (v9)");

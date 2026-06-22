@@ -7,6 +7,7 @@
 
 pub mod countmin;
 pub mod countmin_final;
+pub mod countmin_merkle;
 pub mod countmin_v3;
 pub mod countmin_v9;
 pub mod gk_final;
@@ -14,6 +15,7 @@ pub mod gk_final_full;
 pub mod greenwald_khanna;
 pub mod hll_final;
 pub mod hll_final_full;
+pub mod hll_merkle;
 pub mod hyperloglog;
 pub mod spacesaving;
 pub mod ss_final;

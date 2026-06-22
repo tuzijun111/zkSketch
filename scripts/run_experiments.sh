@@ -23,7 +23,14 @@
 #   EXP_D        E1/cm: Count-Min depth d (1..=8)           (default 4)
 #   EXP_W        E1/cm: comma-list of widths w (powers of 2, sweeps width)
 #                                                            (default 8)
-#   EXP_CM_VARIANT  E1/cm: certified|replay|both            (default both)
+#   EXP_CM_VARIANT  E1/cm: certified|replay|merkle|both|comma-list (default both).
+#                merkle = sparse Merkle-commit leaf (cost Θ(distinct·d·log w),
+#                flat in w); e.g. EXP_CM_VARIANT=certified,merkle for the
+#                flat-vs-sparse head-to-head as w grows.
+#   EXP_DISTINCT_BOUND  E1/cm certified: distinct-key cap — <n>|auto|unset.
+#                Cost is distinct_bound·d·(d·w), NOT batch, so to grow EXP_M
+#                cheaply set this below m (must be >= the slice's real distinct
+#                count, or "auto" to use it). Unset = m (worst case). (default m)
 #   COUNTMIN_MAX_SEL_CELLS  cap on the certified circuit's selector budget
 #                (distinct_bound·d·d·w); raise for big widths (default 16M)
 #   EXP_M        E1: comma-separated batch sizes (default 4,8,16,32)

@@ -85,11 +85,33 @@ impl CmFinalParams {
     }
     pub fn validate(&self) {
         assert!((1..=4).contains(&self.d), "d must be in 1..=4 (PRF digest width)");
-        assert!(self.w.is_power_of_two() && (2..=16).contains(&self.w), "w power of 2 in 2..=16");
+        // `w` must be a power of two (the position is the low log2(w) digest bits,
+        // = `% w` only for powers of two). No fixed upper bound — the real limit
+        // is the selector-budget guard below (the flat circuit's dominant cost is
+        // `distinct_bound·d·(d·w)`; it OOMs at large w, which is exactly why the
+        // sparse Merkle leaf exists). Raise via COUNTMIN_MAX_SEL_CELLS.
+        assert!(self.w.is_power_of_two() && self.w >= 2, "w must be a power of two >= 2");
         assert!(self.batch >= 1, "batch >= 1");
         assert!(
             self.distinct_bound >= 1 && self.distinct_bound <= self.batch,
             "distinct_bound in 1..=batch"
+        );
+        let sel_cells = self
+            .distinct_bound
+            .saturating_mul(self.d)
+            .saturating_mul(self.num_cells());
+        let max_sel = std::env::var("COUNTMIN_MAX_SEL_CELLS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(16_000_000);
+        assert!(
+            sel_cells <= max_sel,
+            "selector budget exceeded: distinct_bound·d·(d·w) = {sel_cells} > {max_sel} \
+             (d={}, w={}, distinct_bound={}). Reduce w / batch, or raise \
+             COUNTMIN_MAX_SEL_CELLS (expect heavy RAM/time).",
+            self.d,
+            self.w,
+            self.distinct_bound
         );
     }
 }
