@@ -1,7 +1,2 @@
 backend,family,variant,m,d,w,s,trace_rows,num_columns,constraint_count,witness_gen_ms_median,prove_ms_median,prove_total_ms_median,prove_total_ms_p95,verify_ms_median,proof_size_bytes,peak_rss_mb_median,peak_rss_mb_p95,status
-plonky3,hll,certified,8,0,0,16,10240,1,10240,0.415,75.491,75.907,75.907,10.659,369148,51.1,51.1,ok
-plonky3,hll,merkle,8,0,0,16,6144,1,6144,0.493,56.227,56.720,56.720,9.741,362869,39.2,39.2,ok
-plonky3,hll,certified,8,0,0,256,68096,1,68096,6.705,233.468,240.173,240.173,12.860,459935,312.5,312.5,ok
-plonky3,hll,merkle,8,0,0,256,6144,1,6144,0.613,53.345,53.957,53.957,10.871,362738,188.1,188.1,ok
-plonky3,hll,certified,8,0,0,4096,1081856,1,1081856,119.039,2618.951,2737.990,2737.990,15.133,584085,4490.1,4490.1,ok
-plonky3,hll,merkle,8,0,0,4096,10240,1,10240,0.636,67.454,68.091,68.091,10.560,375699,437.2,437.2,ok
+plonky3,cm,replay,1024,7,1024,7168,16800768,1,16800768,1636.731,37850.638,39487.369,39487.369,17.808,723481,69172.4,69172.4,ok

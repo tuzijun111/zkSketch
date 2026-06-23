@@ -431,6 +431,77 @@ mod tests {
         assert_eq!(final_, c2, "root final = real Com(S_2)");
     }
 
+    /// REAL HyperLogLog bound forest: two `hll_final_full` exposed leaves
+    /// (real §A update circuit) composed via the hiding merge; root surfaces
+    /// only the real (Com(S_0), Com(S_2)), bound in-circuit.
+    #[test]
+    fn real_hll_bound_forest_exposes_outer_boundary() {
+        use crate::sketch::hll_final_full::{
+            HllFullParams, HllFullState, HllFullUpdate, apply_batch, commit_hll_state,
+            prove_hll_full_exposed,
+        };
+        let params = HllFullParams { b: 4, batch: 2 };
+        let s0 = HllFullState::empty(params);
+        let b1 = vec![HllFullUpdate::real(7), HllFullUpdate::real(11)];
+        let leaf1 = prove_hll_full_exposed(params, s0.clone(), b1.clone());
+        let s1 = apply_batch(&s0, &b1);
+        let b2 = vec![HllFullUpdate::real(13), HllFullUpdate::real(7)];
+        let leaf2 = prove_hll_full_exposed(params, s1.clone(), b2.clone());
+        let s2 = apply_batch(&s1, &b2);
+
+        let root = prove_forest_over(vec![leaf1.output, leaf2.output]);
+        verify_bound_proof(&root);
+        let (initial, final_) = read_exposed_boundary(&root);
+        assert_eq!(initial.0, commit_hll_state(&s0).0, "root initial = real Com(S_0)");
+        assert_eq!(final_.0, commit_hll_state(&s2).0, "root final = real Com(S_2)");
+    }
+
+    /// REAL SpaceSaving bound forest: two `ss_final_full` exposed leaves.
+    #[test]
+    fn real_ss_bound_forest_exposes_outer_boundary() {
+        use crate::sketch::ss_final_full::{
+            SsFullParams, SsFullState, SsFullUpdate, apply_batch_ss_full, commit_ss_state,
+            prove_ss_full_exposed,
+        };
+        let params = SsFullParams { capacity: 4, batch: 2 };
+        let s0 = SsFullState::empty(params);
+        let b1 = vec![SsFullUpdate::real(7, 1), SsFullUpdate::real(11, 1)];
+        let leaf1 = prove_ss_full_exposed(params, s0.clone(), b1.clone());
+        let (s1, _) = apply_batch_ss_full(&s0, &b1);
+        let b2 = vec![SsFullUpdate::real(13, 1), SsFullUpdate::real(7, 1)];
+        let leaf2 = prove_ss_full_exposed(params, s1.clone(), b2.clone());
+        let (s2, _) = apply_batch_ss_full(&s1, &b2);
+
+        let root = prove_forest_over(vec![leaf1.output, leaf2.output]);
+        verify_bound_proof(&root);
+        let (initial, final_) = read_exposed_boundary(&root);
+        assert_eq!(initial.0, commit_ss_state(&s0).0, "root initial = real Com(S_0)");
+        assert_eq!(final_.0, commit_ss_state(&s2).0, "root final = real Com(S_2)");
+    }
+
+    /// REAL Greenwald--Khanna bound forest: two `gk_final_full` exposed leaves.
+    #[test]
+    fn real_gk_bound_forest_exposes_outer_boundary() {
+        use crate::sketch::gk_final_full::{
+            GKFullParams, GKFullState, GKFullUpdate, apply_batch_full, commit_gk_state,
+            prove_gk_full_exposed,
+        };
+        let params = GKFullParams { capacity: 4, batch: 2 };
+        let s0 = GKFullState::empty(params);
+        let b1 = vec![GKFullUpdate::real(10), GKFullUpdate::real(11)];
+        let leaf1 = prove_gk_full_exposed(params, s0.clone(), b1.clone());
+        let (s1, _) = apply_batch_full(&s0, &b1);
+        let b2 = vec![GKFullUpdate::real(20), GKFullUpdate::real(21)];
+        let leaf2 = prove_gk_full_exposed(params, s1.clone(), b2.clone());
+        let (s2, _) = apply_batch_full(&s1, &b2);
+
+        let root = prove_forest_over(vec![leaf1.output, leaf2.output]);
+        verify_bound_proof(&root);
+        let (initial, final_) = read_exposed_boundary(&root);
+        assert_eq!(initial.0, commit_gk_state(&s0).0, "root initial = real Com(S_0)");
+        assert_eq!(final_.0, commit_gk_state(&s2).0, "root final = real Com(S_2)");
+    }
+
     /// 4-leaf bound forest (exercises `agg + agg`): the single root proof
     /// surfaces ONLY (Com(S_0), Com(S_4)), bound in-circuit, and verifies.
     #[test]
