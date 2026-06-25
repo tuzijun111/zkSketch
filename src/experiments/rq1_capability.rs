@@ -44,7 +44,7 @@ pub fn run() -> Vec<Table> {
 fn panel_1a() -> Table {
     let epochs = env_usize("EXP_RQ1_EPOCHS", 12);
     let (d, w, batch) = (4usize, 8usize, 8usize);
-    let params = CountMinFinalParams { d, w, batch, distinct_bound: batch };
+    let params = CountMinFinalParams { d, w, batch };
 
     let mut t = Table::new(
         "rq1a_history_independence",
@@ -82,7 +82,7 @@ fn panel_1c() -> Table {
     // CM ----------------------------------------------------------------
     {
         let (d, w, batch) = (4usize, 8usize, 8usize);
-        let params = CountMinFinalParams { d, w, batch, distinct_bound: batch };
+        let params = CountMinFinalParams { d, w, batch };
         let mut detected = 0usize;
         for tr in 0..trials {
             let honest = synthetic_stream(Synthetic::Uniform, batch, 7000 + tr as u64);
@@ -189,7 +189,7 @@ fn panel_1d() -> Table {
     // hitter exists and the estimate is non-trivial.
     {
         let (d, w, batch) = (4usize, 8usize, 16usize);
-        let params = CountMinFinalParams { d, w, batch, distinct_bound: batch };
+        let params = CountMinFinalParams { d, w, batch };
         let keys = zipf_stream(1.0, 8, batch, 31);
         let (o, state) = cm_epoch(params, &cm_empty(d, w), &keys);
         // Plaintext answer = decode of the same committed state ⇒ identical.

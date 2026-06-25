@@ -30,8 +30,9 @@ For the per-sketch update circuits themselves, see
 6. [Root `R(t)` and the verifier interface](#root-rt-and-the-verifier-interface)
 7. [Realization model & soundness](#realization-model--soundness)
 8. [Composing real sketch leaves (end-to-end)](#composing-real-sketch-leaves-end-to-end)
-9. [Tests — one command per technique](#tests--one-command-per-technique)
-10. [The four sketch circuits the framework composes](#the-four-sketch-circuits-the-framework-composes)
+9. [Stream runner merge modes (`EXP_STREAM_MERGE`)](#stream-runner-merge-modes-exp_stream_merge)
+10. [Tests — one command per technique](#tests--one-command-per-technique)
+11. [The four sketch circuits the framework composes](#the-four-sketch-circuits-the-framework-composes)
 
 ---
 
@@ -242,13 +243,27 @@ Tests (`expose_forest::tests`): a known value surfaces through aggregation
 *in-circuit* (the merge proof can't be produced); a 4-leaf forest (exercising
 `agg+agg`) yields a root exposing only `(Com(S_0), Com(S_4))`.
 
-**Real Count-Min.** `prove_countmin_leaf_v9_exposed_with_params` is the v9
-Count-Min leaf with the boundary `add_expose` added (behind a flag, so the
-unexposed v9 baseline is unchanged). Test
-`real_v9_bound_forest_exposes_outer_boundary` composes two such leaves —
-proving actual Count-Min updates — through the hiding merge; the root surfaces
-only the real `(Com(S_0), Com(S_2))`. So the bound forest runs over genuine
-sketch transitions, not just the minimal boundary-claim leaf.
+**Real sketch leaves — all four families.** Each per-family leaf gains a
+flagged boundary-exposing variant (the unexposed entry points are unchanged, so
+baselines are stable): `prove_countmin_leaf_v9_exposed_with_params`,
+`prove_hll_full_exposed`, `prove_ss_full_exposed`, `prove_gk_full_exposed`. Each
+adds `enable_expose` + `add_expose([init, final])` to the real §5 update circuit.
+The hiding merge and `prove_forest_over` compose them unchanged (they only need
+the leaf's surfaced boundary), so the bound forest runs over genuine Count-Min,
+HyperLogLog, SpaceSaving, and Greenwald–Khanna transitions — not just the
+minimal boundary-claim leaf. Tests `real_{v9,hll,ss,gk}_bound_forest_exposes_outer_boundary`
+each compose two real leaves through the hiding merge and confirm the root
+surfaces only the real `(Com(S_0), Com(S_2))`, bound in-circuit.
+
+The three **§5 Count-Min rebind** leaves the stream runner uses also gained
+exposing variants — `prove_countmin_final_exposed` (one_hot), `prove_countmin_omc_exposed`
+(lookup), and `prove_countmin_c_merkle_exposed` (merkle). The first two surface
+the dense `commit_countmin` boundary directly (like the v9 leaf); the c_merkle
+boundary is `combined_commit(per-row roots)`, which is **not** a single public
+input, so `combine_roots_in_circuit` hashes the `d` root PIs **in-circuit** to
+reproduce the native `combined_commit` (the root itself when `d == 1`).
+Spikes in `tests/spike_recursive_stream_merge.rs` (`{one_hot,omc,merkle}_bound_forest_closes_npo_gap`,
+plus a `d ∈ {1,3,5}` native-equality check) confirm each.
 
 ## Composing real sketch leaves (end-to-end)
 
@@ -260,6 +275,53 @@ Com(S_4)` and that those equal the natively-recomputed state commitments.
 This is the framework wired end-to-end over a per-family circuit; swapping
 in `ss_final_full` / `hll_final_full` / `countmin_final` leaves works the
 same way (each exposes `initial` / `final_` / `batch_commit`).
+
+## Stream runner merge modes (`EXP_STREAM_MERGE`)
+
+The streaming-forest benchmark `examples/exp_stream.rs` (`scripts/run_stream.sh`)
+ingests a whole dataset stream of `N` records as `t = ⌈N/m⌉` Count-Min leaves and
+folds them. `EXP_STREAM_MERGE` selects **how** the leaves are composed — the
+practical knob over the §4 techniques above. Every cell reports the split
+`total_time_ms = leafgen_ms + merge_ms`, so the merge cost is isolated:
+
+| `EXP_STREAM_MERGE` | §4 technique | What each merge does | `merge_ms` |
+| --- | --- | --- | --- |
+| `digest` *(default)* | §4.2 digest fold (`framework::StreamingForest`) | each leaf is verified **once at creation**; the fold checks the boundary natively (`==`) and folds digests with one Poseidon2 hash | ~µs |
+| `recursive` | §4.3(c) Bentley–Saxe **tree** (`countmin_forest_v9`) | recursively **verifies both children in-circuit**; outer boundary carried natively | real, large |
+| `recursive_bound` | §4.3(c) tree, **boundary-bound** (`expose_forest::prove_forest_over`) | recursive verify **+** binds `left.final == right.initial` **in-circuit** via the Expose NPO; root surfaces a *bound* `(Com(S_0), Com(S_E))` | real, large |
+| `chain` | §4.3(a) linear IVC (`countmin_chain_v9`) | the same in-circuit child verification, but folded left-to-right (`Π⁽ᵗ⁾ = merge(Π⁽ᵗ⁻¹⁾, πₜ)`) — `O(t)` depth vs the tree's `O(log t)` | real, large |
+
+Notes:
+
+- **The merge is *not* recursive verification in `digest` mode** — that is why
+  `merge_ms` is ~µs there. The leaves self-verify once (folded into `leafgen_ms`);
+  the §4.2 fold only *binds* their public boundaries. A common misconception is
+  that the "merge" already re-verifies the children — only the `recursive*`/`chain`
+  modes do.
+- **Cost shape.** The recursive merge is a roughly **fixed-size** in-circuit STARK
+  verifier (~1–2 s here), nearly independent of the leaf's `(d, w, batch)`, while
+  the leaf cost **scales** with the workload. So `merge_ms / leaf_ms` flips from
+  ≫1 at tiny batches to ≪1 at realistic batches (e.g. `batch=1000`: leaf ≈ 8 s,
+  merge ≈ 2 s). This asymmetry is exactly why recursion is used in practice: a
+  cheap, constant verifier folds expensive leaves into one `O(1)`-verifiable proof.
+- **NPO binding (`recursive_bound`).** Each leaf surfaces its boundary commitment
+  via the Expose NPO; `prove_hiding_merge` reads both children's boundaries as
+  `air_public_targets`, binds contiguity in-circuit, and re-exposes only the outer
+  boundary (see [In-circuit boundary binding](#in-circuit-boundary-binding--expose_forest)).
+  Supported for all three Count-Min rebind leaves (`one_hot`/`lookup`/`merkle`);
+  `merkle_gb` (group-by routing) has no exposing variant.
+- **Parallelism.** `digest` mode runs the distributed `k`-worker sweep
+  (`EXP_STREAM_CORES`). The `recursive*`/`chain` modes prove leaves **sequentially**
+  (their proofs hold an `Rc`, so they are `!Send`) and do one pass per
+  `(dataset, variant, m)` — the `k` sweep does not apply. These are heavy
+  (each merge is a full recursive proof), so use small `N` / few leaves.
+
+```bash
+# Compare the merge models on the same stream (small N for the recursive modes):
+EXP_DATASET=aol EXP_D=4 EXP_W=8 EXP_CM_VARIANT=lookup \
+  EXP_STREAM_N=8 EXP_STREAM_BATCHES=2 EXP_STREAM_MERGE=recursive_bound \
+  scripts/run_stream.sh
+```
 
 ## Tests — one command per technique
 

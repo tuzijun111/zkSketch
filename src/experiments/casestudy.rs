@@ -111,7 +111,7 @@ fn sources(n: usize) -> Vec<(String, Vec<u32>)> {
 
 fn ingest_cm(name: &str, keys: &[u32], epochs: usize, batch: usize) -> (Vec<String>, Vec<EpochLeaf>) {
     let (d, w) = (4usize, 8usize);
-    let params = CountMinFinalParams { d, w, batch, distinct_bound: batch };
+    let params = CountMinFinalParams { d, w, batch };
     let mut state = cm_empty(d, w);
     let mut leaves = Vec::with_capacity(epochs);
     let (mut total, mut mx, mut all_ok, mut answer) = (0.0f64, 0.0f64, true, 0.0f64);

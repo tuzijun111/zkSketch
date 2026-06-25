@@ -5,9 +5,10 @@
 //! witness/prove/verify timing split, `prove_total` median+p95, `peak_rss_mb`
 //! (sampled from `/proc/self/status:VmRSS` during the run), and the
 //! deterministic `proof_size_bytes` / `trace_rows` / `num_columns` /
-//! `constraint_count` (= trace_rows·num_columns). Protocol: 1 warm-up + N=5
-//! trials, every timing/memory metric reported as `<metric>_median` and
-//! `<metric>_p95` (nearest-rank).
+//! `constraint_count` (= trace_rows·num_columns). [`bench`] can still aggregate
+//! `warmup + trials` runs to median/p95 internally, but the emitted CSV
+//! ([`AggRow::header`]/[`AggRow::fields`]) reports a **single value per metric**
+//! (E1 runs each config once); multi-trial callers see the median.
 //!
 //! [`super::time_it`] and [`super::results_dir`] live in the parent module;
 //! this submodule adds the trial/aggregation/RSS/env machinery on top.
@@ -94,6 +95,21 @@ impl RssSampler {
     }
 }
 
+impl Drop for RssSampler {
+    /// Stop and join the sampling thread even if the measured closure unwinds
+    /// (a guarded `too_large` capacity panic). Without this, an unwind between
+    /// `start()` and `stop()` would detach the thread, which would then poll
+    /// `/proc/self/status` forever — accumulating zombie pollers across a sweep
+    /// and perturbing later RSS readings. Idempotent with `stop()` (which takes
+    /// the handle), so the normal path joins exactly once.
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
@@ -132,23 +148,23 @@ pub struct AggRow {
 
 impl AggRow {
     pub fn header() -> Vec<&'static str> {
+        // Single run per config (trials=1): one value per metric, no median/p95.
         vec![
             "trace_rows",
             "num_columns",
             "constraint_count",
-            "witness_gen_ms_median",
-            "prove_ms_median",
-            "prove_total_ms_median",
-            "prove_total_ms_p95",
-            "verify_ms_median",
+            "witness_gen_ms",
+            "prove_ms",
+            "prove_total_ms",
+            "verify_ms",
             "proof_size_bytes",
-            "peak_rss_mb_median",
-            "peak_rss_mb_p95",
+            "peak_rss_mb",
         ]
     }
 
     pub fn fields(&self) -> Vec<String> {
-        // Order matches EVAL_SPEC §1 (proof_size_bytes after verify_ms_median).
+        // Order matches EVAL_SPEC §1 (proof_size_bytes after verify_ms). The
+        // `*_median` struct fields hold the single run's value when trials=1.
         vec![
             self.trace_rows.to_string(),
             self.num_columns.to_string(),
@@ -156,11 +172,9 @@ impl AggRow {
             format!("{:.3}", self.witness_gen_ms_median),
             format!("{:.3}", self.prove_ms_median),
             format!("{:.3}", self.prove_total_ms_median),
-            format!("{:.3}", self.prove_total_ms_p95),
             format!("{:.3}", self.verify_ms_median),
             self.proof_size_bytes.to_string(),
             format!("{:.1}", self.peak_rss_mb_median),
-            format!("{:.1}", self.peak_rss_mb_p95),
         ]
     }
 }

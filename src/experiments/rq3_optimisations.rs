@@ -23,11 +23,9 @@
 //!   breakdown needs in-circuit introspection — noted as future work; here we
 //!   report the total-cost scaling.)
 
-use std::collections::HashSet;
-
-use crate::dataset::{Synthetic, synthetic_stream, zipf_stream};
+use crate::dataset::{Synthetic, synthetic_stream};
 use crate::sketch::countmin::{CountMin, CountMinParams, CountMinUpdate};
-use crate::sketch::countmin_final::{CountMinFinalParams, prove_countmin_final};
+use crate::sketch::countmin_final::CountMinFinalParams;
 use crate::sketch::gk_final_full::{
     GKFullParams, GKFullState, GKFullUpdate, num_fusion_rounds, prove_gk_full_with_rounds,
 };
@@ -38,7 +36,7 @@ use super::families::{cm_empty, cm_epoch, ss_empty, ss_epoch};
 use super::{Table, ms_str, proof_size, time_it};
 
 pub fn run() -> Vec<Table> {
-    vec![panel_3a(), panel_3d(), panel_3e(), panel_3f()]
+    vec![panel_3a(), panel_3e(), panel_3f()]
 }
 
 // ─── 3-a: optimised CM vs naive strawman ─────────────────────────────────────
@@ -71,7 +69,7 @@ fn panel_3a() -> Table {
         ]);
 
         // Optimised §5.2 leaf.
-        let p = CountMinFinalParams { d, w, batch, distinct_bound: batch };
+        let p = CountMinFinalParams { d, w, batch };
         let (o, _) = cm_epoch(p, &cm_empty(d, w), &keys);
         t.push(vec![
             "optimised".into(),
@@ -83,48 +81,6 @@ fn panel_3a() -> Table {
         ]);
     }
     t
-}
-
-// ─── 3-d: hash-once-per-distinct / sparse rebind under skew ──────────────────
-
-fn panel_3d() -> Table {
-    let mut t = Table::new(
-        "rq3d_dedup_skew",
-        "3-d: Pattern-A dedup — realised distinct u falls with skew; provisioning distinct_bound=u shrinks hash work",
-        &["alpha", "realised_distinct", "prove_ms_dedup", "prove_ms_full", "saving_x"],
-    );
-    let (d, w, batch) = (4usize, 8usize, 24usize);
-    for &alpha in &[0.0f64, 0.5, 1.0, 1.5, 2.0] {
-        let keys = zipf_stream(alpha, batch, batch, 500);
-        let u = keys.iter().copied().collect::<HashSet<_>>().len().max(1);
-
-        // Dedup: provision distinct_bound = realised distinct count.
-        let p_dedup = CountMinFinalParams { d, w, batch, distinct_bound: u };
-        let (_leaf, t_dedup) =
-            time_it(|| run_cm_leaf(p_dedup, &keys));
-
-        // Full: distinct_bound = batch (no dedup provisioning).
-        let p_full = CountMinFinalParams { d, w, batch, distinct_bound: batch };
-        let (_leaf, t_full) = time_it(|| run_cm_leaf(p_full, &keys));
-
-        let saving = t_full.as_secs_f64() / t_dedup.as_secs_f64().max(1e-9);
-        t.push(vec![
-            format!("{alpha:.1}"),
-            u.to_string(),
-            ms_str(t_dedup),
-            ms_str(t_full),
-            format!("{saving:.2}"),
-        ]);
-    }
-    t
-}
-
-/// Prove a CM leaf for `keys` under `params` (empty initial state).
-fn run_cm_leaf(params: CountMinFinalParams, keys: &[u32]) {
-    let updates: Vec<CountMinUpdate> =
-        keys.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
-    let initial = CountMin::new(&CountMinParams { d: params.d, w: params.w });
-    let _ = prove_countmin_final(params, initial, updates);
 }
 
 // ─── 3-e: SS single-round retention vs GK multi-round fusion ─────────────────
@@ -198,17 +154,3 @@ fn panel_3f() -> Table {
     t
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dedup_curve_is_monotone_in_skew() {
-        // Higher skew ⇒ fewer realised distinct keys (column 1 non-increasing).
-        let t = panel_3d();
-        let distinct: Vec<usize> = t.rows.iter().map(|r| r[1].parse().unwrap()).collect();
-        for w in distinct.windows(2) {
-            assert!(w[1] <= w[0], "realised distinct must not rise with skew: {distinct:?}");
-        }
-    }
-}

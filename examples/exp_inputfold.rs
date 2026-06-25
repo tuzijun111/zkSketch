@@ -99,7 +99,7 @@ fn main() {
 
     // ── CM ───────────────────────────────────────────────────────────────────
     {
-        let params = CountMinFinalParams { d: 4, w: 8, batch: m, distinct_bound: m };
+        let params = CountMinFinalParams { d: 4, w: 8, batch: m };
         let mut state = cm_empty(4, 8);
         let (mut rows, mut leaves) = (Vec::new(), Vec::new());
         for i in 1..=n {

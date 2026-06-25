@@ -41,7 +41,9 @@ use std::rc::Rc;
 
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
-use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_recompose_trace};
+use p3_circuit::ops::{
+    Poseidon2Config, Poseidon2PermCall, generate_poseidon2_trace, generate_recompose_trace,
+};
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
@@ -119,20 +121,59 @@ pub fn node_digest(left: &[Val; 8], right: &[Val; 8]) -> [Val; 8] {
     hasher.hash_iter(input.iter().copied())
 }
 
+/// Native node digest in **compress** mode: a single 2:1 Poseidon2
+/// `MyCompress = TruncatedPermutation<Perm, 2, 8, 16>::compress([left, right])`.
+/// This is the native counterpart of the Merkle-mode `add_poseidon2_perm` op
+/// used by [`climb_merkle_path_compress`] — ONE permutation per internal node
+/// (vs. the padding-free sponge's two in [`node_digest`]).
+pub fn node_digest_compress(left: &[Val; 8], right: &[Val; 8]) -> [Val; 8] {
+    use p3_symmetric::PseudoCompressionFunction;
+    let c = crate::config::MyCompress::new(make_perm());
+    c.compress([*left, *right])
+}
+
+/// Native climb step in compress mode: combine the current digest with its
+/// sibling, ordered by the direction bit. `bit == 1` means the current node is
+/// the RIGHT child (sibling on the left), matching the in-circuit
+/// `apply_merkle_swap` (which swaps rate↔capacity iff bit==1). Equals the
+/// parent's `node_digest_compress([left, right])` because the swap reproduces
+/// the child order.
+pub fn node_climb_compress(cur: &[Val; 8], sib: &[Val; 8], bit: bool) -> [Val; 8] {
+    if bit { node_digest_compress(sib, cur) } else { node_digest_compress(cur, sib) }
+}
+
 /// Merkle root over a row of `w` counter cells. `cells[i]` is a single-cell
 /// leaf; the tree is a perfect binary tree of `height = log2(w)` levels.
-pub fn merkle_root(cells: &[u64]) -> [Val; 8] {
+///
+/// `compress` selects the internal-node combiner: `false` = the padding-free
+/// sponge ([`node_digest`], the `merkle` baseline); `true` = the single-perm
+/// 2:1 compression ([`node_digest_compress`], the `merkle_fast` variant). The
+/// LEAF combiner ([`leaf_digest`]) is the sponge in both modes.
+pub fn merkle_root_mode(cells: &[u64], compress: bool) -> [Val; 8] {
     assert!(cells.len().is_power_of_two() && !cells.is_empty());
+    let combine = |l: &[Val; 8], r: &[Val; 8]| {
+        if compress { node_digest_compress(l, r) } else { node_digest(l, r) }
+    };
     let mut level: Vec<[Val; 8]> = cells.iter().map(|&c| leaf_digest(c)).collect();
     while level.len() > 1 {
-        level = level.chunks(2).map(|pair| node_digest(&pair[0], &pair[1])).collect();
+        level = level.chunks(2).map(|pair| combine(&pair[0], &pair[1])).collect();
     }
     level[0]
 }
 
+/// Merkle root over a row of `w` counter cells (sponge baseline). Equivalent to
+/// [`merkle_root_mode`] with `compress = false`.
+pub fn merkle_root(cells: &[u64]) -> [Val; 8] {
+    merkle_root_mode(cells, false)
+}
+
 /// Sibling digests along the path from `pos` to the root, level 0 (leaves)
-/// first. Length `= height`.
-fn merkle_siblings(cells: &[u64], pos: usize) -> Vec<[Val; 8]> {
+/// first. Length `= height`. `compress` selects the internal-node combiner
+/// (see [`merkle_root_mode`]).
+pub(crate) fn merkle_siblings_mode(cells: &[u64], pos: usize, compress: bool) -> Vec<[Val; 8]> {
+    let combine = |l: &[Val; 8], r: &[Val; 8]| {
+        if compress { node_digest_compress(l, r) } else { node_digest(l, r) }
+    };
     let height = cells.len().trailing_zeros() as usize;
     let mut level: Vec<[Val; 8]> = cells.iter().map(|&c| leaf_digest(c)).collect();
     let mut idx = pos;
@@ -141,7 +182,7 @@ fn merkle_siblings(cells: &[u64], pos: usize) -> Vec<[Val; 8]> {
         let sib = idx ^ 1;
         sibs.push(level[sib]);
         idx >>= 1;
-        level = level.chunks(2).map(|pair| node_digest(&pair[0], &pair[1])).collect();
+        level = level.chunks(2).map(|pair| combine(&pair[0], &pair[1])).collect();
     }
     sibs
 }
@@ -160,7 +201,7 @@ pub fn combined_commit(roots: &[CountMinCommit]) -> CountMinCommit {
 }
 
 /// Pack an 8-Val digest into 2 Challenges (the DIGEST_PACKING shape).
-fn pack_digest(d: &[Val; 8]) -> [Challenge; 2] {
+pub(crate) fn pack_digest(d: &[Val; 8]) -> [Challenge; 2] {
     [
         Challenge::from_basis_coefficients_slice(&d[0..4]).expect("4 coeffs"),
         Challenge::from_basis_coefficients_slice(&d[4..8]).expect("4 coeffs"),
@@ -192,23 +233,42 @@ impl CountMinMerkleProof {
 /// Per-row witnessed op data: distinct touched cells (first-touch order),
 /// per-op (old, new, active, position, sibling path), and the intermediate
 /// roots `r_0=init … r_t_max=final`.
-struct RowPlan {
-    record_op: Vec<usize>,  // m: which op each record routes to in this row
-    op_old: Vec<u64>,       // t_max
-    op_new: Vec<u64>,       // t_max
-    op_active: Vec<u64>,    // t_max
-    op_used_pos: Vec<usize>,// t_max
-    op_siblings: Vec<Vec<[Val; 8]>>, // t_max × height
-    init_root: [Val; 8],
-    final_root: [Val; 8],
+pub(crate) struct RowPlan {
+    pub(crate) record_op: Vec<usize>,  // m: which op each record routes to in this row
+    pub(crate) op_old: Vec<u64>,       // t_max
+    pub(crate) op_new: Vec<u64>,       // t_max
+    pub(crate) op_active: Vec<u64>,    // t_max
+    pub(crate) op_used_pos: Vec<usize>,// t_max
+    pub(crate) op_siblings: Vec<Vec<[Val; 8]>>, // t_max × height
+    pub(crate) init_root: [Val; 8],
+    pub(crate) final_root: [Val; 8],
 }
 
-fn build_row_plan(
+/// Build a per-row update plan with the sponge Merkle combiner (the baseline).
+/// Equivalent to [`build_row_plan_mode`] with `compress = false`.
+pub(crate) fn build_row_plan(
     row: usize,
     cells_in: &[u64],
     batch: &[CountMinUpdate],
     w: usize,
     t_max: usize,
+) -> RowPlan {
+    build_row_plan_mode(row, cells_in, batch, w, t_max, false)
+}
+
+/// Build a per-row update plan. `compress` selects the internal-node combiner
+/// for the native roots/siblings: `false` = sponge ([`node_digest`], the
+/// `merkle` baseline), `true` = single-perm compression
+/// ([`node_digest_compress`], the `merkle_fast` variant). The routing,
+/// op-chain, and position logic are identical in both modes; only the native
+/// `init_root`/`final_root`/`op_siblings` digests differ.
+pub(crate) fn build_row_plan_mode(
+    row: usize,
+    cells_in: &[u64],
+    batch: &[CountMinUpdate],
+    w: usize,
+    t_max: usize,
+    compress: bool,
 ) -> RowPlan {
     let m = batch.len();
     let mut cells: Vec<u64> = cells_in.to_vec();
@@ -230,7 +290,7 @@ fn build_row_plan(
         t_max
     );
 
-    let init_root = merkle_root(&cells);
+    let init_root = merkle_root_mode(&cells, compress);
     let mut op_old = vec![0u64; t_max];
     let mut op_new = vec![0u64; t_max];
     let mut op_active = vec![0u64; t_max];
@@ -254,11 +314,11 @@ fn build_row_plan(
         op_old[c] = cells[pos];
         op_new[c] = cells[pos] + inc;
         op_active[c] = active;
-        op_siblings.push(merkle_siblings(&snap, pos));
+        op_siblings.push(merkle_siblings_mode(&snap, pos, compress));
         snap[pos] = op_new[c];
         cells[pos] = op_new[c];
     }
-    let final_root = merkle_root(&cells);
+    let final_root = merkle_root_mode(&cells, compress);
 
     RowPlan { record_op, op_old, op_new, op_active, op_used_pos, op_siblings, init_root, final_root }
 }
@@ -650,7 +710,7 @@ pub fn prove_countmin_merkle_leaf(
 /// as the minuend, so `sib` is operand `a` (its creator) and the result is also
 /// created (the output `cur` is already defined). Both children differ only by
 /// `d`: `lo = cur − bit·d` (= cur + bit·(sib−cur)), `hi = sib + bit·d`.
-fn climb_merkle_path(
+pub(crate) fn climb_merkle_path(
     b: &mut CircuitBuilder<Challenge>,
     cfg: &Poseidon2Config,
     leaf_val: ExprId,
@@ -673,6 +733,62 @@ fn climb_merkle_path(
             .add_hash_slice(cfg, &[lo[0], lo[1], hi[0], hi[1]], true)
             .expect("node hash");
         cur = [parent[0], parent[1]];
+    }
+    cur
+}
+
+/// Climb the Merkle path in **compress** mode and RETURN the computed root
+/// digest (2 Challenges). Drop-in replacement for [`climb_merkle_path`] with
+/// the same signature; the leaf digest is still the sponge
+/// (`add_hash_slice(&[leaf_val])`), but each internal node is a SINGLE
+/// Poseidon2 permutation in Merkle mode (`add_poseidon2_perm`), not the
+/// two-permutation sponge.
+///
+/// Per level, given `running` (current digest, rate) and `sib` (sibling
+/// digest, capacity), the Merkle-mode AIR fills capacity with the CTL-bound
+/// sibling, swaps rate↔capacity iff `bit == 1` (FREE — no per-level bit-select
+/// ALU ops), then permutes; the rate output is the parent digest. This:
+/// 1. removes the per-level `sub`/`mul`/`mul_add` bit-select ALU work, and
+/// 2. uses 1 permutation/level instead of 2.
+///
+/// Soundness: `sib` is the SAME CTL-bound `ExprId` the sponge climb consumes
+/// (kept as a private CTL input, NOT moved to perm-private-data), so the two
+/// climbs share the sibling binding. The 2 rate outputs are CTL-verified
+/// (`out_ctl = [true, true]`) = the parent digest threaded into the next level.
+/// `bit` must already be boolean-checked by the caller.
+///
+/// Native match: equals [`node_climb_compress`] = `MyCompress::compress` of
+/// `(cur, sib)` ordered by `bit` (bit==1 ⇒ current is the right child), so a
+/// tree built with [`merkle_root_mode`]`(.., true)` reconstructs bit-for-bit.
+pub(crate) fn climb_merkle_path_compress(
+    b: &mut CircuitBuilder<Challenge>,
+    cfg: &Poseidon2Config,
+    leaf_val: ExprId,
+    pos_bits: &[ExprId],
+    siblings: &[[ExprId; 2]],
+) -> [ExprId; 2] {
+    let leaf_d = b.add_hash_slice(cfg, &[leaf_val], true).expect("leaf hash");
+    let mut cur: [ExprId; 2] = [leaf_d[0], leaf_d[1]];
+    for (level, sib) in siblings.iter().enumerate() {
+        let bit = pos_bits[level];
+        // rate = running digest, capacity = sibling digest; all CTL-bound. The
+        // AIR swaps rate↔capacity by `bit` (free) before permuting.
+        let call = Poseidon2PermCall {
+            config: Poseidon2Config::BABY_BEAR_D4_W16,
+            new_start: true, // each level is an independent permutation; thread `cur` explicitly
+            merkle_path: true,
+            mmcs_bit: Some(bit),
+            inputs: vec![Some(cur[0]), Some(cur[1]), Some(sib[0]), Some(sib[1])],
+            out_ctl: vec![true, true], // rate outputs CTL-verified = parent digest
+            return_all_outputs: false,
+            mmcs_index_sum: None,
+        };
+        let (_op_id, outputs) =
+            b.add_poseidon2_perm(&call).expect("merkle compress level");
+        cur = [
+            outputs[0].expect("compress rate0"),
+            outputs[1].expect("compress rate1"),
+        ];
     }
     cur
 }
@@ -726,6 +842,161 @@ mod tests {
         let flat: Vec<Val> = l.iter().chain(r.iter()).copied().collect();
         let expect: [Val; 8] = hasher.hash_iter(flat.iter().copied());
         assert_eq!(n, expect);
+    }
+
+    /// Native sanity: the compress-mode node combiner is a single
+    /// `MyCompress::compress`, and the climb step orders children by the bit.
+    #[test]
+    fn native_compress_node_and_climb() {
+        let l = leaf_digest(3);
+        let r = leaf_digest(7);
+        // climb with bit=0: current=l is left child, sibling=r on the right.
+        assert_eq!(node_climb_compress(&l, &r, false), node_digest_compress(&l, &r));
+        // climb with bit=1: current=l is right child, sibling=r on the left.
+        assert_eq!(node_climb_compress(&l, &r, true), node_digest_compress(&r, &l));
+        // compress is NOT the sponge node digest (different node combiner).
+        assert_ne!(node_digest_compress(&l, &r), node_digest(&l, &r));
+    }
+
+    /// **Standalone gadget de-risk** (run BEFORE integration): build a tiny
+    /// circuit that sponges a leaf value, climbs `h` levels with
+    /// [`climb_merkle_path_compress`] against CTL sibling private-inputs + bit
+    /// private-inputs, connects the final running digest to a public-input root
+    /// computed NATIVELY via [`leaf_digest`] + [`node_climb_compress`], then
+    /// proves + self-verifies. If native != in-circuit, self-verify FAILS.
+    ///
+    /// This isolates the native-match / swap-convention risk of the new gadget
+    /// from the full `c_merkle` leaf integration.
+    fn gadget_climb_compress_once(leaf_val: u64, pos: usize, h: usize, sib_cells: &[u64]) {
+        use p3_baby_bear::default_babybear_poseidon2_16;
+        use p3_batch_stark::ProverData;
+        use p3_circuit::ops::{generate_poseidon2_trace, generate_recompose_trace};
+        use p3_circuit::CircuitBuilder;
+        use p3_circuit_prover::{
+            BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
+            batch_stark_prover::{
+                poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
+                recompose_preprocessor,
+            },
+            common::get_airs_and_degrees_with_prep,
+        };
+        use p3_poseidon2_circuit_air::BabyBearD4Width16;
+        use p3_uni_stark::StarkGenericConfig;
+
+        let cfg = Poseidon2Config::BABY_BEAR_D4_W16;
+        assert_eq!(sib_cells.len(), h, "one sibling digest per level");
+
+        // ── Native expected root: leaf sponge, then climb compress per level ──
+        let mut native_cur = leaf_digest(leaf_val);
+        for level in 0..h {
+            let bit = (pos >> level) & 1 == 1;
+            let sib = leaf_digest(sib_cells[level]); // sibling = a leaf digest
+            native_cur = node_climb_compress(&native_cur, &sib, bit);
+        }
+        let root_pi_vals = pack_digest(&native_cur);
+
+        // ── Build the circuit ────────────────────────────────────────────────
+        let mut b = CircuitBuilder::<Challenge>::new();
+        b.enable_poseidon2_perm::<BabyBearD4Width16, _>(
+            generate_poseidon2_trace::<Challenge, BabyBearD4Width16>,
+            default_babybear_poseidon2_16(),
+        );
+        b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+
+        let root_pis: [ExprId; 2] = std::array::from_fn(|i| {
+            b.alloc_public_input(if i == 0 { "root_lo" } else { "root_hi" })
+        });
+        let zero = b.alloc_const(Challenge::ZERO, "zero");
+
+        // leaf value fed only to a hash → recompose it for a bus creator.
+        let leaf_coeff = b.alloc_private_input("leaf_coeff");
+        let leaf_x = b
+            .recompose_base_coeffs_to_ext_via_alu::<Val>(&[leaf_coeff, zero, zero, zero])
+            .expect("recompose leaf");
+
+        // direction bits (boolean-checked) + sibling CTL private inputs.
+        let pos_bits: Vec<ExprId> = (0..h).map(|_| b.alloc_private_input("bit")).collect();
+        let one = b.alloc_const(Challenge::ONE, "one");
+        for &bit in &pos_bits {
+            let bm1 = b.sub(bit, one);
+            let chk = b.mul(bit, bm1);
+            b.connect(chk, zero);
+        }
+        let siblings: Vec<[ExprId; 2]> = (0..h)
+            .map(|_| [b.alloc_private_input("sib_lo"), b.alloc_private_input("sib_hi")])
+            .collect();
+
+        let root = climb_merkle_path_compress(&mut b, &cfg, leaf_x, &pos_bits, &siblings);
+        b.connect(root[0], root_pis[0]);
+        b.connect(root[1], root_pis[1]);
+
+        let circuit = b.build().expect("build gadget circuit");
+
+        // ── Public + private values (allocation order) ───────────────────────
+        let public_inputs: Vec<Challenge> = root_pi_vals.to_vec();
+        let mut private_inputs: Vec<Challenge> = Vec::new();
+        private_inputs.push(Challenge::from_u64(leaf_val)); // leaf_coeff
+        for level in 0..h {
+            let bit = (pos >> level) & 1;
+            private_inputs.push(if bit == 1 { Challenge::ONE } else { Challenge::ZERO });
+        }
+        for level in 0..h {
+            let [lo, hi] = pack_digest(&leaf_digest(sib_cells[level]));
+            private_inputs.push(lo);
+            private_inputs.push(hi);
+        }
+
+        // ── Run + prove + self-verify ────────────────────────────────────────
+        let traces = {
+            let mut runner = circuit.runner();
+            runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
+            runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
+            runner.run().expect("run gadget circuit")
+        };
+
+        let config = make_leaf_config();
+        let table_packing =
+            TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
+        let preprocessors =
+            vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
+        let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
+        air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+
+        let (airs_degrees, primitive_columns, non_primitive_columns) =
+            get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
+                &circuit,
+                &table_packing,
+                &preprocessors,
+                &air_builders,
+                ConstraintProfile::Standard,
+            )
+            .expect("get_airs_and_degrees_with_prep (gadget)");
+        let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
+        let ext_degrees: Vec<usize> = degrees.iter().map(|&dd| dd + config.is_zk()).collect();
+        let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
+        let circuit_prover_data =
+            CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
+
+        let mut prover =
+            BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
+        prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
+        prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+        let proof =
+            prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove gadget");
+        prover.verify_all_tables(&proof).expect("self-verify gadget (native match)");
+    }
+
+    /// Gadget de-risk across several positions/heights. Self-verify passing
+    /// proves the in-circuit compress climb matches the native one bit-for-bit.
+    #[test]
+    fn climb_compress_gadget_matches_native() {
+        // h=2 levels, leaf at each position 0..4 with distinct siblings.
+        for pos in 0..4usize {
+            gadget_climb_compress_once(42, pos, 2, &[7, 13]);
+        }
+        // h=3 levels, exercise the high bit (bit=1 at top).
+        gadget_climb_compress_once(100, 0b101, 3, &[3, 9, 21]);
+        gadget_climb_compress_once(100, 0b010, 3, &[3, 9, 21]);
     }
 
     /// Minimal repro: single row, single op, one Merkle level.

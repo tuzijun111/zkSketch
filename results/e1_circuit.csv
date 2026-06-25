@@ -1,2 +1,0 @@
-backend,family,variant,m,d,w,s,trace_rows,num_columns,constraint_count,witness_gen_ms_median,prove_ms_median,prove_total_ms_median,prove_total_ms_p95,verify_ms_median,proof_size_bytes,peak_rss_mb_median,peak_rss_mb_p95,status
-plonky3,cm,replay,1024,7,1024,7168,16800768,1,16800768,1636.731,37850.638,39487.369,39487.369,17.808,723481,69172.4,69172.4,ok

@@ -75,7 +75,7 @@ fn cm_keys(m: usize, distinct: usize, salt: usize) -> Vec<u32> {
 /// per-batch input-binding rows and the boundary leaves (carrying real
 /// `Com(B_t)`).
 pub fn ingest_cm(params: CountMinFinalParams, n: u64) -> (Vec<IngestRow>, Vec<EpochLeaf>) {
-    let distinct = params.distinct_bound.min(params.batch);
+    let distinct = params.batch;
     let mut state = cm_empty(params.d, params.w);
     let mut rows = Vec::new();
     let mut leaves = Vec::new();
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn real_batch_commitments_bind_and_fold_into_root() {
-        let params = CountMinFinalParams { d: 2, w: 4, batch: 4, distinct_bound: 4 };
+        let params = CountMinFinalParams { d: 2, w: 4, batch: 4 };
         let (rows, leaves) = ingest_cm(params, 4);
         // Every real batch's records were bound to Com(B_t) and the transition
         // verified (the leaf self-verifies its STARK; `correct` checks the commit).

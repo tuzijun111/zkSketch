@@ -69,8 +69,7 @@ impl EpochOutcome {
 // ─── Count-Min ───────────────────────────────────────────────────────────────
 
 /// Prove one CM epoch from `initial`, returning the outcome and the new state.
-/// `keys.len()` must equal `params.batch`; the actual distinct-key count must
-/// be `≤ params.distinct_bound`.
+/// `keys.len()` must equal `params.batch`.
 pub fn cm_epoch(
     params: CountMinFinalParams,
     initial: &CountMinState,
@@ -252,7 +251,7 @@ mod tests {
     // shared runners compile, prove, self-verify, and round-trip.
     #[test]
     fn cm_epoch_round_trips() {
-        let params = CountMinFinalParams { d: 2, w: 4, batch: 2, distinct_bound: 2 };
+        let params = CountMinFinalParams { d: 2, w: 4, batch: 2 };
         let keys = [11u32, 22];
         let (o, _s) = cm_epoch(params, &cm_empty(2, 4), &keys);
         assert!(o.correct, "CM committed final must equal native");

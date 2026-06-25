@@ -97,8 +97,33 @@ impl HllFullParams {
         (64 - self.b + 1) as u32
     }
     pub fn validate(&self) {
-        assert!(self.b >= 2 && self.b <= 12, "b in [2,12]; got {}", self.b);
+        // b∈[2,16] matches the merkle leaf's range so the flat-vs-sparse
+        // comparison can run head-to-head at the same sketch sizes (up to
+        // m=2^16). The flat circuit is *logically* correct for any b≤~30
+        // (routing = digest mod 2^b; ρ is derived over 31 bits so it stays in
+        // [1,32] independent of b); the practical ceiling is the O(m·batch)
+        // trace vs BabyBear's 2^27 FRI domain — points that exceed it surface as
+        // a capacity panic, which the e1 runner catches via `bench_guarded`.
+        assert!(self.b >= 2 && self.b <= 16, "b in [2,16]; got {}", self.b);
         assert!(self.batch >= 2 && self.batch % 2 == 0, "batch even ≥ 2");
+        // Flat O(m·batch) selector budget — the dominant cost. Each cell expands
+        // to ~32 trace rows, so the trace hits BabyBear's 2^27 FRI domain near
+        // m·batch ≈ 4.2M, and RAM grows fast (m·batch=262k ≈ 35 GB measured).
+        // The default lets the full b≤14 sweep through; raise it on a bigger box,
+        // lower it to skip sooner on a small one. Mirrors Count-Min's
+        // COUNTMIN_MAX_SEL_CELLS; the e1 runner turns this panic into a
+        // `too_large` skip via `bench_guarded`.
+        let sel_cells = self.m().saturating_mul(self.batch);
+        let max_sel = std::env::var("HLL_FULL_MAX_SEL_CELLS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(4_194_304);
+        assert!(
+            sel_cells <= max_sel,
+            "HLL selector budget exceeded: m·batch = {sel_cells} > {max_sel} (b={}, batch={}). \
+             Use the sparse merkle variant, or raise HLL_FULL_MAX_SEL_CELLS (heavy RAM/time).",
+            self.b, self.batch
+        );
     }
 }
 

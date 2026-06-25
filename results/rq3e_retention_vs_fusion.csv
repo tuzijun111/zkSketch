@@ -1,4 +1,0 @@
-shape,capacity,batch,rounds,prove_ms,proof_bytes
-SS_retention,16,16,1,77.047,332309
-GK_fusion,16,16,5,118.512,382752
-GK_fusion,16,16,2,89.295,369939

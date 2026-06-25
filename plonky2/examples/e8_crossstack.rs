@@ -65,7 +65,7 @@ fn main() {
         .iter().map(|s| s.to_string()).collect();
     let _ = std::fs::remove_file(dir.join("e8_crossstack.csv"));
 
-    let params = CmFinalParams { d: 4, w: 8, batch: m, distinct_bound: db };
+    let params = CmFinalParams { d: 4, w: 8, batch: m };
     let leaf = build_countmin_final_leaf(params);
     let empty = CountMinState::new(&CountMinParams { d: 4, w: 8 });
     let batch1 = keys(m, db, 0);

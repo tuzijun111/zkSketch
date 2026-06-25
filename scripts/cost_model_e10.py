@@ -83,10 +83,15 @@ def collect():
     for r in load("e1_circuit") or []:
         if r.get("variant") and r["variant"] != "certified":
             continue
+        if r.get("status") not in (None, "", "ok"):
+            continue  # too_large / skipped sweep point: metrics are 'n/a', nothing to fit
         rows.append((
             "E1", r["backend"], r["family"], f"m{r.get('m')}",
             predicted("e1", r["family"], r),
-            geti(r, "constraint_count"), float(r.get("prove_total_ms_median", 0) or 0),
+            # E1 now reports a single `prove_total_ms`; fall back to the old
+            # median column so pre-existing CSVs still parse.
+            geti(r, "constraint_count"),
+            float(r.get("prove_total_ms") or r.get("prove_total_ms_median", 0) or 0),
         ))
     # E3: identity release only (avoid double-counting the threshold variant).
     for r in load("e3_decode") or []:

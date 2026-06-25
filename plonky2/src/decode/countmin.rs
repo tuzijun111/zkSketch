@@ -55,7 +55,7 @@ pub struct CmDecodeLeaf {
 
 pub fn build_cm_decode(params: CmDecodeParams) -> CmDecodeLeaf {
     let CmDecodeParams { d, w, release } = params;
-    assert!((1..=4).contains(&d) && w.is_power_of_two());
+    assert!(d >= 1 && w.is_power_of_two());
     let w_log2 = w.trailing_zeros() as usize;
     let num_cells = d * w;
 
@@ -78,13 +78,24 @@ pub fn build_cm_decode(params: CmDecodeParams) -> CmDecodeLeaf {
     // Stage 1: bind the whole committed state.
     bind_commit(&mut b, cells.clone(), &commit);
 
-    // Stage 2: positions h_i(key) = low w_log2 bits of Poseidon(key)[i]; select.
-    let digest = b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![key]);
+    // Stage 2: positions h_i(key) = low w_log2 bits of the PRF digest; select.
+    // One digest per block of 4 rows (block 0 hashes `[key]`, later blocks
+    // `[key, block]`), matching `hash_cell_prf` exactly.
+    let digests: Vec<_> = (0..d.div_ceil(4))
+        .map(|blk| {
+            if blk == 0 {
+                b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![key])
+            } else {
+                let blk_c = b.constant(F::from_canonical_u64(blk as u64));
+                b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![key, blk_c])
+            }
+        })
+        .collect();
     let pow2: Vec<Target> = (0..w_log2).map(|j| b.constant(F::from_canonical_u64(1u64 << j))).collect();
     let idx_const: Vec<Target> = (0..w).map(|j| b.constant(F::from_canonical_u64(j as u64))).collect();
     let mut vals: Vec<Target> = Vec::with_capacity(d);
     for i in 0..d {
-        let bits = b.split_le(digest.elements[i], 64);
+        let bits = b.split_le(digests[i / 4].elements[i % 4], 64);
         let mut pos = b.mul(bits[0].target, pow2[0]);
         for jb in 1..w_log2 {
             pos = b.mul_add(bits[jb].target, pow2[jb], pos);

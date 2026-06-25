@@ -371,7 +371,7 @@ mod tests {
         use crate::commitment::countmin::commit_countmin;
         use crate::sketch::countmin::CountMinUpdate;
         use crate::sketch::countmin_final::{CountMinFinalParams, generate_proof};
-        let params = CountMinFinalParams { d: 4, w: 8, batch: 8, distinct_bound: 8 };
+        let params = CountMinFinalParams { d: 4, w: 8, batch: 8 };
         for (name, keys) in sources(params.batch) {
             let updates: Vec<CountMinUpdate> =
                 keys.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();

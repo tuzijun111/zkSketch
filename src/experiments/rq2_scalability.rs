@@ -4,9 +4,6 @@
 //!
 //! - **2-a Batch-size linearity (`m`).** Sweep batch size per family; report
 //!   prove time and proof size. Expect ~linear in `m`.
-//! - **2-b Touched-cell / distinct-bound linearity.** CM `distinct_bound`
-//!   sweep at fixed batch — the §5.2 hash gadget runs `distinct_bound·d`
-//!   times, so prove time tracks `distinct_bound`.
 //! - **2-c State-size scaling (`s`).** Sweep CM width `w` and HLL register
 //!   count `m`. *Honest finding:* our prototype commits to the **whole** state
 //!   with a flat Poseidon2 hash (no sparse opening), so per-batch cost grows
@@ -39,7 +36,7 @@ use super::{Table, env_usize, ms_str, time_it};
 use p3_field::PrimeCharacteristicRing;
 
 pub fn run() -> Vec<Table> {
-    vec![panel_2a(), panel_2b(), panel_2c(), panel_2d(), panel_2ef_analytical()]
+    vec![panel_2a(), panel_2c(), panel_2d(), panel_2ef_analytical()]
 }
 
 // ─── 2-a: batch-size linearity ───────────────────────────────────────────────
@@ -53,7 +50,7 @@ fn panel_2a() -> Table {
     let batches = [4usize, 8, 16, 32];
     for &m in &batches {
         // CM
-        let p = CountMinFinalParams { d: 4, w: 8, batch: m, distinct_bound: m };
+        let p = CountMinFinalParams { d: 4, w: 8, batch: m };
         let keys = synthetic_stream(Synthetic::Uniform, m, 200 + m as u64);
         let (o, _) = cm_epoch(p, &cm_empty(4, 8), &keys);
         t.push(vec!["CM".into(), m.to_string(), ms_str(o.prove), o.proof_bytes.to_string()]);
@@ -78,34 +75,6 @@ fn panel_2a() -> Table {
 
 // ─── 2-b: touched-cell / distinct-bound linearity (CM) ───────────────────────
 
-fn panel_2b() -> Table {
-    let mut t = Table::new(
-        "rq2b_distinct_bound",
-        "2-b: CM prove time vs distinct_bound (hash gadget runs distinct_bound·d times)",
-        &["distinct_bound", "n_ctr", "prove_ms", "proof_bytes"],
-    );
-    let (d, w, batch) = (4usize, 16usize, 32usize);
-    for &db in &[2usize, 4, 8, 16, 32] {
-        let p = CountMinFinalParams { d, w, batch, distinct_bound: db };
-        // Build a batch with EXACTLY `db` distinct keys (cycled) so the
-        // distinct-key count never exceeds the bound.
-        let keys: Vec<u32> = (0..batch)
-            .map(|i| {
-                let k = (i % db) as u64;
-                (k.wrapping_mul(0x9E37_79B9) as u32) | 1
-            })
-            .collect();
-        let (o, _) = cm_epoch(p, &cm_empty(d, w), &keys);
-        t.push(vec![
-            db.to_string(),
-            (db * d).to_string(),
-            ms_str(o.prove),
-            o.proof_bytes.to_string(),
-        ]);
-    }
-    t
-}
-
 // ─── 2-c: state-size scaling ─────────────────────────────────────────────────
 
 fn panel_2c() -> Table {
@@ -117,7 +86,7 @@ fn panel_2c() -> Table {
     // CM: vary width w (state size = d·w). Fix batch + distinct_bound.
     let (d, batch) = (4usize, 8usize);
     for &w in &[2usize, 4, 8, 16] {
-        let p = CountMinFinalParams { d, w, batch, distinct_bound: batch };
+        let p = CountMinFinalParams { d, w, batch };
         let keys = synthetic_stream(Synthetic::Uniform, batch, 300 + w as u64);
         let (o, _) = cm_epoch(p, &cm_empty(d, w), &keys);
         t.push(vec!["CM".into(), (d * w).to_string(), ms_str(o.prove), o.proof_bytes.to_string()]);

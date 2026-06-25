@@ -185,6 +185,19 @@ impl CountMinLeaf {
         batch: &[CountMinUpdate],
         index: u64,
     ) -> Result<Node> {
+        self.prove_timed(initial, batch, index).map(|(n, _, _)| n)
+    }
+
+    /// Like [`prove`](Self::prove) but also returns `(witness_gen, prove)`
+    /// durations, so the E1 runner records the §1 witness/prove split for the
+    /// replay strawman exactly as it does for the certified leaf.
+    pub fn prove_timed(
+        &self,
+        initial: &CountMinState,
+        batch: &[CountMinUpdate],
+        index: u64,
+    ) -> Result<(Node, std::time::Duration, std::time::Duration)> {
+        let t_w = std::time::Instant::now();
         assert_eq!(batch.len(), self.params.batch, "batch length mismatch");
         assert_eq!(initial.d, self.params.d, "state.d mismatch");
         assert_eq!(initial.w, self.params.w, "state.w mismatch");
@@ -223,8 +236,11 @@ impl CountMinLeaf {
             }
         }
 
+        let witness = t_w.elapsed();
+        let t_p = std::time::Instant::now();
         let proof = self.data.prove(pw)?;
-        Ok(Node::leaf(self.data.clone(), proof, init_commit, final_commit, index))
+        let prove = t_p.elapsed();
+        Ok((Node::leaf(self.data.clone(), proof, init_commit, final_commit, index), witness, prove))
     }
 }
 

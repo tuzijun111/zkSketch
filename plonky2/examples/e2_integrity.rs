@@ -116,7 +116,7 @@ fn main() {
 
     // CM (point).
     {
-        let leaf = build_countmin_final_leaf(CmFinalParams { d: 4, w: 8, batch: m, distinct_bound: m });
+        let leaf = build_countmin_final_leaf(CmFinalParams { d: 4, w: 8, batch: m });
         let ups: Vec<CountMinUpdate> = keys.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
         let node = leaf.prove(&cm_empty(4, 8), &ups, 1).expect("cm prove");
         verify_node(&node).expect("cm verify");

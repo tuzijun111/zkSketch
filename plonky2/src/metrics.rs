@@ -14,8 +14,9 @@
 //!   deterministic, single value (constraint_count = trace_rows·num_columns,
 //!   the backend-independent trace-cell measure).
 //!
-//! Timing protocol: **1 warm-up (discarded) + N=5 trials**; every timing/memory
-//! metric is reported as `<metric>_median` and `<metric>_p95` (nearest-rank).
+//! Timing protocol: [`bench`] can aggregate `warmup + trials` runs to median/p95
+//! internally, but the emitted CSV ([`AggRow::header`]/[`AggRow::fields`]) reports
+//! a **single value per metric** (E1 runs each config once).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -147,23 +148,23 @@ impl AggRow {
     /// The metric column headers, in `fields()` order. Experiment runners
     /// prepend their config columns (backend, family, m, …) and append `status`.
     pub fn header() -> Vec<&'static str> {
+        // Single run per config (trials=1): one value per metric, no median/p95.
         vec![
             "trace_rows",
             "num_columns",
             "constraint_count",
-            "witness_gen_ms_median",
-            "prove_ms_median",
-            "prove_total_ms_median",
-            "prove_total_ms_p95",
-            "verify_ms_median",
+            "witness_gen_ms",
+            "prove_ms",
+            "prove_total_ms",
+            "verify_ms",
             "proof_size_bytes",
-            "peak_rss_mb_median",
-            "peak_rss_mb_p95",
+            "peak_rss_mb",
         ]
     }
 
     pub fn fields(&self) -> Vec<String> {
-        // Order matches EVAL_SPEC §1 (proof_size_bytes after verify_ms_median).
+        // Order matches EVAL_SPEC §1 (proof_size_bytes after verify_ms). The
+        // `*_median` struct fields hold the single run's value when trials=1.
         vec![
             self.trace_rows.to_string(),
             self.num_columns.to_string(),
@@ -171,11 +172,9 @@ impl AggRow {
             format!("{:.3}", self.witness_gen_ms_median),
             format!("{:.3}", self.prove_ms_median),
             format!("{:.3}", self.prove_total_ms_median),
-            format!("{:.3}", self.prove_total_ms_p95),
             format!("{:.3}", self.verify_ms_median),
             self.proof_size_bytes.to_string(),
             format!("{:.1}", self.peak_rss_mb_median),
-            format!("{:.1}", self.peak_rss_mb_p95),
         ]
     }
 }

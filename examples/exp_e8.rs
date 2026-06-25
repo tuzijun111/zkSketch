@@ -70,7 +70,7 @@ fn main() {
         .iter().map(|s| s.to_string()).collect();
     let _ = std::fs::remove_file(dir.join("e8_crossstack.csv"));
 
-    let p = CountMinFinalParams { d: 4, w: 8, batch: m, distinct_bound: db };
+    let p = CountMinFinalParams { d: 4, w: 8, batch: m };
     let _ = CountMinLeafParams { d: 4, w: 8, batch: m }; // (shape parity with plonky2)
     let batch1 = ups(&keys(m, db, 0));
     let batch2 = ups(&keys(m, db, 1));

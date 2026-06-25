@@ -1,5 +1,0 @@
-dataset,epochs,chain_verify_ms,root_verify_ms,tamper_detected
-aol,4,0.000,0.003,true
-netflix,4,0.000,0.003,true
-gaussian,4,0.000,0.003,true
-uniform,4,0.000,0.003,true

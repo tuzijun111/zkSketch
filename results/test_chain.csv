@@ -1,0 +1,3 @@
+dataset,variant,d,w,n,m,t,k,cores_per_leaf,merge_mode,total_time_ms,leafgen_ms,merge_ms,records_per_sec,speedup,peak_rss_mb,status
+uniform,lookup,4,8,6,2,3,1,64,chain,2274.001,207.439,2066.561,3,1.00,1011.2,ok
+uniform,merkle,4,8,6,2,3,1,64,chain,1849.972,199.314,1650.658,3,1.00,737.9,ok

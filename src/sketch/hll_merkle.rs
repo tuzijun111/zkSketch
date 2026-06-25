@@ -163,6 +163,13 @@ impl HllMerkleProof {
 
 // ─── Prover ──────────────────────────────────────────────────────────────────
 
+thread_local! {
+    /// Test-only fault-injection switch: when set, [`prove_hll_merkle_leaf`]
+    /// publishes a WRONG final root so the rebind constraint is violated and
+    /// self-verify rejects it. Always `false` in normal builds.
+    static TAMPER_FINAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Prove one HLL sparse-rebind epoch over an `m`-register array. `initial` is
 /// the `m` register values; `keys` is `params.batch` record keys.
 pub fn prove_hll_merkle_leaf(
@@ -394,7 +401,10 @@ pub fn prove_hll_merkle_leaf(
     // ─── Pack public + private values (same order as allocation) ─────────────
     let mut public_inputs: Vec<Challenge> = Vec::new();
     public_inputs.extend_from_slice(&pack_digest(&init_root));
-    public_inputs.extend_from_slice(&pack_digest(&final_root));
+    // Test-only: a corrupted public final-root violates `prev_root ==
+    // final_root_pis`, so self-verify rejects it. The true root otherwise.
+    let final_root_pi = if TAMPER_FINAL.with(|f| f.get()) { init_root } else { final_root };
+    public_inputs.extend_from_slice(&pack_digest(&final_root_pi));
     public_inputs.extend_from_slice(&pack_digest(&batch_commit));
 
     let mut private_inputs: Vec<Challenge> = Vec::new();
@@ -567,6 +577,31 @@ mod tests {
         let keys = vec![123u64, 777, 123, 9];
         let proof = prove_hll_merkle_leaf(params, initial.clone(), keys.clone());
         assert_eq!(proof.final_.0, merkle_root(&native_apply(&initial, &keys, m)));
+    }
+
+    /// Soundness gate: a proof that publishes a WRONG final root (the unchanged
+    /// init root, not the rebind result) must be REJECTED by the per-row Merkle
+    /// update-chain constraint (`prev_root == final_root_pis`), caught here as a
+    /// self-verify panic. Mirrors plonky2 `hll_merkle_rejects_tampered_final_root`.
+    #[test]
+    fn hll_merkle_rejects_tampered_final_root() {
+        let params = HllMerkleParams { b: 6, batch: 4, t_max: 4 };
+        let m = 1 << 6;
+        let initial = vec![0u64; m];
+        let keys = vec![7u64, 11, 7, 3];
+
+        // Honest proof goes through (sanity: it must commit a non-trivial final).
+        TAMPER_FINAL.with(|f| f.set(false));
+        let honest = prove_hll_merkle_leaf(params, initial.clone(), keys.clone());
+        assert_ne!(honest.final_.0, merkle_root(&initial), "batch must change the registers");
+
+        // Forced wrong final root ⇒ self-verify must reject.
+        TAMPER_FINAL.with(|f| f.set(true));
+        let bad = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_hll_merkle_leaf(params, initial.clone(), keys.clone())
+        }));
+        TAMPER_FINAL.with(|f| f.set(false));
+        assert!(bad.is_err(), "tampered final root accepted — hll merkle leaf is UNSOUND");
     }
 
     /// Cost study: prove cost ~log(m) at fixed t_max, vs the flat HLL's Θ(m).

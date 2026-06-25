@@ -94,9 +94,12 @@ Forwarded to both backends by the script:
 | --- | ------- | ------- |
 | `EXP_DATASET` | `uniform`\|`gaussian`\|`zipf`\|`aol`\|`netflix` | `uniform` |
 | `EXP_M` | comma-separated batch sizes (the sweep) | `4,8,16,32` |
-| `EXP_TRIALS` | measured trials per config (median/p95) | `5` |
-| `EXP_WARMUP` | discarded warm-up runs | `1` |
+| `EXP_TRIALS` | measured trials per config, median/p95 (e2–e9; **E1 always runs once**, single value per metric) | `5` |
+| `EXP_WARMUP` | discarded warm-up runs (e2–e9; E1 uses none) | `1` |
 | `BACKENDS` | `plonky3`\|`plonky2`\|`both` | `both` |
+| `EXP_HLL_B` | E1/hll: comma-list of precision `b`, registers `m=2^b` (`b∈[2,16]`). For the flat-vs-sparse comparison at large sketch sizes (e.g. `b=14` → `m=16384`), run `EXP_HLL_VARIANT=certified,merkle` | `4` |
+| `EXP_HLL_VARIANT` | E1/hll: `certified`\|`merkle`\|comma-list. `certified` is the flat `O(m·batch)` leaf (heavy: `b=14`/batch 16 ≈ 35 GB, 20 s); `merkle` is the sparse `Θ(t_max·log m)` leaf, flat in `m` (≈ 94 MB at `b=14`) | `certified` |
+| `HLL_FULL_MAX_SEL_CELLS` | E1/hll: skip a `certified` point whose `m·batch` exceeds this (clean `status=too_large` row instead of OOM). Default admits the full `b≤14` sweep; raise on a big box, lower on a small one | `4194304` |
 | `AOL_MAX_KEYS`, `NETFLIX_MAX_KEYS` | fetch caps (used by `fetch_datasets.py`) | `1000000` |
 
 ## Running a single backend manually

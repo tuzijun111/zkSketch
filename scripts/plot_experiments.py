@@ -350,13 +350,22 @@ def fig_e6():
     if not data:
         return
     _, rows = data
+    # `variant` column is optional (older CSVs predate the lookup/merkle sweep).
+    variants = sorted({r.get("variant", "one_hot") for r in rows})
     ms = sorted({int(r["m"]) for r in rows})
     fig, ax = plt.subplots(figsize=(5, 3))
-    for m in ms:
-        mr = sorted([r for r in rows if int(r["m"]) == m], key=lambda r: int(r["k"]))
-        k = [int(r["k"]) for r in mr]
-        sp = [float(r["speedup_vs_1core"]) for r in mr]
-        ax.plot(k, sp, "o-", label=f"m={m}")
+    for variant in variants:
+        for m in ms:
+            mr = sorted(
+                [r for r in rows if r.get("variant", "one_hot") == variant and int(r["m"]) == m],
+                key=lambda r: int(r["k"]),
+            )
+            if not mr:
+                continue
+            k = [int(r["k"]) for r in mr]
+            sp = [float(r["speedup_vs_1core"]) for r in mr]
+            label = f"{variant} m={m}" if len(variants) > 1 else f"m={m}"
+            ax.plot(k, sp, "o-", label=label)
     if rows:
         kmax = max(int(r["k"]) for r in rows)
         ax.plot([1, kmax], [1, kmax], "k--", alpha=0.4, label="ideal linear")

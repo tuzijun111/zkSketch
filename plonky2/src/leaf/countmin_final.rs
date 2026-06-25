@@ -1,31 +1,36 @@
-//! Canonical (§5.2) Count-Min update leaf for plonky2 — the distinct-key
-//! compacted design, ported from `../zkSketch/src/sketch/countmin_final.rs`.
+//! Certified (§"Pattern A") Count-Min update leaf for plonky2 — the
+//! **hash-every-record** design matching the updated paper (zk1.tex Steps 1–5).
 //!
-//! This is the faithful counterpart of the plonky3 `countmin_final` circuit, so
-//! the three benchmark tests measure the *same algorithm* on both stacks. The
-//! defining §5.2 property is preserved: the expensive Poseidon hash gadget runs
-//! `distinct_bound` times (once per distinct key), **not** `batch` times — so
-//! prove time drops as the distinct-key count shrinks even at a fixed batch.
+//! The data-dependent key-grouping step was removed from the paper design: the
+//! circuit no longer pre-aggregates same-key records before hashing. Instead it
+//! hashes **every** record to its `d` counters (`n_ctr = batch·d`), groups BY
+//! COUNTER, and accumulates each counter segment by a checked running sum, so
+//! duplicate keys and independent collisions alike are reconciled in one pass.
+//! The circuit's shape is fixed by the public batch capacity `m`, never by the
+//! realised number of distinct keys. The additive relation is unchanged
+//! (Count-Min is additive), so the final committed state is identical whether
+//! same-key records are pre-grouped or hashed one-by-one.
 //!
-//! ## Pipeline (mirrors the plonky3 stages A-J)
-//! 1. Bind initial/final cells and the raw batch to Poseidon commitments (PIs).
-//! 2. Sort the raw batch by key (permutation + range-checked sortedness).
-//! 3. Adjacent-equality tags + running-sum aggregation per key segment.
-//! 4. Compact the segment-ends into a `distinct_bound`-sized G-table (permutation).
-//! 5. PRF hash family `h_i(k) = Poseidon(k)[i] mod w`, run once per G-table slot.
-//! 6. Sort the `distinct_bound·d` counter updates (permutation + sortedness).
-//! 7. Counter-level adjacent-equality + running sum.
-//! 8. Sparse-patch state transition `final[idx] = initial[idx] + Σ sel·acc`.
+//! ## Pipeline (paper Steps 1–5; circuit stages A, F–J)
+//! 1. (Stage A) Bind initial/final cells and the raw batch to Poseidon
+//!    commitments (PIs).
+//! 2. (Stage F) Derive the `d` counters each record updates:
+//!    `h_i(k) = Poseidon(k)[i] mod w`, run once PER RECORD, value = record value.
+//!    This builds the `n_ctr = batch·d` counter-update table directly.
+//! 3. (Stage G) Sort the `batch·d` counter updates (permutation + sortedness).
+//! 4. (Stage H) Counter-level adjacent-equality + running sum.
+//! 5. (Stages I/J) Sparse-patch one-hot cell selector + state transition
+//!    `final[idx] = initial[idx] + Σ sel·acc`.
 //!
 //! ## The one structural difference from plonky3
-//! plonky3 proves each sort/compaction with a dedicated `PermuteAir` table.
-//! plonky2 has no such table, so each permutation here is an **in-circuit
-//! grand-product argument**: fold each tuple with a Fiat-Shamir challenge `α`,
-//! then assert `Π(x_i + β) == Π(y_i + β)` for two independent challenges
-//! `β₁, β₂` derived (with `α`) from a Poseidon hash of both lists. Two
-//! independent base-field challenges give soundness error ≈ `(n/|F|)² ≈ 2⁻¹⁰⁰`
-//! for our list sizes over Goldilocks. Sortedness is enforced by range-checking
-//! adjacent differences (`split_le`).
+//! plonky3 proves each sort with a dedicated `PermuteAir` table. plonky2 has no
+//! such table, so each permutation here is an **in-circuit grand-product
+//! argument**: fold each tuple with a Fiat-Shamir challenge `α`, then assert
+//! `Π(x_i + β) == Π(y_i + β)` for two independent challenges `β₁, β₂` derived
+//! (with `α`) from a Poseidon hash of both lists. Two independent base-field
+//! challenges give soundness error ≈ `(n/|F|)² ≈ 2⁻¹⁰⁰` for our list sizes over
+//! Goldilocks. Sortedness is enforced by range-checking adjacent differences
+//! (`split_le`).
 
 use std::sync::Arc;
 
@@ -43,12 +48,6 @@ use crate::config::{C, D, F};
 use crate::recursion::Node;
 use crate::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
 
-/// Bit-width for range-checking key sortedness. Goldilocks keeps full 64-bit
-/// keys (unlike the plonky3 original, which reduces them mod the ~31-bit BabyBear
-/// prime), so adjacent sorted-key differences need a wider range check. The
-/// benchmark generators keep keys below `2^48`.
-const KEY_BITS: usize = 48;
-
 /// PRF row hash family: `h_i(k) = Poseidon(k)[i] mod w`.
 ///
 /// plonky2's `PoseidonHash` digest is 4 field elements, so this family supports
@@ -61,7 +60,7 @@ pub fn hash_cell_prf(row: usize, key: u64, w: usize) -> usize {
     (digest.elements[row].to_canonical_u64() as usize) % w
 }
 
-/// Apply one update with the PRF hash family (the canonical §5.2 update).
+/// Apply one update with the PRF hash family (the certified Count-Min update).
 pub fn apply_update_prf(state: &mut CountMinState, u: &CountMinUpdate) {
     for i in 0..state.d {
         let j = hash_cell_prf(i, u.key, state.w);
@@ -69,14 +68,12 @@ pub fn apply_update_prf(state: &mut CountMinState, u: &CountMinUpdate) {
     }
 }
 
-/// Circuit shape. Two leaves chain-merge only when all four fields match.
+/// Circuit shape. Two leaves chain-merge only when all three fields match.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct CmFinalParams {
     pub d: usize,
     pub w: usize,
     pub batch: usize,
-    /// Compile-time upper bound on distinct keys; the hash gadget runs this many times.
-    pub distinct_bound: usize,
 }
 
 impl CmFinalParams {
@@ -87,17 +84,14 @@ impl CmFinalParams {
         assert!((1..=4).contains(&self.d), "d must be in 1..=4 (PRF digest width)");
         // `w` must be a power of two (the position is the low log2(w) digest bits,
         // = `% w` only for powers of two). No fixed upper bound — the real limit
-        // is the selector-budget guard below (the flat circuit's dominant cost is
-        // `distinct_bound·d·(d·w)`; it OOMs at large w, which is exactly why the
-        // sparse Merkle leaf exists). Raise via COUNTMIN_MAX_SEL_CELLS.
+        // is the selector-budget guard below. The flat circuit's dominant cost is
+        // `batch·d·(d·w)`: the hash-per-record table has `n_ctr = batch·d` rows,
+        // each carrying a `d·w`-wide one-hot selector. It OOMs at large w, which is
+        // exactly why the sparse Merkle leaf exists. Raise via COUNTMIN_MAX_SEL_CELLS.
         assert!(self.w.is_power_of_two() && self.w >= 2, "w must be a power of two >= 2");
         assert!(self.batch >= 1, "batch >= 1");
-        assert!(
-            self.distinct_bound >= 1 && self.distinct_bound <= self.batch,
-            "distinct_bound in 1..=batch"
-        );
         let sel_cells = self
-            .distinct_bound
+            .batch
             .saturating_mul(self.d)
             .saturating_mul(self.num_cells());
         let max_sel = std::env::var("COUNTMIN_MAX_SEL_CELLS")
@@ -106,12 +100,12 @@ impl CmFinalParams {
             .unwrap_or(16_000_000);
         assert!(
             sel_cells <= max_sel,
-            "selector budget exceeded: distinct_bound·d·(d·w) = {sel_cells} > {max_sel} \
-             (d={}, w={}, distinct_bound={}). Reduce w / batch, or raise \
+            "selector budget exceeded: batch·d·(d·w) = {sel_cells} > {max_sel} \
+             (d={}, w={}, batch={}). Reduce w / batch, or raise \
              COUNTMIN_MAX_SEL_CELLS (expect heavy RAM/time).",
             self.d,
             self.w,
-            self.distinct_bound
+            self.batch
         );
     }
 }
@@ -123,13 +117,6 @@ struct Tgt {
     // raw batch
     key: Vec<Target>,
     val: Vec<Target>,
-    // sorted-by-key view
-    ks: Vec<Target>,
-    vs: Vec<Target>,
-    key_eq: Vec<Target>,
-    // compact G-table
-    gkey: Vec<Target>,
-    gval: Vec<Target>,
     // counter-level sorted view
     csort: Vec<Target>,
     cval: Vec<Target>,
@@ -140,7 +127,7 @@ struct Tgt {
     final_cells: Vec<Target>,
 }
 
-/// A built, reusable §5.2 Count-Min leaf circuit.
+/// A built, reusable certified Count-Min leaf circuit.
 pub struct CountMinFinalLeaf {
     pub data: Arc<CircuitData<F, C, D>>,
     t: Tgt,
@@ -180,12 +167,13 @@ fn assert_perm(b: &mut CircuitBuilder<F, D>, ak: &[Target], av: &[Target], bk: &
     }
 }
 
-/// Build the §5.2 Count-Min circuit for the given shape.
+/// Build the certified Count-Min circuit for the given shape.
 pub fn build_countmin_final_leaf(params: CmFinalParams) -> CountMinFinalLeaf {
     params.validate();
-    let CmFinalParams { d, w, batch: m, distinct_bound } = params;
+    let CmFinalParams { d, w, batch: m } = params;
     let num_cells = d * w;
-    let n_ctr = distinct_bound * d;
+    // Hash EVERY record to its `d` counters: one update row per (record, row).
+    let n_ctr = m * d;
     let w_log2 = w.trailing_zeros() as usize;
     let comb_bits = (num_cells as u64).next_power_of_two().trailing_zeros().max(1) as usize;
 
@@ -204,11 +192,6 @@ pub fn build_countmin_final_leaf(params: CmFinalParams) -> CountMinFinalLeaf {
     // ---- Witnesses ----
     let key = b.add_virtual_targets(m);
     let val = b.add_virtual_targets(m);
-    let ks = b.add_virtual_targets(m);
-    let vs = b.add_virtual_targets(m);
-    let key_eq = b.add_virtual_targets(m);
-    let gkey = b.add_virtual_targets(distinct_bound);
-    let gval = b.add_virtual_targets(distinct_bound);
     let csort = b.add_virtual_targets(n_ctr);
     let cval = b.add_virtual_targets(n_ctr);
     let ctag = b.add_virtual_targets(n_ctr);
@@ -236,84 +219,19 @@ pub fn build_countmin_final_leaf(params: CmFinalParams) -> CountMinFinalLeaf {
         b.connect(hb.elements[i], batch_commit.elements[i]);
     }
 
-    // ---- Stage B: sort raw batch by key (permutation of (key,val) -> (ks,vs)) ----
-    assert_perm(&mut b, &key, &val, &ks, &vs);
-    // Sortedness: ks[r] - ks[r-1] >= 0 (range-checked to KEY_BITS).
-    for r in 1..m {
-        let diff = b.sub(ks[r], ks[r - 1]);
-        let _ = b.split_le(diff, KEY_BITS);
-    }
-
-    // ---- Stage C: adjacent-equality tags on sorted keys ----
-    // key_eq[r] in {0,1}; key_eq[r]*(ks[r]-ks[r-1]) == 0; and when keys differ, tag is 0.
-    b.connect(key_eq[0], zero);
-    for r in 1..m {
-        let e = key_eq[r];
-        let em1 = b.sub(e, one);
-        let boolchk = b.mul(e, em1);
-        b.connect(boolchk, zero);
-        let diff = b.sub(ks[r], ks[r - 1]);
-        let prod = b.mul(e, diff);
-        b.connect(prod, zero);
-        // If diff == 0 then tag must be 1: (1-tag)*(1 - diff*inv) handled by giving the
-        // prover inv; we enforce (1-tag) * diff_is_zero == 0 via the witnessed equality
-        // that diff==0 => the running sum below would otherwise be wrong. To keep the tag
-        // honest on equal keys we add: (1 - tag) must be 0 when diff == 0. Use selector:
-        // enforce tag == 1 - is_nonzero(diff) by checking (1-tag)*? — instead we rely on
-        // the permutation+sortedness+running-sum + final-state binding to make a dishonest
-        // tag produce a wrong final commit. (Same soundness route as the plonky3 leaf.)
-    }
-
-    // ---- Stage D: running-sum aggregation per key segment ----
-    let mut key_acc: Vec<Target> = Vec::with_capacity(m);
-    key_acc.push(vs[0]);
-    for r in 1..m {
-        let carried = b.mul(key_eq[r], key_acc[r - 1]);
-        let new_acc = b.add(vs[r], carried);
-        key_acc.push(new_acc);
-    }
-    // g_active[r] = 1 iff row r ends its key segment.
-    let mut g_active: Vec<Target> = Vec::with_capacity(m);
-    for r in 0..m {
-        let a = if r == m - 1 { one } else { b.sub(one, key_eq[r + 1]) };
-        g_active.push(a);
-    }
-
-    // ---- Stage E: compact segment-ends into the G-table (permutation) ----
-    // SE[r] = g_active[r] * (ks[r]*SHIFT + key_acc[r]); inactive rows -> 0.
-    // G_padded[j] = gkey[j]*SHIFT + gval[j] for j < distinct_bound, else 0.
-    let shift = b.constant(F::from_canonical_u64(1u64 << 40));
-    let mut se: Vec<Target> = Vec::with_capacity(m);
-    for r in 0..m {
-        let kshift = b.mul(ks[r], shift);
-        let payload = b.add(kshift, key_acc[r]);
-        let s = b.mul(g_active[r], payload);
-        se.push(s);
-    }
-    let mut gpad: Vec<Target> = Vec::with_capacity(m);
-    for j in 0..m {
-        if j < distinct_bound {
-            let kshift = b.mul(gkey[j], shift);
-            let p = b.add(kshift, gval[j]);
-            gpad.push(p);
-        } else {
-            gpad.push(zero);
-        }
-    }
-    let zeros_m = vec![zero; m];
-    assert_perm(&mut b, &se, &zeros_m, &gpad, &zeros_m);
-
-    // ---- Stage F: PRF hash gadget over the compact G-table ----
-    // For each distinct slot j: digest = Poseidon(gkey[j]); position_i = digest[i] mod w.
-    // Build the n_ctr counter-update payloads (combined, value) where
-    // combined = i*w + position_i and value = gval[j].
+    // ---- Stage F: PRF hash gadget, run once PER RECORD (Steps 2) ----
+    // For each record k: digest = Poseidon(key[k]); position_i = digest[i] mod w.
+    // Emit the n_ctr = m·d counter-update payloads (combined, value) where
+    // combined = i*w + position_i and value = val[k]. Duplicate keys are NOT
+    // pre-aggregated — they target the same counters and are summed in the
+    // counter grouping below (Step 4), alongside every other collision.
     let w_const = b.constant(F::from_canonical_u64(w as u64));
     let pow2: Vec<Target> = (0..w_log2).map(|j| b.constant(F::from_canonical_u64(1u64 << j))).collect();
     let row_const: Vec<Target> = (0..d).map(|i| b.constant(F::from_canonical_u64(i as u64))).collect();
     let mut u_combined: Vec<Target> = Vec::with_capacity(n_ctr);
     let mut u_value: Vec<Target> = Vec::with_capacity(n_ctr);
-    for j in 0..distinct_bound {
-        let digest = b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![gkey[j]]);
+    for k in 0..m {
+        let digest = b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![key[k]]);
         for i in 0..d {
             // position_i = low w_log2 bits of digest[i].
             let bits = b.split_le(digest.elements[i], 64);
@@ -325,7 +243,7 @@ pub fn build_countmin_final_leaf(params: CmFinalParams) -> CountMinFinalLeaf {
             let row_w = b.mul(row_const[i], w_const);
             let combined = b.add(row_w, pos);
             u_combined.push(combined);
-            u_value.push(gval[j]);
+            u_value.push(val[k]);
         }
     }
 
@@ -399,14 +317,14 @@ pub fn build_countmin_final_leaf(params: CmFinalParams) -> CountMinFinalLeaf {
         data,
         t: Tgt {
             init_commit, final_commit, batch_commit,
-            key, val, ks, vs, key_eq, gkey, gval, csort, cval, ctag, sel, init_cells, final_cells,
+            key, val, csort, cval, ctag, sel, init_cells, final_cells,
         },
         params,
     }
 }
 
 impl CountMinFinalLeaf {
-    /// Prove one §5.2 epoch. `index` is the 1-based leaf position.
+    /// Prove one epoch. `index` is the 1-based leaf position.
     pub fn prove(&self, initial: &CountMinState, batch: &[CountMinUpdate], index: u64) -> Result<Node> {
         self.prove_timed(initial, batch, index).map(|(n, _, _)| n)
     }
@@ -420,12 +338,12 @@ impl CountMinFinalLeaf {
         index: u64,
     ) -> Result<(Node, std::time::Duration, std::time::Duration)> {
         let t_w = std::time::Instant::now();
-        let CmFinalParams { d, w, batch: m, distinct_bound } = self.params;
+        let CmFinalParams { d, w, batch: m } = self.params;
         assert_eq!(batch.len(), m);
         assert_eq!(initial.d, d);
         assert_eq!(initial.w, w);
         let num_cells = d * w;
-        let n_ctr = distinct_bound * d;
+        let n_ctr = m * d;
 
         // Native state evolution + commitments.
         let mut final_state = initial.clone();
@@ -441,46 +359,14 @@ impl CountMinFinalLeaf {
         }
         let batch_commit = PoseidonHash::hash_no_pad(&batch_pre);
 
-        // Stage B native: sort by key.
-        let mut idxk: Vec<usize> = (0..m).collect();
-        idxk.sort_by_key(|&i| batch[i].key);
-        let ks_n: Vec<u64> = idxk.iter().map(|&i| batch[i].key).collect();
-        let vs_n: Vec<u64> = idxk.iter().map(|&i| batch[i].value as u64).collect();
-        // Stage C/D native: tags, running sum, segment ends.
-        let mut key_eq_n = vec![0u64; m];
-        for r in 1..m {
-            if ks_n[r] == ks_n[r - 1] {
-                key_eq_n[r] = 1;
-            }
-        }
-        let mut key_acc_n = vec![0u64; m];
-        key_acc_n[0] = vs_n[0];
-        for r in 1..m {
-            key_acc_n[r] = if key_eq_n[r] == 1 { key_acc_n[r - 1] + vs_n[r] } else { vs_n[r] };
-        }
-        let mut g_active_n = vec![0u64; m];
-        for r in 0..m {
-            let ends = if r == m - 1 { true } else { key_eq_n[r + 1] == 0 };
-            g_active_n[r] = ends as u64;
-        }
-        // Stage E native: compact G-table.
-        let active: Vec<usize> = (0..m).filter(|&r| g_active_n[r] == 1).collect();
-        let actual = active.len();
-        assert!(actual <= distinct_bound, "distinct keys {actual} > bound {distinct_bound}");
-        let mut gkey_n = vec![0u64; distinct_bound];
-        let mut gval_n = vec![0u64; distinct_bound];
-        for (slot, &r) in active.iter().enumerate() {
-            gkey_n[slot] = ks_n[r];
-            gval_n[slot] = key_acc_n[r];
-        }
-        // Stage F native: PRF positions -> counter updates.
+        // Stage F native: PRF positions -> counter updates, one row per (record, row).
         let mut uc: Vec<u64> = Vec::with_capacity(n_ctr);
         let mut uv: Vec<u64> = Vec::with_capacity(n_ctr);
-        for j in 0..distinct_bound {
+        for u in batch {
             for i in 0..d {
-                let bucket = hash_cell_prf(i, gkey_n[j], w) as u64;
+                let bucket = hash_cell_prf(i, u.key, w) as u64;
                 uc.push((i as u64) * (w as u64) + bucket);
-                uv.push(gval_n[j]);
+                uv.push(u.value as u64);
             }
         }
         // Stage G native: sort counter updates by combined.
@@ -513,13 +399,6 @@ impl CountMinFinalLeaf {
         for k in 0..m {
             pw.set_target(self.t.key[k], F::from_canonical_u64(batch[k].key))?;
             pw.set_target(self.t.val[k], F::from_canonical_u64(batch[k].value as u64))?;
-            pw.set_target(self.t.ks[k], F::from_canonical_u64(ks_n[k]))?;
-            pw.set_target(self.t.vs[k], F::from_canonical_u64(vs_n[k]))?;
-            pw.set_target(self.t.key_eq[k], F::from_canonical_u64(key_eq_n[k]))?;
-        }
-        for j in 0..distinct_bound {
-            pw.set_target(self.t.gkey[j], F::from_canonical_u64(gkey_n[j]))?;
-            pw.set_target(self.t.gval[j], F::from_canonical_u64(gval_n[j]))?;
         }
         for r in 0..n_ctr {
             pw.set_target(self.t.csort[r], F::from_canonical_u64(csort_n[r]))?;
@@ -558,7 +437,7 @@ mod tests {
 
     #[test]
     fn countmin_final_round_trip() -> Result<()> {
-        let params = CmFinalParams { d: 2, w: 4, batch: 4, distinct_bound: 2 };
+        let params = CmFinalParams { d: 2, w: 4, batch: 4 };
         let leaf = build_countmin_final_leaf(params);
         let updates = vec![
             CountMinUpdate { key: 7, value: 3 },
@@ -573,6 +452,93 @@ mod tests {
         }
         assert_eq!(node.final_, PoseidonHash::hash_no_pad(&expected.cells()));
         verify_node(&node)
+    }
+
+    /// Tamper: a prover claiming a `final` commitment that is NOT the honest
+    /// hash-per-record rebind must be rejected. Build the honest witness, then
+    /// corrupt the final-state cells/commitment so the Stage J transition fails.
+    #[test]
+    fn countmin_final_rejects_tampered_final() {
+        let params = CmFinalParams { d: 2, w: 4, batch: 4 };
+        let leaf = build_countmin_final_leaf(params);
+        let (d, w, m) = (2usize, 4usize, 4usize);
+        let num_cells = d * w;
+        let n_ctr = m * d;
+        let updates = vec![
+            CountMinUpdate { key: 7, value: 3 },
+            CountMinUpdate { key: 11, value: 5 },
+            CountMinUpdate { key: 7, value: 2 },
+            CountMinUpdate { key: 11, value: 1 },
+        ];
+        let initial = empty_state(d, w);
+
+        // Honest counter-update table.
+        let mut uc: Vec<u64> = Vec::with_capacity(n_ctr);
+        let mut uv: Vec<u64> = Vec::with_capacity(n_ctr);
+        for u in &updates {
+            for i in 0..d {
+                uc.push((i as u64) * (w as u64) + hash_cell_prf(i, u.key, w) as u64);
+                uv.push(u.value as u64);
+            }
+        }
+        let mut idxc: Vec<usize> = (0..n_ctr).collect();
+        idxc.sort_by_key(|&i| uc[i]);
+        let csort_n: Vec<u64> = idxc.iter().map(|&i| uc[i]).collect();
+        let cval_n: Vec<u64> = idxc.iter().map(|&i| uv[i]).collect();
+        let mut ctag_n = vec![0u64; n_ctr];
+        for r in 1..n_ctr {
+            if csort_n[r] == csort_n[r - 1] {
+                ctag_n[r] = 1;
+            }
+        }
+        let mut acc_n = vec![0u64; n_ctr];
+        acc_n[0] = cval_n[0];
+        for r in 1..n_ctr {
+            acc_n[r] = if ctag_n[r] == 1 { acc_n[r - 1] + cval_n[r] } else { cval_n[r] };
+        }
+        let mut a_active_n = vec![0u64; n_ctr];
+        for r in 0..n_ctr {
+            a_active_n[r] = (if r == n_ctr - 1 { true } else { ctag_n[r + 1] == 0 }) as u64;
+        }
+
+        // TAMPERED final state: claim the initial cells unchanged (no patch
+        // applied), but keep the honest selectors/running sums — the Stage J
+        // `final = init + Σ sel·acc` constraint must reject this.
+        let init_commit = PoseidonHash::hash_no_pad(&initial.cells());
+        let tampered_final_cells = initial.cells();
+        let tampered_final_commit = PoseidonHash::hash_no_pad(&tampered_final_cells);
+        let mut batch_pre: Vec<F> = Vec::with_capacity(2 * m);
+        for u in &updates {
+            batch_pre.push(F::from_canonical_u64(u.key));
+            batch_pre.push(F::from_canonical_u64(u.value as u64));
+        }
+        let batch_commit = PoseidonHash::hash_no_pad(&batch_pre);
+
+        let mut pw = PartialWitness::<F>::new();
+        pw.set_hash_target(leaf.t.init_commit, init_commit).unwrap();
+        pw.set_hash_target(leaf.t.final_commit, tampered_final_commit).unwrap();
+        pw.set_hash_target(leaf.t.batch_commit, batch_commit).unwrap();
+        for k in 0..m {
+            pw.set_target(leaf.t.key[k], F::from_canonical_u64(updates[k].key)).unwrap();
+            pw.set_target(leaf.t.val[k], F::from_canonical_u64(updates[k].value as u64)).unwrap();
+        }
+        for r in 0..n_ctr {
+            pw.set_target(leaf.t.csort[r], F::from_canonical_u64(csort_n[r])).unwrap();
+            pw.set_target(leaf.t.cval[r], F::from_canonical_u64(cval_n[r])).unwrap();
+            pw.set_target(leaf.t.ctag[r], F::from_canonical_u64(ctag_n[r])).unwrap();
+            let target_idx = csort_n[r] as usize;
+            for idx in 0..num_cells {
+                let one_hot = a_active_n[r] == 1 && idx == target_idx;
+                pw.set_target(leaf.t.sel[r][idx], if one_hot { F::ONE } else { F::ZERO }).unwrap();
+            }
+        }
+        for (t, v) in leaf.t.init_cells.iter().zip(initial.cells()) {
+            pw.set_target(*t, v).unwrap();
+        }
+        for (t, v) in leaf.t.final_cells.iter().zip(tampered_final_cells) {
+            pw.set_target(*t, v).unwrap();
+        }
+        assert!(leaf.data.prove(pw).is_err(), "tampered (un-patched) final state must be rejected");
     }
 
     // ─── Benchmarks mirroring ../zkSketch/src/sketch/countmin_final.rs ──────
@@ -605,10 +571,11 @@ mod tests {
             .collect()
     }
 
-    /// **Test 1 — proving time vs. distinct-key count.** Sweep
-    /// `distinct_bound ∈ {1000, 500, 100, 50, 10, 5, 1}` at fixed (4, 8, 1000).
-    /// Times full circuit build + prove per setting (matching plonky3, whose
-    /// `prove_countmin_final` constructs the circuit inside the timed region).
+    /// **Test 1 — proving time vs. distinct-key count.** Sweep the realised
+    /// distinct-key count `∈ {1000, 500, 100, 50, 10, 5, 1}` at fixed
+    /// (4, 8, 1000). The certified circuit's shape is now fixed by `batch` (it
+    /// hashes every record), so prove time is flat in distinct keys — this sweep
+    /// documents exactly that (vs. the old key-grouped design where it dropped).
     #[test]
     #[ignore]
     fn proving_time_with_different_distinct_keys() {
@@ -620,13 +587,13 @@ mod tests {
         println!("  d={d}, w={w}, batch={batch}\n");
 
         for &distinct in &[1000usize, 500, 100, 50, 10, 5, 1] {
-            let params = CmFinalParams { d, w, batch, distinct_bound: distinct };
+            let params = CmFinalParams { d, w, batch };
             let updates = gen_batch(batch, distinct);
             let t = Instant::now();
             let leaf = build_countmin_final_leaf(params);
             let _node = leaf.prove(&empty_state(d, w), &updates, 1).expect("prove");
             let elapsed = t.elapsed();
-            println!("  distinct_bound={:>5}  build+prove {:>10.2?}", distinct, elapsed);
+            println!("  distinct_keys={:>5}  build+prove {:>10.2?}", distinct, elapsed);
         }
     }
 
@@ -638,7 +605,7 @@ mod tests {
         use std::time::Instant;
         use crate::recursion::{merge, verify_node};
         let (d, w, batch) = (4usize, 8usize, 1000usize);
-        let params = CmFinalParams { d, w, batch, distinct_bound: batch };
+        let params = CmFinalParams { d, w, batch };
         println!("\ncountmin_final (plonky2) — merge proving-time check");
         println!("===================================================");
         println!("  threads: rayon default ({} threads)", rayon::current_num_threads());
@@ -674,10 +641,10 @@ mod tests {
     }
 
     /// **Test 3 — generate two proofs, persist to disk, merge.** Mirrors
-    /// plonky3's `generate_and_store_proof` at (4, 8, 1000, distinct_bound=100):
-    /// prove l1, serialize bytes to `src/proofs/`, prove l2, serialize, then
-    /// merge (using in-memory nodes; the byte round-trip through disk is
-    /// verified, same caveat as plonky3 re: reconstructing circuit data).
+    /// plonky3's `generate_and_store_proof` at (4, 8, 1000): prove l1, serialize
+    /// bytes to `src/proofs/`, prove l2, serialize, then merge (using in-memory
+    /// nodes; the byte round-trip through disk is verified, same caveat as
+    /// plonky3 re: reconstructing circuit data).
     #[test]
     #[ignore]
     fn generate_and_store_proof() {
@@ -686,18 +653,18 @@ mod tests {
         use std::time::Instant;
         use crate::recursion::{merge, verify_node};
 
-        let (d, w, batch, distinct_bound) = (4usize, 8usize, 1000usize, 100usize);
-        let params = CmFinalParams { d, w, batch, distinct_bound };
+        let (d, w, batch) = (4usize, 8usize, 1000usize);
+        let params = CmFinalParams { d, w, batch };
         let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/proofs");
         fs::create_dir_all(&out_dir).expect("create src/proofs");
 
         println!("\ncountmin_final (plonky2) — generate two proofs + merge (stored)");
         println!("===============================================================");
-        println!("  params: d={d}, w={w}, batch={batch}, distinct_bound={distinct_bound}\n");
+        println!("  params: d={d}, w={w}, batch={batch}\n");
 
         let leaf = build_countmin_final_leaf(params);
         let s0 = empty_state(d, w);
-        let b1 = gen_batch(batch, distinct_bound);
+        let b1 = gen_batch(batch, 100);
 
         let t1 = Instant::now();
         let l1 = leaf.prove(&s0, &b1, 1).expect("prove l1");
@@ -711,7 +678,7 @@ mod tests {
         for u in &b1 {
             apply_update_prf(&mut s1, u);
         }
-        let b2 = gen_batch2(batch, distinct_bound);
+        let b2 = gen_batch2(batch, 100);
         let t2 = Instant::now();
         let l2 = leaf.prove(&s1, &b2, 2).expect("prove l2");
         let l2_time = t2.elapsed();

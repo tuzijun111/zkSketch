@@ -1,9 +1,0 @@
-backend,family,query_type,tamper_trials,tamper_reject_rate,zk_answer,plaintext_answer,ground_truth,zk_eq_plaintext
-plonky3,cm,point,50,1.000,2.000,2.000,1.000,true
-plonky3,gk,quantile,50,1.000,4.000,4.000,4.000,true
-plonky3,hll,cardinality,50,1.000,52.652,52.652,16.000,true
-plonky3,ss,frequency,50,1.000,1.000,1.000,1.000,true
-plonky2,cm,point,50,1.000,2.000,2.000,1.000,true
-plonky2,hll,cardinality,50,1.000,52.562,52.562,16.000,true
-plonky2,ss,frequency,50,1.000,1.000,1.000,1.000,true
-plonky2,gk,quantile,50,1.000,2.000,2.000,2.000,true

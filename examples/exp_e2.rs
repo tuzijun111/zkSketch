@@ -103,7 +103,7 @@ fn main() {
 
     // ── CM (point query) ──────────────────────────────────────────────
     {
-        let p = CountMinFinalParams { d: 4, w: 8, batch: m, distinct_bound: m };
+        let p = CountMinFinalParams { d: 4, w: 8, batch: m };
         let ups: Vec<CountMinUpdate> = keys.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
         let r = cm_prove(p, ups.clone());
         let probe = keys[0] as u64;

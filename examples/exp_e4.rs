@@ -6,9 +6,6 @@
 //!   in `m` (the no-dedup worst case). (`constraint_count` on plonky3 is the
 //!   summed FRI log-degree, so it grows only ~logarithmically — the linear
 //!   signal is in `prove_total_ms`.)
-//! - **e4b** touched-cell capacity `T_max = distinct_bound·d` at fixed `m` →
-//!   linear in `T_max`. This is the §5.2 lever: cost tracks *distinct* keys, not
-//!   raw batch size.
 //! - **e4c** state size `s = d·w` at fixed `m` → with the prototype's **flat**
 //!   whole-state Poseidon2 commit, cost grows ~linearly in `s` (recorded via the
 //!   `commit_mode` column; the sublinear-in-`s` claim needs a sparse-opening
@@ -90,7 +87,6 @@ fn hdr() -> Vec<String> {
 fn main() {
     let c = cfg();
     let e4a = env_list("EXP_E4A_M", &[16, 32, 64]);
-    let e4b = env_list("EXP_E4B_DB", &[8, 16, 32]);
     // CM caps w to {2,4,8,16}, so the state-size axis maxes at s = d·w = 64
     // (the prototype's documented w≤16 cap); invalid w are skipped below.
     let e4c = env_list("EXP_E4C_W", &[4, 8, 16]);
@@ -103,7 +99,7 @@ fn main() {
         eprintln!("EXP_E4D_EPOCHS must be > 0");
         std::process::exit(2);
     }
-    println!("E4 scaling (plonky3) — a(m)={e4a:?} b(db)={e4b:?} c(w)={e4c:?} d(epochs)={e4d_n} trials={}", c.trials);
+    println!("E4 scaling (plonky3) — a(m)={e4a:?} c(w)={e4c:?} d(epochs)={e4d_n} trials={}", c.trials);
 
     let dir = results_dir();
     write_env_json(&dir, &[
@@ -116,27 +112,19 @@ fn main() {
 
     // ── e4a: batch size m, all keys distinct (distinct_bound = m) ────────────
     for &m in &e4a {
-        let p = CountMinFinalParams { d: CM_D, w: 8, batch: m, distinct_bound: m };
+        let p = CountMinFinalParams { d: CM_D, w: 8, batch: m };
         let ups = batch(m, m, 0);
         let agg = bench(c, || { let l = prove_countmin_final(p, cm_empty(CM_D, 8), ups.clone()); outcome(proof_size(&l.output.0) as u64) });
         emit(&dir, &hdr, "a", &agg, m, 8, m * CM_D, "-", "-");
     }
-    // ── e4b: touched-cell capacity T_max = distinct_bound·d, fixed m=64 ───────
-    let m_b = 64;
-    for &db in &e4b {
-        let p = CountMinFinalParams { d: CM_D, w: 8, batch: m_b, distinct_bound: db };
-        let ups = batch(m_b, db, 0);
-        let agg = bench(c, || { let l = prove_countmin_final(p, cm_empty(CM_D, 8), ups.clone()); outcome(proof_size(&l.output.0) as u64) });
-        emit(&dir, &hdr, "b", &agg, m_b, 8, db * CM_D, "-", "-");
-    }
-    // ── e4c: state size s = d·w, fixed m=32, distinct_bound=16, flat commit ───
+    // ── e4c: state size s = d·w, fixed m=32, flat commit ─────────────────────
     let (m_c, db_c) = (32, 16);
     for &w in &e4c {
         if !matches!(w, 2 | 4 | 8 | 16) {
             eprintln!("  e4c: skipping w={w} (CM requires w ∈ {{2,4,8,16}}, s = d·w ≤ 64)");
             continue;
         }
-        let p = CountMinFinalParams { d: CM_D, w, batch: m_c, distinct_bound: db_c };
+        let p = CountMinFinalParams { d: CM_D, w, batch: m_c };
         let ups = batch(m_c, db_c, 0);
         let agg = bench(c, || { let l = prove_countmin_final(p, cm_empty(CM_D, w), ups.clone()); outcome(proof_size(&l.output.0) as u64) });
         emit(&dir, &hdr, "c", &agg, m_c, w, db_c * CM_D, "-", "-");
@@ -144,7 +132,7 @@ fn main() {
     // ── e4d: stream length n, per-batch prove flat in n (state threaded) ──────
     {
         let (m, db, w) = (32, 32, 8);
-        let p = CountMinFinalParams { d: CM_D, w, batch: m, distinct_bound: db };
+        let p = CountMinFinalParams { d: CM_D, w, batch: m };
         let mut per_epoch: Vec<Vec<f64>> = vec![Vec::new(); e4d_n];
         let (mut cc, mut bytes, mut verify, mut rss) = (0u64, 0u64, 0f64, 0f64);
         for trial in 0..(c.warmup + c.trials) {

@@ -109,7 +109,10 @@ impl fmt::Display for CountMinMergeErrorV9 {
 
 impl core::error::Error for CountMinMergeErrorV9 {}
 
-fn agg_params() -> ProveNextLayerParams {
+/// `pub(crate)` so the linear-chain extension ([`countmin_chain_v9`]) folds
+/// `agg + leaf` under the **same** FRI shape — any drift would make
+/// [`verify_chain_countmin_v9`] reject the extended proof.
+pub(crate) fn agg_params() -> ProveNextLayerParams {
     ProveNextLayerParams {
         table_packing: TablePacking::new(2, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP),
         constraint_profile: ConstraintProfile::Standard,
@@ -119,8 +122,9 @@ fn agg_params() -> ProveNextLayerParams {
 /// Fold a `CountMinCommit` down to the 2-element boundary id the digest
 /// hash takes. Same scheme as `countmin_merge.rs::cm_leaf_digest`: the
 /// commit is itself a Poseidon2 digest, so the first two elements retain
-/// ~62 bits of entropy — enough for binding.
-fn v9_leaf_digest_bound(c: &CountMinCommit) -> [crate::config::Val; 2] {
+/// ~62 bits of entropy — enough for binding. `pub(crate)` so the linear
+/// chain extends the digest with the identical leaf-boundary encoding.
+pub(crate) fn v9_leaf_digest_bound(c: &CountMinCommit) -> [crate::config::Val; 2] {
     [c.0[0], c.0[1]]
 }
 

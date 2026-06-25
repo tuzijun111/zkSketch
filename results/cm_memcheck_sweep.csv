@@ -1,0 +1,10 @@
+backend,dataset,family,variant,m,d,w,s,trace_rows,num_columns,constraint_count,witness_gen_ms,prove_ms,prove_total_ms,verify_ms,proof_size_bytes,peak_rss_mb,status
+plonky3,uniform,cm,one_hot,8,4,64,256,35328,1,35328,2.505,147.011,149.516,11.661,431792,161.7,ok
+plonky3,uniform,cm,merkle,8,4,64,256,10752,1,10752,1.270,72.582,73.852,11.173,400050,102.8,ok
+plonky3,uniform,cm,memcheck,8,4,64,256,6656,1,6656,0.198,57.374,57.572,10.074,370684,102.9,ok
+plonky3,uniform,cm,one_hot,8,4,1024,4096,539648,1,539648,45.917,1385.554,1431.471,15.156,575905,2205.9,ok
+plonky3,uniform,cm,merkle,8,4,1024,4096,11776,1,11776,1.718,76.999,78.717,10.240,375541,282.6,ok
+plonky3,uniform,cm,memcheck,8,4,1024,4096,6656,1,6656,0.424,56.791,57.215,10.680,370665,282.6,ok
+plonky3,uniform,cm,one_hot,8,4,16384,65536,8619008,1,8619008,827.585,18971.425,19799.011,17.779,717203,34510.2,ok
+plonky3,uniform,cm,merkle,8,4,16384,65536,19968,1,19968,2.270,102.171,104.441,10.936,414463,934.8,ok
+plonky3,uniform,cm,memcheck,8,4,16384,65536,6656,1,6656,0.229,58.631,58.860,10.712,370615,735.6,ok

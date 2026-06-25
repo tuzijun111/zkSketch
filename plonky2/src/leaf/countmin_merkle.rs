@@ -58,7 +58,8 @@ use crate::sketch::countmin::CountMinUpdate;
 /// records per epoch, capacity `t_max` for distinct touched cells **per row**.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CmMerkleParams {
-    /// Number of rows (independent Merkle trees). `1 ≤ d ≤ 4` (PRF digest width).
+    /// Number of rows (independent Merkle trees). `d ≥ 1` — the PRF hash family
+    /// draws `ceil(d/4)` digests per key, so depth is unbounded.
     pub d: usize,
     /// Counters per row. A power of two `≥ 2` (each row tree is perfect).
     pub w: usize,
@@ -70,7 +71,9 @@ pub struct CmMerkleParams {
 
 impl CmMerkleParams {
     pub fn validate(&self) {
-        assert!((1..=4).contains(&self.d), "d must be in 1..=4 (PRF digest width)");
+        // `d` unbounded: the shared `hash_cell_prf` draws `ceil(d/4)` Poseidon
+        // digests per key (4 row positions each), so any depth is supported.
+        assert!(self.d >= 1, "d must be >= 1");
         assert!(self.w.is_power_of_two() && self.w >= 2, "w must be a power of 2 >= 2");
         assert!(self.batch >= 1, "batch must be positive");
         assert!(self.t_max >= 1 && self.t_max <= self.w, "t_max in [1, w]");
@@ -241,9 +244,20 @@ pub fn build_cm_merkle_leaf(params: CmMerkleParams) -> CmMerkleLeaf {
 
     // ── S2: per record, derive per-row pos_i = digest[i] mod w; route one-hot ─
     for k in 0..batch {
-        let digest = b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![keys[k]]);
+        // One digest per block of 4 rows (block 0 hashes `[key]`, later blocks
+        // `[key, block]`), matching `hash_cell_prf` exactly.
+        let digests: Vec<_> = (0..d.div_ceil(4))
+            .map(|blk| {
+                if blk == 0 {
+                    b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![keys[k]])
+                } else {
+                    let blk_c = b.constant(F::from_canonical_u64(blk as u64));
+                    b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![keys[k], blk_c])
+                }
+            })
+            .collect();
         for i in 0..d {
-            let bits = canonical_bits_64(&mut b, digest.elements[i]);
+            let bits = canonical_bits_64(&mut b, digests[i / 4].elements[i % 4]);
             let mut pos_ki = zero;
             for j in 0..h {
                 pos_ki = b.mul_add(bits[j].target, pow2[j], pos_ki);

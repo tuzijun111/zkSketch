@@ -23,22 +23,49 @@
 #   EXP_D        E1/cm: Count-Min depth d (1..=8)           (default 4)
 #   EXP_W        E1/cm: comma-list of widths w (powers of 2, sweeps width)
 #                                                            (default 8)
-#   EXP_CM_VARIANT  E1/cm: certified|replay|merkle|both|comma-list (default both).
-#                merkle = sparse Merkle-commit leaf (cost Θ(distinct·d·log w),
-#                flat in w); e.g. EXP_CM_VARIANT=certified,merkle for the
-#                flat-vs-sparse head-to-head as w grows.
-#   EXP_DISTINCT_BOUND  E1/cm certified: distinct-key cap — <n>|auto|unset.
-#                Cost is distinct_bound·d·(d·w), NOT batch, so to grow EXP_M
-#                cheaply set this below m (must be >= the slice's real distinct
-#                count, or "auto" to use it). Unset = m (worst case). (default m)
-#   COUNTMIN_MAX_SEL_CELLS  cap on the certified circuit's selector budget
-#                (distinct_bound·d·d·w); raise for big widths (default 16M)
+#   EXP_CM_VARIANT  E1/cm: one_hot|merkle|merkle_fast|merkle_gb|memcheck|omc|
+#                lookup|comma-list (default one_hot). All hash per record and group
+#                by counter (no key-grouping); they differ only in the Step-5
+#                rebind. one_hot = flat one-hot sparse patch over all d·w cells
+#                (Θ(n_ctr·d·w)); merkle = sparse Merkle rebind opening only touched
+#                cells (Θ(t_max·d·log w), flat in w); merkle_fast = merkle with a
+#                1-perm 2:1 compression climb (the AIR swaps by the bit for free —
+#                1.86× at large w); merkle_gb = merkle_fast + the group-by routing
+#                replacing the m·t_max·d selector with the O(m·d) group-by (1.86×
+#                at large batch m); memcheck = sparse-patch-commit rebind, NO dense
+#                d·w / NO Merkle (Θ(batch·d·log(d·w)), flat in w), empty-init only;
+#                omc = sound offline-memory-checking M_old⊎W=M_new⊎R against a real
+#                prior state (Θ(d·w), dense commit, batch factor below one_hot);
+#                lookup = the §5 "lookup table" encoding — in a hash-STARK (multiset
+#                equality only, no LogUp inclusion) this IS the omc circuit, so the
+#                label runs the omc leaf. (Retired replay/merkle leaves remain
+#                in-tree, unwired.)
+#   COUNTMIN_MAX_SEL_CELLS  cap on the one_hot circuit's selector budget
+#                (batch·d·d·w); raise for big widths (default 16M)
+#   --- per-family size knobs (the analog of cm's EXP_D/EXP_W) ---
+#   EXP_HLL_B    E1/hll: comma-list of precision b; registers = 2^b (default 4)
+#   EXP_HLL_VARIANT  E1/hll: one_hot|merkle|comma-list  (default one_hot)
+#   EXP_SS_CAP   E1/ss: comma-list of SpaceSaving capacities s (default 8;
+#                rounded up to even ≥2)
+#   EXP_GK_CAP   E1/gk: comma-list of Greenwald-Khanna capacities (default 8;
+#                rounded up to even ≥2)
 #   EXP_M        E1: comma-separated batch sizes (default 4,8,16,32)
 #                E2: single batch size (default 16)
+#   EXP_CORES    E1 (plonky3): pin the STARK prover to this many cores — the
+#                "cores-per-proof" knob for the distributed-setting study (one
+#                proof per machine of N cores). Adds a `cores` CSV column. Unset =
+#                all cores, no column. plonky3-only (do not combine with the
+#                plonky2 leg). e.g. EXP_CORES=8 ... e1   (default: all cores)
 #   EXP_TRIALS   E1 measured trials (median/p95)        (default 5)
 #   EXP_WARMUP   E1 warm-up runs                         (default 1)
 #   EXP_TAMPER_TRIALS  E2 tamper trials                  (default 50)
-#   BACKENDS     plonky3|plonky2|both                    (default both)
+#   BACKENDS     plonky3|plonky2|both|comma-list         (default both)
+#                (e.g. BACKENDS=plonky3,plonky2 == both)
+#   EXP_OUT      rename the combined output CSV to results/<EXP_OUT> so runs
+#                under different settings don't overwrite each other; the .csv
+#                suffix is optional. Also accepted as the positional 2nd arg
+#                (`run_experiments.sh e1 cm_circuit_1.csv`). Default: the
+#                experiment's standard name (e.g. e1_circuit.csv).
 #
 # Partial vs whole dataset: each runner consumes a small key slice (testing
 # default). Fetch more (`python3 scripts/fetch_datasets.py`, raise *_MAX_KEYS)
@@ -47,6 +74,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 EXPERIMENT="${1:-e1}"
+# Caller-chosen output filename (env EXP_OUT preferred; positional $2 accepted).
+OUT_CSV="${EXP_OUT:-${2:-}}"
 
 # E10 is pure post-processing (reads the E1/E3/E4 CSVs, applies the cost model);
 # it has no prover runner — dispatch straight to the Python script.
@@ -97,35 +126,75 @@ case "$EXPERIMENT" in
   inputfold) CSV="input_fold.csv"; P3_EX="exp_inputfold"; P2_EX=""; BACKENDS="plonky3"; export EXP_M="${EXP_M:-n/a}" ;;
   *) echo "unknown experiment '$EXPERIMENT' (supported: e1, e2, e3, e4, e5, e5real, e6, e7, e8, e9, e10, inputfold, casestudy)"; exit 1 ;;
 esac
-if [[ -z "$P3_EX" && ( "$BACKENDS" == "plonky3" || "$BACKENDS" == "both" ) ]]; then
-  echo "note: $EXPERIMENT has no plonky3 runner; forcing BACKENDS=plonky2"
-  BACKENDS="plonky2"
+# Normalise BACKENDS into two flags so "both", "plonky3", "plonky2", and
+# comma/space lists like "plonky3,plonky2" all work — an unknown value warns
+# instead of silently running nothing.
+want_p3=0; want_p2=0
+for b in ${BACKENDS//,/ }; do
+  case "$b" in
+    both)             want_p3=1; want_p2=1 ;;
+    plonky3|p3|stark) want_p3=1 ;;
+    plonky2|p2|snark) want_p2=1 ;;
+    *) echo "warning: unknown backend '$b' (use plonky3|plonky2|both)" >&2 ;;
+  esac
+done
+if [[ "$want_p3" == 0 && "$want_p2" == 0 ]]; then
+  echo "error: BACKENDS='$BACKENDS' selected no runnable backend (use plonky3|plonky2|both)" >&2
+  exit 2
+fi
+if [[ -z "$P3_EX" && "$want_p3" == 1 ]]; then
+  echo "note: $EXPERIMENT has no plonky3 runner; running plonky2 only"
+  want_p3=0; want_p2=1
+fi
+if [[ -z "$P2_EX" && "$want_p2" == 1 ]]; then
+  echo "note: $EXPERIMENT has no plonky2 runner; running plonky3 only"
+  want_p2=0
+fi
+# EXP_CORES (E1 cores-per-proof) adds a `cores` column to the plonky3 CSV that the
+# plonky2 leg doesn't emit, which would misalign the merge. Enforce plonky3-only.
+if [[ -n "${EXP_CORES:-}" && "$want_p2" == 1 && "$EXPERIMENT" == "e1" ]]; then
+  echo "note: EXP_CORES is plonky3-only (its 'cores' column would misalign the plonky2 merge); running plonky3 only" >&2
+  want_p2=0
 fi
 
-echo "== zkSketch $EXPERIMENT == dataset=$EXP_DATASET m=$EXP_M backends=$BACKENDS"
+sel=""
+if [[ "$want_p3" == 1 ]]; then sel+="plonky3 "; fi
+if [[ "$want_p2" == 1 ]]; then sel+="plonky2 "; fi
+echo "== zkSketch $EXPERIMENT == dataset=$EXP_DATASET m=$EXP_M backends=${sel% }"
 mkdir -p results
 rm -f "results/$CSV" "plonky2/results/$CSV"
 
-if [[ "$BACKENDS" == "plonky3" || "$BACKENDS" == "both" ]]; then
+if [[ "$want_p3" == 1 ]]; then
   echo "-- plonky3 (STARK) --"
   cargo run --release --example "$P3_EX"
 fi
-if [[ "$BACKENDS" == "plonky2" || "$BACKENDS" == "both" ]]; then
+if [[ "$want_p2" == 1 ]]; then
   echo "-- plonky2 (SNARK) --"  # plonky2/ pins nightly via rust-toolchain.toml
   ( cd plonky2 && cargo run --release --example "$P2_EX" )
 fi
 
 # Merge into one combined results/$CSV.
-if [[ "$BACKENDS" == "both" && -f "plonky2/results/$CSV" ]]; then
+if [[ "$want_p3" == 1 && "$want_p2" == 1 && -f "plonky2/results/$CSV" ]]; then
   if [[ -f "results/$CSV" ]]; then
     tail -n +2 "plonky2/results/$CSV" >> "results/$CSV"
   else
     cp "plonky2/results/$CSV" "results/$CSV"
   fi
-elif [[ "$BACKENDS" == "plonky2" ]]; then
+elif [[ "$want_p2" == 1 && "$want_p3" == 0 ]]; then
   cp -f "plonky2/results/$CSV" "results/$CSV"
 fi
 
-echo "combined -> results/$CSV"
-[[ -f "results/$CSV" ]] && column -t -s, "results/$CSV" | sed -n '1,40p'
+# Rename the combined output to the caller-chosen name (EXP_OUT or positional
+# $2), so successive runs under different settings accumulate distinct files.
+FINAL_CSV="$CSV"
+if [[ -n "$OUT_CSV" && -f "results/$CSV" ]]; then
+  FINAL_CSV="${OUT_CSV%.csv}.csv"
+  if [[ "$FINAL_CSV" != "$CSV" ]]; then
+    mkdir -p "$(dirname "results/$FINAL_CSV")"
+    mv -f "results/$CSV" "results/$FINAL_CSV"
+  fi
+fi
+
+echo "combined -> results/$FINAL_CSV"
+[[ -f "results/$FINAL_CSV" ]] && column -t -s, "results/$FINAL_CSV" | sed -n '1,40p'
 echo "env.json: results/env.json (plonky3), plonky2/results/env.json (plonky2)"

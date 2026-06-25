@@ -121,7 +121,6 @@ and the `*_rho_binding_*` / threshold-gate tests.
 | Panel | Implemented | CSV | Result shape |
 | ----- | ----------- | --- | ------------ |
 | **2-a** batch-size `m` | ✅ measured | `rq2a_batch_size` | prove time rises with `m`; HLL steepest (`O(m·register)` scatter), SS flat (single pass) |
-| **2-b** touched-cell / distinct_bound | ✅ measured | `rq2b_distinct_bound` | CM prove time linear in `distinct_bound` (hash gadget runs `db·d` times): 85→247 ms for db 2→32 |
 | **2-c** state-size `s` | ✅ measured | `rq2c_state_size` | **honest finding:** flat Poseidon2 commit ⇒ cost grows with `s`. The paper's *sublinear-in-`s`* needs the sparse-rebind commitment (Merkle/IPA opening of touched cells only) — future work |
 | **2-d** audit window `E` | ✅ measured | `rq2d_audit_window` | root digest constant (16 B), root verify O(1); chain merges Θ(E); forest merges = `E − popcount(E)`, worst insert = `log₂E` |
 | **2-e** sketch vs exact index | ⚠️ analytical | `rq2ef_analytical` | predicted ratio `H·log₂n/(d+L)` = 250×–500× for n=2¹⁵–2³⁰ |
@@ -134,10 +133,9 @@ and the `*_rho_binding_*` / threshold-gate tests.
 
 | Panel | Implemented | CSV | Result shape |
 | ----- | ----------- | --- | ------------ |
-| **3-a** optimised CM vs `naive-zkSketch` | ✅ measured | `rq3a_naive_vs_optimised` | **honest finding:** at toy `w≤16` the optimised pipeline's permutation/compaction NPO overhead *dominates* (naive is faster); the Θ(d·w·batch) vs Θ(distinct·d + d·w) crossover needs realistic `w=2¹⁶`, which the prototype's `w∈{2,4,8,16}` validation does not yet reach |
-| **3-b** HLL hash-once-per-distinct (Zipf) | ✅ analogue | `rq3d_dedup_skew` | realised by the Pattern-A CM dedup (same principle); saving 1.05×→1.80× as α 0→2 shrinks `u` 16→6 |
+| **3-a** optimised CM vs `naive-zkSketch` | ✅ measured | `rq3a_naive_vs_optimised` | **honest finding:** at toy `w≤16` the optimised pipeline's permutation/grouping NPO overhead *dominates* (naive is faster); the Θ(d·w·batch) vs Θ(batch·d + d·w) crossover needs realistic `w=2¹⁶`, which the prototype's `w∈{2,4,8,16}` validation does not yet reach |
+| **3-b** HLL hash-once-per-distinct (Zipf) | ⚠️ analytical | `e9 hll_dedup` | analytical hash-saving `\|B\|/U_max` as Zipf α shrinks the realised distinct count; the measured CM analogue (`rq3d`) was removed with the per-record CM refactor (distinct_bound dropped) |
 | **3-c** HLL wide-output two-field split | ⚠️ planned | — | not a separate circuit knob yet; analytical 2× |
-| **3-d** sparse register-rebind (HLL/CM) | ✅ measured | `rq3d_dedup_skew` | provisioning `distinct_bound=u` shrinks hash work; bounded by O(m) sort overhead (the Phase-9h analysis) |
 | **3-e** SS single-round vs GK multi-round | ✅ measured | `rq3e_retention_vs_fusion` | SS single pass 77 ms < GK 5-round 119 ms; GK 2-round 89 ms (round-count is a cost lever) |
 | **3-f** SS comparator share bounded | ✅ partial | `rq3f_ss_capacity` | total prove time rises gently with capacity (66→76 ms for s 4→32); per-component split needs introspection |
 

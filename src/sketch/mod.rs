@@ -6,18 +6,24 @@
 //! now — Phase 2 fills it in following §5.4 of the paper.
 
 pub mod countmin;
+pub mod countmin_c_merkle;
 pub mod countmin_final;
+pub mod countmin_memcheck;
 pub mod countmin_merkle;
+pub mod countmin_omc;
+pub mod countmin_replay;
 pub mod countmin_v3;
 pub mod countmin_v9;
 pub mod gk_final;
 pub mod gk_final_full;
 pub mod greenwald_khanna;
+pub mod greenwald_khanna_naive;
 pub mod hll_final;
 pub mod hll_final_full;
 pub mod hll_merkle;
 pub mod hyperloglog;
 pub mod spacesaving;
+pub mod spacesaving_naive;
 pub mod ss_final;
 pub mod ss_final_full;
 
