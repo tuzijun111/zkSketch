@@ -1,6 +1,6 @@
 //! **Streaming-forest total-time runner** — fixed total stream size `N`, over a
 //! real (or synthetic) dataset, swept over batch size `m` and core count `k`,
-//! for the `lookup` and `merkle` Count-Min leaf provers at an arbitrary `(d, w)`
+//! for the `omc` and `merkle` Count-Min leaf provers at an arbitrary `(d, w)`
 //! sketch shape.
 //!
 //! Unlike E6 (`exp_e6`, which fixes the epoch count `t`, the shape `(4, 8)`, and
@@ -28,7 +28,7 @@
 //!         EXP_DATASET=uniform            uniform|gaussian|zipf|aol|netflix|comma-list (default uniform)
 //!         EXP_D=4                        Count-Min depth d (1..=8)
 //!         EXP_W=8                        Count-Min width w (power of two ≥ 2)
-//!         EXP_CM_VARIANT=lookup,merkle   leaf prover(s): one_hot|lookup|merkle
+//!         EXP_CM_VARIANT=omc,merkle   leaf prover(s): one_hot|omc|merkle
 //!                                        (EXP_STREAM_CM_VARIANT also accepted)
 //!         EXP_STREAM_MERGE=digest        digest | recursive | recursive_bound | chain (default digest)
 //!
@@ -40,7 +40,7 @@
 //! `recursive_bound` additionally binds `left.final == right.initial`
 //! **in-circuit** via the Expose NPO (`expose_forest::prove_forest_over`),
 //! closing the NPO-public-value gap so the root surfaces a bound
-//! `(Com(S_0), Com(S_E))` — supports all three variants (one_hot/lookup/merkle).
+//! `(Com(S_0), Com(S_E))` — supports all three variants (one_hot/omc/merkle).
 //! `chain` folds the same leaves with the **linear §4.3 chain**
 //! (`prove_countmin_chain_v9`, `Π^(t)=merge(Π^(t-1),π_t)`) instead of the
 //! Bentley–Saxe tree — the comparison baseline (O(t)-depth left-leaning fold vs
@@ -49,7 +49,7 @@
 //! pass per (dataset, variant, m); the distributed `k`/EXP_STREAM_CORES sweep is
 //! ignored. Use small N/few leaves — each merge is a full recursive proof.
 //!
-//! The `lookup` (omc) leaf requires `d·w % 4 == 0` (Challenge packing); the
+//! The omc leaf requires `d·w % 4 == 0` (Challenge packing); the
 //! `merkle` leaf requires `w` a power of two. Real datasets must be fetched
 //! first (`python3 scripts/fetch_datasets.py`) — a missing one is skipped.
 //!
@@ -296,10 +296,10 @@ fn main() {
         "digest" | "" => (false, false, false),
         "recursive" | "recursion" | "real" => (true, false, false),
         // Boundary-bound: the recursive fold binds left.final==right.initial
-        // in-circuit (NPO gap closed). lookup + merkle.
+        // in-circuit (NPO gap closed). omc + merkle.
         "recursive_bound" | "bound" | "in_circuit" => (true, true, false),
         // Linear §4.3 chain over the same leaves — the comparison baseline vs
-        // the tree fold. Every CM variant (one_hot/lookup/merkle).
+        // the tree fold. Every CM variant (one_hot/omc/merkle).
         "chain" | "linear" => (false, false, true),
         other => {
             eprintln!("unknown EXP_STREAM_MERGE='{other}' (digest|recursive|recursive_bound|chain); using digest");
@@ -321,14 +321,14 @@ fn main() {
     // uses), falling back to EXP_STREAM_CM_VARIANT, then the default.
     let variant_str = std::env::var("EXP_CM_VARIANT")
         .or_else(|_| std::env::var("EXP_STREAM_CM_VARIANT"))
-        .unwrap_or_else(|_| "lookup,merkle".to_string());
+        .unwrap_or_else(|_| "omc,merkle".to_string());
     let variants: Vec<CmLeaf> = variant_str
         .split(',')
         .filter_map(|s| {
             let s = s.trim();
             let v = CmLeaf::parse(s);
             if v.is_none() && !s.is_empty() {
-                eprintln!("ignoring unknown CM variant token '{s}' (one_hot|lookup|merkle)");
+                eprintln!("ignoring unknown CM variant token '{s}' (one_hot|omc|merkle)");
             }
             v
         })
@@ -351,7 +351,7 @@ fn main() {
         std::process::exit(2);
     }
     if variants.is_empty() {
-        eprintln!("EXP_CM_VARIANT must list one or more of one_hot|lookup|merkle");
+        eprintln!("EXP_CM_VARIANT must list one or more of one_hot|omc|merkle");
         std::process::exit(2);
     }
     if datasets.is_empty() {
@@ -366,13 +366,13 @@ fn main() {
         eprintln!("EXP_W must be a power of two ≥ 2 (got {w})");
         std::process::exit(2);
     }
-    // Both the lookup (omc) and one_hot (countmin_final) leaves pack the dense
+    // Both the omc and one_hot (countmin_final) leaves pack the dense
     // d·w state into Challenge words and assert d·w % 4 == 0. The merkle leaf
     // commits per-row roots and has no such constraint.
-    let needs_dw_mult4 = variants.iter().any(|v| matches!(v, CmLeaf::Lookup | CmLeaf::OneHot));
+    let needs_dw_mult4 = variants.iter().any(|v| matches!(v, CmLeaf::Omc | CmLeaf::OneHot));
     if needs_dw_mult4 && (d * w) % 4 != 0 {
         eprintln!(
-            "the lookup (omc) and one_hot (flat-commit) leaves require d·w % 4 == 0 (got d={d}, w={w} → {})",
+            "the omc and one_hot (flat-commit) leaves require d·w % 4 == 0 (got d={d}, w={w} → {})",
             d * w
         );
         std::process::exit(2);

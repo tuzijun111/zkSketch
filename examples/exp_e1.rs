@@ -163,7 +163,7 @@ fn main() {
     //   EXP_D            depth d                      (default 4, must be 1..=8)
     //   EXP_W            comma-list of widths w        (default 8; powers of two)
     //   EXP_CM_VARIANT   one_hot | merkle | merkle_fast | merkle_gb | memcheck |
-    //                    omc | lookup | comma-list (default one_hot). All share the
+    //                    omc | comma-list (default one_hot). All share the
     //                    per-record hash + counter-sort + group-by front half; they
     //                    differ only in the Step-5 rebind:
     //                      one_hot  = flat commit, one-hot sparse patch over all
@@ -191,15 +191,13 @@ fn main() {
     //                                 multiset membership (no Merkle, no empty-init);
     //                                 replaces one_hot's Θ(batch·d·d·w) selector
     //                                 matrix, so far below one_hot but loses to the
-    //                                 sparse rebinds when t_max≪d·w.
-    //                      lookup   = the §5 "lookup table" encoding (advanced
-    //                                 one_hot; Θ(d·w+m·d), batch factor below
-    //                                 one_hot). In a hash-STARK the backend has only
-    //                                 multiset EQUALITY (no LogUp inclusion), so the
-    //                                 faithful lookup-table realization IS the `omc`
-    //                                 circuit — this label runs the omc leaf. A true
-    //                                 LogUp-inclusion lookup needs native lookups
-    //                                 (e.g. plonky2).
+    //                                 sparse rebinds when t_max≪d·w. In a hash-STARK
+    //                                 (only multiset EQUALITY, no LogUp inclusion)
+    //                                 this OMC circuit IS the faithful realisation of
+    //                                 the §5 "lookup table" design — a true
+    //                                 LogUp-inclusion lookup would need native lookups
+    //                                 (e.g. plonky2). (The former separate `lookup`
+    //                                 label was a duplicate of `omc` and is removed.)
     //                    (merkle_gb = merkle_fast + the group-by routing of opt (ii):
     //                                 replaces the m·t_max·d selector with the
     //                                 O(m·d) group-by; wins at large batch m.)
@@ -392,34 +390,9 @@ fn main() {
                             }
                         }
                     }
-                    // CM `lookup`: the §5 "lookup table" encoding (advanced one_hot —
-                    // resolve each access by membership into the committed cell table
-                    // instead of a per-access one-hot scan; cost Θ(dw+md), the batch
-                    // factor below one_hot's Θ(md·dw)). In a hash-STARK the backend
-                    // exposes only multiset EQUALITY (add_permute), not a generic LogUp
-                    // inclusion, so the faithful lookup-table realization (resolve the
-                    // accesses + pin the untouched complement) IS the `omc`
-                    // M_old⊎W=M_new⊎R circuit — same dense commit_countmin, same Θ(dw).
-                    // We therefore run the omc leaf under the `lookup` label; a TRUE
-                    // LogUp-inclusion lookup would need a backend with native lookups
-                    // (e.g. plonky2). See countmin_omc.rs.
-                    if cm_wants("lookup") {
-                        let initial = CountMinState {
-                            counters: vec![vec![0u32; cm_w]; cm_d],
-                            params: CountMinParams { d: cm_d, w: cm_w },
-                        };
-                        let p = CmOmcParams { d: cm_d, w: cm_w, batch: m };
-                        match bench_guarded(c, || {
-                            let r = prove_countmin_omc(p, initial.clone(), ups.clone());
-                            outcome(r.proof_size() as u64)
-                        }) {
-                            Some(agg) => { append_csv(&dir, "e1_circuit", &hdr, &row("cm", "lookup", m, cm_d, cm_w, s_cells, &agg)); }
-                            None => {
-                                println!("  cm lookup m={m} w={cm_w}: SKIPPED — too large (exceeds BabyBear 2^27 FRI domain)");
-                                append_csv(&dir, "e1_circuit", &hdr, &row_skip("cm", "lookup", m, cm_d, cm_w, s_cells, "too_large"));
-                            }
-                        }
-                    }
+                    // (The former `lookup` label was a duplicate of `omc` — in a
+                    // hash-STARK the §5 lookup-table design IS the M_old⊎W=M_new⊎R
+                    // OMC circuit, so it is now exposed only under the `omc` name.)
                 }
             }
 

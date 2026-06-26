@@ -24,7 +24,7 @@
 #   EXP_W        E1/cm: comma-list of widths w (powers of 2, sweeps width)
 #                                                            (default 8)
 #   EXP_CM_VARIANT  E1/cm: one_hot|merkle|merkle_fast|merkle_gb|memcheck|omc|
-#                lookup|comma-list (default one_hot). All hash per record and group
+#                comma-list (default one_hot). All hash per record and group
 #                by counter (no key-grouping); they differ only in the Step-5
 #                rebind. one_hot = flat one-hot sparse patch over all d·w cells
 #                (Θ(n_ctr·d·w)); merkle = sparse Merkle rebind opening only touched
@@ -35,11 +35,11 @@
 #                at large batch m); memcheck = sparse-patch-commit rebind, NO dense
 #                d·w / NO Merkle (Θ(batch·d·log(d·w)), flat in w), empty-init only;
 #                omc = sound offline-memory-checking M_old⊎W=M_new⊎R against a real
-#                prior state (Θ(d·w), dense commit, batch factor below one_hot);
-#                lookup = the §5 "lookup table" encoding — in a hash-STARK (multiset
-#                equality only, no LogUp inclusion) this IS the omc circuit, so the
-#                label runs the omc leaf. (Retired replay/merkle leaves remain
-#                in-tree, unwired.)
+#                prior state (Θ(d·w), dense commit, batch factor below one_hot) — in
+#                a hash-STARK (multiset equality only, no LogUp inclusion) this OMC
+#                circuit IS the faithful §5 "lookup table" realization (the former
+#                separate `lookup` label was a duplicate of `omc` and is removed).
+#                (Retired replay/merkle leaves remain in-tree, unwired.)
 #   COUNTMIN_MAX_SEL_CELLS  cap on the one_hot circuit's selector budget
 #                (batch·d·d·w); raise for big widths (default 16M)
 #   --- per-family size knobs (the analog of cm's EXP_D/EXP_W) ---

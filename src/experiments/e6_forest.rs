@@ -76,22 +76,23 @@ fn key_mix(i: usize, j: usize) -> u32 {
 pub enum CmLeaf {
     /// §5.2 flat-commit leaf (`countmin_final`) — the original E6 leaf.
     OneHot,
-    /// Lookup-table rebind. In a hash-STARK (multiset EQUALITY only, no LogUp
-    /// inclusion) the faithful realisation is the sound OMC leaf
-    /// (`countmin_omc`, `M_old ⊎ W = M_new ⊎ R`); it commits the dense state
-    /// with `commit_countmin`, the same boundary scheme as `one_hot`.
-    Lookup,
+    /// Offline-memory-checking rebind: the sound OMC leaf (`countmin_omc`,
+    /// `M_old ⊎ W = M_new ⊎ R`) — in a hash-STARK (multiset EQUALITY only, no
+    /// LogUp inclusion) this is the faithful realisation of the §5 lookup-table
+    /// design. Commits the dense state with `commit_countmin`, the same boundary
+    /// scheme as `one_hot`.
+    Omc,
     /// Sparse Merkle-commit rebind (`countmin_c_merkle`, `compress=false`):
     /// per-row Merkle roots folded into one digest via `combined_commit`.
     Merkle,
 }
 
 impl CmLeaf {
-    /// Parse an `EXP_E6_CM_VARIANT` token. `omc` is an alias for `lookup`.
+    /// Parse an `EXP_E6_CM_VARIANT` token (`one_hot` | `omc` | `merkle`).
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim() {
             "one_hot" => Some(Self::OneHot),
-            "lookup" | "omc" => Some(Self::Lookup),
+            "omc" => Some(Self::Omc),
             "merkle" => Some(Self::Merkle),
             _ => None,
         }
@@ -99,7 +100,7 @@ impl CmLeaf {
     pub fn label(self) -> &'static str {
         match self {
             Self::OneHot => "one_hot",
-            Self::Lookup => "lookup",
+            Self::Omc => "omc",
             Self::Merkle => "merkle",
         }
     }
@@ -129,7 +130,7 @@ fn prove_leaf(
             let o = cm_epoch(CountMinFinalParams { d, w, batch: m }, initial, batch).0;
             LeafBoundary { com_before: o.com_before, com_after: o.com_after, batch_commit: o.batch_commit }
         }
-        CmLeaf::Lookup => {
+        CmLeaf::Omc => {
             let updates: Vec<CountMinUpdate> =
                 batch.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
             let pr = prove_countmin_omc(CmOmcParams { d, w, batch: m }, initial.clone(), updates);
@@ -175,7 +176,7 @@ fn prove_leaf_full(
         CmLeaf::OneHot => {
             prove_countmin_final(CountMinFinalParams { d, w, batch: m }, initial.clone(), updates)
         }
-        CmLeaf::Lookup => {
+        CmLeaf::Omc => {
             let pr = prove_countmin_omc(CmOmcParams { d, w, batch: m }, initial.clone(), updates);
             CountMinLeafProofV9 {
                 output: pr.output,
@@ -290,7 +291,7 @@ fn prove_leaves_distributed(
 /// `m`. The Merkle `t_max` is computed **exactly** as the largest number of
 /// distinct touched cells in any (batch, row) — sound (the realised maximum,
 /// always ≤ `w`) and tight. Caller must validate the shape is legal for
-/// `variant` (e.g. the `lookup`/omc leaf needs `d·w % 4 == 0`); a capacity panic
+/// `variant` (e.g. the `omc` leaf needs `d·w % 4 == 0`); a capacity panic
 /// here is the runner's `catch_unwind`'s job, not this function's.
 pub fn measure_batches(
     workers: usize,
@@ -480,7 +481,7 @@ pub fn measure_batches_recursive(
 /// So `merge_ms` here is the linear-chain composition cost, directly comparable
 /// to [`measure_batches_recursive`]'s tree cost on the same leaves. The
 /// distributed `k`/cores split does NOT apply (sequential). Works for every CM
-/// leaf variant (`one_hot`/`lookup`/`merkle`), since each wraps into the same
+/// leaf variant (`one_hot`/`omc`/`merkle`), since each wraps into the same
 /// `CountMinLeafProofV9` the chain consumes.
 pub fn measure_batches_chain(
     variant: CmLeaf,
@@ -614,7 +615,7 @@ pub fn measure_batches_recursive_bound(
                         CmLeaf::OneHot => {
                             prove_countmin_final_exposed(CountMinFinalParams { d, w, batch: m }, states[i].clone(), updates).output
                         }
-                        CmLeaf::Lookup => {
+                        CmLeaf::Omc => {
                             prove_countmin_omc_exposed(CmOmcParams { d, w, batch: m }, states[i].clone(), updates).output
                         }
                         CmLeaf::Merkle => {
@@ -665,7 +666,7 @@ mod tests {
         // proves the path runs, the leaves chain into a finalisable forest
         // (a panic on `forest.insert` would mean the boundary commitments don't
         // chain), and timing is non-zero.
-        for variant in [CmLeaf::OneHot, CmLeaf::Lookup, CmLeaf::Merkle] {
+        for variant in [CmLeaf::OneHot, CmLeaf::Omc, CmLeaf::Merkle] {
             let cell = measure(1, 8, 2, variant, BenchCfg { warmup: 0, trials: 1 });
             assert!(
                 cell.forest_completion_ms_median > 0.0,

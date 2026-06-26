@@ -11,7 +11,7 @@
 //!
 //! This mirrors [`countmin_chain::CountMinChainState`](super::countmin_chain),
 //! which folds the original flat `CountMinLeafProof`, but operates on
-//! [`CountMinLeafProofV9`] — the envelope the streaming runner's `lookup` (omc)
+//! [`CountMinLeafProofV9`] — the envelope the streaming runner's `omc`
 //! and `merkle` (c_merkle) leaves wrap into (see
 //! `experiments::e6_forest::prove_leaf_full`). That makes the linear chain a
 //! drop-in **comparison baseline** against

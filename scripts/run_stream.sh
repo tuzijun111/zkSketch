@@ -4,7 +4,7 @@
 # Fixes the TOTAL stream size N (e.g. 2^16) and measures the total wall-clock to
 # prove the whole stream: prove t = ceil(N/m) independent Count-Min transition
 # leaves in parallel on a k-thread pool, then fold them into a streaming forest.
-# Swept over batch size m and core count k, for the `lookup` and `merkle` leaf
+# Swept over batch size m and core count k, for the `omc` and `merkle` leaf
 # provers. SINGLE run — no warm-up, no measured trials, no target insert-rate.
 #
 # (Contrast with `run_experiments.sh e6`, which fixes the epoch count and
@@ -15,7 +15,7 @@
 #   scripts/run_stream.sh
 #   EXP_STREAM_N=2^16 scripts/run_stream.sh
 #   EXP_STREAM_BATCHES=64,256,1024 EXP_STREAM_CORES=8,16,32,64 scripts/run_stream.sh
-#   EXP_STREAM_CM_VARIANT=lookup,merkle scripts/run_stream.sh
+#   EXP_STREAM_CM_VARIANT=omc,merkle scripts/run_stream.sh
 #   scripts/run_stream.sh stream_2p16.csv            # rename output CSV
 #
 # Config (env):
@@ -31,7 +31,7 @@
 #                         (fetch real ones first: python3 scripts/fetch_datasets.py)
 #   EXP_D                 Count-Min depth d, 1..=8                    (default 4)
 #   EXP_W                 Count-Min width w, power of two ≥ 2         (default 8)
-#   EXP_CM_VARIANT        one_hot|lookup|merkle|comma-list           (default lookup,merkle)
+#   EXP_CM_VARIANT        one_hot|omc|merkle|comma-list           (default omc,merkle)
 #                         (EXP_STREAM_CM_VARIANT also accepted; the stream runner is CM-only)
 #   EXP_STREAM_MERGE      digest | recursive | recursive_bound | chain  (default digest)
 #                         digest = cheap §4.2 commitment fold (merge ~µs); recursive =
@@ -45,7 +45,7 @@
 #                         — use small N / few leaves.
 #   EXP_OUT / $1          rename output to results/<name>.csv (the .csv is optional)
 #
-# The lookup (omc) leaf needs d·w % 4 == 0; the merkle leaf needs w a power of 2.
+# The omc leaf needs d·w % 4 == 0; the merkle leaf needs w a power of 2.
 #
 # Output: results/stream_forest.csv with columns
 #   dataset,variant,d,w,n,m,t,k,cores_per_leaf,merge_mode,total_time_ms,leafgen_ms,merge_ms,records_per_sec,speedup,peak_rss_mb,status
@@ -63,7 +63,7 @@ cd "$(dirname "$0")/.."
 OUT_CSV="${EXP_OUT:-${1:-}}"
 CSV="stream_forest.csv"
 
-echo "== zkSketch stream-forest == N=${EXP_STREAM_N:-65536} dataset=${EXP_DATASET:-uniform} d=${EXP_D:-4} w=${EXP_W:-8} batches=${EXP_STREAM_BATCHES:-64,256,1024} cores=${EXP_STREAM_CORES:-1,2,4,8,16,32,64} variants=${EXP_CM_VARIANT:-${EXP_STREAM_CM_VARIANT:-lookup,merkle}} merge=${EXP_STREAM_MERGE:-digest} (single run)"
+echo "== zkSketch stream-forest == N=${EXP_STREAM_N:-65536} dataset=${EXP_DATASET:-uniform} d=${EXP_D:-4} w=${EXP_W:-8} batches=${EXP_STREAM_BATCHES:-64,256,1024} cores=${EXP_STREAM_CORES:-1,2,4,8,16,32,64} variants=${EXP_CM_VARIANT:-${EXP_STREAM_CM_VARIANT:-omc,merkle}} merge=${EXP_STREAM_MERGE:-digest} (single run)"
 mkdir -p results
 rm -f "results/$CSV"
 

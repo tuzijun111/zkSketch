@@ -92,9 +92,8 @@
 //!
 //!   The native side ([`apply_batch_full`] → [`fuse_round_parity0`] →
 //!   [`resort_by_active_value`]) produces the witnesses the circuit
-//!   verifies. Only a **single** parity-0 round is applied; the full
-//!   `L = ⌈log M⌉` parity-alternating schedule (Step 5 in full) is a
-//!   strict superset (see "still deferred" below).
+//!   verifies, applying the `fuse_round_parity0` → `resort_by_active_value`
+//!   step once per round for the full `L = ⌈log₂(total)⌉`-round schedule.
 //! - **Full mass conservation**: `Σ(S_new.count·active) + Σ(excess.count
 //!   ·active) = Σ(S_old.count·active) + Σ(B.active)`. The excess holds
 //!   whatever actives in `U` didn't fit into `S_new`, so the combined

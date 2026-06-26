@@ -7,10 +7,10 @@
 //! Run:    cargo run --release --example exp_e6
 //! Config: EXP_E6_CORES=1,2,4,8   EXP_E6_BATCHES=32,64   EXP_E6_INSERTS=8
 //!         EXP_E6_TRIALS=2        EXP_E6_WARMUP=1
-//!         EXP_E6_CM_VARIANT=one_hot   (leaf prover: one_hot|lookup|merkle; default one_hot)
+//!         EXP_E6_CM_VARIANT=one_hot   (leaf prover: one_hot|omc|merkle; default one_hot)
 //!
 //! The leaf variants share the per-record hash + counter front half and differ
-//! only in the §5 rebind: `lookup` = the sound OMC leaf (`countmin_omc`),
+//! only in the §5 rebind: `omc` = the sound OMC leaf (`countmin_omc`),
 //! `merkle` = the sparse Merkle-commit rebind (`countmin_c_merkle`), `one_hot` =
 //! the §5.2 flat-commit leaf (`countmin_final`). A `variant` column is the first
 //! CSV field; the k=1 speedup baseline is per (variant, m).
@@ -50,9 +50,9 @@ fn main() {
         trials: env_usize("EXP_E6_TRIALS", 2),
     };
     // Which Count-Min leaf prover(s) the forest folds. Comma-list of
-    // one_hot | lookup (=omc) | merkle. Default is `one_hot` — the original E6
+    // one_hot | omc | merkle. Default is `one_hot` — the original E6
     // leaf (countmin_final flat-commit) — so `run_experiments.sh e6` reproduces
-    // the baseline; pass e.g. EXP_E6_CM_VARIANT=lookup,merkle for the rebind
+    // the baseline; pass e.g. EXP_E6_CM_VARIANT=omc,merkle for the rebind
     // comparison.
     let variant_str = std::env::var("EXP_E6_CM_VARIANT").unwrap_or_else(|_| "one_hot".to_string());
     let variants: Vec<CmLeaf> = variant_str
@@ -61,13 +61,13 @@ fn main() {
             let s = s.trim();
             let v = CmLeaf::parse(s);
             if v.is_none() && !s.is_empty() {
-                eprintln!("ignoring unknown EXP_E6_CM_VARIANT token '{s}' (one_hot|lookup|merkle)");
+                eprintln!("ignoring unknown EXP_E6_CM_VARIANT token '{s}' (one_hot|omc|merkle)");
             }
             v
         })
         .collect();
     if variants.is_empty() {
-        eprintln!("EXP_E6_CM_VARIANT must list one or more of one_hot|lookup|merkle");
+        eprintln!("EXP_E6_CM_VARIANT must list one or more of one_hot|omc|merkle");
         std::process::exit(2);
     }
     if batches.is_empty() || batches.iter().any(|&m| m == 0) {

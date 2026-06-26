@@ -350,7 +350,7 @@ def fig_e6():
     if not data:
         return
     _, rows = data
-    # `variant` column is optional (older CSVs predate the lookup/merkle sweep).
+    # `variant` column is optional (older CSVs predate the omc/merkle sweep).
     variants = sorted({r.get("variant", "one_hot") for r in rows})
     ms = sorted({int(r["m"]) for r in rows})
     fig, ax = plt.subplots(figsize=(5, 3))

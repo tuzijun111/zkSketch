@@ -1,6 +1,6 @@
 //! Feasibility spike: can the REAL recursive forest (`prove_countmin_forest_v9`,
 //! whose merges verify their two children in-circuit) recursively verify the
-//! stream runner's OMC (`lookup`) leaves — not just the native v9 leaves?
+//! stream runner's OMC (`omc`) leaves — not just the native v9 leaves?
 //!
 //! If this passes, the stream runner can keep its leaf proofs, wrap them as
 //! `CountMinLeafProofV9`, and fold them with the real recursive merge so
@@ -107,7 +107,7 @@ fn merkle_leaves_recursively_merge() {
     assert_eq!(root.num_leaves(), 2);
 }
 
-/// NPO-gap closure for the stream's `lookup` (omc) leaf: two omc-EXPOSED leaves
+/// NPO-gap closure for the stream's `omc` leaf: two omc-EXPOSED leaves
 /// folded by the in-circuit boundary-bound forest. The merge binds
 /// `left.final == right.initial` IN-CIRCUIT (not natively), and the root
 /// surfaces exactly the real outer boundary (Com(S_0), Com(S_2)).
@@ -275,7 +275,7 @@ fn one_hot_bound_forest_closes_npo_gap() {
     assert_eq!(final_, c2, "root final = real Com(S_2), bound in-circuit");
 }
 
-/// Linear §4.3 chain (`Π^(t)=merge(Π^(t-1),π_t)`) over the stream's `lookup`
+/// Linear §4.3 chain (`Π^(t)=merge(Π^(t-1),π_t)`) over the stream's `omc`
 /// (omc) leaves — the comparison baseline against the tree fold
 /// (`prove_countmin_forest_v9`). Three omc leaves wrapped as v9 are chained
 /// `init(l0,l1)` then `extend(l2)` (so the chain does one `leaf+leaf` then one

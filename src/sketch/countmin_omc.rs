@@ -677,7 +677,7 @@ mod tests {
     }
 
     /// **Correctness at the reported shape** (`d=7, w=128`, large batch) where
-    /// `omc`/`lookup` beats `merkle` — the regime where touched cells approach
+    /// `omc` beats `merkle` — the regime where touched cells approach
     /// the whole small row. Asserts the certified final commitment equals the
     /// natively-applied Count-Min, i.e. the speed is NOT a degenerate shortcut:
     /// the cheaper proof still commits to the correct state. `#[ignore]`d (a real

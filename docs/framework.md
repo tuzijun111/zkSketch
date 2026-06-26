@@ -257,7 +257,7 @@ surfaces only the real `(Com(S_0), Com(S_2))`, bound in-circuit.
 
 The three **§5 Count-Min rebind** leaves the stream runner uses also gained
 exposing variants — `prove_countmin_final_exposed` (one_hot), `prove_countmin_omc_exposed`
-(lookup), and `prove_countmin_c_merkle_exposed` (merkle). The first two surface
+(omc), and `prove_countmin_c_merkle_exposed` (merkle). The first two surface
 the dense `commit_countmin` boundary directly (like the v9 leaf); the c_merkle
 boundary is `combined_commit(per-row roots)`, which is **not** a single public
 input, so `combine_roots_in_circuit` hashes the `d` root PIs **in-circuit** to
@@ -308,7 +308,7 @@ Notes:
   via the Expose NPO; `prove_hiding_merge` reads both children's boundaries as
   `air_public_targets`, binds contiguity in-circuit, and re-exposes only the outer
   boundary (see [In-circuit boundary binding](#in-circuit-boundary-binding--expose_forest)).
-  Supported for all three Count-Min rebind leaves (`one_hot`/`lookup`/`merkle`);
+  Supported for all three Count-Min rebind leaves (`one_hot`/`omc`/`merkle`);
   `merkle_gb` (group-by routing) has no exposing variant.
 - **Parallelism.** `digest` mode runs the distributed `k`-worker sweep
   (`EXP_STREAM_CORES`). The `recursive*`/`chain` modes prove leaves **sequentially**
@@ -318,7 +318,7 @@ Notes:
 
 ```bash
 # Compare the merge models on the same stream (small N for the recursive modes):
-EXP_DATASET=aol EXP_D=4 EXP_W=8 EXP_CM_VARIANT=lookup \
+EXP_DATASET=aol EXP_D=4 EXP_W=8 EXP_CM_VARIANT=omc \
   EXP_STREAM_N=8 EXP_STREAM_BATCHES=2 EXP_STREAM_MERGE=recursive_bound \
   scripts/run_stream.sh
 ```
