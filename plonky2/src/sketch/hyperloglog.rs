@@ -11,6 +11,7 @@ use plonky2::plonk::config::Hasher;
 
 use crate::commitment::commit;
 use crate::config::F;
+use crate::sketch::{DeltaCert, Sketch};
 
 /// Trailing-zero window for the `ρ` (leading-run) derivation. The in-circuit
 /// routing in [`crate::leaf::hyperloglog`] re-derives `ρ` over exactly this many
@@ -59,6 +60,15 @@ pub struct HllState {
     pub b: usize,
 }
 
+/// Per-batch delta certificate — Pattern A max (paper §5.3): for each touched
+/// register, the maximum leading-run contributed by the batch. Sorted by
+/// register index so equality is order-independent. Port of
+/// `../src/sketch/hyperloglog.rs::HyperLogLogDelta` (u8 → u64 over Goldilocks).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HllDelta {
+    pub touched: Vec<(usize, u64)>,
+}
+
 impl HllState {
     pub fn new(p: &HllParams) -> Self {
         assert!(p.b >= 2, "b must be >= 2 (m >= 4)");
@@ -84,6 +94,71 @@ impl HllState {
     pub fn commit(&self) -> HashOut<F> {
         commit(&self.cells())
     }
+
+    /// HyperLogLog distinct-count estimate via the classical harmonic-mean
+    /// formula (no small/large-range bias correction). Mirrors
+    /// `../src/sketch/hyperloglog.rs::HyperLogLog::estimate`.
+    pub fn estimate(&self) -> f64 {
+        let m = self.m() as f64;
+        let alpha = match self.m() {
+            16 => 0.673,
+            32 => 0.697,
+            64 => 0.709,
+            _ => 0.7213 / (1.0 + 1.079 / m),
+        };
+        let z: f64 = self.registers.iter().map(|&r| 2f64.powi(-(r as i32))).sum();
+        alpha * m * m / z
+    }
+
+    /// Build the Pattern-A (max) delta certificate for `batch` against this
+    /// state's shape: per-register max leading-runs, sorted by register index.
+    pub fn build_delta(&self, batch: &[HllUpdate]) -> HllDelta {
+        let mut by_idx: std::collections::BTreeMap<usize, u64> = std::collections::BTreeMap::new();
+        for u in batch {
+            let (idx, lr) = hash_register(self.b, u.key);
+            let entry = by_idx.entry(idx).or_insert(0);
+            if lr > *entry {
+                *entry = lr;
+            }
+        }
+        HllDelta { touched: by_idx.into_iter().collect() }
+    }
+
+    /// Apply a previously-computed delta. `apply_delta(build_delta(batch))`
+    /// equals replaying the batch via [`update`](Self::update) — the §5.3
+    /// Pattern-A max invariant (max is associative-commutative).
+    pub fn apply_delta(&mut self, delta: &HllDelta) {
+        for &(idx, v) in &delta.touched {
+            if v > self.registers[idx] {
+                self.registers[idx] = v;
+            }
+        }
+    }
+}
+
+/// Zero-sized marker implementing the [`Sketch`]/[`DeltaCert`] traits over
+/// [`HllState`], mirroring `../src/sketch/hyperloglog.rs::HyperLogLog`.
+pub struct HyperLogLog;
+
+impl Sketch for HyperLogLog {
+    type Params = HllParams;
+    type State = HllState;
+    type Update = HllUpdate;
+
+    fn new(params: &Self::Params) -> Self::State {
+        HllState::new(params)
+    }
+    fn update(state: &mut Self::State, u: &Self::Update) {
+        state.update(u)
+    }
+}
+
+impl DeltaCert for HyperLogLog {
+    type Delta = HllDelta;
+
+    fn build_delta(prev: &Self::State, batch: &[Self::Update]) -> Self::Delta {
+        prev.build_delta(batch)
+    }
 }
 
 #[cfg(test)]
@@ -107,5 +182,44 @@ mod tests {
         let mut s1 = s0.clone();
         s1.update(&HllUpdate { key: 7 });
         assert_ne!(s0.commit(), s1.commit());
+    }
+
+    /// §5.3 Pattern-A max invariant: per-register max over a batch equals
+    /// replaying the batch one-by-one.
+    #[test]
+    fn delta_aggregates_batch_via_max() {
+        let p = HllParams { b: 4 }; // m = 16
+        let initial = HllState::new(&p);
+        let batch: Vec<HllUpdate> =
+            (0..64u64).map(|i| HllUpdate { key: i.wrapping_mul(0x9E37_79B9) }).collect();
+
+        let mut by_replay = initial.clone();
+        for u in &batch {
+            by_replay.update(u);
+        }
+
+        let delta = initial.build_delta(&batch);
+        let mut by_delta = initial.clone();
+        by_delta.apply_delta(&delta);
+
+        assert_eq!(by_replay, by_delta);
+        assert!(delta.touched.len() <= batch.len());
+        assert!(delta.touched.len() <= p.m());
+    }
+
+    /// The estimate is finite, positive, and grows with more distinct keys.
+    #[test]
+    fn estimate_is_monotone_in_distinct_keys() {
+        let mut few = HllState::new(&HllParams { b: 6 });
+        for k in 0..8u64 {
+            few.update(&HllUpdate { key: k.wrapping_mul(0x9E37_79B9_7F4A_7C15) });
+        }
+        let mut many = HllState::new(&HllParams { b: 6 });
+        for k in 0..2000u64 {
+            many.update(&HllUpdate { key: k.wrapping_mul(0x9E37_79B9_7F4A_7C15) });
+        }
+        let (e_few, e_many) = (few.estimate(), many.estimate());
+        assert!(e_few.is_finite() && e_few > 0.0);
+        assert!(e_many > e_few, "estimate should grow: {e_few} !< {e_many}");
     }
 }

@@ -125,6 +125,70 @@ pub fn take(keys: &[u32], k: usize) -> Vec<u32> {
     keys[..k.min(keys.len())].to_vec()
 }
 
+// ─── Canonical *materialized* synthetic datasets ──────────────────────────
+//
+// Port of `../src/dataset.rs`'s frozen-synthetic layer. The Gaussian/Zipf paths
+// use libm transcendentals (`ln/cos/sin/powf`) whose last-ULP rounding can differ
+// across platforms, so a *frozen* copy is the only way to guarantee byte-identical
+// inputs everywhere. Because this crate's `keys_path` already points at the shared
+// `../data/`, the frozen files are the **same** ones the plonky3 crate freezes —
+// both stacks load identical canonical streams. The in-code generators remain the
+// offline fallback (per the "keep baselines" rule).
+
+/// Canonical length of a materialized synthetic stream (matches the real
+/// datasets' default cap, so each is a drop-in sibling of `aol.keys`/`netflix.keys`).
+pub const SYNTH_N: usize = 200_000;
+/// Canonical seed for the materialized **Gaussian** stream.
+pub const GAUSSIAN_SEED: u64 = 1;
+/// Canonical seed for the materialized **Uniform** stream.
+pub const UNIFORM_SEED: u64 = 2;
+/// Canonical skew for the materialized **Zipf** stream.
+pub const ZIPF_ALPHA: f64 = 1.0;
+/// Canonical universe size for the materialized **Zipf** stream.
+pub const ZIPF_UNIVERSE: usize = 1 << 16;
+/// Canonical seed for the materialized **Zipf** stream.
+pub const ZIPF_SEED: u64 = 1;
+
+/// Build a canonical synthetic stream of `n` keys by name
+/// (`"gaussian" | "uniform" | "zipf"`) at the documented canonical seeds/params —
+/// the single source of truth shared with the plonky3 crate's `gen_synthetic`.
+pub fn canonical_stream(name: &str, n: usize) -> Option<Vec<u32>> {
+    match name {
+        "gaussian" => Some(synthetic_stream(Synthetic::Gaussian, n, GAUSSIAN_SEED)),
+        "uniform" => Some(synthetic_stream(Synthetic::Uniform, n, UNIFORM_SEED)),
+        "zipf" => Some(zipf_stream(ZIPF_ALPHA, ZIPF_UNIVERSE, n, ZIPF_SEED)),
+        _ => None,
+    }
+}
+
+/// Write a key stream to `../data/<name>.keys` as a flat little-endian `u32`
+/// stream (the exact format the real loaders read). Returns the path written.
+pub fn write_keys(name: &str, keys: &[u32]) -> std::io::Result<PathBuf> {
+    let path = keys_path(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut bytes = Vec::with_capacity(keys.len() * 4);
+    for &k in keys {
+        bytes.extend_from_slice(&k.to_le_bytes());
+    }
+    std::fs::write(&path, &bytes)?;
+    Ok(path)
+}
+
+/// Materialized canonical **Gaussian** stream (`../data/gaussian.keys`), if present.
+pub fn gaussian() -> Option<Vec<u32>> {
+    load_keys("gaussian")
+}
+/// Materialized canonical **Uniform** stream (`../data/uniform.keys`), if present.
+pub fn uniform() -> Option<Vec<u32>> {
+    load_keys("uniform")
+}
+/// Materialized canonical **Zipf** stream (`../data/zipf.keys`), if present.
+pub fn zipf() -> Option<Vec<u32>> {
+    load_keys("zipf")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +211,32 @@ mod tests {
                     println!("dataset {name}: {} keys (shared with plonky3 crate)", k.len());
                 }
                 None => println!("dataset {name}: not fetched (run ../scripts/fetch_datasets.py)"),
+            }
+        }
+    }
+
+    #[test]
+    fn materialized_synthetic_is_prefix_equivalent_when_present() {
+        // If the frozen files exist (shared with the plonky3 crate), their prefix
+        // must equal in-code generation at the canonical seed. Absent ⇒ no-op.
+        for name in ["gaussian", "uniform", "zipf"] {
+            let loaded = match name {
+                "gaussian" => gaussian(),
+                "uniform" => uniform(),
+                "zipf" => zipf(),
+                _ => None,
+            };
+            match loaded {
+                Some(k) => {
+                    let n = 1000.min(k.len());
+                    assert_eq!(
+                        &k[..n],
+                        &canonical_stream(name, n).unwrap()[..n],
+                        "{name}.keys must be the canonical seeded stream's prefix"
+                    );
+                    println!("dataset {name}: {} frozen keys, prefix matches generator", k.len());
+                }
+                None => println!("dataset {name}: not materialized (run gen_synthetic)"),
             }
         }
     }

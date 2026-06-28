@@ -10,6 +10,10 @@
 //! - [`flat_verify`] — §4.1 baseline (verify each node natively); Θ(E) verifier.
 //! - §4.3 chain   — just repeated [`merge`] of the running root with a new leaf.
 
+pub mod framework;
+pub mod mmr;
+pub mod topology;
+
 use std::sync::Arc;
 
 use anyhow::{ensure, Result};

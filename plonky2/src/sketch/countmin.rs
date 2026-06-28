@@ -9,6 +9,7 @@ use plonky2::hash::hash_types::HashOut;
 
 use crate::commitment::commit;
 use crate::config::F;
+use crate::sketch::{DeltaCert, Sketch};
 
 /// Fixed per-row hash multipliers (odd 64-bit constants).
 const HASH_PRIMES: [u64; 16] = [
@@ -56,6 +57,22 @@ pub fn hash_cell(row: usize, key: u64, w: usize) -> usize {
     (mixed % w as u64) as usize
 }
 
+/// Native Count-Min **batch commitment** `C_B` (paper §5.2): binds the raw
+/// `(key, value)` records, interleaved, under Poseidon — the off-circuit twin of
+/// the in-circuit `batch_commit` in [`crate::leaf::countmin_final`]
+/// (`Poseidon(key0, val0, key1, val1, …)`). A prover cannot insert, drop, or
+/// reorder records without breaking this binding. Port of
+/// `../src/commitment/countmin_batch.rs::commit_batch` (Goldilocks-native: each
+/// `key` is a single field element, so no `key_lo`/`key_hi` split).
+pub fn commit_batch(records: &[CountMinUpdate]) -> HashOut<F> {
+    let mut pre = Vec::with_capacity(2 * records.len());
+    for r in records {
+        pre.push(F::from_canonical_u64(r.key));
+        pre.push(F::from_canonical_u64(r.value));
+    }
+    commit(&pre)
+}
+
 /// Count-Min shape: `d` rows × `w` columns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CountMinParams {
@@ -76,6 +93,15 @@ pub struct CountMinState {
     pub counters: Vec<Vec<u64>>,
     pub d: usize,
     pub w: usize,
+}
+
+/// Per-batch delta certificate — Pattern A linear (paper §5.3): for each touched
+/// cell `(row, col)`, the additive contribution this batch applies. Stored as a
+/// sorted `((row, col), delta)` list so equality is order-independent. Port of
+/// `../src/sketch/countmin.rs::CountMinDelta` (u32 → u64 over Goldilocks).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CountMinDelta {
+    pub touched: Vec<((usize, usize), u64)>,
 }
 
 impl CountMinState {
@@ -100,6 +126,70 @@ impl CountMinState {
     pub fn commit(&self) -> HashOut<F> {
         commit(&self.cells())
     }
+
+    /// Point query — the Count-Min estimate for `key` (min over rows), an upper
+    /// bound on the true frequency (classical Count-Min). Mirrors
+    /// `../src/sketch/countmin.rs::CountMin::query`.
+    pub fn query(&self, key: u64) -> u64 {
+        (0..self.d)
+            .map(|row| self.counters[row][hash_cell(row, key, self.w)])
+            .min()
+            .unwrap_or(0)
+    }
+
+    /// Build the Pattern-A delta certificate for `batch` against this state's
+    /// shape: the sorted per-cell additive contributions. Depends only on the
+    /// `(d, w)` hash profile, not on the current counter values.
+    pub fn build_delta(&self, batch: &[CountMinUpdate]) -> CountMinDelta {
+        let mut touched: Vec<((usize, usize), u64)> = Vec::new();
+        for u in batch {
+            for row in 0..self.d {
+                let col = hash_cell(row, u.key, self.w);
+                match touched.iter_mut().find(|(k, _)| *k == (row, col)) {
+                    Some(entry) => entry.1 = entry.1.saturating_add(u.value),
+                    None => touched.push(((row, col), u.value)),
+                }
+            }
+        }
+        touched.sort_by_key(|&((row, col), _)| (row, col));
+        CountMinDelta { touched }
+    }
+
+    /// Apply a previously-computed delta. `apply_delta(build_delta(batch))`
+    /// equals replaying the batch via [`update`](Self::update) — the §5.3
+    /// Pattern-A linear invariant.
+    pub fn apply_delta(&mut self, delta: &CountMinDelta) {
+        for &((row, col), v) in &delta.touched {
+            self.counters[row][col] = self.counters[row][col].saturating_add(v);
+        }
+    }
+}
+
+/// Zero-sized marker implementing the [`Sketch`]/[`DeltaCert`] traits over
+/// [`CountMinState`], mirroring `../src/sketch/countmin.rs::CountMin`. The
+/// inherent methods above remain the primary API; this just wires Count-Min into
+/// the generic sketch-family abstraction.
+pub struct CountMin;
+
+impl Sketch for CountMin {
+    type Params = CountMinParams;
+    type State = CountMinState;
+    type Update = CountMinUpdate;
+
+    fn new(params: &Self::Params) -> Self::State {
+        CountMinState::new(params)
+    }
+    fn update(state: &mut Self::State, u: &Self::Update) {
+        state.update(u)
+    }
+}
+
+impl DeltaCert for CountMin {
+    type Delta = CountMinDelta;
+
+    fn build_delta(prev: &Self::State, batch: &[Self::Update]) -> Self::Delta {
+        prev.build_delta(batch)
+    }
 }
 
 #[cfg(test)]
@@ -121,5 +211,69 @@ mod tests {
         s1.update(&CountMinUpdate { key: 1, value: 1 });
         assert_ne!(s0.commit(), s1.commit());
         assert_eq!(s0.commit(), CountMinState::new(&CountMinParams { d: 2, w: 4 }).commit());
+    }
+
+    /// Classical Count-Min upper bound: the query never under-counts, and with a
+    /// wide sketch and few distinct keys the bound is tight (no collisions).
+    #[test]
+    fn point_query_upper_bounds_true_count() {
+        let mut s = CountMinState::new(&CountMinParams { d: 3, w: 256 });
+        let stream = [(10u64, 1u64), (10, 1), (10, 1), (10, 1), (20, 5), (20, 5), (999, 2)];
+        let mut truth = std::collections::HashMap::<u64, u64>::new();
+        for &(k, v) in &stream {
+            *truth.entry(k).or_insert(0) += v;
+            s.update(&CountMinUpdate { key: k, value: v });
+        }
+        for (&k, &t) in &truth {
+            let est = s.query(k);
+            assert!(est >= t, "query({k}) = {est} but true count = {t}");
+            assert_eq!(est, t, "query({k}) over-counted by {}", est - t);
+        }
+    }
+
+    /// §5.3 Pattern-A linear invariant: replaying a batch one-by-one equals
+    /// applying the aggregated delta to the same starting state.
+    #[test]
+    fn delta_aggregates_batch() {
+        let p = CountMinParams { d: 4, w: 16 };
+        let initial = CountMinState::new(&p);
+        let batch: Vec<CountMinUpdate> = (0..32)
+            .map(|i| CountMinUpdate { key: (i % 6) as u64, value: 1 + (i as u64 % 3) })
+            .collect();
+
+        let mut by_replay = initial.clone();
+        for u in &batch {
+            by_replay.update(u);
+        }
+
+        let delta = initial.build_delta(&batch);
+        let mut by_delta = initial.clone();
+        by_delta.apply_delta(&delta);
+
+        assert_eq!(by_replay, by_delta);
+        assert!(delta.touched.len() <= p.d * batch.len());
+    }
+
+    /// The batch commitment is deterministic and binds key, value, and order.
+    #[test]
+    fn batch_commit_binds_records() {
+        let b1 = vec![
+            CountMinUpdate { key: 7, value: 3 },
+            CountMinUpdate { key: 11, value: 5 },
+            CountMinUpdate { key: 42, value: 1 },
+        ];
+        assert_eq!(commit_batch(&b1), commit_batch(&b1));
+
+        let mut by_key = b1.clone();
+        by_key[1].key += 1;
+        assert_ne!(commit_batch(&b1), commit_batch(&by_key));
+
+        let mut by_val = b1.clone();
+        by_val[0].value += 1;
+        assert_ne!(commit_batch(&b1), commit_batch(&by_val));
+
+        let mut by_order = b1.clone();
+        by_order.swap(0, 2);
+        assert_ne!(commit_batch(&b1), commit_batch(&by_order));
     }
 }
