@@ -485,6 +485,32 @@ mod tests {
         );
     }
 
+    /// O(1)-VERIFIER evidence: the time to verify a forest root does NOT grow
+    /// with the stream length (leaf count). The single recursive STARK only ever
+    /// verifies its two direct children in-circuit, so `verify_all_tables` is
+    /// constant-time regardless of how many leaves are folded; the only
+    /// E-dependent term is the cheap native digest replay (a handful of
+    /// Poseidon2 per leaf), which is negligible against the STARK verify.
+    /// Builds forests at E ∈ {2,4,8} (2+4+8 leaves + 1+3+7 merges = 25 proofs)
+    /// and times verify; the per-E times should be ~flat. Slow; run with
+    /// `--ignored --nocapture`.
+    #[test]
+    #[ignore = "slow: builds forests at E=2,4,8 (25 recursive proofs) to time verify"]
+    fn forest_verify_time_independent_of_stream_length() {
+        use std::time::Instant;
+        const REPS: u32 = 50;
+        for e in [2u64, 4, 8] {
+            let root = prove_countmin_forest_v9(&honest_leaves(e)).expect("forest");
+            verify_forest_countmin_v9(&root).expect("verify"); // warm up
+            let t0 = Instant::now();
+            for _ in 0..REPS {
+                verify_forest_countmin_v9(&root).expect("verify");
+            }
+            let per = t0.elapsed().as_secs_f64() * 1000.0 / REPS as f64;
+            println!("verify forest E={e:>2} ({e} leaves): {per:.3} ms/verify");
+        }
+    }
+
     /// Tampering the carried digest is rejected at verify time.
     #[test]
     fn forest_rejects_tampered_digest() {
