@@ -20,6 +20,7 @@
 //! mirror the same harness over their respective relations.
 
 pub mod countmin;
+pub mod gk_bandmerge;
 pub mod greenwald_khanna;
 pub mod hyperloglog;
 pub mod spacesaving;

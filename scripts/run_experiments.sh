@@ -44,7 +44,8 @@
 #                (batch·d·d·w); raise for big widths (default 16M)
 #   --- per-family size knobs (the analog of cm's EXP_D/EXP_W) ---
 #   EXP_HLL_B    E1/hll: comma-list of precision b; registers = 2^b (default 4)
-#   EXP_HLL_VARIANT  E1/hll: one_hot|merkle|comma-list  (default one_hot)
+#   EXP_HLL_VARIANT  E1/hll: one_hot|merkle|omc|comma-list  (default one_hot)
+#                    (omc = offline-memory-checking max-update rebind, Θ(m+batch))
 #   EXP_SS_CAP   E1/ss: comma-list of SpaceSaving capacities s (default 8;
 #                rounded up to even ≥2)
 #   EXP_GK_CAP   E1/gk: comma-list of Greenwald-Khanna capacities (default 8;

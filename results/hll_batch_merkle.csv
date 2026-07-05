@@ -1,0 +1,10 @@
+backend,dataset,family,variant,m,d,w,s,cores,trace_rows,num_columns,constraint_count,witness_gen_ms,prove_ms,prove_total_ms,verify_ms,proof_size_bytes,peak_rss_mb,status
+plonky3,aol,hll,merkle,16,0,0,16384,48,18944,1,18944,1.565,94.268,95.833,11.727,412306,91.6,ok
+plonky3,aol,hll,merkle,32,0,0,16384,48,36352,1,36352,3.148,150.285,153.433,11.191,427214,181.5,ok
+plonky3,aol,hll,merkle,64,0,0,16384,48,136704,1,136704,12.358,475.082,487.440,12.878,509359,597.3,ok
+plonky3,aol,hll,merkle,128,0,0,16384,48,271872,1,271872,42.560,773.635,816.195,13.127,527874,1245.2,ok
+plonky3,aol,hll,merkle,256,0,0,16384,48,1066496,1,1066496,112.747,2752.934,2865.681,14.357,586703,4589.8,ok
+plonky3,aol,hll,merkle,512,0,0,16384,48,4229120,1,4229120,498.669,10414.390,10913.059,16.542,683596,17771.7,ok
+plonky3,aol,hll,merkle,1024,0,0,16384,48,16845824,1,16845824,1985.896,40281.675,42267.572,17.791,725737,69992.1,ok
+plonky3,aol,hll,merkle,2048,0,0,16384,48,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,too_large
+plonky3,aol,hll,merkle,4096,0,0,16384,48,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,too_large

@@ -72,6 +72,7 @@ use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
 use crate::sketch::hll_final_full::{HllFullState, commit_hll_state};
+use crate::sketch::hll_omc::commit_hll_omc;
 
 const LOG_FINAL_POLY_LEN: usize = 6;
 
@@ -402,6 +403,220 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     DecodeProof { output: RecursionOutput(proof, Rc::new(circuit_prover_data)), answer }
 }
 
+/// Register-value range for the omc-form decode (`reg ≤ MU_MAX`, one-hot-indexed).
+const REG_BITS: usize = 6;
+
+/// HyperLogLog cardinality decode against the **omc** committed state: the `m`
+/// registers as a `d=1, w=m` array committed via [`commit_hll_omc`] (=
+/// `commit_countmin`, one Val per register, 4 registers per Challenge) — the
+/// state the deployed `prove_hll_omc` update recommits. Same fixed-point
+/// estimator as [`prove_hll_decode`]; only the state binding differs (so this
+/// one chains to the omc update, which `prove_hll_decode`'s `[r,0,0,1]` /
+/// `commit_hll_state` binding does not).
+pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64) -> DecodeProof {
+    params.validate();
+    let HllDecodeParams { b: blog2, release } = params;
+    let m = 1usize << blog2;
+    assert_eq!(regs.len(), m, "state shape must match params (m = 2^b)");
+    assert_eq!(m % 4, 0, "m = 2^b must be a multiple of 4 (b >= 2)");
+    assert!(regs.iter().all(|&r| (r as usize) <= MU_MAX), "register exceeds MU_MAX; raise MU_MAX");
+
+    // ─── Native decode ───────────────────────────────────────────────────
+    let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
+    let commit = commit_hll_omc(&regs, blog2);
+    let z = fixed_z(&regs32);
+    let invz = inv_z(z);
+    let knum = k_num(m);
+    let res = knum * invz;
+    let answer = release.apply(res);
+
+    let mut b = CircuitBuilder::<Challenge>::new();
+    b.enable_poseidon2_perm::<BabyBearD4Width16, _>(
+        generate_poseidon2_trace::<Challenge, BabyBearD4Width16>,
+        default_babybear_poseidon2_16(),
+    );
+    b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+
+    let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
+        b.alloc_public_input(if i == 0 { "commit_lo" } else { "commit_hi" })
+    });
+    let answer_pi = b.alloc_public_input("answer");
+
+    let one = b.alloc_const(Challenge::ONE, "one");
+    let zero = b.alloc_const(Challenge::ZERO, "zero");
+    let pow: Vec<ExprId> = (0..=MU_MAX)
+        .map(|j| b.alloc_const(Challenge::from_u64(pow2neg(j)), "pow2neg"))
+        .collect();
+    let idx: Vec<ExprId> =
+        (0..=MU_MAX).map(|j| b.alloc_const(Challenge::from_u64(j as u64), "idx")).collect();
+    let knum_c = b.alloc_const(Challenge::from_u64(knum), "k_num");
+    let target = b.alloc_const(Challenge::from_u64(recip_target()), "recip_target");
+
+    // Private witnesses: m/4 packed challenges (4 registers each).
+    let n_cells = m / 4;
+    let cells_packed: Vec<ExprId> =
+        (0..n_cells).map(|_| b.alloc_private_input("cell_packed")).collect();
+    let sel: Vec<Vec<ExprId>> = (0..m)
+        .map(|_| (0..=MU_MAX).map(|_| b.alloc_private_input("sel")).collect())
+        .collect();
+    let invz_w = b.alloc_private_input("invz");
+    let flag = if matches!(release, ReleasePolicy::Threshold(_)) {
+        Some(b.alloc_private_input("flag"))
+    } else {
+        None
+    };
+
+    // ── Stage 1: open the committed omc register state ──
+    let digest = b
+        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &cells_packed, true)
+        .expect("hash cells");
+    for i in 0..DIGEST_PACKING {
+        b.connect(digest[i], commit_pis[i]);
+    }
+    // Extract the m registers (4 per challenge); range-check each (bus-safe
+    // consumption, the pattern that balances multi-coeff challenges).
+    let mut regs_expr: Vec<ExprId> = Vec::with_capacity(m);
+    for &p in &cells_packed {
+        let c = b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose cell");
+        for k in 0..4 {
+            let _ = b.decompose_to_bits::<Val>(c[k], REG_BITS).expect("reg range");
+            regs_expr.push(c[k]);
+        }
+    }
+
+    // ── Stage 2 + 3: per-register one-hot Pow2Neg selector → Z ──
+    let mut z_expr = zero;
+    for r in 0..m {
+        let row = &sel[r];
+        let mut sum = zero;
+        let mut idx_acc = zero;
+        let mut term = zero;
+        for j in 0..=MU_MAX {
+            let sm1 = b.sub(row[j], one);
+            let bchk = b.mul(row[j], sm1);
+            b.connect(bchk, zero);
+            sum = b.add(sum, row[j]);
+            let it = b.mul(idx[j], row[j]);
+            idx_acc = b.add(idx_acc, it);
+            let pt = b.mul(row[j], pow[j]);
+            term = b.add(term, pt);
+        }
+        b.connect(sum, one);
+        let reg_lhs = b.mul(regs_expr[r], one);
+        b.connect(idx_acc, reg_lhs);
+        z_expr = b.add(z_expr, term);
+    }
+
+    // ── Stage 4: witnessed reciprocal invZ, residual range-check, res = K·invZ ──
+    let z_invz = b.mul(invz_w, z_expr);
+    let residual = b.sub(z_invz, target);
+    let _ = b.decompose_to_bits::<Val>(residual, DIFF_BITS).expect("Z·invZ − T >= 0");
+    let zm1 = b.sub(z_expr, one);
+    let upper = b.sub(zm1, residual);
+    let _ = b.decompose_to_bits::<Val>(upper, DIFF_BITS).expect("residual < Z");
+    let res_expr = b.mul(knum_c, invz_w);
+
+    // ── Stage 5: release policy → answer ──
+    match release {
+        ReleasePolicy::Identity => {
+            b.connect(res_expr, answer_pi);
+        }
+        ReleasePolicy::Threshold(t) => {
+            let theta = b.alloc_const(Challenge::from_u64(t), "theta");
+            let fl = flag.unwrap();
+            let fm1 = b.sub(fl, one);
+            let bchk = b.mul(fl, fm1);
+            b.connect(bchk, zero);
+            let res_minus_t = b.sub(res_expr, theta);
+            let tm = b.sub(theta, res_expr);
+            let t_minus_res_m1 = b.sub(tm, one);
+            let nf = b.sub(one, fl);
+            let a = b.mul(fl, res_minus_t);
+            let nft = b.mul(nf, t_minus_res_m1);
+            let chosen = b.add(a, nft);
+            let _ = b.decompose_to_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
+            let released = b.mul(fl, res_expr);
+            b.connect(released, answer_pi);
+        }
+    }
+
+    let circuit = b.build().expect("build hll omc decode circuit");
+
+    let commit_packed = pack_commit_to_challenge(&crate::commitment::CountMinCommit(commit));
+    let mut public_inputs: Vec<Challenge> = Vec::new();
+    public_inputs.extend_from_slice(&commit_packed);
+    public_inputs.push(Challenge::from_u64(answer));
+
+    // pack the m registers 4-per-challenge (commit_countmin / commit_hll_omc form).
+    let mut private_inputs: Vec<Challenge> = regs
+        .chunks(4)
+        .map(|ch| {
+            let coeffs: Vec<Val> = ch.iter().map(|&r| Val::from_u32(r as u32)).collect();
+            Challenge::from_basis_coefficients_slice(&coeffs).expect("4 base coeffs")
+        })
+        .collect();
+    for r in 0..m {
+        let rv = regs[r] as usize;
+        for j in 0..=MU_MAX {
+            private_inputs.push(if j == rv { Challenge::ONE } else { Challenge::ZERO });
+        }
+    }
+    private_inputs.push(Challenge::from_u64(invz));
+    if flag.is_some() {
+        let t = if let ReleasePolicy::Threshold(t) = release { t } else { 0 };
+        private_inputs.push(if res >= t { Challenge::ONE } else { Challenge::ZERO });
+    }
+
+    let __t_w = std::time::Instant::now();
+    let traces = {
+        let mut runner = circuit.runner();
+        runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
+        runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
+        runner.run().expect("run hll omc decode circuit")
+    };
+    let __witness = __t_w.elapsed();
+
+    let config = make_leaf_config();
+    let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
+    let preprocessors =
+        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
+    let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
+    air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+
+    let (airs_degrees, primitive_columns, non_primitive_columns) =
+        get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
+            &circuit,
+            &table_packing,
+            &preprocessors,
+            &air_builders,
+            ConstraintProfile::Standard,
+        )
+        .expect("get_airs_and_degrees_with_prep (hll omc decode)");
+    let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
+    let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
+    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
+    let circuit_prover_data =
+        CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
+
+    let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
+    prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
+    prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    let __t_p = std::time::Instant::now();
+    let proof =
+        prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove hll omc decode");
+    let __prove = __t_p.elapsed();
+    let __t_v = std::time::Instant::now();
+    prover.verify_all_tables(&proof).expect("self-verify hll omc decode");
+    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
+        witness: __witness,
+        prove: __prove,
+        verify: __t_v.elapsed(),
+        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
+    });
+
+    DecodeProof { output: RecursionOutput(proof, Rc::new(circuit_prover_data)), answer }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +629,25 @@ mod tests {
             apply_update(&mut s, &HllFullUpdate::real(k.wrapping_mul(0x9E37_79B9)));
         }
         s
+    }
+
+    /// The omc-form decode binds `commit_hll_omc` (so it chains to the deployed
+    /// `prove_hll_omc` update), matches the native cardinality, and self-verifies.
+    #[test]
+    fn hll_omc_decode_chains_and_selfverifies() {
+        let blog2 = 2usize; // m = 4
+        let regs: Vec<u64> = vec![3, 1, 4, 2];
+        let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
+        let expected = k_num(1 << blog2) * inv_z(fixed_z(&regs32));
+        // Identity release.
+        let p = HllDecodeParams { b: blog2, release: ReleasePolicy::Identity };
+        let proof = prove_hll_decode_omc(p, regs.clone(), 0);
+        assert_eq!(proof.answer, expected, "omc decode must match native cardinality");
+        // Threshold release: suppress above expected, pass at/below.
+        let p_hi = HllDecodeParams { b: blog2, release: ReleasePolicy::Threshold(expected + 1) };
+        assert_eq!(prove_hll_decode_omc(p_hi, regs.clone(), 0).answer, 0);
+        let p_lo = HllDecodeParams { b: blog2, release: ReleasePolicy::Threshold(expected) };
+        assert_eq!(prove_hll_decode_omc(p_lo, regs, 0).answer, expected);
     }
 
     #[test]

@@ -9,9 +9,13 @@
 //! group-sort-split pass (cost `Θ(m + s)` permute rows), the naive leaf
 //! literally re-executes the plaintext `SpaceSaving::update` once **per
 //! record**, threading the full `s`-row state `S_0 → S_1 → … → S_m`. For
-//! each record it witnesses one-hot `match` / `fill` / `evict` selectors and
-//! range-checks the eviction-minimality with `Θ(s)` `decompose_to_bits`
-//! gadgets — the intended `Θ(m·s)` cost.
+//! each record it witnesses one-hot `match` / `fill` / `evict` selectors,
+//! one-hot-SELECTS the evicted counter's count, and range-checks its
+//! minimality against every counter with `Θ(s)` `decompose_to_bits` gadgets —
+//! a `Θ(m·s)` cost (the honest lower bound for oblivious per-record replay; an
+//! earlier version paid `Θ(m·s²)` by range-checking every (evict-position,
+//! counter) pair). This is the fair `verification-over-computation` cost-to-beat
+//! for `ss_final_full`'s `Θ(m + s)` batch certificate.
 //!
 //! ### Commitment interchangeability
 //!
@@ -542,8 +546,22 @@ pub fn prove_ss_naive(
             free_count = b.add(free_count, one_minus_act);
         }
 
-        // ── Constraint 6: evict[j]=1 ⟹ matched==0, NO free slot, and row j
-        // is a minimum: count_l − count_j ∈ [0, 2^B) for ALL l. ──
+        // ── Constraint 6: evict[j]=1 ⟹ matched==0, NO free slot, and the
+        // evicted row is a minimum: count_l − evicted_count ∈ [0, 2^B) for ALL
+        // l. ──
+        //
+        // `evict_sel[k]` is at-most-one-hot (Constraint 1+2: Σ over all match/
+        // fill/evict selectors == ra ≤ 1, each boolean), so we one-hot-SELECT the
+        // evicted counter's count ONCE and range-check it against every counter —
+        // `Θ(s)` decomposes/record, not the `Θ(s²)` of a per-(j,l) nested check.
+        // Sound: with `is_evict=1` at the true evict position `j*`,
+        // `evicted_count = count_{j*}`; a non-minimal choice leaves some
+        // `count_l − count_{j*} < 0`, which wraps past `p` and fails the B-bit
+        // decomposition — identical soundness to the old nested check, `s×`
+        // cheaper. (Every `prev[l][2]` still appears as an ALU lhs in the sub
+        // below, so the WitnessChecks bus stays balanced; see [[witnesschecks-bus-rules]].)
+        let mut is_evict = zero;
+        let mut evicted_count = zero;
         for j in 0..s {
             // evict·matched == 0
             let c1 = b.mul(evict_sel[k][j], matched);
@@ -551,19 +569,19 @@ pub fn prove_ss_naive(
             // evict·free_count == 0  (full state: no free slot).
             let c2 = b.mul(evict_sel[k][j], free_count);
             b.connect(c2, zero);
-            // minimality: for all l, range-check (count_l − count_j) but only
-            // when evict[j]=1. We range-check `evict_j·(count_l − count_j)`:
-            //   - when evict_j=0 the value is 0 ⇒ trivially in range.
-            //   - when evict_j=1 it equals count_l − count_j, which must be
-            //     in [0, 2^B). A negative diff wraps past p and fails the B-bit
-            //     decomposition. This is the intended Θ(s)-per-evict cost.
-            for l in 0..s {
-                let diff = b.sub(prev[l][2], prev[j][2]);
-                let gated = b.mul(evict_sel[k][j], diff);
-                let _bits = b
-                    .decompose_to_bits::<Val>(gated, COUNT_DIFF_BITS)
-                    .expect("decompose evict-min diff");
-            }
+            // One-hot select the evicted count + the "this record evicts" flag.
+            is_evict = b.add(is_evict, evict_sel[k][j]);
+            let contrib = b.mul(evict_sel[k][j], prev[j][2]);
+            evicted_count = b.add(evicted_count, contrib);
+        }
+        // Minimality: the selected evicted count is ≤ every counter. Gated by
+        // `is_evict` so non-evict records (is_evict=0 ⇒ gated=0) pass trivially.
+        for l in 0..s {
+            let diff = b.sub(prev[l][2], evicted_count);
+            let gated = b.mul(is_evict, diff);
+            let _bits = b
+                .decompose_to_bits::<Val>(gated, COUNT_DIFF_BITS)
+                .expect("decompose evict-min diff");
         }
 
         // ── Constraint 7: state transition per row j. ──

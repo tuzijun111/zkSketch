@@ -104,6 +104,15 @@ const LOG_FINAL_POLY_LEN: usize = 6;
 /// bits; a "negative" diff wraps to ≈ p and overflows, soundly rejecting.
 const COUNT_DIFF_BITS: usize = 22;
 
+/// Bit-width for the union **key**-sortedness check (and single-limb key
+/// range-check). Keys are bound to `[0, 2^KEY_DIFF_BITS)`, so the union sort
+/// diff `key[r] − key[r-1]` is non-negative only when it fits in
+/// `KEY_DIFF_BITS` bits: a real decrease wraps to `≈ p` (> 2^KEY_DIFF_BITS,
+/// since `2·2^KEY_DIFF_BITS < p`) and fails, forcing equal keys to be
+/// adjacent. Must satisfy `2^(KEY_DIFF_BITS+1) < p` (BabyBear `p ≈ 2^30.9`),
+/// so 29 is the max safe width; callers mask keys to `KEY_DIFF_BITS` bits.
+const KEY_DIFF_BITS: usize = 29;
+
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -342,6 +351,13 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
     // key-sort (ascending by key_field; stable for determinism).
     let mut idx: Vec<usize> = (0..total).collect();
     idx.sort_by_key(|&i| key_field(combined[i].key));
+    // Test-only: leave the union unsorted so same-key rows that aren't already
+    // adjacent in `[old ‖ batch]` fragment under the adjacency-only group-by.
+    // The circuit accepts it because union key-sortedness is never enforced.
+    #[cfg(test)]
+    if TAMPER_FRAGMENT.with(|f| f.get()) {
+        idx = (0..total).collect();
+    }
     let sigma_key = idx.clone();
     let key_sorted: Vec<SsFullRow> = idx.iter().map(|&i| combined[i]).collect();
 
@@ -382,9 +398,31 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
         }
     }
 
+    // Test-only: demote the largest-key count-0 ACTIVE segment to a dummy
+    // (active bit flipped off), freeing a retained slot for a different
+    // zero-weight key. The active-binding constraint must reject it.
+    #[cfg(test)]
+    if TAMPER_ACTIVE.with(|f| f.get()) {
+        for r in (0..total).rev() {
+            if seg_end[r] == 1 && grouped[r].active == 1 && grouped[r].count == 0 {
+                grouped[r] = SsFullRow::dummy();
+                break;
+            }
+        }
+    }
+
     // count-sort G by (active asc, count asc, key asc).
     let mut idx2: Vec<usize> = (0..total).collect();
     idx2.sort_by_key(|&i| (grouped[i].active, grouped[i].count, key_field(grouped[i].key)));
+    // Test-only: break count ties by DESCENDING key, a non-canonical order that
+    // keeps a different equal-count subset across the top-s cut. The key
+    // tie-break constraint must reject it. (Prod callers never set this.)
+    #[cfg(test)]
+    if TAMPER_TIE.with(|f| f.get()) {
+        idx2.sort_by_key(|&i| {
+            (grouped[i].active, grouped[i].count, std::cmp::Reverse(key_field(grouped[i].key)))
+        });
+    }
     let sigma_count = idx2.clone();
     let g_sorted: Vec<SsFullRow> = idx2.iter().map(|&i| grouped[i]).collect();
 
@@ -415,6 +453,23 @@ pub fn apply_batch_ss_full(
 #[cfg(test)]
 thread_local! {
     static TAMPER_GSORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// When set, the prover leaves the key-union UNSORTED (identity σ_key). Since
+    /// the circuit binds `key_sorted` to `combined` only as a MULTISET permutation
+    /// and never checks it is sorted by key, a key whose rows are non-adjacent in
+    /// `[old ‖ batch]` fragments into several sub-count grouped rows under the
+    /// adjacency-only group-by — so a genuine top-`s` key can be evicted. Drives
+    /// [`tests::fragmentation_rejected`] (the union-sortedness fix's regression).
+    static TAMPER_FRAGMENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// When set, the prover breaks count ties in the count-sort by DESCENDING
+    /// key, a non-canonical order that retains a different equal-count subset
+    /// across the top-`s` cut. The key tie-break constraint must reject it.
+    /// Drives [`tests::tie_break_rejected`].
+    static TAMPER_TIE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// When set, the prover demotes the largest-key count-0 ACTIVE segment to a
+    /// dummy (flipping its active bit off) to free a leftover retained slot for
+    /// a different zero-weight key. The `grouped.active = se·(acc_active≠0)`
+    /// binding must reject it. Drives [`tests::count0_active_rejected`].
+    static TAMPER_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 // ─── Prover ──────────────────────────────────────────────────────────────
@@ -516,6 +571,10 @@ fn prove_ss_full_inner(
         (0..total).map(|_| b.alloc_private_input("key_eq_tag")).collect();
     let key_inv_diff: Vec<ExprId> =
         (0..total).map(|_| b.alloc_private_input("key_inv_diff")).collect();
+    // Inverse hint for the per-segment active running sum (is-nonzero gadget
+    // that binds grouped.active = se·(acc_active≠0)).
+    let acc_active_inv: Vec<ExprId> =
+        (0..total).map(|_| b.alloc_private_input("acc_active_inv")).collect();
 
     // ─── Stage 1: commit bindings ───────────────────────────────────────
     let h_init = b.add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &init_packed, true).expect("hash init");
@@ -556,6 +615,12 @@ fn prove_ss_full_inner(
     for r in 0..cap {
         bool_check(&mut b, init_fields[r][3]);
         bool_check(&mut b, final_fields[r][3]);
+        // Well-formedness of the committed S_old: an INACTIVE init row must
+        // carry count 0 (`active=0 ⇒ count=0`), severing the malformed-preimage
+        // source that could otherwise seed a count-carrying dummy. Mirrors the
+        // GK init check and the active-gated group-by below (redundant barrier).
+        let c_gated = b.mul(init_fields[r][2], init_fields[r][3]);
+        b.connect(init_fields[r][2], c_gated);
     }
     for j in 0..m {
         bool_check(&mut b, batch_fields[j][3]);
@@ -588,8 +653,45 @@ fn prove_ss_full_inner(
     // key_eq_tag[r] ∈ {0,1}, tag[0]=0. PoneglyphDB §4.3 constraints.
     let ks_keyfield: Vec<ExprId> =
         (0..total).map(|r| key_field_of(&mut b, &key_sorted_fields[r])).collect();
+
+    // ── Union key-sortedness (closes the fragmentation soundness hole) ──
+    // Bind every union key to a single limb in [0, 2^KEY_DIFF_BITS) and force
+    // `key_sorted` non-decreasing. Then equal keys are necessarily contiguous,
+    // so the adjacency-only group-by below cannot be gamed by scattering a
+    // key's rows to fragment its aggregate (see tests::fragmentation_rejected).
+    for r in 0..total {
+        b.connect(key_sorted_fields[r][1], zero); // single-limb: key_hi = 0
+        let _ = b
+            .decompose_to_bits::<Val>(key_sorted_fields[r][0], KEY_DIFF_BITS)
+            .expect("union key range-check");
+        // Bound every union count at the SOURCE to `< 2^(COUNT_DIFF_BITS−1)` so
+        // no single input can approach `p`; combined with the g_sorted count
+        // range-check on the summed output, this forecloses the field-wrap where
+        // a committed S_old count `≈ p` (plus one batch occurrence of the same
+        // key) wraps a segment sum down to a small residue and is silently kept.
+        let _ = b
+            .decompose_to_bits::<Val>(key_sorted_fields[r][2], COUNT_DIFF_BITS - 1)
+            .expect("union count range-check");
+    }
+    for r in 1..total {
+        let kdiff = b.sub(ks_keyfield[r], ks_keyfield[r - 1]);
+        let _ = b
+            .decompose_to_bits::<Val>(kdiff, KEY_DIFF_BITS)
+            .expect("union key-sortedness");
+    }
+
     bool_check(&mut b, key_eq_tag[0]);
     b.connect(key_eq_tag[0], zero);
+    // key_inv_diff[0] is unused by the r>=1 is-zero gadget; give it a real
+    // ALU-operand use so the private input gets a WitnessChecks-bus creator.
+    // Without this the debug builder asserts "Private input … never used as an
+    // ALU operand" and every in-circuit test panics at build time under
+    // `cargo test` (release masks it). Use `sub` (not `mul`-by-zero, which
+    // const-folds away the operand).
+    {
+        let z = b.sub(key_inv_diff[0], zero);
+        b.connect(z, zero);
+    }
     for r in 1..total {
         bool_check(&mut b, key_eq_tag[r]);
         let diff = b.sub(ks_keyfield[r], ks_keyfield[r - 1]);
@@ -605,13 +707,25 @@ fn prove_ss_full_inner(
     }
 
     // running sums of count (field [2]) and active (field [3]).
+    //
+    // SOUNDNESS (count is ACTIVE-GATED): each row contributes `count·active`,
+    // NOT the raw count, so an INACTIVE row adds nothing to a segment sum. This
+    // makes every dummy grouped row a canonical `(0,·,0,0)` and forecloses a
+    // malformed committed S_old dummy `(key, count=C, active=0)` seeding a
+    // count-carrying dummy grouped row (the SS count-sort + count-monotone
+    // already pin such a row to the evicted region, but the gate removes the
+    // reliance on that incidental defense and keeps SS in lockstep with GK). For
+    // honest input dummies carry count=0, so the gate is a no-op (completeness
+    // unchanged) and it matches native `build_ss`, whose dummy rows also carry 0.
     let mut acc_count: Vec<ExprId> = Vec::with_capacity(total);
     let mut acc_active: Vec<ExprId> = Vec::with_capacity(total);
-    acc_count.push(key_sorted_fields[0][2]);
+    let c0 = b.mul(key_sorted_fields[0][2], key_sorted_fields[0][3]);
+    acc_count.push(c0);
     acc_active.push(key_sorted_fields[0][3]);
     for r in 1..total {
+        let c_act = b.mul(key_sorted_fields[r][2], key_sorted_fields[r][3]);
         let carried_c = b.mul(key_eq_tag[r], acc_count[r - 1]);
-        acc_count.push(b.add(key_sorted_fields[r][2], carried_c));
+        acc_count.push(b.add(c_act, carried_c));
         let carried_a = b.mul(key_eq_tag[r], acc_active[r - 1]);
         acc_active.push(b.add(key_sorted_fields[r][3], carried_a));
     }
@@ -638,21 +752,20 @@ fn prove_ss_full_inner(
         // grouped[r].count = se · acc_count[r]  (acc_count lhs → bus creator)
         let want_count = b.mul(acc_count[r], se);
         b.connect(grouped_fields[r][2], want_count);
-        // grouped[r].active: prover supplies it; enforce it is `se`-gated
-        // and that count>0 ⇔ active=1 within the segment via the
-        // `seg_active` witness = se·(acc_active>0). We bind active to a
-        // prover value `g_active_native` already inside grouped_fields[r][3];
-        // soundness for the count/active coupling comes from:
-        //   active ∈ {0,1} (checked above is on g_sorted not grouped;
-        //   add here), active ≤ se (no active outside a segment end), and
-        //   count = se·acc_count ties the mass. A segment with acc_count>0
-        //   must report active=1 to keep mass in S_new; acc_count=0 rows
-        //   are harmless either way.
+        // grouped[r].active is fully DERIVED (not a free prover bit): it must
+        // equal se·(acc_active[r] ≠ 0). This closes the count-0 active-bit
+        // latitude — a prover can no longer flag a count-0 segment active or
+        // inactive at will (which, when the summary is under-full, would let it
+        // pick which zero-weight key fills a leftover retained slot). is-nonzero
+        // via the inverse hint:  nz = acc_active·acc_active_inv, with
+        // acc_active·(1−nz)=0 forcing nz = [acc_active ≠ 0] (boolean).
+        let nz = b.mul(acc_active[r], acc_active_inv[r]);
+        let one_minus_nz = b.sub(one, nz);
+        let must_zero = b.mul(acc_active[r], one_minus_nz);
+        b.connect(must_zero, zero);
+        let want_active = b.mul(se, nz);
+        b.connect(grouped_fields[r][3], want_active);
         bool_check(&mut b, grouped_fields[r][3]);
-        // active ≤ se : active·(1−se) = 0  (active is 0 on non-segment-ends)
-        let one_minus_se = b.sub(one, se);
-        let act_outside = b.mul(grouped_fields[r][3], one_minus_se);
-        b.connect(act_outside, zero);
         // key gating: grouped.key_lo/hi = active · key_sorted.key_lo/hi
         let want_key_lo = b.mul(key_sorted_fields[r][0], grouped_fields[r][3]);
         b.connect(grouped_fields[r][0], want_key_lo);
@@ -667,6 +780,17 @@ fn prove_ss_full_inner(
     }
 
     // ─── Stage 7: sortedness on g_sorted ────────────────────────────────
+    // Range-check every count to < 2^(COUNT_DIFF_BITS−1) so the count-diff
+    // sortedness below is sound: an in-domain decrease wraps to ≈ p (≫ 2^BITS)
+    // and fails, while a crafted out-of-domain count (≈ p) — which could
+    // otherwise wrap a genuine descent into a small in-range diff and admit a
+    // non-canonical retention cut (evicting a real heavy hitter) — is rejected
+    // here. This is the count analog of the union key range-check in Stage 5.
+    for r in 0..total {
+        let _ = b
+            .decompose_to_bits::<Val>(g_sorted_fields[r][2], COUNT_DIFF_BITS - 1)
+            .expect("g_sorted count range-check");
+    }
     // active monotone increasing (dummies first):
     for r in 0..total - 1 {
         let diff = b.sub(g_sorted_fields[r + 1][3], g_sorted_fields[r][3]);
@@ -676,12 +800,39 @@ fn prove_ss_full_inner(
     }
     // count monotone increasing across all adjacent pairs (count[r+1] ≥
     // count[r]); dummies have count 0 so the dummy→active boundary is also
-    // non-negative — no gating needed.
+    // non-negative — no gating needed. We capture the diff bits to derive
+    // `count[r]==count[r+1]` for the key tie-break below.
     for r in 0..total - 1 {
         let diff = b.sub(g_sorted_fields[r + 1][2], g_sorted_fields[r][2]);
-        let _bits = b
+        let bits = b
             .decompose_to_bits::<Val>(diff, COUNT_DIFF_BITS)
             .expect("decompose count diff");
+
+        // ── Key tie-break (canonical top-s retention) ──────────────────────
+        // Within a count-EQUAL run the retained set must not depend on the
+        // prover's ordering. Force keys non-decreasing whenever counts are
+        // equal, matching the native (active, count, key)-ascending sort, so
+        // tied keys have one canonical order and the top-s split is
+        // deterministic (closes the count-tie straddle: a prover can no longer
+        // pick which equal-count key is evicted across the cut).
+        //   count_eq = ∏(1 − bit)  (== 1 iff the count diff is 0).
+        let mut count_eq = one;
+        for &bit in &bits {
+            let nb = b.sub(one, bit);
+            count_eq = b.mul(count_eq, nb);
+        }
+        // g_sorted keys are single-limb in [0, 2^KEY_DIFF_BITS): grouped keys
+        // are `union_key × active` and the union keys are range-checked in
+        // Stage 5; the count-sort permutation preserves the packed values. So
+        // a real key decrease wraps to ≈ p and the gated 29-bit check rejects
+        // it; a count-unequal pair gates to 0 and is unconstrained.
+        let gk_r = key_field_of(&mut b, &g_sorted_fields[r]);
+        let gk_r1 = key_field_of(&mut b, &g_sorted_fields[r + 1]);
+        let kdiff = b.sub(gk_r1, gk_r);
+        let gated = b.mul(count_eq, kdiff);
+        let _ = b
+            .decompose_to_bits::<Val>(gated, KEY_DIFF_BITS)
+            .expect("key tie-break within count-equal run");
     }
 
     // ─── Stage 8: compaction — residual ↔ g_sorted[..m], S_new ↔ g_sorted[m..] ─
@@ -775,6 +926,21 @@ fn prove_ss_full_inner(
                 let prev = Challenge::from_u64(key_field(key_sorted_rows[r - 1].key) as u64);
                 (cur - prev).inverse()
             };
+            private_inputs.push(inv);
+        }
+    }
+    // acc_active_inv: inverse of the per-segment active running sum (0 when the
+    // sum is 0), for the is-nonzero gadget that binds grouped.active.
+    {
+        use p3_field::Field;
+        let mut acc_a = 0u64;
+        for r in 0..total {
+            acc_a = if r > 0 && build.key_eq_tag[r] == 1 {
+                acc_a + key_sorted_rows[r].active as u64
+            } else {
+                key_sorted_rows[r].active as u64
+            };
+            let inv = if acc_a == 0 { Challenge::ZERO } else { Challenge::from_u64(acc_a).inverse() };
             private_inputs.push(inv);
         }
     }
@@ -1060,5 +1226,201 @@ mod tests {
             meta.push_str("# count-ascending order; mass conservation.\n");
             fs::write(out_dir.join("ss_full_proofs.meta.txt"), &meta).expect("w meta");
         });
+    }
+
+    /// **Regression: union-fragmentation is rejected.** The circuit binds the
+    /// key-union to `[old ‖ batch]` only as a MULTISET permutation and groups by
+    /// ADJACENCY equality. Without a union key-sortedness constraint a prover
+    /// could scatter a heavy key's rows non-adjacently, fragmenting its aggregate
+    /// so the genuine heaviest key is evicted below the top-`s` cut — an
+    /// accepting proof for a wrong monitored set. Stage 5's key-sortedness +
+    /// single-limb range-check now forces equal keys to be contiguous, so the
+    /// fragmenting witness fails and proving is rejected.
+    ///
+    /// Setup (capacity s=2): old {A:6, C:9}, batch {A:+4, B:8}. True grouped
+    /// union {A:10, B:8, C:9} ⇒ top-2 = {A:10, C:9}. The tampered prover leaves
+    /// the union unsorted so A fragments into 6+4 and would certify {B:8, C:9}
+    /// (A evicted). The fix rejects it.
+    #[test]
+    fn fragmentation_rejected() {
+        let params = SsFullParams { capacity: 2, batch: 2 };
+        // key_field(1) < key_field(2) < key_field(3); all non-zero (0 = dummy).
+        let (ka, kb, kc) = (1u64, 2u64, 3u64);
+        let initial = SsFullState {
+            rows: vec![SsFullRow::real(ka, 6), SsFullRow::real(kc, 9)],
+            params,
+        };
+        let batch = vec![SsFullUpdate::real(ka, 4), SsFullUpdate::real(kb, 8)];
+
+        // Honest transition keeps the true top-2 {A:10, C:9}, evicts B — and its
+        // proof self-verifies (key-sorted union passes the new constraint).
+        let (honest_final, _) = apply_batch_ss_full(&initial, &batch);
+        assert_eq!(honest_final.frequency(ka), 10, "honest keeps A:10 (true heaviest)");
+        assert_eq!(honest_final.frequency(kc), 9, "honest keeps C:9");
+        assert_eq!(honest_final.frequency(kb), 0, "honest evicts B:8 (lightest)");
+        let _honest_proof = prove_ss_full(params, initial.clone(), batch.clone());
+
+        // Attack: fragment A. Natively it WOULD certify a wrong state (A evicted)…
+        TAMPER_FRAGMENT.with(|f| f.set(true));
+        let (mal_final, _) = apply_batch_ss_full(&initial, &batch);
+        let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_ss_full(params, initial.clone(), batch.clone())
+        }));
+        TAMPER_FRAGMENT.with(|f| f.set(false));
+        assert_eq!(mal_final.frequency(ka), 0, "the attack WOULD evict true top key A");
+        assert_eq!(mal_final.frequency(kb), 8, "the attack WOULD wrongly retain B:8");
+
+        // …but the circuit now REJECTS the fragmenting union (non-sorted keys
+        // fail the key-sortedness range-check → witness/self-verify fails).
+        assert!(
+            mal.is_err(),
+            "FIX REGRESSED: fragmenting the union must be rejected by key-sortedness",
+        );
+    }
+
+    /// **Regression: count-tie straddle is rejected (canonical top-s).** When
+    /// several keys share a count across the top-`s` cut, the retained SET must
+    /// be canonical — the prover must not be able to pick which tied key is
+    /// evicted. Stage 7's key tie-break (keys non-decreasing within count-equal
+    /// runs, matching the native ascending sort) makes the cut deterministic.
+    ///
+    /// Setup (capacity s=2): three equal-count candidates {A:5, B:5, C:5}. The
+    /// canonical (ascending-key) order retains {B:5, C:5} and evicts the
+    /// smallest-key tied candidate A. A descending-key reorder would instead
+    /// retain {A:5, B:5} and evict C — a different monitored set; the fix
+    /// rejects it.
+    #[test]
+    fn tie_break_rejected() {
+        let params = SsFullParams { capacity: 2, batch: 2 };
+        let (ka, kb, kc) = (1u64, 2u64, 3u64);
+        let initial = SsFullState {
+            rows: vec![SsFullRow::real(ka, 5), SsFullRow::real(kb, 5)],
+            params,
+        };
+        let batch = vec![SsFullUpdate::real(kc, 5), SsFullUpdate::dummy()];
+
+        // Honest canonical order retains the larger-key tied pair {B:5, C:5},
+        // evicts A, and self-verifies.
+        let (honest_final, _) = apply_batch_ss_full(&initial, &batch);
+        assert_eq!(honest_final.frequency(kb), 5);
+        assert_eq!(honest_final.frequency(kc), 5);
+        assert_eq!(honest_final.frequency(ka), 0, "canonical order evicts smallest tied key A");
+        let _honest = prove_ss_full(params, initial.clone(), batch.clone());
+
+        // Non-canonical (descending-key) reorder WOULD retain {A:5, B:5}, evicting C…
+        TAMPER_TIE.with(|f| f.set(true));
+        let (mal_final, _) = apply_batch_ss_full(&initial, &batch);
+        let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_ss_full(params, initial.clone(), batch.clone())
+        }));
+        TAMPER_TIE.with(|f| f.set(false));
+        assert_eq!(mal_final.frequency(kc), 0, "the reorder WOULD evict a different tied key C");
+        assert_eq!(mal_final.frequency(ka), 5, "the reorder WOULD instead retain A");
+
+        // …but the key tie-break rejects the non-canonical order.
+        assert!(
+            mal.is_err(),
+            "FIX REGRESSED: count-tie reorder must be rejected by the key tie-break",
+        );
+    }
+
+    /// **Regression: count-0 active-bit latitude is rejected (full canonical
+    /// retention).** `grouped.active` must be derived (`se·(acc_active≠0)`), not
+    /// a free prover bit — otherwise, with the summary under-full, a prover
+    /// could flip the active flag on a count-0 real key (weight 0, reachable via
+    /// value-0 records) to pick which zero-weight key fills a leftover retained
+    /// slot, giving two accepting proofs with different retained SETS.
+    ///
+    /// Setup (capacity s=2): old {A:5}, batch {C:0, D:0} (C, D distinct real
+    /// keys, value 0). Only A has weight; C and D are count-0 active candidates
+    /// competing for the one leftover slot. Canonical order retains {A, D}
+    /// (larger-key tie); demoting D's active bit would instead retain {A, C}.
+    /// The active binding rejects the demotion.
+    #[test]
+    fn count0_active_rejected() {
+        let params = SsFullParams { capacity: 2, batch: 2 };
+        let (ka, kc, kd) = (1u64, 3u64, 4u64);
+        let initial = SsFullState {
+            rows: vec![SsFullRow::real(ka, 5), SsFullRow::dummy()],
+            params,
+        };
+        let batch = vec![SsFullUpdate::real(kc, 0), SsFullUpdate::real(kd, 0)];
+
+        // Honest: A retained; the larger-key count-0 candidate D fills the
+        // leftover slot; C is evicted — and it self-verifies.
+        let (honest_final, _) = apply_batch_ss_full(&initial, &batch);
+        assert_eq!(honest_final.frequency(ka), 5, "A (the only weighted key) retained");
+        let _honest = prove_ss_full(params, initial.clone(), batch.clone());
+
+        // Demoting D's active bit WOULD retain {A, C} instead — a different set…
+        TAMPER_ACTIVE.with(|f| f.set(true));
+        let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_ss_full(params, initial.clone(), batch.clone())
+        }));
+        TAMPER_ACTIVE.with(|f| f.set(false));
+
+        // …but the active binding (active = se·(acc_active≠0)) rejects it.
+        assert!(
+            mal.is_err(),
+            "FIX REGRESSED: flipping a count-0 segment's active bit must be rejected",
+        );
+    }
+
+    /// **Regression: out-of-domain counts are rejected (count-wrap defense).**
+    /// The count-sortedness only decomposes the adjacent count DIFF, so a count
+    /// crafted ≈ p could wrap a genuine descent into a small in-range diff and
+    /// admit a non-canonical order (evicting a real heavy hitter). Stage 7 now
+    /// range-checks every count to < 2^(COUNT_DIFF_BITS−1); a count reaching that
+    /// bound is rejected. Honest small counts still verify.
+    #[test]
+    fn count_overflow_rejected() {
+        let params = SsFullParams { capacity: 2, batch: 2 };
+        // Honest small-count batch verifies.
+        let _ok = prove_ss_full(
+            params,
+            SsFullState::empty(params),
+            vec![SsFullUpdate::real(1, 5), SsFullUpdate::real(2, 3)],
+        );
+
+        // A count reaching 2^(COUNT_DIFF_BITS−1) is out of the sortedness domain.
+        let over = 1u32 << (COUNT_DIFF_BITS - 1);
+        let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_ss_full(
+                params,
+                SsFullState::empty(params),
+                vec![SsFullUpdate::real(1, over), SsFullUpdate::real(2, 1)],
+            )
+        }));
+        assert!(mal.is_err(), "a count ≥ 2^(COUNT_DIFF_BITS−1) must be rejected by the range-check");
+    }
+
+    /// **Regression (canonicality parity with GK): a malformed S_old dummy
+    /// carrying a nonzero count is rejected.** SS's count-sort + count-monotone
+    /// already pin such a row to the evicted region, but the active-gated
+    /// group-by sum and the init `active=0 ⇒ count=0` check now reject it
+    /// outright, keeping SS in lockstep with the GK hardening.
+    #[test]
+    fn malformed_dummy_count_rejected() {
+        let params = SsFullParams { capacity: 2, batch: 2 };
+        let batch = vec![SsFullUpdate::real(7, 1), SsFullUpdate::dummy()];
+
+        // Honest all-zero-dummy S_old proves fine.
+        let _ok = prove_ss_full(params, SsFullState::empty(params), batch.clone());
+
+        // Malformed dummy: key=3, count=9, active=0.
+        let initial = SsFullState {
+            rows: vec![
+                SsFullRow::real(5, 1),
+                SsFullRow { key: 3, count: 9, active: 0 },
+            ],
+            params,
+        };
+        let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_ss_full(params, initial.clone(), batch.clone())
+        }));
+        assert!(
+            mal.is_err(),
+            "a committed S_old dummy with nonzero count must be rejected",
+        );
     }
 }

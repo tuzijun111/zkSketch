@@ -30,7 +30,18 @@
 //!         EXP_W=8                        Count-Min width w (power of two ≥ 2)
 //!         EXP_CM_VARIANT=omc,merkle   leaf prover(s): one_hot|omc|merkle
 //!                                        (EXP_STREAM_CM_VARIANT also accepted)
-//!         EXP_STREAM_MERGE=digest        digest | recursive | recursive_bound | chain (default digest)
+//!         EXP_STREAM_MERGE=digest        digest | per_batch | chain | recursive | recursive_bound (default digest)
+//!         EXP_STREAM_PROOF_DIR           folder the `per_batch` mode stores proofs under (default results/per_batch_proofs)
+//!
+//! Composition model: the three modes of the paper's §Streaming Proof
+//! Composition, plus the cheap `digest` proxy.
+//! `per_batch` = the **per-batch proof chain**: one independent proof per batch,
+//! NO fold; every proof is serialized into `EXP_STREAM_PROOF_DIR` and the
+//! verifier holds all `t` of them — `proof_bytes` is their sum (`Θ(t)`) and
+//! `verify_ms` is the `t` leaf verifications + the `t-1` boundary equalities +
+//! anchor (`Θ(t)`). `chain` = the **recursive linear chain** and `recursive` =
+//! the **streaming forest** (both fold the same leaves into one `O(1)` root, so
+//! `proof_bytes`/`verify_ms` are the single root's).
 //!
 //! Merge model: `digest` (default) folds leaf boundary commitments with cheap
 //! Poseidon2 hashing (the §4.2 composition — each leaf is verified once at
@@ -54,10 +65,14 @@
 //! first (`python3 scripts/fetch_datasets.py`) — a missing one is skipped.
 //!
 //! Output: results/stream_forest.csv with columns
-//!   dataset,variant,d,w,n,m,t,k,cores_per_leaf,merge_mode,total_time_ms,leafgen_ms,merge_ms,records_per_sec,speedup,peak_rss_mb,status
+//!   dataset,variant,d,w,n,m,t,k,cores_per_leaf,merge_mode,total_time_ms,leafgen_ms,merge_ms,verify_ms,proof_bytes,records_per_sec,speedup,peak_rss_mb,status
 //! `total_time_ms = leafgen_ms + merge_ms` (leaf proving vs the forest fold);
-//! `merge_mode` is `digest` (merge ~µs), `recursive`/`recursive_bound`/`chain`
-//! (merge = real in-circuit child verification). `k` = concurrent leaf proofs,
+//! `verify_ms` + `proof_bytes` are the verifier-facing cost: `Θ(t)` for
+//! `per_batch` (sum of the t leaf proofs / verifications), `O(1)` for the
+//! composed roots (`chain`/`recursive`/`recursive_bound`).
+//! `merge_mode` is `digest` (merge ~µs), `per_batch` (no fold),
+//! `recursive`/`recursive_bound`/`chain` (merge = real in-circuit child
+//! verification). `k` = concurrent leaf proofs,
 //! `cores_per_leaf` = ⌊total/k⌋ (both = 1/all in the sequential modes); `n` is the actual
 //! records proven (`t·m`, ≥ requested N when m∤N); `speedup` is vs the smallest k
 //! per (dataset, variant, m); `status` is `ok` or `too_large` (capacity panic —
@@ -76,7 +91,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use zksketch::dataset::{aol, netflix, synthetic_stream, zipf_stream, Synthetic};
 use zksketch::experiments::e6_forest::{
-    measure_batches, measure_batches_chain, measure_batches_recursive,
+    measure_batches, measure_batches_chain, measure_batches_per_batch, measure_batches_recursive,
     measure_batches_recursive_bound, CmLeaf, E6Cell,
 };
 use zksketch::experiments::metrics::{append_csv, write_env_json, BenchCfg};
@@ -234,7 +249,29 @@ fn measure_guarded_recursive_bound(
     r.ok()
 }
 
-/// Build an `ok` CSV row. `mode` is `digest` or `recursive`.
+/// Guarded variant for the per-batch proof chain (`measure_batches_per_batch`) —
+/// proves the `t` leaves in isolation and stores each proof to `proof_dir`.
+fn measure_guarded_per_batch(
+    variant: CmLeaf,
+    d: usize,
+    w: usize,
+    batches: &[Vec<u32>],
+    cfg: BenchCfg,
+    proof_dir: &std::path::Path,
+) -> Option<E6Cell> {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        measure_batches_per_batch(variant, d, w, batches, cfg, proof_dir)
+    }));
+    std::panic::set_hook(prev);
+    r.ok()
+}
+
+/// Build an `ok` CSV row. `mode` is `digest`|`per_batch`|`chain`|`recursive`|
+/// `recursive_bound`. `verify_ms` and `proof_bytes` are the verifier-facing
+/// metrics that separate the three composition modes: `Θ(t)` for `per_batch`,
+/// `O(1)` for the composed roots.
 #[allow(clippy::too_many_arguments)]
 fn ok_row(
     dataset: &str, variant: &str, d: usize, w: usize, n: usize, m: usize, t: usize,
@@ -246,12 +283,14 @@ fn ok_row(
         format!("{total:.3}"),
         format!("{:.3}", cell.leafgen_ms_median),
         format!("{:.3}", cell.merge_ms_median),
+        format!("{:.3}", cell.verify_ms_median),
+        cell.proof_bytes.to_string(),
         rps.to_string(), format!("{speedup:.2}"),
         format!("{:.1}", cell.peak_rss_mb_median), "ok".into(),
     ]
 }
 
-/// Build a `too_large` CSV row (six `n/a` metric cells + status).
+/// Build a `too_large` CSV row (eight `n/a` metric cells + status).
 #[allow(clippy::too_many_arguments)]
 fn skip_row(
     dataset: &str, variant: &str, d: usize, w: usize, n: usize, m: usize, t: usize,
@@ -261,7 +300,8 @@ fn skip_row(
         dataset.into(), variant.into(), d.to_string(), w.to_string(), n.to_string(),
         m.to_string(), t.to_string(), k.to_string(), cpl.to_string(), mode.into(),
     ];
-    r.extend(std::iter::repeat("n/a".to_string()).take(6)); // total,leafgen,merge,rps,speedup,peak
+    // total,leafgen,merge,verify,proof_bytes,rps,speedup,peak
+    r.extend(std::iter::repeat("n/a".to_string()).take(8));
     r.push("too_large".into());
     r
 }
@@ -292,18 +332,22 @@ fn main() {
     // — `recursive` = Bentley–Saxe tree (O(log t) depth), `chain` = linear §4.3
     // IVC `Π^(t)=merge(Π^(t-1),π_t)` (O(t) depth). `bound` ⇒ tree + in-circuit
     // boundary binding.
-    let (recursive, bound, chain) = match env_str("EXP_STREAM_MERGE", "digest").trim().to_ascii_lowercase().as_str() {
-        "digest" | "" => (false, false, false),
-        "recursive" | "recursion" | "real" => (true, false, false),
+    let (recursive, bound, chain, per_batch) = match env_str("EXP_STREAM_MERGE", "digest").trim().to_ascii_lowercase().as_str() {
+        "digest" | "" => (false, false, false, false),
+        "recursive" | "recursion" | "real" => (true, false, false, false),
         // Boundary-bound: the recursive fold binds left.final==right.initial
         // in-circuit (NPO gap closed). omc + merkle.
-        "recursive_bound" | "bound" | "in_circuit" => (true, true, false),
-        // Linear §4.3 chain over the same leaves — the comparison baseline vs
-        // the tree fold. Every CM variant (one_hot/omc/merkle).
-        "chain" | "linear" => (false, false, true),
+        "recursive_bound" | "bound" | "in_circuit" => (true, true, false, false),
+        // Linear §4.3 chain over the same leaves — the recursive-linear-chain
+        // mode. Every CM variant (one_hot/omc/merkle).
+        "chain" | "linear" => (false, false, true, false),
+        // Per-batch proof chain: one independent proof per batch, NO fold. Each
+        // proof is stored to the proof folder; the verifier holds all t of them
+        // (Θ(t) size + verify). The prover-friendly / verifier-expensive baseline.
+        "per_batch" | "perbatch" | "per-batch" | "flat" => (false, false, false, true),
         other => {
-            eprintln!("unknown EXP_STREAM_MERGE='{other}' (digest|recursive|recursive_bound|chain); using digest");
-            (false, false, false)
+            eprintln!("unknown EXP_STREAM_MERGE='{other}' (digest|per_batch|chain|recursive|recursive_bound); using digest");
+            (false, false, false, false)
         }
     };
 
@@ -378,7 +422,9 @@ fn main() {
         std::process::exit(2);
     }
 
-    let merge_mode = if chain {
+    let merge_mode = if per_batch {
+        "per_batch"
+    } else if chain {
         "chain"
     } else if bound {
         "recursive_bound"
@@ -387,12 +433,21 @@ fn main() {
     } else {
         "digest"
     };
-    // `recursive` and `chain` both prove sequentially with an in-circuit fold.
-    let sequential = recursive || chain;
+    // `per_batch`, `recursive`, and `chain` all prove the leaves sequentially
+    // (one pass; the distributed k-sweep does not apply). `per_batch` does no
+    // fold — it just stores the t proofs; the other two fold in-circuit.
+    let sequential = recursive || chain || per_batch;
     if sequential {
-        let schedule = if chain { "linear §4.3 chain" } else { "Bentley–Saxe tree" };
+        let schedule = if per_batch {
+            "no fold (store t proofs)"
+        } else if chain {
+            "linear §4.3 chain"
+        } else {
+            "Bentley–Saxe tree"
+        };
+        let kind = if per_batch { "PER-BATCH chain" } else { "RECURSIVE merge" };
         println!(
-            "Stream forest (plonky3, RECURSIVE merge [{merge_mode}], {schedule}) — N={n} d={d} w={w} datasets={datasets:?} variants={variant_str} batches={batches_m:?} (sequential leaf-gen + in-circuit fold; k-sweep ignored)"
+            "Stream compose (plonky3, {kind} [{merge_mode}], {schedule}) — N={n} d={d} w={w} datasets={datasets:?} variants={variant_str} batches={batches_m:?} (sequential leaf-gen; k-sweep ignored)"
         );
     } else {
         println!(
@@ -401,6 +456,16 @@ fn main() {
     }
 
     let dir = results_dir();
+    // The single folder the per-batch chain stores its proofs under (one
+    // subfolder per (dataset,variant,d,w,m) cell). Overridable so a run can
+    // point it at scratch/ or a RAM disk. Only touched in `per_batch` mode.
+    let proof_base = std::env::var("EXP_STREAM_PROOF_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| dir.join("per_batch_proofs"));
+    if per_batch {
+        let _ = std::fs::remove_dir_all(&proof_base); // start clean
+        println!("per-batch proofs → {}", proof_base.display());
+    }
     write_env_json(
         &dir,
         &[
@@ -434,6 +499,8 @@ fn main() {
         "total_time_ms",
         "leafgen_ms",
         "merge_ms",
+        "verify_ms",
+        "proof_bytes",
         "records_per_sec",
         "speedup",
         "peak_rss_mb",
@@ -472,12 +539,18 @@ fn main() {
                 let vl = variant.label();
 
                 if sequential {
-                    // Sequential in-circuit fold: ONE pass (sequential leaf-gen +
-                    // the in-circuit fold). k/cores_per_leaf don't apply, so we
-                    // record k=1, cores_per_leaf=all. `chain` ⇒ linear §4.3
+                    // Sequential ONE pass (sequential leaf-gen). k/cores_per_leaf
+                    // don't apply, so we record k=1, cores_per_leaf=all.
+                    // `per_batch` ⇒ store t proofs, NO fold; `chain` ⇒ linear §4.3
                     // schedule; `bound` ⇒ tree + in-circuit boundary binding (NPO
                     // gap closed); else ⇒ the plain Bentley–Saxe tree fold.
-                    let guarded = if chain {
+                    let guarded = if per_batch {
+                        // One folder per (dataset,variant,d,w,m) cell holds this
+                        // stream's t proofs; the recorded proof_bytes = their sum.
+                        let cell_dir = proof_base
+                            .join(format!("{dataset}_{vl}_d{d}_w{w}_m{m}"));
+                        measure_guarded_per_batch(variant, d, w, &batches, cfg, &cell_dir)
+                    } else if chain {
                         measure_guarded_chain(variant, d, w, &batches, cfg)
                     } else if bound {
                         measure_guarded_recursive_bound(variant, d, w, &batches, cfg)
@@ -492,10 +565,12 @@ fn main() {
                             let row = ok_row(dataset, vl, d, w, actual_n, m, t, 1, avail, merge_mode, &cell, total, rps, 1.0);
                             append_csv(&dir, "stream_forest", &hdr, &row);
                             println!(
-                                "  ds={dataset:<8} {vl:<7} d={d} w={w:<5} m={m:<5} t={t:<5} [{merge_mode}] total={:.2}s (leafgen={:.2}s merge={:.2}s) {rps} rec/s rss={:.1}MB",
+                                "  ds={dataset:<8} {vl:<7} d={d} w={w:<5} m={m:<5} t={t:<5} [{merge_mode}] total={:.2}s (leafgen={:.2}s merge={:.2}s) verify={:.2}s proof={:.1}KB {rps} rec/s rss={:.1}MB",
                                 total / 1000.0,
                                 cell.leafgen_ms_median / 1000.0,
                                 cell.merge_ms_median / 1000.0,
+                                cell.verify_ms_median / 1000.0,
+                                cell.proof_bytes as f64 / 1024.0,
                                 cell.peak_rss_mb_median
                             );
                         }

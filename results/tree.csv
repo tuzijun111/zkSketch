@@ -1,3 +1,0 @@
-dataset,variant,d,w,n,m,t,k,cores_per_leaf,merge_mode,total_time_ms,leafgen_ms,merge_ms,records_per_sec,speedup,peak_rss_mb,status
-aol,lookup,7,128,16,2,8,1,64,recursive,7200.193,834.372,6365.821,2,1.00,1190.5,ok
-aol,merkle,7,128,16,2,8,1,64,recursive,6174.482,725.082,5449.400,3,1.00,1018.6,ok

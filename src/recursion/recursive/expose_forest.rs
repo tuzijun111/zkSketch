@@ -309,6 +309,26 @@ pub fn prove_forest_over(
     acc
 }
 
+/// Left-leaning **linear chain** fold over any boundary-exposing leaves — the
+/// family-agnostic analog of `countmin_chain_v9::prove_countmin_chain_v9`, but
+/// consuming the same exposed `RecursionOutput` leaves as [`prove_forest_over`].
+/// Folds `Π^(t) = merge(Π^(t-1), leaf_t)` strictly left-to-right (`O(t)` depth,
+/// vs the tree's `O(log t)`), so it is the sequential comparison baseline for the
+/// streaming forest. Same in-circuit child verification + boundary binding per
+/// merge as the tree; the returned root surfaces exactly `(Com(S_0), Com(S_E))`
+/// and verifies with [`verify_bound_proof`].
+pub fn prove_chain_over(
+    leaves: Vec<RecursionOutput<ConfigWithFriParams>>,
+) -> RecursionOutput<ConfigWithFriParams> {
+    assert!(leaves.len() >= 2, "need >= 2 leaves");
+    let mut iter = leaves.into_iter();
+    let mut acc = iter.next().unwrap();
+    for leaf in iter {
+        acc = prove_hiding_merge(&acc, &leaf);
+    }
+    acc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,6 +520,31 @@ mod tests {
         let (initial, final_) = read_exposed_boundary(&root);
         assert_eq!(initial.0, commit_gk_state(&s0).0, "root initial = real Com(S_0)");
         assert_eq!(final_.0, commit_gk_state(&s2).0, "root final = real Com(S_2)");
+    }
+
+    /// Two-sided band-merge (bandmerge2) leaf, boundary-exposed via the NEW
+    /// `prove_gkb2_exposed`: the generic forest fold composes two real gk2 leaves
+    /// and surfaces the outer boundary — confirms the added Expose wiring is
+    /// sound and the gk2 leaf is foldable by the family-agnostic path.
+    #[test]
+    fn real_gk2_bandmerge_bound_forest_exposes_outer_boundary() {
+        use crate::sketch::gk_bandmerge::{
+            apply_batch2, commit_gk2_state, prove_gkb2_exposed, Gk2State, GkbParams,
+        };
+        let params = GkbParams { capacity: 4, batch: 2, s: 2 };
+        let s0 = Gk2State::empty(params);
+        let b1 = vec![10u32, 11];
+        let leaf1 = prove_gkb2_exposed(params, s0.clone(), b1.clone());
+        let s1 = apply_batch2(&s0, &b1);
+        let b2 = vec![20u32, 21];
+        let leaf2 = prove_gkb2_exposed(params, s1.clone(), b2.clone());
+        let s2 = apply_batch2(&s1, &b2);
+
+        let root = prove_forest_over(vec![leaf1.output, leaf2.output]);
+        verify_bound_proof(&root);
+        let (initial, final_) = read_exposed_boundary(&root);
+        assert_eq!(initial.0, commit_gk2_state(&s0).0, "root initial = real Com(S_0)");
+        assert_eq!(final_.0, commit_gk2_state(&s2).0, "root final = real Com(S_2)");
     }
 
     /// 4-leaf bound forest (exercises `agg + agg`): the single root proof

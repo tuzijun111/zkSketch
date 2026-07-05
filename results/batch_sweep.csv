@@ -1,5 +1,0 @@
-dataset,variant,d,w,n,m,t,k,cores_per_leaf,total_time_ms,leafgen_ms,merge_ms,records_per_sec,speedup,peak_rss_mb,status
-aol,lookup,7,128,1024,16,64,8,8,3171.676,3171.414,0.262,323,1.00,664.5,ok
-aol,lookup,7,128,1024,32,32,8,8,2891.579,2891.384,0.195,354,1.00,1215.9,ok
-aol,lookup,7,128,1024,64,16,8,8,2930.214,2930.082,0.132,349,1.00,2417.2,ok
-aol,lookup,7,128,1024,128,8,8,8,1502.762,1502.729,0.033,681,1.00,2474.9,ok

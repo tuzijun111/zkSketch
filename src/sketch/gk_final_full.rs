@@ -1,5 +1,8 @@
 //! **Full Greenwald-Khanna update circuit** (paper §5.4) — extends
-//! [`crate::sketch::gk_final`] with the previously-deferred steps.
+//! [`crate::sketch::gk_final`] with the previously-deferred steps, and
+//! certifies the same-value-collapse specialization via a **single-pass
+//! group-by-value** (the direct analogue of `ss_final_full`'s group-by-key,
+//! which was just hardened and verified sound).
 //!
 //! Relative to [`crate::sketch::gk_final`] this adds:
 //!
@@ -8,128 +11,144 @@
 //!   `(S_old.tuples ‖ B_as_tuples)` and a prover-supplied sorted union
 //!   table `U`. The verifier learns that every active tuple in `U` came
 //!   from either the old state or the batch — no fabricated values.
-//! - **Step 6 compaction tie**: a positional binding `excess[i] = U[i]`
-//!   for `i ∈ [0, batch)` and `S_new[i] = U[batch + i]` for
-//!   `i ∈ [0, capacity)`. Together with Step 2 this gives the **end-to-end
-//!   chain** `S_new ⊆ U ⊆ (S_old ∪ B)` as multisets: every active row
-//!   in the final state traces back to either the old state or the
-//!   batch, with no fabricated values.
-//! - **Strict per-value sortedness across `U` (NEW, Stage 7.5)**: every
+//! - **Step 6 compaction tie**: a positional split of the grouped+resorted
+//!   table `G_sorted`: `excess = G_sorted[..batch]`, `S_new =
+//!   G_sorted[batch..batch+capacity]`. Together with Step 2 this gives the
+//!   **end-to-end chain** `S_new ⊆ G ⊆ (S_old ∪ B)` as multisets: every
+//!   active row in the final state is a per-value aggregate of rows that
+//!   trace back to either the old state or the batch, with no fabricated
+//!   values.
+//! - **Per-value sortedness across `U` (non-strict, Stage 7.5)**: every
 //!   adjacent pair `(U[r], U[r+1])` is forced to satisfy
 //!   `U[r+1].value ≥ U[r].value` via a range-checked raw diff
 //!   (`decompose_to_bits(value[r+1] − value[r], 22)`). The convention is
-//!   flipped from the previous `(active desc, value asc)` to
-//!   `(active asc, value asc)` — dummies (value=0) now come first, then
+//!   `(active asc, value asc)` — dummies (value=0) come first, then
 //!   actives in ascending value order. This makes the diff non-negative
 //!   across the dummy→active boundary too (`diff = first_active.value`),
-//!   so the check needs **no gating** and avoids the previous
-//!   `mul(decompose, decompose) → decompose_to_bits` Plonky3
-//!   WitnessChecks bus-accounting failure. Together with active-flag
-//!   monotonicity (Stage 4) and PermuteAir multiset equality (Stage 6),
-//!   this forces the union's order to be uniquely `(active asc, value
-//!   asc)` — the prover can no longer reshuffle.
+//!   so the check needs **no gating**, and — crucially — it forces every
+//!   same-value run of the union to be **contiguous**, so the adjacency-only
+//!   group-by below cannot be gamed by scattering a value's rows to
+//!   fragment its aggregate (the same defense `ss_final_full` uses for keys).
 //!
-//! - **Compaction reversed**: now `excess = U[..batch]` (dummies + the
-//!   smallest few actives if there's overflow) and `S_new = U[batch..]`
-//!   — the **largest `capacity` actives by value**. Semantically
-//!   different from the previous "smallest cap actives" version, but
-//!   both preserve the same `multiset(S_new ∪ excess) =
-//!   multiset(S_old ∪ B)` invariant.
+//! ### Same-value collapse via a single-pass group-by (Step 5)
 //!
-//! ### Value-range assumption
+//! The old certified transition fused adjacent same-value pairs over a
+//! `L = ⌈log₂ M⌉`-round parity-0 schedule (fuse + resort, repeated). That
+//! schedule is **fragile for completeness**: a duplicate that lands at an
+//! odd position never pairs with its neighbor in a given round, so at large
+//! `cap` an honest table could fail to fully collapse within the fixed
+//! round budget and the honest proof would be **rejected** by the final
+//! strict value-ascent (`WitnessConflict` at cap=16384).
 //!
-//! The strict sortedness check uses a 22-bit diff range, so **per-record
-//! `value` fields must fit in 21 bits** (`value < 2^21 = 2 097 152`).
-//! BabyBear is ~31 bits, so a "negative" diff (`value[r+1] < value[r]`)
-//! wraps to ≈ `p`, which won't fit in 22 bits — the bit-decomposition
-//! then fails, soundly rejecting the proof. The test workloads
-//! (`gen_padded_batch`) generate values masked to 20 bits, fitting
-//! comfortably under this bound.
+//! We replace the whole round loop with a **single group-by-value pass**
+//! that is GUARANTEED to fully collapse every same-value run, mirroring
+//! `ss_final_full`'s group-by-key exactly:
 //!
-//! - **Step 5 (full `L = ⌈log₂(total)⌉`-round parity-0 fusion) —
-//!   IN-CIRCUIT & sound (NEW, Stages 7.6–7.8, looped)**: each round, for
-//!   every adjacent pair `(T[2i], T[2i+1])` the prover supplies a
-//!   decision bit `e[i] ∈ {0,1}`; the circuit enforces `e·(e−1)=0`, the
-//!   eligibility implications `e·(a.value−b.value)=0`, `e·(1−a.active)=0`,
-//!   `e·(1−b.active)=0`, and builds the post-fusion tuples as ALU
-//!   expressions (`F[2i]=(1−e)·a`, `F[2i+1]=(b.val, b.cnt+e·a.cnt,
-//!   b.max+e·a.max, b.act)`). Those fused rows are packed into Challenges
-//!   via [`CircuitBuilder::recompose_base_coeffs_to_ext_via_alu`] (pure
-//!   ALU, so every fused field gets a WitnessChecks-bus creator) and fed
-//!   to a **per-round PermuteAir** that re-sorts `F → F_sorted`; each
-//!   round's `F_sorted` gets active-monotonicity + strict value-asc
-//!   sortedness checks and becomes the next round's input. Re-sorting
-//!   between rounds re-adjacenttizes survivors, so `L` plain parity-0
-//!   rounds collapse any run of equal values (≤ `total` long) into one
-//!   tuple — the §5.4 `L = ⌈log M⌉` schedule. Stage 8's compaction binds
-//!   `S_new`/`excess` to the **final** round's `F_sorted` (not `U`). This
-//!   closes the soundness chain end-to-end —
-//!   a malicious prover supplying a non-canonical post-fusion table is
-//!   rejected (test `gk_full_fusion_soundness_rejects_bad_table`).
+//! 1. **Union → value-sort** (Stage 6): PermuteAir ties `U` (sorted by
+//!    `(active, value)`) to `(S_old ‖ B_as_tuples)` as a multiset; the
+//!    value range-check + non-strict value-sortedness (Stage 7.5) force
+//!    every same-value run to be contiguous.
+//! 2. **Group-by-value** (Stage 7): a PoneglyphDB §4.3 adjacency-equality
+//!    tag `value_eq_tag[r]` (`value[r] == value[r-1]`, pinned by the
+//!    is-zero gadget) drives **active-gated** running sums of `count`,
+//!    `max_error`, and `active`: each row contributes `count·active` and
+//!    `max_error·active` (an inactive row adds nothing). Each segment-end row
+//!    (`se = 1 − value_eq_tag[r+1]`) carries the summed `count`/`max_error`;
+//!    its active bit is fully DERIVED as `se · (acc_active ≠ 0)` (is-nonzero
+//!    gadget), and its value is gated by `active`. Non-segment-end active rows
+//!    become dummies. Dummies (value 0) form one segment whose `acc_active = 0`,
+//!    so they collapse to a single dummy grouped row. The active-gating of the
+//!    sums is load-bearing for canonicality: it forces every dummy grouped row
+//!    to a bit-identical `(0,0,0,0)`, so a malformed committed `S_old` dummy
+//!    carrying a nonzero `count`/`max_error` cannot seed a count-carrying dummy
+//!    that the resort could route into either the final or the excess region
+//!    (two `S_new` for one `(S_old,B)`), nor can an inactive row launder a
+//!    stale `max_error` onto an active survivor. The init well-formedness check
+//!    `active=0 ⇒ count=0 ∧ max_error=0` (Stage 3) is the redundant second
+//!    barrier that severs the malformed preimage at the source.
+//! 3. **Resort** (Stage 7.7): a second PermuteAir re-sorts the grouped
+//!    table `G` by `(active asc, value asc)` — dummies first, then the
+//!    distinct-valued survivors ascending.
+//! 4. **Canonicalize + split** (Stages 7.8/8): on `G_sorted`,
+//!    active-monotonicity + non-strict value-sortedness + the **STRICT**
+//!    active value-ascent (`both_active·(value[r+1]−value[r]−1)`
+//!    range-checked) force distinct active values (every run fully
+//!    collapsed — impossible to under-fuse or count-split). Because the
+//!    group-by is a single pass that sums each whole run, this strict check
+//!    now ALWAYS passes for honest input, so the completeness failure of
+//!    the round schedule is gone. The compaction then binds
+//!    `excess = G_sorted[..batch]`, `S_new = G_sorted[batch..]`.
 //!
-//!   **Pipeline-preserving proving-time knob**: the round count is a
-//!   public circuit-shape parameter (§5), so
-//!   [`prove_gk_full_with_rounds`] lets callers run fewer than the
-//!   worst-case `⌈log₂(total)⌉` rounds. The worst case only bites when a
-//!   *single value* repeats across most of the union; the rounds actually
-//!   needed are `⌈log₂(max run length)⌉`. For any workload where no value
-//!   repeats more than `2^rounds` times the result is identical, and
-//!   prove time falls ≈ linearly in the round count (measured at
-//!   `cap=32, batch=100`: 8 rounds ≈ 675 ms → 2 rounds ≈ 217 ms, ~3.1×).
-//!   This is the GK analogue of Count-Min's `distinct_bound`. The default
-//!   [`prove_gk_full`] keeps the worst-case count (baseline behavior).
+//! **Cost** is now Θ(s' + m) per epoch (one union sort + one group-by pass
+//! + one resort + one positional split) — no `⌈log₂ M⌉` factor, no residual
+//! log term.
 //!
-//!   **The bus-accounting fix that unblocked this** (it failed for many
-//!   prior sessions): a decompose coefficient is created on the
-//!   WitnessChecks bus only when it first appears as an ALU **lhs**
-//!   (operand `a`/`c`); a coeff read *only* as an rhs (operand `b`) — as
-//!   `a.max_error` was, in the `(1−e)·a_max` / `e·a_max` products — never
-//!   gets a creator, so the global lookup sum is unbalanced
-//!   (`GlobalCumulativeMismatch(WitnessChecks)`). Putting each union
-//!   field first in its product (lhs) gives it a creator and balances the
-//!   bus. Equivalently: never feed a raw private input straight into an
-//!   NPO with no ALU use — use `recompose_base_coeffs_to_ext_via_alu`.
+//! ### Value range (ENFORCED)
 //!
-//!   The native side ([`apply_batch_full`] → [`fuse_round_parity0`] →
-//!   [`resort_by_active_value`]) produces the witnesses the circuit
-//!   verifies, applying the `fuse_round_parity0` → `resort_by_active_value`
-//!   step once per round for the full `L = ⌈log₂(total)⌉`-round schedule.
-//! - **Full mass conservation**: `Σ(S_new.count·active) + Σ(excess.count
-//!   ·active) = Σ(S_old.count·active) + Σ(B.active)`. The excess holds
-//!   whatever actives in `U` didn't fit into `S_new`, so the combined
-//!   mass is preserved exactly across the pipeline (no leakage, no
-//!   forgery).
+//! Every union `value` is range-checked to `VALUE_DIFF_BITS = 22` bits
+//! (`value < 2^22`; `2^22 ≤ p − 2^22` for BabyBear `p ≈ 2^30.9`), so the
+//! value-diff checks cannot be bypassed by a crafted out-of-range value: a
+//! "negative" diff (`value[r+1] < value[r]`) wraps to `≈ p ≫ 2^22` and fails
+//! the bit-decomposition. Grouped values are `active · union_value` and the
+//! resort permutation preserves them, so this one check bounds every value in
+//! the grouped and final tables too (the grouped-sorted values are
+//! re-range-checked for defense-in-depth). Test workloads mask values to 20
+//! bits, well under the bound.
+//!
+//! ### Count / max_error range (ENFORCED)
+//!
+//! Every `count` and `max_error` — both the union inputs and the summed
+//! `G_sorted` survivors — is range-checked to `< 2^(COUNT_DIFF_BITS−1) = 2^21`.
+//! Bounding the inputs stops any single committed count from approaching `p`;
+//! bounding the summed output stops a segment sum engineered to wrap `p` down
+//! to a small residue. Without both, a committed `S_old` count `≈ p` plus one
+//! more batch occurrence of the same value would wrap the in-field sum to a
+//! wrong small integer while every (in-field) mass check passed in lockstep.
+//! The documented count domain is `< 2^21`.
+//!
+//! ### Canonicalization
+//!
+//! The single-pass group-by sums each whole same-value run in one shot; the
+//! **STRICT** active value-ascent on `G_sorted`
+//! (`both_active·(value[r+1]−value[r]−1)` range-checked) then rejects any
+//! surviving duplicate active value. With the union multiset conservation,
+//! the derived per-run count/max_error sums, and mass conservation, the
+//! certified `S_t` is the UNIQUE canonical per-value aggregation of
+//! `S_{t-1} ⊎ B` — no prover latitude in how much collapses.
+//!
+//! ### Input boundary (assumed well-formed, as in the paper's chain)
+//!
+//! The circuit fully verifies `S_new` and the batch, but treats the committed
+//! `S_old` as an **assumed-honest boundary** — canonical because in the
+//! streaming forest it is the prior epoch's certified `S_new` (distinct active
+//! values by that epoch's strict value-ascent, dummies all-zero by the
+//! active-gated group-by). It enforces `active=0 ⇒ count=0 ∧ max_error=0` and
+//! per-count range on `S_old`, but does NOT enforce that `S_old`'s active
+//! values are DISTINCT. So a *standalone* proof fed a crafted `S_old` with many
+//! (`≳ 2^{10}`) same-value active rows could in principle sum their (individually
+//! `< 2^21`) counts past `p` in one run and wrap; this is unreachable in the
+//! chained forest (init is always a distinct-valued prior `S_new`) and matches
+//! `ss_final_full`'s posture and the paper's soundness boundary. Closing it for
+//! standalone use would require a strict active value-ascent on `S_old` too.
 //!
 //! ### Step coverage summary
 //!
-//! **All seven §5.4 steps now have an in-circuit mechanism.** Steps 1, 2,
-//! 4, 5, 6, 7 are enforced as explicit constraints (bind, union multiset,
-//! band-threshold gate, `L`-round fusion, compaction, metadata-
-//! invariants). Step 3 is done-by-design by the single-Challenge tuple.
+//! Steps 1, 2, 5, 6, 7 are enforced as explicit constraints (bind, union
+//! multiset + sortedness, single-pass group-by collapse, compaction,
+//! mass/metadata invariants). Step 3 is done-by-design by the single-Challenge
+//! tuple. There is no longer a band-threshold decision `θ_t` — with a
+//! single-pass whole-run collapse there is no per-pair fusion decision to
+//! gate, so the `θ_t` gate is removed entirely.
 //!
 //! - **Step 3 (Δ initialization via prefix/suffix-copy)** —
 //!   *done-by-design via the 4-field tuple simplification*. The full
 //!   §5.4 tuple `(e, g_1, g_2, Δ_1, Δ_2, t, active)` keeps `g_1, g_2`
 //!   and `Δ_1, Δ_2` separate so that fusion can do the prefix/suffix
 //!   copy on `Δ`. Our `(value, count, max_error, active)` layout already
-//!   folds `g_1+g_2 ↔ count` and `Δ_1+Δ_2 ↔ max_error`, so no
-//!   per-side bookkeeping is needed; `max_error` after fusion is simply
-//!   `a.max_error + b.max_error` (computed natively in
-//!   [`fuse_round_parity0`]). If we were to switch to the 7-field tuple
-//!   for a tighter ε-bound, Step 3 would resurface.
-//! - **Step 4 (band threshold `θ_t`) — IN-CIRCUIT (NEW, in Stage 7.6)**:
-//!   every fusion is gated by a range-checked inequality `e · (θ_t −
-//!   (a.count + b.count + a.max_err + b.max_err)) ∈ [0, 2^22)`, i.e. a
-//!   fused pair's merged band must fit under `θ_t`. We take `θ_t = N_t`
-//!   (`init_plus_batch`, the total active mass) — the GK band at
-//!   `ε = 1/2`, a valid generous calibration. The fusion *policy* the
-//!   prover follows is still exact value-equality (so rank queries stay
-//!   exact, no introduced error); the threshold *gate* is what §5.4
-//!   verifies, and it is now enforced. The full GK band-merge of
-//!   *different* adjacent values (which trades the exact-rank guarantee
-//!   for the tighter `O((1/ε)log εN)` space bound) needs the 7-field
-//!   `Δ_1/Δ_2` tuple to bound the introduced error — that tuple swap is
-//!   the one remaining architectural extension.
+//!   folds `g_1+g_2 ↔ count` and `Δ_1+Δ_2 ↔ max_error`, so no per-side
+//!   bookkeeping is needed; `max_error` after collapse is the per-run sum
+//!   `Σ max_error` (running sum in the group-by). If we were to switch to
+//!   the 7-field tuple for a tighter ε-bound, Step 3 would resurface.
 //!
 //! ### Tuple representation
 //!
@@ -137,7 +156,9 @@
 //! 7-field §5.4 tuple `(e, g_1, g_2, Δ_1, Δ_2, t, active)` would need
 //! 2 Challenges per tuple; we use a single Challenge per tuple here,
 //! folding `g_1+g_2 ↔ count` and `Δ_1+Δ_2 ↔ max_error` per the
-//! existing baseline.
+//! existing baseline. This remains the same-value-collapse specialization
+//! (exact per-value frequency aggregation), NOT the full distinct-value GK
+//! band-merge — that remains future work.
 
 use std::rc::Rc;
 
@@ -177,6 +198,15 @@ const LOG_FINAL_POLY_LEN: usize = 6;
 /// BabyBear is ~31 bits, so a "negative" diff wraps to ≈ `p` which
 /// won't fit — soundly rejecting the proof.
 const VALUE_DIFF_BITS: usize = 22;
+
+/// Per-tuple `count` and `max_error` field range. Every surviving `count`/
+/// `max_error` (and every union input feeding a segment sum) is range-checked
+/// to `< 2^(COUNT_DIFF_BITS − 1)` so it cannot approach the field size: a
+/// crafted value `≈ p` (or a run-sum engineered to wrap `p` down to a small
+/// residue) is rejected before it can corrupt the certified integer count.
+/// Mirrors `ss_final_full::COUNT_DIFF_BITS`; the documented count domain is
+/// `< 2^21`.
+const COUNT_DIFF_BITS: usize = 22;
 
 // ─── Types — same shape as gk_final.rs ───────────────────────────────────
 
@@ -420,256 +450,10 @@ pub fn apply_update(state: &mut GKFullState, u: &GKFullUpdate) {
     state.tuples[pos] = GKFullTuple::real(u.value, 1, 0);
 }
 
-// ─── Native: one round of adjacent same-value fusion (parity 0) ─────────
+// ─── Native: single-pass group-by-value collapse ────────────────────────
 
-/// Apply one parity-0 round of adjacent same-value fusion to a sorted
-/// tuple table (one iteration of the `L`-round schedule run by
-/// [`fuse_all_rounds`]). Pairs (0,1), (2,3), ... are checked; if both are
-/// active and have the same value, the left tuple becomes a dummy and the
-/// right tuple absorbs the left's count and max_error. Returns the fused
-/// table and the per-pair decision bits.
-///
-/// Simplification vs. paper §5.4: the eligibility predicate here is
-/// "values are equal AND both active" instead of the full threshold
-/// inequality `g_1+Δ_1+g_2+Δ_2+1 ≤ θ_t`. [`fuse_all_rounds`] repeats this
-/// (with a resort between rounds) `⌈log₂(total)⌉` times, which collapses
-/// arbitrarily long runs of equal values; the threshold-gated variant
-/// (Step 4) is the remaining future extension.
-pub fn fuse_round_parity0(input: &[GKFullTuple]) -> (Vec<GKFullTuple>, Vec<bool>) {
-    let total = input.len();
-    let num_pairs = total / 2;
-    let mut output = input.to_vec();
-    let mut decisions = Vec::with_capacity(num_pairs);
-
-    for i in 0..num_pairs {
-        let a = input[2 * i];
-        let b = input[2 * i + 1];
-        let eligible = a.active == 1 && b.active == 1 && a.value == b.value;
-        decisions.push(eligible);
-        if eligible {
-            output[2 * i] = GKFullTuple::dummy();
-            output[2 * i + 1] = GKFullTuple {
-                value: b.value,
-                count: a.count.saturating_add(b.count),
-                max_error: a.max_error.saturating_add(b.max_error),
-                active: 1,
-            };
-        }
-    }
-    (output, decisions)
-}
-
-/// Re-sort a tuple table by `(active asc, value asc)` (dummies first,
-/// then actives by value ascending) and return both the sorted table
-/// and the permutation `sigma` such that `output[i] = input[sigma[i]]`.
-/// Used after `fuse_round_parity0` to bring the fusion-induced dummies
-/// to the head of the table before compaction. The convention matches
-/// `build_union_table` and `apply_batch_full`.
-#[allow(dead_code)]
-fn resort_by_active_value(input: &[GKFullTuple]) -> (Vec<GKFullTuple>, Vec<usize>) {
-    let mut indexed: Vec<(usize, GKFullTuple)> =
-        input.iter().enumerate().map(|(i, t)| (i, *t)).collect();
-    indexed.sort_by_key(|(_, t)| (t.active, t.value));
-    let sigma: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
-    let sorted: Vec<GKFullTuple> = indexed.iter().map(|(_, t)| *t).collect();
-    (sorted, sigma)
-}
-
-/// Number of parity-0 fusion rounds needed to fully collapse a table of
-/// length `total`: the smallest `L` with `2^L ≥ total`. Because each
-/// round (fuse + resort) at most halves the longest run of equal values,
-/// `L` rounds collapse any run (up to `total` long) down to one tuple —
-/// the §5.4 `L = ⌈log M⌉` schedule, with `M = total`.
-pub fn num_fusion_rounds(total: usize) -> usize {
-    let mut l = 0usize;
-    let mut span = 1usize;
-    while span < total {
-        span <<= 1;
-        l += 1;
-    }
-    l.max(1)
-}
-
-/// Witness data for one parity-0 fusion round, captured for the
-/// in-circuit proof. The circuit re-derives `fused` from the round's
-/// input table + `decisions`, then checks `resorted = σ(fused)` via a
-/// PermuteAir; so only `decisions`, `resorted`, and `sigma` need to be
-/// surfaced.
-#[derive(Clone)]
-struct FusionRound {
-    decisions: Vec<bool>,
-    resorted: Vec<GKFullTuple>,
-    sigma: Vec<usize>,
-}
-
-/// Apply `rounds` parity-0 fusion+resort rounds to `sorted_union`,
-/// returning the final fused+sorted table and per-round witness data.
-/// Round 0's input is `sorted_union`; round `r>0`'s input is round
-/// `r-1`'s resorted output.
-fn fuse_all_rounds(
-    sorted_union: &[GKFullTuple],
-    rounds: usize,
-) -> (Vec<GKFullTuple>, Vec<FusionRound>) {
-    let mut current = sorted_union.to_vec();
-    let mut data = Vec::with_capacity(rounds);
-    for _ in 0..rounds {
-        let (fused, decisions) = fuse_round_parity0(&current);
-        let (resorted, sigma) = resort_by_active_value(&fused);
-        data.push(FusionRound { decisions, resorted: resorted.clone(), sigma });
-        current = resorted;
-    }
-    (current, data)
-}
-
-// ─── Native: batched union-and-compact update ───────────────────────────
-
-/// Batched §5.4-style update: builds the union of `S_old.tuples` and
-/// `B`-as-tuples, sorts by `(active asc, value asc)` (dummies first,
-/// then actives in ascending value order), and returns `(s_new, excess)`
-/// where
-/// - `excess` is the first `batch` rows of the sorted union (the
-///   smallest values, where dummies live; plus any overflow actives
-///   that didn't fit into `s_new`);
-/// - `s_new` is the next `capacity` rows — the **largest `capacity`
-///   actives by value** (padded with dummies on the lower side if
-///   fewer than `capacity` actives existed).
-///
-/// Unlike the per-record `apply_update` (which evicts the minimum-cost
-/// adjacent pair), this batched version is **side-by-side** verifiable:
-/// the in-circuit proof can certify `excess[i] = U[i]` and `S_new[i] =
-/// U[batch + i]` directly, tying the final state's contents to the
-/// union via simple positional connects.
-///
-/// **Soundness consequence**: combined with Step 2's PermuteAir on
-/// `(S_old.tuples ‖ B_as_tuples) → U`, this guarantees
-/// `multiset(S_new.actives) ⊆ multiset(S_old.actives ∪ B.actives)`. No
-/// fabricated values can sneak into the final state.
-///
-/// **Why dummies-first ordering** (changed from the previous
-/// `(active desc, value asc)`): with all dummies sharing `value=0` and
-/// actives having `value ≥ 1`, the ASC ordering makes `U` strictly
-/// value-monotone across **every** adjacent pair — including the
-/// dummy→active boundary (`diff = first_active.value > 0`). That in
-/// turn unlocks a simple in-circuit sortedness check (Stage 7.5) using
-/// `sub(value[r+1], value[r]) → decompose_to_bits` with no gating —
-/// sidestepping the `mul(decompose, decompose) → decompose_to_bits`
-/// bus-accounting issue that blocked the gated-diff approach.
-///
-/// **Fusion**: before splitting, `L = ⌈log₂(total)⌉` parity-0
-/// fusion+resort rounds (Step 5) collapse every run of equal-valued
-/// actives into one tuple with summed count. Overflow actives that still
-/// don't fit after fusion land in `excess`. The fusion predicate is
-/// value-equality (exact, no rank error) rather than the GK band
-/// threshold `θ_t` (which needs the 7-field `Δ_1/Δ_2` tuple — see the
-/// module docstring's "still deferred" notes).
-pub fn apply_batch_full(
-    s_old: &GKFullState,
-    batch: &[GKFullUpdate],
-) -> (GKFullState, Vec<GKFullTuple>) {
-    let total = s_old.params.capacity + s_old.params.batch;
-    apply_batch_full_with_rounds(s_old, batch, num_fusion_rounds(total))
-}
-
-/// Like [`apply_batch_full`] but runs exactly `fusion_rounds` parity-0
-/// fusion+resort rounds instead of the worst-case `⌈log₂(total)⌉`.
-///
-/// **Round-count is a paper-sanctioned public circuit parameter** ("the
-/// public number of fusion or eviction rounds encoded in circuit shape",
-/// §5). The worst-case `⌈log₂(total)⌉` only matters when a *single value*
-/// repeats across most of the union; the rounds actually needed are
-/// `⌈log₂(max run length)⌉`. For workloads where no value repeats more
-/// than `2^fusion_rounds` times within the union, the result is
-/// **identical** to the full-round update — the extra rounds would be
-/// no-ops. With fewer rounds than that, residual duplicates remain
-/// un-fused (they stay sorted and mass-conserved, just occupy extra
-/// slots / spill to `excess`) — a graceful, sound degradation, exactly
-/// analogous to Count-Min's `distinct_bound`.
-pub fn apply_batch_full_with_rounds(
-    s_old: &GKFullState,
-    batch: &[GKFullUpdate],
-    fusion_rounds: usize,
-) -> (GKFullState, Vec<GKFullTuple>) {
-    let cap = s_old.params.capacity;
-    let m = s_old.params.batch;
-    assert_eq!(batch.len(), m);
-    assert!(fusion_rounds >= 1, "need at least one fusion round");
-
-    let mut union: Vec<GKFullTuple> = s_old.tuples.iter().cloned().collect();
-    for u in batch {
-        union.push(GKFullTuple {
-            value: u.value,
-            count: u.active,
-            max_error: 0,
-            active: u.active,
-        });
-    }
-    // Sort by (active asc, value asc) — dummies first, actives last by value asc.
-    union.sort_by_key(|t| (t.active, t.value));
-
-    let (fused_sorted, _rounds_data) = fuse_all_rounds(&union, fusion_rounds);
-
-    // Excess = first `batch` rows (dummies + smallest actives if any spill).
-    // S_new = last `capacity` rows (= largest `capacity` actives + padding).
-    let excess_tuples: Vec<GKFullTuple> = fused_sorted[..m].to_vec();
-    let s_new_tuples: Vec<GKFullTuple> = fused_sorted[m..m + cap].to_vec();
-    (
-        GKFullState { tuples: s_new_tuples, params: s_old.params },
-        excess_tuples,
-    )
-}
-
-// ─── Native: build the sorted union table (Step 2) ───────────────────────
-
-/// Build the union table `U` of length `capacity + batch`.
-///
-/// Logical contents:
-/// - From `S_old`: every tuple as-is (capacity rows; active or dummy).
-/// - From `B`: each record as a tuple `(value, active, 0, active)`
-///   so an active batch row contributes `(value, count=1)` and a
-///   dummy contributes `(0, 0, 0, 0)`.
-///
-/// Sort key: `(active ascending, value ascending)` — dummies first
-/// (with `value = 0`), actives last in ascending value order. This
-/// produces a strictly value-monotone union, which unlocks the simple
-/// non-gated sortedness check at Stage 7.5. Stability not strictly
-/// required; we use stable sort for determinism.
-///
-/// Returns `(sorted_union, sigma)` where `sigma[i]` is the position in
-/// the combined `(S_old ‖ B_as_tuples)` input that landed at output
-/// position `i`.
-fn build_union_table(
-    s_old: &GKFullState,
-    batch: &[GKFullUpdate],
-) -> (Vec<GKFullTuple>, Vec<usize>) {
-    let cap = s_old.params.capacity;
-    let m = s_old.params.batch;
-    let total = cap + m;
-
-    // Combined input: indices 0..cap are S_old; cap..total are B.
-    let mut indexed: Vec<(usize, GKFullTuple)> = Vec::with_capacity(total);
-    for (i, t) in s_old.tuples.iter().enumerate() {
-        indexed.push((i, *t));
-    }
-    for (j, u) in batch.iter().enumerate() {
-        indexed.push((
-            cap + j,
-            GKFullTuple {
-                value: u.value,
-                count: u.active,
-                max_error: 0,
-                active: u.active,
-            },
-        ));
-    }
-    // Stable sort by (active ascending, value ascending) — dummies
-    // first, actives last by value asc.
-    indexed.sort_by_key(|(_, t)| (t.active, t.value));
-
-    let sigma: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
-    let sorted: Vec<GKFullTuple> = indexed.iter().map(|(_, t)| *t).collect();
-    (sorted, sigma)
-}
-
+/// Pack a generic tuple table to Challenges (4 base coeffs per tuple:
+/// value, count, max_error, active).
 fn pack_union_to_challenge(tuples: &[GKFullTuple]) -> Vec<Challenge> {
     use p3_field::BasedVectorSpace;
     tuples
@@ -686,75 +470,277 @@ fn pack_union_to_challenge(tuples: &[GKFullTuple]) -> Vec<Challenge> {
         .collect()
 }
 
-// ─── Test-only soundness hook ─────────────────────────────────────────────
-//
-// When set (only in tests), the prover corrupts the `fused_sorted`
-// private-input table so it no longer matches the in-circuit fusion +
-// resort. This exercises whether Stages 7.7/7.8/8 actually *reject* a
-// bogus post-fusion table (soundness), as opposed to merely accepting an
-// honest one. Production callers never touch this.
+/// Witnesses for the single-pass group-by-value update certificate. The
+/// circuit reconstructs the value-sorted union, the grouped table, and the
+/// grouped-resorted table from the two permutations, so only the
+/// permutations (plus the derived tables it binds) are surfaced. This is the
+/// GK analogue of `ss_final_full::SsBuild` (group by VALUE instead of key;
+/// sum count AND max_error; positional split with NO count-sort/tie-break).
+struct GkBuild {
+    /// permutation σ_union with `union_sorted[i] = combined[σ_union[i]]`
+    /// (value-sorted view).
+    sigma_union: Vec<usize>,
+    /// value-sorted union `(active asc, value asc)`.
+    union_sorted: Vec<GKFullTuple>,
+    /// grouped table `G` (length cap+m): each segment-end row carries the
+    /// summed count/max_error (active iff any active contributor); the rest
+    /// are dummies.
+    grouped: Vec<GKFullTuple>,
+    /// per-row value-adjacency tag on the value-sorted view (`tag[r]=1` iff
+    /// `value_sorted[r] == value_sorted[r-1]`); `tag[0]=0`.
+    value_eq_tag: Vec<u32>,
+    /// permutation σ_group with `g_sorted[i] = grouped[σ_group[i]]`.
+    sigma_group: Vec<usize>,
+    /// `g_sorted` = grouped re-sorted by `(active asc, value asc)`.
+    g_sorted: Vec<GKFullTuple>,
+}
+
+/// Build the GK single-pass group-by-value update certificate witnesses.
+///
+/// Mirrors `ss_final_full::build_ss` exactly, grouping by **value** (the GK
+/// analogue of SS's key) and summing both `count` and `max_error` over each
+/// same-value run. The final compaction is a plain positional split (no
+/// count-sort, no tie-break) — GK keeps the *largest `capacity` distinct
+/// values* by value order, not the top-`s` by count.
+fn build_gk(s_old: &GKFullState, batch: &[GKFullUpdate]) -> GkBuild {
+    let cap = s_old.params.capacity;
+    let m = s_old.params.batch;
+    let total = cap + m;
+
+    // combined = old tuples ‖ batch-as-tuples `(value, count=active, 0, active)`.
+    let mut combined: Vec<GKFullTuple> = Vec::with_capacity(total);
+    for t in &s_old.tuples {
+        combined.push(*t);
+    }
+    for u in batch {
+        combined.push(GKFullTuple {
+            value: u.value,
+            count: u.active,
+            max_error: 0,
+            active: u.active,
+        });
+    }
+
+    // value-sort by (active asc, value asc) — dummies first, actives ascending.
+    let mut idx: Vec<usize> = (0..total).collect();
+    idx.sort_by_key(|&i| (combined[i].active, combined[i].value));
+    // Test-only: leave the union in `[old ‖ batch]` order so same-value rows
+    // that aren't already adjacent fragment under the adjacency-only group-by.
+    // The union value-sortedness (Stage 7.5) must reject it.
+    #[cfg(test)]
+    if TAMPER_FRAGMENT.with(|f| f.get()) {
+        idx = (0..total).collect();
+    }
+    let sigma_union = idx.clone();
+    let union_sorted: Vec<GKFullTuple> = idx.iter().map(|&i| combined[i]).collect();
+
+    // value-adjacency tags + running sums (count + max_error + active).
+    let mut value_eq_tag = vec![0u32; total];
+    let mut acc_count = vec![0u64; total];
+    let mut acc_maxerr = vec![0u64; total];
+    let mut acc_active = vec![0u64; total];
+    for r in 0..total {
+        if r > 0 && union_sorted[r].value == union_sorted[r - 1].value {
+            value_eq_tag[r] = 1;
+            acc_count[r] = acc_count[r - 1] + union_sorted[r].count as u64;
+            acc_maxerr[r] = acc_maxerr[r - 1] + union_sorted[r].max_error as u64;
+            acc_active[r] = acc_active[r - 1] + union_sorted[r].active as u64;
+        } else {
+            acc_count[r] = union_sorted[r].count as u64;
+            acc_maxerr[r] = union_sorted[r].max_error as u64;
+            acc_active[r] = union_sorted[r].active as u64;
+        }
+    }
+    let mut seg_end = vec![0u32; total];
+    for r in 0..total {
+        seg_end[r] = if r + 1 == total || union_sorted[r + 1].value != union_sorted[r].value {
+            1
+        } else {
+            0
+        };
+    }
+
+    // grouped table G: segment-end rows carry the summed count/max_error; the
+    // row is active iff the segment had any active contributor (acc_active>0).
+    let mut grouped = vec![GKFullTuple::dummy(); total];
+    for r in 0..total {
+        if seg_end[r] == 1 {
+            let act = if acc_active[r] > 0 { 1 } else { 0 };
+            // [review probe] The circuit binds grouped.count = se·acc_count and
+            // grouped.max_error = se·acc_maxerr for EVERY segment-end row,
+            // regardless of `act`. Native zeroes them for dummy rows, which does
+            // NOT match the circuit — so emit the RAW sums a malicious prover
+            // would supply to satisfy the constraint on a count/maxerr-carrying
+            // dummy grouped row. Value stays gated (grouped.value=active·union).
+            #[cfg(test)]
+            let (dummy_count, dummy_maxerr) = if TAMPER_DUMMY_COUNT.with(|f| f.get()) {
+                (acc_count[r] as u32, acc_maxerr[r] as u32)
+            } else {
+                (0, 0)
+            };
+            #[cfg(not(test))]
+            let (dummy_count, dummy_maxerr) = (0u32, 0u32);
+            grouped[r] = GKFullTuple {
+                value: if act == 1 { union_sorted[r].value } else { 0 },
+                count: if act == 1 { acc_count[r] as u32 } else { dummy_count },
+                max_error: if act == 1 { acc_maxerr[r] as u32 } else { dummy_maxerr },
+                active: act,
+            };
+        }
+    }
+
+    // Test-only: leave a value in TWO active tuples (skip the segment collapse
+    // for one same-value run: keep BOTH the run's members as active grouped
+    // rows carrying their own count, instead of collapsing to one summed row).
+    // The strict active value-ascent must reject the surviving duplicate.
+    #[cfg(test)]
+    if TAMPER_SPLIT.with(|f| f.get()) {
+        // Find the first same-value ACTIVE run of length ≥ 2 and, instead of
+        // one summed segment-end row + interior dummies, emit each member as
+        // its own active grouped row (count/max_error un-summed).
+        let mut r = 0usize;
+        while r < total {
+            let mut e = r;
+            while e + 1 < total
+                && union_sorted[e + 1].value == union_sorted[r].value
+                && union_sorted[r].active == 1
+            {
+                e += 1;
+            }
+            if e > r && union_sorted[r].active == 1 {
+                for k in r..=e {
+                    grouped[k] = GKFullTuple {
+                        value: union_sorted[k].value,
+                        count: union_sorted[k].count,
+                        max_error: union_sorted[k].max_error,
+                        active: 1,
+                    };
+                }
+                break;
+            }
+            r = e + 1;
+        }
+    }
+
+    // grouped-resort by (active asc, value asc).
+    let mut idx2: Vec<usize> = (0..total).collect();
+    idx2.sort_by_key(|&i| (grouped[i].active, grouped[i].value));
+    let sigma_group = idx2.clone();
+    let g_sorted: Vec<GKFullTuple> = idx2.iter().map(|&i| grouped[i]).collect();
+
+    GkBuild {
+        sigma_union,
+        union_sorted,
+        grouped,
+        value_eq_tag,
+        sigma_group,
+        g_sorted,
+    }
+}
+
+// ─── Native: batched group-by-and-compact update ────────────────────────
+
+/// Batched §5.4-style update via a **single-pass group-by-value collapse**:
+/// build the union of `S_old.tuples` and `B`-as-tuples, value-sort by
+/// `(active asc, value asc)`, collapse every same-value run into one tuple
+/// with summed count/max_error, re-sort the grouped table, and split
+/// positionally into `(s_new, excess)` where
+/// - `excess` is the first `batch` rows of the grouped-resorted table
+///   (dummies + the smallest few distinct values if there's overflow);
+/// - `s_new` is the next `capacity` rows — the **largest `capacity`
+///   distinct values** (padded with dummies on the lower side if fewer than
+///   `capacity` distinct active values existed).
+///
+/// The single-pass group-by is GUARANTEED to fully collapse every run (it
+/// sums the whole run in one shot), so the in-circuit strict value-ascent
+/// canonicalization always holds for honest input — unlike the old
+/// `L = ⌈log₂ M⌉`-round parity-0 schedule, which could leave an odd-position
+/// duplicate un-collapsed and reject an honest proof at large `cap`.
+pub fn apply_batch_full(
+    s_old: &GKFullState,
+    batch: &[GKFullUpdate],
+) -> (GKFullState, Vec<GKFullTuple>) {
+    let cap = s_old.params.capacity;
+    let m = s_old.params.batch;
+    assert_eq!(batch.len(), m);
+    let b = build_gk(s_old, batch);
+    let excess_tuples: Vec<GKFullTuple> = b.g_sorted[..m].to_vec();
+    let s_new_tuples: Vec<GKFullTuple> = b.g_sorted[m..m + cap].to_vec();
+    (
+        GKFullState { tuples: s_new_tuples, params: s_old.params },
+        excess_tuples,
+    )
+}
+
+/// Backward-compatibility shim (retained for [`crate::experiments`] callers
+/// that still take a "round count" arg). The certified transition is now a
+/// **single group-by pass** with no round schedule, so the round count is
+/// vestigial — this always returns `1`.
+pub fn num_fusion_rounds(_total: usize) -> usize {
+    1
+}
+
+// ─── Test-only soundness hooks ────────────────────────────────────────────
 #[cfg(test)]
 thread_local! {
-    static TAMPER_FUSED_SORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    // When set, the Step 4 band gate uses θ_t = 0 instead of N_t, so any
-    // real fusion (merged band > 0) violates the range check — proving the
-    // gate actually binds.
-    static TIGHTEN_THETA: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// When set, the prover corrupts the `g_sorted` private-input table so it
+    /// no longer matches the grouped-resort image. Exercises whether the
+    /// resort PermuteAir + sortedness + compaction reject a bogus
+    /// post-collapse table. Drives [`tests::gk_full_fusion_soundness_rejects_bad_table`].
+    static TAMPER_GSORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// When set, the prover leaves the union in `[old ‖ batch]` order (identity
+    /// σ_union), so a value whose rows are non-adjacent fragments under the
+    /// adjacency-only group-by. The union value-sortedness (Stage 7.5) must
+    /// reject it. Drives [`tests::fragmentation_rejected`].
+    static TAMPER_FRAGMENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// When set, the prover leaves a same-value run in TWO active tuples (skips
+    /// the segment collapse for one value). The strict active value-ascent must
+    /// reject the surviving duplicate active value. Drives
+    /// [`tests::count_split_rejected`].
+    static TAMPER_SPLIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// [review probe] When set, dummy (inactive) segment-end grouped rows carry
+    /// the RAW acc_count/acc_maxerr (which is what the circuit constraint
+    /// `grouped.count = se·acc_count` actually requires) instead of native's 0.
+    static TAMPER_DUMMY_COUNT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 // ─── Prover ──────────────────────────────────────────────────────────────
 
-/// Prove one GK update epoch with the §5.4 pipeline enforced in-circuit:
-/// Step 2 (union multiset via PermuteAir), strict union sortedness, the
-/// full `L = ⌈log₂(total)⌉`-round parity-0 fusion schedule (Step 5) —
-/// each round verified per-pair and re-sorted via its own PermuteAir +
-/// sortedness check — compaction of the final fused+sorted table into
-/// `(S_new, excess)`, and combined mass conservation. A malicious prover
-/// cannot fabricate values, reshuffle any table, supply a bogus
-/// post-fusion table at any round, or fuse a pair whose merged band
-/// exceeds `θ_t` (Step 4) — each is rejected by a lookup-bus / range /
-/// connect constraint. The only honest-prover latitude left is *how
-/// much* to fuse (the eligibility implication is one-directional). The
-/// sole remaining simplification versus textbook GK is the exact
-/// value-equality fusion policy (vs. band-merge of different values),
-/// which keeps rank queries exact and avoids the 7-field Δ tuple — see
-/// the module docstring.
+/// Prove one GK update epoch with the §5.4 same-value-collapse pipeline
+/// enforced in-circuit: Step 2 (union multiset via PermuteAir + value
+/// range-check + non-strict value-sortedness, which forces same-value runs
+/// contiguous), the **single-pass group-by-value collapse** (Step 5:
+/// adjacency-tag running sums of count/max_error/active bind the grouped
+/// table, then a resort PermuteAir + strict active value-ascent
+/// canonicalize it), the positional compaction into `(S_new, excess)`
+/// (Step 6), and combined mass conservation. A malicious prover cannot
+/// fabricate values, reshuffle any table, fragment a value's run
+/// (value-sortedness forces contiguity), under-fuse or count-split a run
+/// (the strict active value-ascent rejects surviving duplicate active
+/// values), or misbind a segment's active bit (it is derived as
+/// `se·(acc_active≠0)`). The sole remaining simplification versus textbook
+/// GK is the exact value-equality collapse policy (vs. band-merge of
+/// different values), which keeps rank queries exact and avoids the 7-field
+/// Δ tuple — see the module docstring.
 pub fn prove_gk_full(
     params: GKFullParams,
     initial_state: GKFullState,
     batch: Vec<GKFullUpdate>,
 ) -> GKFullLeafProof {
-    let total = params.capacity + params.batch;
-    prove_gk_full_with_rounds(params, initial_state, batch, num_fusion_rounds(total))
+    prove_gk_full_inner(params, initial_state, batch, false)
 }
 
-/// Like [`prove_gk_full`] but runs exactly `fusion_rounds` parity-0
-/// fusion rounds in-circuit instead of the worst-case `⌈log₂(total)⌉`.
-///
-/// **This is a pipeline-preserving proving-time optimization, not a
-/// design change.** The §5.4 pipeline (sorted-union → parity-alternating
-/// fusion *rounds* → compaction → invariant checks) is unchanged — we
-/// only run the fusion stage `fusion_rounds` times, and the paper
-/// explicitly treats the round count as a public circuit-shape parameter.
-/// Each dropped round removes one PermuteAir + one decompose pass + one
-/// set of `total` sortedness range-checks, so prove time falls roughly
-/// linearly in the round count.
-///
-/// Correctness: for any workload whose longest run of equal values in the
-/// union is `≤ 2^fusion_rounds`, the result is **identical** to the
-/// full-round proof. With fewer rounds, residual duplicates remain
-/// un-fused (sorted + mass-conserved, just occupying extra slots) — the
-/// same graceful, sound degradation as Count-Min's `distinct_bound`.
-/// Leaves proved with different `fusion_rounds` have different circuit
-/// shapes (different verification keys), so a chain/merge must use a
-/// consistent value.
+/// Backward-compatibility shim (retained for [`crate::experiments`] callers).
+/// The certified transition is now a **single group-by pass** with no fusion
+/// round schedule, so the `_fusion_rounds` argument is vestigial and ignored
+/// — this is identical to [`prove_gk_full`].
 pub fn prove_gk_full_with_rounds(
     params: GKFullParams,
     initial_state: GKFullState,
     batch: Vec<GKFullUpdate>,
-    fusion_rounds: usize,
+    _fusion_rounds: usize,
 ) -> GKFullLeafProof {
-    prove_gk_full_inner(params, initial_state, batch, fusion_rounds, false)
+    prove_gk_full_inner(params, initial_state, batch, false)
 }
 
 /// Like [`prove_gk_full`] but also surfaces the `(initial, final)` boundary via
@@ -766,58 +752,39 @@ pub fn prove_gk_full_exposed(
     initial_state: GKFullState,
     batch: Vec<GKFullUpdate>,
 ) -> GKFullLeafProof {
-    let total = params.capacity + params.batch;
-    prove_gk_full_inner(params, initial_state, batch, num_fusion_rounds(total), true)
+    prove_gk_full_inner(params, initial_state, batch, true)
 }
 
 fn prove_gk_full_inner(
     params: GKFullParams,
     initial_state: GKFullState,
     batch: Vec<GKFullUpdate>,
-    fusion_rounds: usize,
     expose_boundary: bool,
 ) -> GKFullLeafProof {
     params.validate();
     assert_eq!(initial_state.params, params);
     assert_eq!(batch.len(), params.batch);
-    assert!(fusion_rounds >= 1, "need at least one fusion round");
 
     let cap = params.capacity;
     let m = params.batch;
     let total = cap + m;
 
     // ─── Native side ────────────────────────────────────────────────────
-    // Use the batched union-and-compact update so S_new is positionally
-    // bound to U via the in-circuit compaction step. Both the native
-    // update and the circuit below run exactly `fusion_rounds` rounds, so
-    // the committed final state matches what the circuit verifies.
-    let (final_state, excess_tuples) =
-        apply_batch_full_with_rounds(&initial_state, &batch, fusion_rounds);
+    // Single-pass group-by-value: build the union, value-sort, collapse each
+    // same-value run, re-sort, and positionally split into (excess, S_new).
+    let (final_state, excess_tuples) = apply_batch_full(&initial_state, &batch);
+    let build = build_gk(&initial_state, &batch);
     let initial_commit = commit_gk_state(&initial_state);
     let final_commit = commit_gk_state(&final_state);
     let batch_commit = commit_gk_batch(&batch);
 
-    // Step 2 native: build sorted union.
-    let (union_tuples, sigma_union) = build_union_table(&initial_state, &batch);
+    let union_tuples = build.union_sorted.clone();
     assert_eq!(union_tuples.len(), total);
-    assert_eq!(sigma_union.len(), total);
+    assert_eq!(build.sigma_union.len(), total);
     assert_eq!(excess_tuples.len(), m);
-
-    // Step 5 native: run `fusion_rounds` parity-0 fusion+resort rounds.
-    // `rounds_data[r]` holds round r's decision bits, resorted table, and
-    // resort permutation; the circuit verifies each round's per-pair
-    // fusion transition and ties round r's resorted view to round r+1's
-    // input (and the final round to the compaction, Stage 8).
-    let num_rounds = fusion_rounds;
-    let (final_fused_sorted, rounds_data) = fuse_all_rounds(&union_tuples, num_rounds);
-    assert_eq!(rounds_data.len(), num_rounds);
-    assert_eq!(final_fused_sorted.len(), total);
-    // Spot-check: final_state == final_fused_sorted[m..m+cap].
-    debug_assert_eq!(
-        final_state.tuples.as_slice(),
-        &final_fused_sorted[m..m + cap]
-    );
-    debug_assert_eq!(excess_tuples.as_slice(), &final_fused_sorted[..m]);
+    // Spot-check: final_state == g_sorted[m..m+cap], excess == g_sorted[..m].
+    debug_assert_eq!(final_state.tuples.as_slice(), &build.g_sorted[m..m + cap]);
+    debug_assert_eq!(excess_tuples.as_slice(), &build.g_sorted[..m]);
 
     // Sanity: combined mass conservation.
     // final.actives + excess.actives = init.actives + batch.actives.
@@ -863,9 +830,11 @@ fn prove_gk_full_inner(
     let zero = b.alloc_const(Challenge::ZERO, "zero");
 
     // Private inputs (alloc order, MUST match the witness packing below):
-    //   init, final, batch, union,
-    //   [round 0..L: fuse_decision bits], [round 0..L: resorted table],
-    //   excess.
+    //   init, final(=S_new), batch, union(=value_sorted), grouped, g_sorted,
+    //   excess, value_eq_tag, val_inv_diff, acc_active_inv.
+    // Mirrors `ss_final_full`'s private-input set (grouped + g_sorted are
+    // prover-supplied tables bound in-circuit; the inverse hints drive the
+    // is-zero/is-nonzero group-by gadgets).
     let init_packed: Vec<ExprId> = (0..cap).map(|_| b.alloc_private_input("init_packed")).collect();
     let final_packed: Vec<ExprId> =
         (0..cap).map(|_| b.alloc_private_input("final_packed")).collect();
@@ -873,24 +842,29 @@ fn prove_gk_full_inner(
         (0..m).map(|_| b.alloc_private_input("batch_packed")).collect();
     let union_packed: Vec<ExprId> =
         (0..total).map(|_| b.alloc_private_input("union_packed")).collect();
-    // Step 5: per-round, per-pair fusion decision bits (length = total/2
-    // each). Each bit `e[i] ∈ {0,1}` says whether pair (T[2i], T[2i+1])
-    // was fused in that round. They appear as ALU operands below so the
-    // WitnessChecks bus claims them as creators.
-    let num_pairs = total / 2;
-    let round_decisions: Vec<Vec<ExprId>> = (0..num_rounds)
-        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("fuse_decision")).collect())
-        .collect();
-    // Step 5: per-round post-fusion resorted tables (active asc, value
-    // asc). Each is created on the bus by its own decompose and read by
-    // its resort-connect — the proven-balanced `union_packed` role.
-    let round_resorted: Vec<Vec<ExprId>> = (0..num_rounds)
-        .map(|_| (0..total).map(|_| b.alloc_private_input("fused_sorted_packed")).collect())
-        .collect();
-    // Excess: overflow tuples from the final F_sorted that didn't fit
-    // into S_new. Length = batch.
+    // Grouped table G (private input, bound in-circuit from the running sums):
+    // each segment-end row carries the summed count/max_error; the rest dummies.
+    let grouped_packed: Vec<ExprId> =
+        (0..total).map(|_| b.alloc_private_input("grouped_packed")).collect();
+    // Grouped-resorted table `g_sorted` = σ_group image of `grouped`
+    // (`(active asc, value asc)`); canonicalized + split.
+    let g_sorted_packed: Vec<ExprId> =
+        (0..total).map(|_| b.alloc_private_input("g_sorted_packed")).collect();
+    // Excess: the first `batch` rows of `g_sorted` (dummies + smallest
+    // distinct values on overflow). Length = batch.
     let excess_packed: Vec<ExprId> =
         (0..m).map(|_| b.alloc_private_input("excess_packed")).collect();
+    // Group-by adjacency tag: value_eq_tag[r] ∈ {0,1}, 1 iff value[r]==value[r-1].
+    let value_eq_tag: Vec<ExprId> =
+        (0..total).map(|_| b.alloc_private_input("value_eq_tag")).collect();
+    // Inverse hint for the value-adjacency is-zero gadget (inverse of the
+    // value diff when distinct, else 0).
+    let val_inv_diff: Vec<ExprId> =
+        (0..total).map(|_| b.alloc_private_input("val_inv_diff")).collect();
+    // Inverse hint for the per-segment active running sum (is-nonzero gadget
+    // that binds grouped.active = se·(acc_active≠0)).
+    let acc_active_inv: Vec<ExprId> =
+        (0..total).map(|_| b.alloc_private_input("acc_active_inv")).collect();
 
     // ─── Stage 1: Poseidon2 commit bindings ─────────────────────────────
     let h_init = b
@@ -929,6 +903,17 @@ fn prove_gk_full_inner(
         .iter()
         .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose union"))
         .collect();
+    // Decompose grouped + g_sorted EARLY (matches ss_final_full's Stage-2
+    // ordering: the recompose that creates each packed value must be processed
+    // before the PermuteAir that reads/emits it).
+    let grouped_fields: Vec<Vec<ExprId>> = grouped_packed
+        .iter()
+        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose grouped"))
+        .collect();
+    let g_sorted_fields: Vec<Vec<ExprId>> = g_sorted_packed
+        .iter()
+        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose g_sorted"))
+        .collect();
 
     // ─── Stage 3: Active flag boolean checks ────────────────────────────
     for r in 0..cap {
@@ -936,6 +921,18 @@ fn prove_gk_full_inner(
         let am1 = b.sub(a, one);
         let prod = b.mul(a, am1);
         b.connect(prod, zero);
+
+        // Well-formedness of the committed S_old: an INACTIVE init row must be a
+        // canonical all-zero dummy — `active=0 ⇒ count=0 ∧ max_error=0`. This
+        // severs the malformed-preimage source directly: a dummy carrying a
+        // nonzero count/max_error can no longer be opened from `init_commit` to
+        // seed a count-carrying grouped dummy. (The active-gated group-by sums
+        // above already annihilate such a contribution; this is the redundant
+        // second barrier, and it also makes every committed dummy bit-identical.)
+        let c_gated = b.mul(init_fields[r][1], a);
+        b.connect(init_fields[r][1], c_gated);
+        let e_gated = b.mul(init_fields[r][2], a);
+        b.connect(init_fields[r][2], e_gated);
 
         let a = final_fields[r][3];
         let am1 = b.sub(a, one);
@@ -960,6 +957,12 @@ fn prove_gk_full_inner(
         let am1 = b.sub(a, one);
         let prod = b.mul(a, am1);
         b.connect(prod, zero);
+
+        // g_sorted active boolean check (mirrors ss_final_full Stage 3).
+        let ga = g_sorted_fields[r][3];
+        let gam1 = b.sub(ga, one);
+        let gprod = b.mul(ga, gam1);
+        b.connect(gprod, zero);
     }
 
     // ─── Stage 4: Active flag monotonicity on final state and union ────
@@ -1017,7 +1020,7 @@ fn prove_gk_full_inner(
     combined_input.extend(init_packed.iter().copied());
     combined_input.extend(batch_packed.iter().copied());
     let union_permuted = b
-        .add_permute(&combined_input, sigma_union.clone())
+        .add_permute(&combined_input, build.sigma_union.clone())
         .expect("add_permute (union)");
     for i in 0..total {
         b.connect(union_permuted[i], union_packed[i]);
@@ -1065,12 +1068,29 @@ fn prove_gk_full_inner(
     // — it MUST be `(active asc, value asc)`. Any non-canonical ordering
     // either breaks active monotonicity or fails the range check.
     //
-    // **Value-range assumption**: per-record `value` fields must fit in
-    // `VALUE_DIFF_BITS - 1` bits so that a "negative" diff
-    // (`value[r+1] < value[r]`) wraps to ≈ `p` ≈ 2^31 and won't fit in
-    // `VALUE_DIFF_BITS = 22` bits — soundly rejecting the proof.
-    // `gen_padded_batch` generates values masked to 20 bits, comfortably
-    // under this bound. `VALUE_DIFF_BITS` is module-level.
+    // **Value range-check (ENFORCED)**: every union `value` field must fit in
+    // `VALUE_DIFF_BITS = 22` bits (`< 2^22`, and `2^22 ≤ p − 2^22` for BabyBear
+    // `p ≈ 2^30.9`), so the value-diff checks below cannot be bypassed by a
+    // crafted out-of-range value: a real "negative" diff (`value[r+1] <
+    // value[r]`) wraps to `≈ p ≫ 2^22` and fails. Values propagate unchanged
+    // through fusion (survivor keeps its value) and the resort permutation, so
+    // this one check bounds every value in every round and in the final table.
+    for r in 0..total {
+        let _ = b
+            .decompose_to_bits::<Val>(union_fields[r][0], VALUE_DIFF_BITS)
+            .expect("union value range-check");
+        // Bound every union count/max_error at the SOURCE to `< 2^(COUNT_DIFF_BITS−1)`
+        // so no single input can approach `p`; combined with the g_sorted
+        // range-check on the summed output, this forecloses the field-wrap where
+        // a committed S_old count `≈ p` (plus one batch occurrence) would wrap a
+        // segment sum down to a small residue and be silently accepted.
+        let _ = b
+            .decompose_to_bits::<Val>(union_fields[r][1], COUNT_DIFF_BITS - 1)
+            .expect("union count range-check");
+        let _ = b
+            .decompose_to_bits::<Val>(union_fields[r][2], COUNT_DIFF_BITS - 1)
+            .expect("union max_error range-check");
+    }
     for r in 0..total - 1 {
         let curr = union_fields[r][0]; // value field
         let next = union_fields[r + 1][0];
@@ -1080,190 +1100,195 @@ fn prove_gk_full_inner(
             .expect("decompose union value diff");
     }
 
-    // ─── Stage 7.6–7.8 (NEW): Step 5 — full L-round parity-0 fusion ─────
-    //
-    // Repeat `num_rounds = ⌈log₂(total)⌉` times: fuse adjacent pairs of
-    // the current table, then re-sort. Because re-sorting re-adjacenttizes
-    // surviving equal-value tuples, every run of equal values collapses to
-    // one tuple after `L` rounds (each round at most halves the longest
-    // run) — the §5.4 `L = ⌈log M⌉` schedule with plain parity-0 each
-    // round (resort substitutes for parity alternation).
-    //
-    // Per round, for each pair `(T[2i], T[2i+1]) = (a, b)`, the prover
-    // supplies a decision bit `e[i] ∈ {0,1}`; the circuit enforces:
-    //   - `e·(e−1)=0`, `e·(a.value−b.value)=0`,
-    //     `e·(1−a.active)=0`, `e·(1−b.active)=0`
-    // and builds the post-fusion tuples as **ALU expressions**:
-    //   - F[2i]   = (1−e)·a       (dummy if fused, else a)
-    //   - F[2i+1] = (b.value, b.count+e·a.count, b.max_err+e·a.max_err, b.active)
-    //
-    // **Bus-safety** (the crux of why earlier attempts failed):
-    //   1. F's rows are recomposed into Challenges via
-    //      `recompose_base_coeffs_to_ext_via_alu` (a `mul_add` chain),
-    //      never introduced as raw private inputs — so every fused field
-    //      and packed value gets a WitnessChecks-bus creator.
-    //   2. Each `a`/`b` field (a decompose-coeff hint witness) MUST appear
-    //      as an ALU **lhs** (operand `a`) at least once, or it is never
-    //      created on the bus (a coeff read only as rhs has no creator →
-    //      `GlobalCumulativeMismatch(WitnessChecks)`). Hence every union
-    //      field leads its product below.
-    //
-    // The round input `current_fields` is `union_fields` for round 0; for
-    // round r>0 it is the previous round's `resorted_fields` (each decomposed
-    // exactly once — re-decomposing a packed value would double-create it).
-    let mut current_fields: Vec<Vec<ExprId>> = union_fields.clone();
-    for round in 0..num_rounds {
-        let decisions = &round_decisions[round];
-        let resorted_packed = &round_resorted[round];
-        let sigma = rounds_data[round].sigma.clone();
+    // ─── Stage 7: single-pass group-by-value (Step 5) ─────────────────────
+    // Mirrors `ss_final_full` Stage 5 (group-by-key), grouping by VALUE and
+    // summing count AND max_error over each contiguous same-value run. The
+    // union value-sortedness above forces every run contiguous, so the
+    // adjacency-only tag captures whole runs. The grouped table is built as
+    // ALU expressions (recompose-via-alu) — never a raw private input — so
+    // every packed grouped value gets a WitnessChecks-bus creator.
 
-        // 7.6: build the fused payload from current_fields + decisions.
-        let mut fused_payload: Vec<ExprId> = Vec::with_capacity(total);
-        for i in 0..num_pairs {
-            let e = decisions[i];
-            let a_val = current_fields[2 * i][0];
-            let a_cnt = current_fields[2 * i][1];
-            let a_max = current_fields[2 * i][2];
-            let a_act = current_fields[2 * i][3];
-            let b_val = current_fields[2 * i + 1][0];
-            let b_cnt = current_fields[2 * i + 1][1];
-            let b_max = current_fields[2 * i + 1][2];
-            let b_act = current_fields[2 * i + 1][3];
-
-            // Boolean check: e · (e − 1) = 0.
-            let em1 = b.sub(e, one);
-            let bool_prod = b.mul(e, em1);
-            b.connect(bool_prod, zero);
-
-            // Eligibility implications (e = 1 ⇒ values equal, both active).
-            let val_diff = b.sub(a_val, b_val);
-            let prod_val = b.mul(e, val_diff);
-            b.connect(prod_val, zero);
-            let one_minus_a_act = b.sub(one, a_act);
-            let prod_a_act = b.mul(e, one_minus_a_act);
-            b.connect(prod_a_act, zero);
-            let one_minus_b_act = b.sub(one, b_act);
-            let prod_b_act = b.mul(e, one_minus_b_act);
-            b.connect(prod_b_act, zero);
-
-            // F[2i] = (1 − e) · a (union fields lead → lhs → bus creator).
-            let one_minus_e = b.sub(one, e);
-            let f_lo_val = b.mul(a_val, one_minus_e);
-            let f_lo_cnt = b.mul(a_cnt, one_minus_e);
-            let f_lo_max = b.mul(a_max, one_minus_e);
-            let f_lo_act = b.mul(a_act, one_minus_e);
-            let f_lo_packed = b
-                .recompose_base_coeffs_to_ext_via_alu::<Val>(&[
-                    f_lo_val, f_lo_cnt, f_lo_max, f_lo_act,
-                ])
-                .expect("recompose F[2i] via alu");
-            fused_payload.push(f_lo_packed);
-
-            // F[2i+1] = (b.value, b.count+e·a.count, b.max_err+e·a.max_err, b.active).
-            let ea_cnt = b.mul(a_cnt, e);
-            let f_hi_cnt = b.add(b_cnt, ea_cnt);
-            let ea_max = b.mul(a_max, e);
-            let f_hi_max = b.add(b_max, ea_max);
-            let f_hi_packed = b
-                .recompose_base_coeffs_to_ext_via_alu::<Val>(&[b_val, f_hi_cnt, f_hi_max, b_act])
-                .expect("recompose F[2i+1] via alu");
-            fused_payload.push(f_hi_packed);
-
-            // ── Step 4 (NEW): GK band-threshold gate ──────────────────
-            // §5.4 only fuses a pair when the merged band fits under
-            // `θ_t = ⌊2εN_t⌋`. We enforce that in-circuit: if `e = 1`, the
-            // merged band `a.count + b.count + a.max_err + b.max_err` must
-            // be `≤ θ_t`. We take `θ_t = N_t` (the total active mass
-            // `init_plus_batch`), i.e. the GK band at `ε = 1/2` — a valid,
-            // generous calibration that never blocks a legitimate
-            // exact-value merge (a pair's count-sum is always `≤ N_t`) yet
-            // installs the real Step 4 mechanism: a range-checked
-            // inequality gating every fusion.
-            //
-            // Encoding: `slack = θ_t − band`; range-check `e · slack ∈
-            // [0, 2^VALUE_DIFF_BITS)`. When `e = 0` the product is 0 (in
-            // range, no constraint); when `e = 1` it forces `slack ≥ 0`
-            // (band ≤ θ_t) and `slack < 2^22` (true for N_t < 2^22 — our
-            // batch scales sit far below that; documented bound).
-            //
-            // `a_cnt`/`b_cnt`/`a_max`/`b_max` already appear as ALU lhs in
-            // the F-construction above, so they have bus creators; the
-            // adds below are plain reads.
-            let band_ab = b.add(a_cnt, b_cnt);
-            let band_err = b.add(a_max, b_max);
-            let band = b.add(band_ab, band_err);
-            // θ_t = N_t normally; a test hook can tighten it to 0 to prove
-            // the gate binds (any real fusion then has band > θ_t → reject).
-            let theta_t = {
-                #[cfg(test)]
-                {
-                    if TIGHTEN_THETA.with(|c| c.get()) { zero } else { init_plus_batch }
-                }
-                #[cfg(not(test))]
-                {
-                    init_plus_batch
-                }
-            };
-            let slack = b.sub(theta_t, band);
-            let gated_slack = b.mul(e, slack);
-            let _band_bits = b
-                .decompose_to_bits::<Val>(gated_slack, VALUE_DIFF_BITS)
-                .expect("decompose Step 4 band slack");
-        }
-
-        // 7.7: resort F → resorted via PermuteAir, connect to the prover's
-        // `resorted_packed`, then boolean + active-monotonicity checks.
-        // Decompose `resorted_packed` FIRST (connect target needs a creator
-        // before the connect reads it — mirrors Stage 6's ordering).
-        let resorted_fields: Vec<Vec<ExprId>> = resorted_packed
-            .iter()
-            .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose resorted"))
-            .collect();
-        let permuted = b
-            .add_permute(&fused_payload, sigma)
-            .expect("add_permute (resort round)");
-        for r in 0..total {
-            b.connect(permuted[r], resorted_packed[r]);
-        }
-        for r in 0..total {
-            let a = resorted_fields[r][3];
-            let am1 = b.sub(a, one);
-            let prod = b.mul(a, am1);
-            b.connect(prod, zero);
-        }
-        for r in 0..total - 1 {
-            let curr = resorted_fields[r][3];
-            let next = resorted_fields[r + 1][3];
-            let diff = b.sub(next, curr);
-            let one_minus = b.sub(one, diff);
-            let prod = b.mul(diff, one_minus);
-            b.connect(prod, zero);
-        }
-
-        // 7.8: strict value-asc sortedness on the resorted table.
-        for r in 0..total - 1 {
-            let curr = resorted_fields[r][0];
-            let next = resorted_fields[r + 1][0];
-            let diff = b.sub(next, curr);
-            let _bits = b
-                .decompose_to_bits::<Val>(diff, VALUE_DIFF_BITS)
-                .expect("decompose resorted value diff");
-        }
-
-        current_fields = resorted_fields;
+    // value_eq_tag[r] ∈ {0,1}, tag[0]=0. is-zero gadget pins it to
+    // `value[r] == value[r-1]` (PoneglyphDB §4.3 constraints).
+    {
+        let am1 = b.sub(value_eq_tag[0], one);
+        let prod = b.mul(value_eq_tag[0], am1);
+        b.connect(prod, zero);
     }
-    // After L rounds, `current_fields` is the fully-fused, sorted table
-    // that compaction (Stage 8) splits into (excess, S_new).
-    let fused_sorted_fields = current_fields;
+    b.connect(value_eq_tag[0], zero);
+    // val_inv_diff[0] is unused by the r>=1 is-zero gadget (it only reads
+    // val_inv_diff[r] for r>=1). Give it a real ALU-operand use so the private
+    // input gets a WitnessChecks-bus creator; without this the debug builder
+    // asserts "Private input … never used as an ALU operand" and every
+    // in-circuit test panics at build time under `cargo test` (release masks
+    // it). Use `sub` (not `mul`-by-zero, which const-folds away the operand).
+    {
+        let z = b.sub(val_inv_diff[0], zero);
+        b.connect(z, zero);
+    }
+    for r in 1..total {
+        let am1 = b.sub(value_eq_tag[r], one);
+        let prod = b.mul(value_eq_tag[r], am1);
+        b.connect(prod, zero);
+        let diff = b.sub(union_fields[r][0], union_fields[r - 1][0]);
+        // tag · diff = 0
+        let lhs1 = b.mul(value_eq_tag[r], diff);
+        b.connect(lhs1, zero);
+        // (1 − tag)(1 − diff·inv) = 0
+        let one_minus_tag = b.sub(one, value_eq_tag[r]);
+        let diff_inv = b.mul(diff, val_inv_diff[r]);
+        let one_minus = b.sub(one, diff_inv);
+        let lhs2 = b.mul(one_minus_tag, one_minus);
+        b.connect(lhs2, zero);
+    }
 
-    // ─── Stage 8: Compaction binding excess ↔ F_sorted[..batch],
-    //                              S_new  ↔ F_sorted[batch..] ───
+    // running sums of count (field [1]), max_error (field [2]), active
+    // (field [3]) over each same-value segment.
     //
-    // F_sorted is in `(active asc, value asc)` order (dummies first, then
-    // actives in value-asc order). The first `batch` rows become
-    // `excess`; the next `capacity` rows become `S_new` — the **largest
-    // `capacity` actives by value** (padded with the smallest few dummies
-    // if `n_active < capacity`).
+    // SOUNDNESS (count/max_error are ACTIVE-GATED): each row contributes
+    // `count·active` and `max_error·active`, NOT the raw field. An INACTIVE row
+    // therefore adds nothing to the segment sums. This closes two canonicality
+    // holes that the un-gated version had:
+    //   (1) a malformed committed S_old dummy `(value=v, count=C, active=0)` no
+    //       longer seeds a count-carrying grouped dummy that σ_group could route
+    //       into either the final or the excess region (two S_new for one
+    //       (S_old,B)); its C is annihilated → the grouped dummy is truly (0,0,0,0);
+    //   (2) an inactive row sharing a value-run with an active survivor can no
+    //       longer launder a stale `max_error` onto that survivor.
+    // For honest chained input (dummies carry count=max_error=0) the gate is a
+    // no-op, so completeness is unchanged; it matches native `build_gk`, whose
+    // dummy rows also carry 0.
+    let mut acc_count: Vec<ExprId> = Vec::with_capacity(total);
+    let mut acc_maxerr: Vec<ExprId> = Vec::with_capacity(total);
+    let mut acc_active: Vec<ExprId> = Vec::with_capacity(total);
+    let c0 = b.mul(union_fields[0][1], union_fields[0][3]);
+    let e0 = b.mul(union_fields[0][2], union_fields[0][3]);
+    acc_count.push(c0);
+    acc_maxerr.push(e0);
+    acc_active.push(union_fields[0][3]);
+    for r in 1..total {
+        let c_act = b.mul(union_fields[r][1], union_fields[r][3]);
+        let carried_c = b.mul(value_eq_tag[r], acc_count[r - 1]);
+        acc_count.push(b.add(c_act, carried_c));
+        let e_act = b.mul(union_fields[r][2], union_fields[r][3]);
+        let carried_e = b.mul(value_eq_tag[r], acc_maxerr[r - 1]);
+        acc_maxerr.push(b.add(e_act, carried_e));
+        let carried_a = b.mul(value_eq_tag[r], acc_active[r - 1]);
+        acc_active.push(b.add(union_fields[r][3], carried_a));
+    }
+
+    // Bind the grouped table G (private input) from the running sums. For each
+    // r let `se = seg_end` indicator (`se = 1 − value_eq_tag[r+1]`, 1 for the
+    // last row):
+    //   grouped[r].count      = se · acc_count[r]
+    //   grouped[r].max_error  = se · acc_maxerr[r]
+    //   grouped[r].active     = se · (acc_active[r] ≠ 0)   (is-nonzero gadget)
+    //   grouped[r].value      = active · union_value
+    // Non-segment-end rows get se=0 ⇒ all-zero ⇒ dummy. Dummies (value 0)
+    // form one segment whose acc_active=0 ⇒ a single dummy grouped row.
+    for r in 0..total {
+        let se = if r + 1 == total {
+            one
+        } else {
+            b.sub(one, value_eq_tag[r + 1])
+        };
+        // grouped.count = se · acc_count  (acc_count lhs → bus creator)
+        let want_count = b.mul(acc_count[r], se);
+        b.connect(grouped_fields[r][1], want_count);
+        // grouped.max_error = se · acc_maxerr
+        let want_maxerr = b.mul(acc_maxerr[r], se);
+        b.connect(grouped_fields[r][2], want_maxerr);
+        // grouped.active = se·(acc_active ≠ 0) — fully DERIVED, not a free bit.
+        // is-nonzero via the inverse hint: nz = acc_active·acc_active_inv, with
+        // acc_active·(1−nz)=0 forcing nz = [acc_active ≠ 0] (boolean).
+        let nz = b.mul(acc_active[r], acc_active_inv[r]);
+        let one_minus_nz = b.sub(one, nz);
+        let must_zero = b.mul(acc_active[r], one_minus_nz);
+        b.connect(must_zero, zero);
+        let want_active = b.mul(se, nz);
+        b.connect(grouped_fields[r][3], want_active);
+        // boolean check on grouped.active.
+        let am1 = b.sub(grouped_fields[r][3], one);
+        let prod = b.mul(grouped_fields[r][3], am1);
+        b.connect(prod, zero);
+        // value gating: grouped.value = active · union_value.
+        let want_value = b.mul(union_fields[r][0], grouped_fields[r][3]);
+        b.connect(grouped_fields[r][0], want_value);
+    }
+
+    // ─── Stage 7.7: resort G → g_sorted via PermuteAir ────────────────────
+    // (grouped + g_sorted decomposed early in Stage 2, mirroring ss_final_full.)
+    let gs_permuted = b
+        .add_permute(&grouped_packed, build.sigma_group.clone())
+        .expect("add_permute (grouped resort)");
+    for i in 0..total {
+        b.connect(gs_permuted[i], g_sorted_packed[i]);
+    }
+
+    // ─── Stage 7.8: canonicalization on g_sorted ──────────────────────────
+    // Value range-check (defense-in-depth; grouped values = active·union_value
+    // are ≤ union values, already range-checked, and the resort permutes
+    // them — but re-check so the strict-ascent diff below is sound). Also
+    // range-check count (field [1]) and max_error (field [2]) to
+    // `< 2^(COUNT_DIFF_BITS−1)`: mirrors SS's count range-check (and closes the
+    // field-wrap hole — an un-gated summed count/error `≈ p` would otherwise
+    // survive), and — as in SS — gives every g_sorted field an ALU-lhs use so
+    // the WitnessChecks bus has a creator for it (the compaction wire-merge
+    // alone leaves count/max_error uncreated otherwise).
+    for r in 0..total {
+        let _ = b
+            .decompose_to_bits::<Val>(g_sorted_fields[r][0], VALUE_DIFF_BITS)
+            .expect("g_sorted value range-check");
+        let _ = b
+            .decompose_to_bits::<Val>(g_sorted_fields[r][1], COUNT_DIFF_BITS - 1)
+            .expect("g_sorted count range-check");
+        let _ = b
+            .decompose_to_bits::<Val>(g_sorted_fields[r][2], COUNT_DIFF_BITS - 1)
+            .expect("g_sorted max_error range-check");
+    }
+    // active monotone increasing (dummies first):
+    for r in 0..total - 1 {
+        let diff = b.sub(g_sorted_fields[r + 1][3], g_sorted_fields[r][3]);
+        let one_minus = b.sub(one, diff);
+        let prod = b.mul(diff, one_minus);
+        b.connect(prod, zero);
+    }
+    // non-strict value-asc sortedness across all adjacent pairs (dummies have
+    // value 0, so the dummy→active boundary is also non-negative — no gating).
+    for r in 0..total - 1 {
+        let diff = b.sub(g_sorted_fields[r + 1][0], g_sorted_fields[r][0]);
+        let _ = b
+            .decompose_to_bits::<Val>(diff, VALUE_DIFF_BITS)
+            .expect("g_sorted value sortedness");
+    }
+    // STRICT active value-ascent (final canonicalization). An equal adjacent
+    // active pair (an un-collapsed same-value run, i.e. under-fusion or
+    // count-split) has diff = 0, so gated = both_active·(diff − 1) = −1 ≈ p
+    // and fails the 22-bit range check. Because the single-pass group-by sums
+    // each whole run in one shot, this ALWAYS holds for honest input (no
+    // odd-position-duplicate completeness gap). It forces DISTINCT active
+    // values ⇒ every same-value run fully collapsed and no count-split; with
+    // the union multiset conservation + derived per-run sums + mass
+    // conservation, the certified S_t is the UNIQUE canonical per-value
+    // aggregation of S_{t-1} ⊎ B.
+    for r in 0..total - 1 {
+        let both_active = b.mul(g_sorted_fields[r][3], g_sorted_fields[r + 1][3]);
+        let diff = b.sub(g_sorted_fields[r + 1][0], g_sorted_fields[r][0]);
+        let diff_m1 = b.sub(diff, one);
+        let gated = b.mul(both_active, diff_m1);
+        let _ = b
+            .decompose_to_bits::<Val>(gated, VALUE_DIFF_BITS)
+            .expect("strict active value-ascent (final canonicalization)");
+    }
+
+    // ─── Stage 8: Compaction binding excess ↔ g_sorted[..batch],
+    //                              S_new  ↔ g_sorted[batch..] ───
+    //
+    // g_sorted is in `(active asc, value asc)` order (dummies first, then the
+    // distinct-valued survivors in value-asc order). The first `batch` rows
+    // become `excess`; the next `capacity` rows become `S_new` — the
+    // **largest `capacity` distinct values** (padded with the smallest few
+    // dummies if fewer than `capacity` distinct active values existed).
     //
     // We bind the **decomposed base coefficients** field-by-field (Plonky3
     // disallows connecting two packed Challenges that have both already
@@ -1272,14 +1297,16 @@ fn prove_gk_full_inner(
     //
     // End-to-end soundness chain now closed:
     //   Step 2 (Stage 6): multiset(U) = multiset(S_old ‖ B_as_tuples)
-    //   Step 5 (Stage 7.6): F = per-pair fusion of U (verified)
-    //   Resort (Stage 7.7): multiset(F_sorted) = multiset(F)
-    //   Sortedness (Stage 7.8): F_sorted uniquely ordered
-    //   Compaction (here): S_new = F_sorted[batch..], excess = F_sorted[..batch]
-    // ⇒ every active tuple in S_new traces back to S_old ∪ B, with
-    //   adjacent same-value duplicates fused per GK §5.4. No fabricated
-    //   values, no cherry-picking, no skipped fusions a malicious prover
-    //   could exploit to inflate rank estimates.
+    //   Sortedness (Stage 7.5): U uniquely `(active asc, value asc)` ⇒ every
+    //     same-value run contiguous (no fragmentation)
+    //   Group-by (Stage 7): G = per-run count/max_error sum of U (derived)
+    //   Resort (Stage 7.7): multiset(g_sorted) = multiset(G)
+    //   Canonicalize (Stage 7.8): g_sorted distinct-valued (no under-fusion,
+    //     no count-split)
+    //   Compaction (here): S_new = g_sorted[batch..], excess = g_sorted[..batch]
+    // ⇒ every active tuple in S_new is the canonical per-value aggregate of
+    //   rows tracing back to S_old ∪ B. No fabricated values, no fragmentation,
+    //   no cherry-picking a malicious prover could exploit to inflate ranks.
     let excess_fields: Vec<Vec<ExprId>> = excess_packed
         .iter()
         .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose excess"))
@@ -1287,12 +1314,12 @@ fn prove_gk_full_inner(
 
     for i in 0..m {
         for k in 0..4 {
-            b.connect(excess_fields[i][k], fused_sorted_fields[i][k]);
+            b.connect(excess_fields[i][k], g_sorted_fields[i][k]);
         }
     }
     for i in 0..cap {
         for k in 0..4 {
-            b.connect(final_fields[i][k], fused_sorted_fields[m + i][k]);
+            b.connect(final_fields[i][k], g_sorted_fields[m + i][k]);
         }
     }
 
@@ -1333,40 +1360,61 @@ fn prove_gk_full_inner(
     public_inputs.extend_from_slice(&batch_commit_packed);
 
     // NOTE: this order MUST match the `alloc_private_input` order above:
-    //   init, final, batch, union,
-    //   [round 0..L: decision bits], [round 0..L: resorted table], excess.
+    //   init, final, batch, union, grouped, g_sorted, excess,
+    //   value_eq_tag, val_inv_diff, acc_active_inv.
     let mut private_inputs: Vec<Challenge> = Vec::new();
     private_inputs.extend_from_slice(&pack_state_to_challenge(&initial_state));
     private_inputs.extend_from_slice(&pack_state_to_challenge(&final_state));
     private_inputs.extend_from_slice(&pack_batch_to_challenge(&batch));
     private_inputs.extend_from_slice(&pack_union_to_challenge(&union_tuples));
-    // Step 5 witnesses: all rounds' decision bits, then all rounds'
-    // resorted tables. `rounds_data[r].sigma` is consumed as the round's
-    // PermuteAir config (not a private input); the fused table itself is
-    // re-derived in-circuit.
-    for rd in &rounds_data {
-        for &d in &rd.decisions {
-            private_inputs.push(if d { Challenge::ONE } else { Challenge::ZERO });
-        }
+    private_inputs.extend_from_slice(&pack_union_to_challenge(&build.grouped));
+    #[allow(unused_mut)]
+    let mut g_sorted_vals = pack_union_to_challenge(&build.g_sorted);
+    // [test-only] corrupt the post-collapse table to confirm the resort
+    // PermuteAir + sortedness + compaction reject it.
+    #[cfg(test)]
+    if TAMPER_GSORTED.with(|c| c.get()) {
+        use p3_field::PrimeCharacteristicRing;
+        g_sorted_vals[0] += Challenge::ONE;
     }
-    for (r, rd) in rounds_data.iter().enumerate() {
-        // `mut` is only used by the `#[cfg(test)]` tamper block below.
-        #[allow(unused_mut)]
-        let mut resorted_vals = pack_union_to_challenge(&rd.resorted);
-        // [test-only] corrupt the FINAL round's resorted table (the one
-        // compaction binds S_new/excess to) to confirm the resort
-        // PermuteAir + sortedness + compaction constraints reject it.
-        // Bumping one entry makes it no longer the σ image of the
-        // in-circuit fused table, so the Stage 7.7 connect can't hold.
-        #[cfg(test)]
-        if r + 1 == rounds_data.len() && TAMPER_FUSED_SORTED.with(|c| c.get()) {
-            use p3_field::PrimeCharacteristicRing;
-            resorted_vals[0] += Challenge::ONE;
-        }
-        let _ = r;
-        private_inputs.extend_from_slice(&resorted_vals);
-    }
+    private_inputs.extend_from_slice(&g_sorted_vals);
     private_inputs.extend_from_slice(&pack_union_to_challenge(&excess_tuples));
+    // value_eq_tag
+    for &t in &build.value_eq_tag {
+        private_inputs.push(if t == 1 { Challenge::ONE } else { Challenge::ZERO });
+    }
+    // val_inv_diff: inverse of (union_value[r] − union_value[r-1]) when
+    // distinct, else 0. r=0 unused (push 0).
+    {
+        use p3_field::Field;
+        private_inputs.push(Challenge::ZERO);
+        for r in 1..total {
+            let d = union_tuples[r].value as i128 - union_tuples[r - 1].value as i128;
+            let inv = if d == 0 {
+                Challenge::ZERO
+            } else {
+                let cur = Challenge::from_u64(union_tuples[r].value as u64);
+                let prev = Challenge::from_u64(union_tuples[r - 1].value as u64);
+                (cur - prev).inverse()
+            };
+            private_inputs.push(inv);
+        }
+    }
+    // acc_active_inv: inverse of the per-segment active running sum (0 when the
+    // sum is 0), for the is-nonzero gadget that binds grouped.active.
+    {
+        use p3_field::Field;
+        let mut acc_a = 0u64;
+        for r in 0..total {
+            acc_a = if r > 0 && build.value_eq_tag[r] == 1 {
+                acc_a + union_tuples[r].active as u64
+            } else {
+                union_tuples[r].active as u64
+            };
+            let inv = if acc_a == 0 { Challenge::ZERO } else { Challenge::from_u64(acc_a).inverse() };
+            private_inputs.push(inv);
+        }
+    }
 
     // ─── Run + prove ────────────────────────────────────────────────────
     let __t_w = std::time::Instant::now();
@@ -1509,16 +1557,202 @@ mod tests {
         assert!(result.rank(11) >= 2);
     }
 
-    /// Native-side exercise of [`fuse_round_parity0`] + the resort + the
-    /// compaction performed by [`apply_batch_full`]. Two duplicate values
-    /// in the batch should land in a single fused tuple with `count = 2`
-    /// in the final state. The total mass equals the active batch count.
-    /// (Step 5 is verified on the native side only — see Stage 7.6's
-    /// deferred-status comment for the in-circuit gap.)
+    /// **Group-by collapse: a repeated value verifies + collapses to ONE
+    /// tuple with the summed count.** The single-pass group-by-value sums the
+    /// whole same-value run in one shot; the final state carries exactly one
+    /// active value-42 tuple with count 2, and the proof self-verifies.
+    #[test]
+    fn duplicate_values_collapse() {
+        let params = GKFullParams { capacity: 4, batch: 2 };
+        let updates = vec![GKFullUpdate::real(42), GKFullUpdate::real(42)];
+
+        let result = generate_proof(params, updates);
+        assert_eq!(commit_gk_state(&result.final_state).0, result.proof.final_.0);
+        let actives: Vec<_> =
+            result.final_state.tuples.iter().filter(|t| t.active == 1).collect();
+        assert_eq!(actives.len(), 1, "the same-value run collapses to one tuple");
+        assert_eq!(actives[0].value, 42);
+        assert_eq!(actives[0].count, 2, "grouped count = 1 + 1");
+        assert_eq!(result.final_state.total_mass(), 2);
+    }
+
+    /// **Regression: count-split is rejected (canonical collapse).** The
+    /// certified transition must fully collapse every same-value run so the
+    /// output is the unique per-value aggregation — a prover cannot leave a
+    /// value in TWO active tuples (which would split its count and make the
+    /// retained state non-deterministic). `TAMPER_SPLIT` skips the segment
+    /// collapse for one value, leaving two adjacent active value-42 tuples;
+    /// the strict active value-ascent (zero value-gap ⇒ gated = −1 ≈ p) must
+    /// reject it.
+    #[test]
+    fn count_split_rejected() {
+        let params = GKFullParams { capacity: 4, batch: 2 };
+        let updates = vec![GKFullUpdate::real(42), GKFullUpdate::real(42)];
+
+        // Honest: the run collapses; the proof verifies and mass is preserved.
+        let ok = generate_proof(params, updates.clone());
+        assert_eq!(ok.final_state.total_mass(), 2, "honest run collapses to one value-42 tuple");
+
+        // Count-split: leave the value in two active tuples.
+        TAMPER_SPLIT.with(|f| f.set(true));
+        let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            generate_proof(params, updates.clone())
+        }));
+        TAMPER_SPLIT.with(|f| f.set(false));
+        assert!(
+            mal.is_err(),
+            "count-split (un-collapsed duplicate active values) must be rejected by strict ascent",
+        );
+    }
+
+    /// **Regression: union fragmentation is rejected.** The circuit binds the
+    /// value-union to `[old ‖ batch]` only as a MULTISET permutation and groups
+    /// by ADJACENCY equality. The union value-sortedness (Stage 7.5) forces
+    /// every same-value run contiguous, so a prover cannot scatter a value's
+    /// rows to fragment its aggregate. Leaving the union unsorted (identity
+    /// σ_union) so two value-7 rows are non-adjacent must fail the value
+    /// range-check / sortedness. Here old {value 7} + batch {value 3, value 7}:
+    /// unsorted `[7, 3, 7]` has a descent (7→3) that wraps and is rejected.
+    #[test]
+    fn fragmentation_rejected() {
+        let params = GKFullParams { capacity: 2, batch: 2 };
+        let initial = GKFullState {
+            tuples: vec![GKFullTuple::real(7, 1, 0), GKFullTuple::dummy()],
+            params,
+        };
+        let batch = vec![GKFullUpdate::real(3), GKFullUpdate::real(7)];
+
+        // Honest transition verifies (value-sorted union passes the checks).
+        let _honest = prove_gk_full(params, initial.clone(), batch.clone());
+
+        // Attack: leave the union unsorted so the two value-7 rows fragment.
+        TAMPER_FRAGMENT.with(|f| f.set(true));
+        let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_gk_full(params, initial.clone(), batch.clone())
+        }));
+        TAMPER_FRAGMENT.with(|f| f.set(false));
+        assert!(
+            mal.is_err(),
+            "FIX REGRESSED: fragmenting the union must be rejected by value-sortedness",
+        );
+    }
+
+    /// **Regression (canonicality): a malformed S_old dummy carrying a nonzero
+    /// count is rejected.** Historically the group-by summed the RAW union count
+    /// (not `count·active`) and never constrained `active=0 ⇒ count=0`, so an
+    /// `active=0` dummy with `count=9` opened from `init_commit` seeded a
+    /// count-9 *dummy* grouped row that `σ_group` could route into either the
+    /// final or the excess region — two distinct S_new for one (S_old,B). Two
+    /// independent barriers now reject it: (1) the init well-formedness check
+    /// `active=0 ⇒ count=0 ∧ max_error=0`, and (2) the active-gated group-by
+    /// sums (an inactive row contributes 0), which forces every dummy grouped
+    /// row to a canonical `(0,0,0,0)`. `TAMPER_DUMMY_COUNT` additionally makes
+    /// the prover *emit* the raw count on the dummy grouped row (the witness a
+    /// malicious prover would supply); barrier (2) rejects that too.
+    #[test]
+    fn malformed_dummy_count_rejected() {
+        let params = GKFullParams { capacity: 2, batch: 2 };
+        let batch = vec![GKFullUpdate::real(7), GKFullUpdate::dummy()];
+
+        // Honest counterpart: an all-zero dummy S_old proves fine.
+        let honest = GKFullState {
+            tuples: vec![GKFullTuple::real(5, 1, 0), GKFullTuple::dummy()],
+            params,
+        };
+        let _ok = prove_gk_full(params, honest, batch.clone());
+
+        // Malformed dummy: value=3, count=9, active=0.
+        let malformed_dummy = GKFullTuple { value: 3, count: 9, max_error: 0, active: 0 };
+        let initial = GKFullState {
+            tuples: vec![GKFullTuple::real(5, 1, 0), malformed_dummy],
+            params,
+        };
+
+        // Barrier (1): the malformed init alone (native zeroes dummy grouped
+        // rows, so the honest witness is well-formed) must be rejected by the
+        // init `active=0 ⇒ count=0` check.
+        let mal_init = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_gk_full(params, initial.clone(), batch.clone())
+        }));
+        assert!(
+            mal_init.is_err(),
+            "FIX REGRESSED: a committed S_old dummy with nonzero count must be rejected",
+        );
+
+        // Barrier (2): the full malicious witness (raw count emitted on the dummy
+        // grouped row) must be rejected by the active-gated group-by binding.
+        TAMPER_DUMMY_COUNT.with(|f| f.set(true));
+        let mal_witness = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_gk_full(params, initial.clone(), batch.clone())
+        }));
+        TAMPER_DUMMY_COUNT.with(|f| f.set(false));
+        assert!(
+            mal_witness.is_err(),
+            "FIX REGRESSED: a count-carrying dummy grouped row must be rejected",
+        );
+    }
+
+    /// **Regression (canonicality): max_error laundering is rejected.** An
+    /// inactive row `(v=5, max_error=99, active=0)` sharing a value-run with an
+    /// active survivor `(v=5, count=1, active=1)` used to have its stale
+    /// `max_error=99` summed into the survivor (the group-by summed raw
+    /// max_error, and max_error is in no mass identity nor range-check) — a
+    /// forged per-value ε/Δ certificate with an accepting proof. The init
+    /// `active=0 ⇒ max_error=0` check and the active-gated `acc_maxerr` both
+    /// reject it now.
+    #[test]
+    fn max_error_laundering_rejected() {
+        let params = GKFullParams { capacity: 2, batch: 2 };
+        let batch = vec![GKFullUpdate::dummy(), GKFullUpdate::dummy()];
+        let initial = GKFullState {
+            tuples: vec![
+                GKFullTuple { value: 5, count: 0, max_error: 99, active: 0 },
+                GKFullTuple { value: 5, count: 1, max_error: 0, active: 1 },
+            ],
+            params,
+        };
+        let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_gk_full(params, initial.clone(), batch.clone())
+        }));
+        assert!(
+            mal.is_err(),
+            "FIX REGRESSED: an inactive row's max_error must not launder onto an active survivor",
+        );
+    }
+
+    /// **Regression (field-wrap): an out-of-domain count is rejected.** Counts
+    /// (union inputs and grouped survivors) are range-checked to
+    /// `< 2^(COUNT_DIFF_BITS−1)`; a committed S_old count at/above the bound —
+    /// which a malicious prover could pick `≈ p` so a segment sum wraps the
+    /// field down to a small residue — is rejected by the union count
+    /// range-check before it can corrupt the certified integer count. Mirrors
+    /// `ss_final_full::count_overflow_rejected`.
+    #[test]
+    fn gk_count_overflow_rejected() {
+        let params = GKFullParams { capacity: 2, batch: 2 };
+        let batch = vec![GKFullUpdate::real(5), GKFullUpdate::dummy()];
+        let over = 1u32 << (COUNT_DIFF_BITS - 1); // 2^21, out of the count domain
+        let initial = GKFullState {
+            tuples: vec![GKFullTuple::real(5, over, 0), GKFullTuple::dummy()],
+            params,
+        };
+        let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_gk_full(params, initial.clone(), batch.clone())
+        }));
+        assert!(
+            mal.is_err(),
+            "a count ≥ 2^(COUNT_DIFF_BITS−1) must be rejected by the range-check",
+        );
+    }
+
+    /// Native-side exercise of the single-pass group-by-value collapse
+    /// performed by [`apply_batch_full`]. Two duplicate values in the batch
+    /// should land in a single grouped tuple with `count = 2` in the final
+    /// state. The total mass equals the active batch count.
     #[test]
     fn gk_full_native_fusion_round_trip() {
         let params = GKFullParams { capacity: 4, batch: 2 };
-        // Two updates with the same value — should fuse natively.
+        // Two updates with the same value — should collapse natively.
         let updates = vec![GKFullUpdate::real(42), GKFullUpdate::real(42)];
 
         let s0 = GKFullState::empty(params);
@@ -1566,15 +1800,13 @@ mod tests {
         assert_eq!(result.final_state.total_mass(), 2);
     }
 
-    /// Multi-round fusion: four copies of one value cannot collapse in a
-    /// single parity-0 round (that only pairs them down to two count-2
-    /// tuples); it needs `⌈log₂(total)⌉ ≥ 2` rounds. This proves the
-    /// L-round schedule is wired end-to-end in-circuit — the final state
-    /// must carry a single active tuple with count = 4.
+    /// Long same-value run: four copies of one value collapse in the single
+    /// group-by pass into one active tuple with count = 4 (the old L-round
+    /// schedule needed `⌈log₂(total)⌉ ≥ 2` rounds; the group-by sums the whole
+    /// run in one shot). The proof self-verifies.
     #[test]
     fn gk_full_in_circuit_multiround_fusion() {
         let params = GKFullParams { capacity: 4, batch: 4 };
-        assert!(num_fusion_rounds(params.union_size()) >= 2);
         let updates = vec![
             GKFullUpdate::real(55),
             GKFullUpdate::real(55),
@@ -1585,141 +1817,35 @@ mod tests {
         assert_eq!(commit_gk_state(&result.final_state).0, result.proof.final_.0);
         let actives: Vec<_> =
             result.final_state.tuples.iter().filter(|t| t.active == 1).collect();
-        assert_eq!(actives.len(), 1, "all four copies must fuse into one tuple");
+        assert_eq!(actives.len(), 1, "all four copies must collapse into one tuple");
         assert_eq!(actives[0].value, 55);
-        assert_eq!(actives[0].count, 4, "fused count = 4 across multiple rounds");
+        assert_eq!(actives[0].count, 4, "grouped count = 4 in a single pass");
         assert_eq!(result.final_state.total_mass(), 4);
     }
 
-    /// Pipeline-preserving optimization: capping the fusion-round count
-    /// below the worst-case `⌈log₂(total)⌉` yields the **identical** result
-    /// when no value's run exceeds `2^rounds`. Here every value repeats at
-    /// most twice (max run = 2), so `fusion_rounds = 1` matches the full
-    /// schedule exactly — proving the reduced-round circuit is correct, not
-    /// just faster.
-    #[test]
-    fn gk_full_reduced_rounds_matches_full_when_runs_fit() {
-        let params = GKFullParams { capacity: 4, batch: 4 };
-        // Two distinct values, each appearing twice → max run length 2.
-        let updates = vec![
-            GKFullUpdate::real(5),
-            GKFullUpdate::real(5),
-            GKFullUpdate::real(9),
-            GKFullUpdate::real(9),
-        ];
-        // Native full vs 1-round must agree for this max-run-2 workload.
-        let s0 = GKFullState::empty(params);
-        let (full_state, _) = apply_batch_full(&s0, &updates);
-        let (r1_state, _) = apply_batch_full_with_rounds(&s0, &updates, 1);
-        assert_eq!(full_state, r1_state, "1 round must equal full for max-run-2");
-
-        // The 1-round proof certifies exactly that state.
-        let proof = prove_gk_full_with_rounds(params, s0, updates, 1);
-        assert_eq!(commit_gk_state(&full_state).0, proof.final_.0);
-        let actives: Vec<_> = full_state.tuples.iter().filter(|t| t.active == 1).collect();
-        assert_eq!(actives.len(), 2);
-        assert!(actives.iter().all(|t| t.count == 2));
-        assert_eq!(full_state.total_mass(), 4);
-    }
-
-    /// Graceful degradation: when a run exceeds `2^rounds`, the reduced-
-    /// round proof still **verifies** (it's a valid k-round update) — the
-    /// surplus duplicates simply remain un-fused, sorted and mass-conserved.
-    /// Four copies of one value with `fusion_rounds = 1` collapse only to
-    /// two count-2 tuples (full needs 2 rounds for count-4), yet mass is
-    /// preserved and the leaf self-verifies.
-    #[test]
-    fn gk_full_reduced_rounds_underfuses_gracefully() {
-        let params = GKFullParams { capacity: 4, batch: 4 };
-        let updates = vec![
-            GKFullUpdate::real(7),
-            GKFullUpdate::real(7),
-            GKFullUpdate::real(7),
-            GKFullUpdate::real(7),
-        ];
-        let s0 = GKFullState::empty(params);
-        let (r1_state, _) = apply_batch_full_with_rounds(&s0, &updates, 1);
-        // 1 round merges into pairs: two (7, count 2) tuples, not one (7,4).
-        let actives: Vec<_> = r1_state.tuples.iter().filter(|t| t.active == 1).collect();
-        assert_eq!(actives.len(), 2, "1 round leaves 2 partially-fused tuples");
-        assert!(actives.iter().all(|t| t.value == 7 && t.count == 2));
-        // Mass is still conserved and the reduced-round proof verifies.
-        assert_eq!(r1_state.total_mass(), 4);
-        let proof = prove_gk_full_with_rounds(params, s0, updates, 1);
-        assert_eq!(commit_gk_state(&r1_state).0, proof.final_.0);
-    }
-
-    #[test]
-    #[ignore]
-    fn gk_full_fusion_rounds_sweep() {
-        use std::time::Instant;
-        let (threads, threads_label) = resolve_threads();
-        let params = GKFullParams { capacity: 32, batch: 100 };
-        let full = num_fusion_rounds(params.union_size());
-
-        println!();
-        println!("gk_final_full — prove time vs. fusion-round count (pipeline-preserving)");
-        println!("=====================================================================");
-        println!("  threads: {threads_label}");
-        println!("  capacity={}, batch={}, full ⌈log₂(total)⌉ = {full}", params.capacity, params.batch);
-        println!();
-
-        for &rounds in &[1usize, 2, 4, full] {
-            let updates = gen_padded_batch(params, 60);
-            let elapsed = with_pool(threads, move || {
-                let s0 = GKFullState::empty(params);
-                let t = Instant::now();
-                let _ = prove_gk_full_with_rounds(params, s0, updates, rounds);
-                t.elapsed()
-            });
-            println!("  fusion_rounds={rounds:>2} (of {full})   prove {elapsed:>10.2?}");
-        }
-    }
-
-    /// Step 4 gate binds: with θ_t tightened to 0, a batch that fuses
-    /// (two equal values, merged band = 2 > 0) must be rejected by the
-    /// band range-check. Confirms the threshold gate is a real constraint,
-    /// not a no-op. (At the production θ_t = N_t the same batch is
-    /// accepted — see `gk_full_in_circuit_fusion_accepts`.)
-    #[test]
-    fn gk_full_step4_threshold_gate_binds() {
-        let params = GKFullParams { capacity: 4, batch: 2 };
-        let updates = vec![GKFullUpdate::real(13), GKFullUpdate::real(13)];
-
-        TIGHTEN_THETA.with(|c| c.set(true));
-        let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            generate_proof(params, updates)
-        }));
-        TIGHTEN_THETA.with(|c| c.set(false)); // reset for other tests
-        assert!(
-            rejected.is_err(),
-            "fusion with merged band > θ_t (=0) was accepted — Step 4 gate is a no-op"
-        );
-    }
-
-    /// Soundness: if a malicious prover supplies a `fused_sorted` table
-    /// that isn't the σ_resort image of the in-circuit fusion, the resort
-    /// PermuteAir + sortedness + compaction constraints must reject it.
-    /// We flip the test-only tamper flag and assert that proving panics
-    /// (self-verify fails on the WitnessChecks / lookup bus).
+    /// Soundness: if a malicious prover supplies a `g_sorted` table that isn't
+    /// the σ_group image of the grouped candidates, the resort PermuteAir +
+    /// sortedness + compaction constraints must reject it. We flip the
+    /// test-only tamper flag and assert that proving panics (self-verify fails
+    /// on the WitnessChecks / lookup bus).
     #[test]
     fn gk_full_fusion_soundness_rejects_bad_table() {
         let params = GKFullParams { capacity: 4, batch: 2 };
         let updates = vec![GKFullUpdate::real(7), GKFullUpdate::real(11)];
 
         // Sanity: honest prove succeeds (tamper off).
-        TAMPER_FUSED_SORTED.with(|c| c.set(false));
+        TAMPER_GSORTED.with(|c| c.set(false));
         let _ok = generate_proof(params, updates.clone());
 
-        // Now corrupt the post-fusion table: prove must fail.
-        TAMPER_FUSED_SORTED.with(|c| c.set(true));
+        // Now corrupt the post-collapse table: prove must fail.
+        TAMPER_GSORTED.with(|c| c.set(true));
         let bad = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             generate_proof(params, updates)
         }));
-        TAMPER_FUSED_SORTED.with(|c| c.set(false)); // reset for other tests
+        TAMPER_GSORTED.with(|c| c.set(false)); // reset for other tests
         assert!(
             bad.is_err(),
-            "corrupted fused_sorted table was accepted — Step 5 resort/compaction \
+            "corrupted g_sorted table was accepted — group-by resort/compaction \
              constraints are not sound"
         );
     }

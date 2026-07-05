@@ -33,24 +33,33 @@
 #   EXP_W                 Count-Min width w, power of two ≥ 2         (default 8)
 #   EXP_CM_VARIANT        one_hot|omc|merkle|comma-list           (default omc,merkle)
 #                         (EXP_STREAM_CM_VARIANT also accepted; the stream runner is CM-only)
-#   EXP_STREAM_MERGE      digest | recursive | recursive_bound | chain  (default digest)
-#                         digest = cheap §4.2 commitment fold (merge ~µs); recursive =
-#                         §4.3(c) fold where every merge verifies its two children
-#                         in-circuit (merge = real, large); recursive_bound = recursive
-#                         + binds left.final==right.initial IN-circuit via the Expose NPO
-#                         (NPO gap closed; all variants); chain = the linear §4.3 IVC
-#                         Π^(t)=merge(Π^(t-1),π_t) over the same leaves (comparison
-#                         baseline vs the recursive tree — O(t) vs O(log t) depth).
-#                         recursive*/chain prove leaves sequentially, k-sweep ignored
-#                         — use small N / few leaves.
+#   EXP_STREAM_MERGE      digest | per_batch | chain | recursive | recursive_bound (default digest)
+#                         The three §Streaming-Proof-Composition modes + a cheap
+#                         proxy. per_batch = the PER-BATCH PROOF CHAIN: one
+#                         independent proof per batch, NO fold; each proof is
+#                         stored under EXP_STREAM_PROOF_DIR and the verifier holds
+#                         all t (proof_bytes + verify_ms are Θ(t)). chain = the
+#                         RECURSIVE LINEAR CHAIN Π^(t)=merge(Π^(t-1),π_t) (O(t)
+#                         depth); recursive = the STREAMING FOREST Bentley–Saxe
+#                         tree fold (O(log t) depth) — both fold to one O(1) root,
+#                         so proof_bytes/verify_ms are the single root's.
+#                         recursive_bound = recursive + binds left.final==right.initial
+#                         IN-circuit via the Expose NPO (NPO gap closed). digest =
+#                         cheap §4.2 commitment fold (merge ~µs, no STARK verify).
+#                         per_batch/chain/recursive* prove leaves sequentially,
+#                         k-sweep ignored — use small N / few leaves.
+#   EXP_STREAM_PROOF_DIR  folder the per_batch mode writes proofs into
+#                         (default results/per_batch_proofs; one subfolder per cell)
 #   EXP_OUT / $1          rename output to results/<name>.csv (the .csv is optional)
 #
 # The omc leaf needs d·w % 4 == 0; the merkle leaf needs w a power of 2.
 #
 # Output: results/stream_forest.csv with columns
-#   dataset,variant,d,w,n,m,t,k,cores_per_leaf,merge_mode,total_time_ms,leafgen_ms,merge_ms,records_per_sec,speedup,peak_rss_mb,status
-#   (total_time_ms = leafgen_ms + merge_ms — leaf proving vs the forest fold;
-#    merge_mode = digest | recursive | recursive_bound | chain)
+#   dataset,variant,d,w,n,m,t,k,cores_per_leaf,merge_mode,total_time_ms,leafgen_ms,merge_ms,verify_ms,proof_bytes,records_per_sec,speedup,peak_rss_mb,status
+#   (total_time_ms = leafgen_ms + merge_ms — leaf proving vs the fold;
+#    verify_ms + proof_bytes = the verifier-facing cost, Θ(t) for per_batch vs
+#    O(1) for the composed roots;
+#    merge_mode = digest | per_batch | chain | recursive | recursive_bound)
 #
 # RUNTIME WARNING: total proving work ≈ N records of real STARK proving, so at
 # k cores it is ~ (N · per-record-cost)/k and the smallest-k cells dominate. For

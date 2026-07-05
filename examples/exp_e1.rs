@@ -33,7 +33,12 @@ use zksketch::sketch::countmin_c_merkle::{prove_countmin_c_merkle_leaf, CountMin
 use zksketch::sketch::countmin_memcheck::{prove_countmin_memcheck, CmMemcheckParams};
 use zksketch::sketch::countmin_omc::{prove_countmin_omc, CmOmcParams};
 use zksketch::sketch::hll_merkle::{prove_hll_merkle_leaf, HllMerkleParams};
+use zksketch::sketch::hll_omc::{prove_hll_omc, HllOmcParams};
 use zksketch::sketch::gk_final_full::{generate_proof as gk_prove, GKFullParams, GKFullState, GKFullUpdate};
+use zksketch::sketch::gk_bandmerge::{
+    generate_proof as gkb_prove, generate_proof2 as gkb2_prove,
+    generate_proof2_naive as gkb2n_prove, GkbParams,
+};
 use zksketch::sketch::greenwald_khanna_naive::generate_proof_naive as gk_naive_prove;
 use zksketch::sketch::hll_final_full::{generate_proof as hll_prove, HllFullParams, HllFullUpdate};
 use zksketch::sketch::ss_final_full::{generate_proof as ss_prove, SsFullParams, SsFullState, SsFullUpdate};
@@ -47,6 +52,25 @@ fn env_list(key: &str, default: &[usize]) -> Vec<usize> {
         Ok(s) => s.split(',').filter_map(|x| x.trim().parse().ok()).collect(),
         Err(_) => default.to_vec(),
     }
+}
+
+/// Largest GK band-merge accuracy `s = 1/ε` the capacity supports at stream
+/// length `n` — the space-accuracy coupling `capacity ≳ s·log2(n/s)`, inverted
+/// with a 2× safety factor (using `log2 n ≥ log2(n/s)` so it never fragments).
+/// Lets a single `EXP_GK_CAP` set the GK size (matches `exp_compose`). For e1's
+/// single-leaf-from-empty benchmark, `n` is the batch size `me` the leaf covers.
+fn derive_gk_s(cap: usize, n: usize) -> u64 {
+    let logn = (n.max(4) as f64).log2().ceil().max(1.0);
+    ((cap as f64 / (2.0 * logn)).floor() as u64).max(2)
+}
+
+/// Round a requested batch size up to an even value ≥ 2 (GK/SS/HLL require an
+/// even batch). Round the CLAMPED value, else `m=1 → 2+(1%2)=3` (odd → panic).
+/// Used for BOTH `me` and `max_m` so enough dataset keys are loaded for the
+/// rounded batch (else `slice_e` is short of `batch` and the leaf panics).
+fn round_even_batch(m: usize) -> usize {
+    let x = m.max(2);
+    x + (x % 2)
 }
 
 /// `n` keys from the named dataset (synthetic generated; real sliced). `None`
@@ -123,7 +147,9 @@ fn main() {
     let datasets: Vec<String> =
         dataset_arg.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     let ms = env_list("EXP_M", &[4, 8, 16, 32]);
-    let max_m = *ms.iter().max().unwrap_or(&32);
+    // Load enough keys for the ROUNDED batch (`me`), not the raw `m`, so
+    // `slice_e = take(keys, me)` is never short of `batch` (e.g. EXP_M=1 → me=2).
+    let max_m = ms.iter().map(|&m| round_even_batch(m)).max().unwrap_or(32);
     // EXP_FAMILY filters which families run: "all" (default) or a comma-list of
     // cm|gk|hll|ss (e.g. EXP_FAMILY=cm runs only Count-Min, both variants).
     let family_sel = env_str("EXP_FAMILY", "all");
@@ -246,7 +272,7 @@ fn main() {
         println!("-- dataset={dataset} --");
         for &m in &ms {
             let slice = take(&keys, m);
-            let me = m.max(2) + (m % 2); // even batch for GK/SS/HLL
+            let me = round_even_batch(m);
             let slice_e = take(&keys, me);
 
             if want("cm") {
@@ -399,18 +425,37 @@ fn main() {
             if want("gk") {
                 // GK quantile summary — size = capacity (the tuple budget).
                 //   EXP_GK_CAP      comma-list of capacities  (default 8; even ≥2)
-                //   EXP_GK_VARIANT  certified|naive|both|comma-list (default certified).
+                //   EXP_GK_VARIANT  certified|naive|bandmerge|bandmerge2|both|comma-list (default certified).
+                //     bandmerge = one-sided (§3 toy) real GK; bandmerge2 = two-sided (§4 optimal, mirrored).
+                //   EXP_GK_S        band-merge accuracy s=1/ε (θ_t=⌊N_t/s⌋). DERIVED
+                //                   from (cap, batch) unless set — so EXP_GK_CAP alone
+                //                   sets the GK size (mirrors run_compose; a small cap
+                //                   with a large explicit s fragments → too_large).
                 //   `naive` = per-record oblivious in-circuit replay; `certified` =
-                //   the batched L-round fusion leaf. NOTE: the naive leaf computes a
-                //   valid GK summary via insert-then-merge, which may differ from the
-                //   certified batched fusion when compression fires (GK summaries are
-                //   not canonical) — it is a COST baseline, not a same-final replay.
+                //   the same-value-collapse group-by leaf (exact per-value aggregation,
+                //   NO log factor); `bandmerge` = the REAL Greenwald–Khanna distinct-value
+                //   quantile band-merge (gk_bandmerge.rs) — L_f=⌈log₂(cap+m)⌉ forced-
+                //   decision fusion rounds, so it carries the honest log factor and costs
+                //   ~L_f× the `certified`/SS leaf. NOTE: the naive leaf computes a valid
+                //   GK summary via insert-then-merge, a COST baseline, not a same-final replay.
                 let gk_variant = env_str("EXP_GK_VARIANT", "certified");
                 let gk_wants = |v: &str| gk_variant == "both" || gk_variant.split(',').any(|x| x.trim() == v);
                 let ups: Vec<GKFullUpdate> = slice_e.iter().map(|&k| GKFullUpdate::real(k & 0x003F_FFFF)).collect();
                 for &cap in &env_list("EXP_GK_CAP", &[8]) {
                     let cap = cap.max(2) + (cap % 2);
                     let p = GKFullParams { capacity: cap, batch: me };
+                    // Band-merge accuracy: honor EXP_GK_S if set, else derive from
+                    // (cap, me) so EXP_GK_CAP alone sets the GK size (matches
+                    // run_compose). Shared by the three band-merge variants below.
+                    let s_param: u64 = match std::env::var("EXP_GK_S") {
+                        Ok(v) => v.trim().parse().unwrap_or_else(|_| derive_gk_s(cap, me)),
+                        Err(_) => derive_gk_s(cap, me),
+                    };
+                    if (gk_wants("bandmerge") || gk_wants("bandmerge2") || gk_wants("bandmerge2_naive"))
+                        && std::env::var("EXP_GK_S").is_err()
+                    {
+                        println!("  gk cap={cap} m={me}: s=1/ε={s_param} (derived from cap)");
+                    }
                     if gk_wants("certified") {
                         let agg = bench(c, || { let r = gk_prove(p, ups.clone()); outcome(proof_size(&r.proof.output.0) as u64) });
                         append_csv(&dir, "e1_circuit", &hdr, &row("gk", "certified", me, 0, 0, cap, &agg));
@@ -425,13 +470,61 @@ fn main() {
                             }
                         }
                     }
+                    if gk_wants("bandmerge") {
+                        // The REAL Greenwald–Khanna band-merge (distinct-value quantile
+                        // compression, gk_bandmerge.rs): L_f=⌈log₂(cap+m)⌉ forced-decision
+                        // fusion rounds, so its cost carries the honest log factor (unlike
+                        // the same-value-collapse `certified` leaf). Accuracy s=1/ε via
+                        // EXP_GK_S (θ_t=⌊N_t/s⌋); values masked to 21 bits (< E_MAX=2^22−1).
+                        let bvals: Vec<u32> = slice_e.iter().map(|&k| (k & 0x001F_FFFF) as u32).collect();
+                        let gp = GkbParams { capacity: cap, batch: me, s: s_param };
+                        match bench_guarded(c, || { let r = gkb_prove(gp, bvals.clone()); outcome(proof_size(&r.proof.output.0) as u64) }) {
+                            Some(agg) => { append_csv(&dir, "e1_circuit", &hdr, &row("gk", "bandmerge", me, 0, 0, cap, &agg)); }
+                            None => {
+                                println!("  gk bandmerge m={me} cap={cap}: SKIPPED — too large / hard case");
+                                append_csv(&dir, "e1_circuit", &hdr, &row_skip("gk", "bandmerge", me, 0, 0, cap, "too_large"));
+                            }
+                        }
+                    }
+                    if gk_wants("bandmerge2") {
+                        // The TWO-SIDED (optimal) Gribelyuk §4 band-merge: combines GK
+                        // with its mirror (Khanna–Greenwald), so it certifies the full
+                        // bidirectional fusion and achieves the O(ε⁻¹·log εN) worst-case
+                        // size. Six-field tuple (e,g₁,g₂,Δ₁,Δ₂,t) packed two challenges
+                        // per row ⇒ ~2× per-tuple width vs `bandmerge`.
+                        let bvals: Vec<u32> = slice_e.iter().map(|&k| (k & 0x001F_FFFF) as u32).collect();
+                        let gp = GkbParams { capacity: cap, batch: me, s: s_param };
+                        match bench_guarded(c, || { let r = gkb2_prove(gp, bvals.clone()); outcome(proof_size(&r.proof.output.0) as u64) }) {
+                            Some(agg) => { append_csv(&dir, "e1_circuit", &hdr, &row("gk", "bandmerge2", me, 0, 0, cap, &agg)); }
+                            None => {
+                                println!("  gk bandmerge2 m={me} cap={cap}: SKIPPED — too large");
+                                append_csv(&dir, "e1_circuit", &hdr, &row_skip("gk", "bandmerge2", me, 0, 0, cap, "too_large"));
+                            }
+                        }
+                    }
+                    if gk_wants("bandmerge2_naive") {
+                        // The REPLAY baseline for `bandmerge2`: the SAME two-sided §4
+                        // algorithm, proven by per-record in-circuit replay (thread
+                        // S_0→…→S_m, each record a Θ(cap) insert + two-sided compress)
+                        // instead of one batch-effect certificate. Cost Θ(m·cap) — the
+                        // cost-to-beat for the verification-over-computation story.
+                        let bvals: Vec<u32> = slice_e.iter().map(|&k| (k & 0x001F_FFFF) as u32).collect();
+                        let gp = GkbParams { capacity: cap, batch: me, s: s_param };
+                        match bench_guarded(c, || { let r = gkb2n_prove(gp, bvals.clone()); outcome(proof_size(&r.proof.output.0) as u64) }) {
+                            Some(agg) => { append_csv(&dir, "e1_circuit", &hdr, &row("gk", "bandmerge2_naive", me, 0, 0, cap, &agg)); }
+                            None => {
+                                println!("  gk bandmerge2_naive m={me} cap={cap}: SKIPPED — too large");
+                                append_csv(&dir, "e1_circuit", &hdr, &row_skip("gk", "bandmerge2_naive", me, 0, 0, cap, "too_large"));
+                            }
+                        }
+                    }
                 }
             }
 
             if want("hll") {
                 // HLL — flat `one_hot` vs sparse `merkle`, sweeping b (m = 2^b).
                 //   EXP_HLL_B        comma-list of b values        (default 4)
-                //   EXP_HLL_VARIANT  one_hot|merkle|comma-list     (default one_hot)
+                //   EXP_HLL_VARIANT  one_hot|merkle|omc|comma-list (default one_hot)
                 // one_hot = flat commit, one-hot register scatter + max (cost
                 // O(m·batch)); merkle = the sparse Merkle-commit leaf (cost
                 // Θ(t_max·log m), flat in m). e.g. EXP_HLL_VARIANT=one_hot,merkle.
@@ -478,6 +571,25 @@ fn main() {
                             }
                         }
                     }
+                    if hll_wants("omc") {
+                        // Offline-memory-checking leaf (cost Θ(m + batch), a dense
+                        // `M_old ⊎ W = M_new ⊎ R` multiset rebind with a max update).
+                        // No sparse t_max bound; the max-update analogue of cm `omc`.
+                        // Its `m + batch` multiset trace can overflow BabyBear's 2^27
+                        // FRI domain at large m·batch, so guard it (mirrors cm omc).
+                        let initial = vec![0u64; m_reg];
+                        let op = HllOmcParams { b: hb, batch: me };
+                        match bench_guarded(c, || {
+                            let r = prove_hll_omc(op, initial.clone(), keys_e.clone());
+                            outcome(r.proof_size() as u64)
+                        }) {
+                            Some(agg) => { append_csv(&dir, "e1_circuit", &hdr, &row("hll", "omc", me, 0, 0, m_reg, &agg)); }
+                            None => {
+                                println!("  hll omc m={me} b={hb} (regs={m_reg}): SKIPPED — too large (m+batch multiset exceeds BabyBear 2^27 FRI domain)");
+                                append_csv(&dir, "e1_circuit", &hdr, &row_skip("hll", "omc", me, 0, 0, m_reg, "too_large"));
+                            }
+                        }
+                    }
                 }
             }
 
@@ -490,7 +602,7 @@ fn main() {
                 //   (Θ(s+m)). The gap widens with batch m — the rq3a analog for SS.
                 let ss_variant = env_str("EXP_SS_VARIANT", "certified");
                 let ss_wants = |v: &str| ss_variant == "both" || ss_variant.split(',').any(|x| x.trim() == v);
-                let ups: Vec<SsFullUpdate> = slice_e.iter().map(|&k| SsFullUpdate::real(((k & 0x3FFF_FFFF) | 1) as u64, 1)).collect();
+                let ups: Vec<SsFullUpdate> = slice_e.iter().map(|&k| SsFullUpdate::real(((k & 0x1FFF_FFFF) | 1) as u64, 1)).collect();
                 for &cap in &env_list("EXP_SS_CAP", &[8]) {
                     let cap = cap.max(2) + (cap % 2);
                     let p = SsFullParams { capacity: cap, batch: me };

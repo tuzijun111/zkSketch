@@ -21,17 +21,23 @@
 //! (`t / completion`, inserts/sec) — the prototype reports the rate it can
 //! actually achieve rather than throttling to a synthetic target.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::commitment::CountMinBatchCommit;
+use crate::commitment::countmin::commit_countmin;
+use crate::commitment::{CountMinBatchCommit, CountMinCommit};
 use crate::config::Val;
 use crate::recursion::framework::{EpochLeaf, StreamingForest};
 use crate::recursion::recursive::countmin_chain_v9::prove_countmin_chain_v9;
-use crate::recursion::recursive::countmin_forest_v9::prove_countmin_forest_v9;
+use crate::recursion::recursive::countmin_forest_v9::{
+    prove_countmin_forest_v9, verify_forest_countmin_v9,
+};
 use crate::recursion::recursive::countmin_leaf::CountMinLeafParams;
 use crate::recursion::recursive::countmin_leaf_v9::CountMinLeafProofV9;
-use crate::recursion::recursive::expose_forest::prove_forest_over;
+use crate::recursion::recursive::countmin_merge_v9::verify_chain_countmin_v9;
+use crate::recursion::recursive::expose_forest::{prove_forest_over, verify_bound_proof};
+use crate::recursion::recursive::timing;
 use crate::sketch::countmin::{CountMinState, CountMinUpdate};
 use crate::sketch::countmin_c_merkle::{
     prove_countmin_c_merkle_exposed, prove_countmin_c_merkle_leaf, CountMinCMerkleParams,
@@ -40,12 +46,12 @@ use crate::sketch::countmin_final::{
     apply_update_prf, hash_cell_prf, prove_countmin_final, prove_countmin_final_exposed,
     CountMinFinalParams,
 };
-use crate::sketch::countmin_merkle::combined_commit;
+use crate::sketch::countmin_merkle::{combined_commit, merkle_root_mode};
 use crate::sketch::countmin_omc::{prove_countmin_omc, prove_countmin_omc_exposed, CmOmcParams};
 
 use super::families::{cm_empty, cm_epoch};
 use super::metrics::{bench, read_vmrss_kb, BenchCfg, RunOutcome};
-use super::time_it;
+use super::{proof_size, time_it};
 
 const CM_D: usize = 4;
 const CM_W: usize = 8;
@@ -211,6 +217,17 @@ pub struct E6Cell {
     /// expected to be tiny (Poseidon2 hashing of commitments, not recursive
     /// STARK proving).
     pub merge_ms_median: f64,
+    /// The **verifier's** cost for the composed object (§Streaming Proof
+    /// Composition). Recursive/chain/bound: the single root's `verify_*`. The
+    /// per-batch chain: the sum of the `t` independent leaf verifications plus
+    /// the `t-1` boundary equalities and the anchor check — the paper's
+    /// `Θ(t)` verifier cost. `digest`: 0 (cheap structural fold, no STARK verify).
+    pub verify_ms_median: f64,
+    /// The verifier-facing artifact size in bytes. Recursive/chain/bound: the
+    /// single `O(1)` root proof. The per-batch chain: the **sum** of the `t`
+    /// leaf proofs (the `Θ(t)` artifact the verifier must hold), also written
+    /// to the per-batch proof folder.
+    pub proof_bytes: u64,
     pub peak_rss_mb_median: f64,
 }
 
@@ -385,6 +402,11 @@ pub fn measure_batches(
         forest_completion_ms_median: agg.prove_total_ms_median,
         leafgen_ms_median: agg.witness_gen_ms_median,
         merge_ms_median: agg.prove_ms_median,
+        // Digest fold: the root is a cheap Poseidon2 boundary commitment, not a
+        // STARK proof, so there is no recursive verify (0 ms) and the artifact
+        // is the fixed-size interval-proof digest.
+        verify_ms_median: agg.verify_ms_median,
+        proof_bytes: agg.proof_size_bytes,
         peak_rss_mb_median: peak,
     }
 }
@@ -441,18 +463,33 @@ pub fn measure_batches_recursive(
                 .map(|i| prove_leaf_full(variant, d, w, m, t_max, &states[i], &batches[i]))
                 .collect::<Vec<CountMinLeafProofV9>>()
         });
-        // Real recursive merge: every fold verifies its two children in-circuit.
-        let (_root, t_merge) = time_it(|| {
+        // Real recursive merge (Bentley–Saxe tree): every fold verifies its two
+        // children in-circuit. Keep the root so we can verify + size the single
+        // O(1) object the verifier actually checks.
+        let mut root_opt = None;
+        let (_, t_merge) = time_it(|| {
             if leaves.len() >= 2 {
-                let _ = prove_countmin_forest_v9(&leaves).expect("recursive forest fold");
+                root_opt =
+                    Some(prove_countmin_forest_v9(&leaves).expect("recursive forest fold"));
             }
             // t == 1 ⇒ a single leaf, nothing to merge.
         });
+        // Verifier side: one succinct check of the single root proof + its
+        // serialized size (both independent of the leaf count t).
+        let (verify, proof_bytes) = match &root_opt {
+            Some(root) => {
+                let bytes = proof_size(&root.recursive_proof.0) as u64;
+                let (vr, tv) = time_it(|| verify_forest_countmin_v9(root));
+                vr.expect("verify forest root");
+                (tv, bytes)
+            }
+            None => (Duration::ZERO, INTERVAL_PROOF_BYTES),
+        };
         RunOutcome {
             witness_gen: t_gen,
             prove: t_merge,
-            verify: Duration::ZERO,
-            proof_size_bytes: INTERVAL_PROOF_BYTES,
+            verify,
+            proof_size_bytes: proof_bytes,
             trace_rows: 0,
             num_columns: 0,
         }
@@ -468,6 +505,8 @@ pub fn measure_batches_recursive(
         forest_completion_ms_median: agg.prove_total_ms_median,
         leafgen_ms_median: agg.witness_gen_ms_median,
         merge_ms_median: agg.prove_ms_median,
+        verify_ms_median: agg.verify_ms_median,
+        proof_bytes: agg.proof_size_bytes,
         peak_rss_mb_median: peak,
     }
 }
@@ -527,18 +566,29 @@ pub fn measure_batches_chain(
         });
         // Linear chain fold: init(l0,l1) then extend left-to-right; every merge
         // verifies its two children in-circuit (the previous chain root + the
-        // fresh leaf).
-        let (_root, t_merge) = time_it(|| {
+        // fresh leaf). Keep the root to verify + size it.
+        let mut root_opt = None;
+        let (_, t_merge) = time_it(|| {
             if leaves.len() >= 2 {
-                let _ = prove_countmin_chain_v9(&leaves).expect("recursive chain fold");
+                root_opt = Some(prove_countmin_chain_v9(&leaves).expect("recursive chain fold"));
             }
             // t == 1 ⇒ a single leaf, nothing to merge.
         });
+        // Verifier side: one succinct check of the single chain root + its size.
+        let (verify, proof_bytes) = match &root_opt {
+            Some(root) => {
+                let bytes = proof_size(&root.recursive_proof.0) as u64;
+                let (vr, tv) = time_it(|| verify_chain_countmin_v9(root));
+                vr.expect("verify chain root");
+                (tv, bytes)
+            }
+            None => (Duration::ZERO, INTERVAL_PROOF_BYTES),
+        };
         RunOutcome {
             witness_gen: t_gen,
             prove: t_merge,
-            verify: Duration::ZERO,
-            proof_size_bytes: INTERVAL_PROOF_BYTES,
+            verify,
+            proof_size_bytes: proof_bytes,
             trace_rows: 0,
             num_columns: 0,
         }
@@ -554,6 +604,8 @@ pub fn measure_batches_chain(
         forest_completion_ms_median: agg.prove_total_ms_median,
         leafgen_ms_median: agg.witness_gen_ms_median,
         merge_ms_median: agg.prove_ms_median,
+        verify_ms_median: agg.verify_ms_median,
+        proof_bytes: agg.proof_size_bytes,
         peak_rss_mb_median: peak,
     }
 }
@@ -627,16 +679,31 @@ pub fn measure_batches_recursive_bound(
                 .collect::<Vec<_>>()
         });
         // In-circuit boundary-bound fold: each merge verifies + binds the chain.
-        let (_root, t_merge) = time_it(move || {
+        // `prove_forest_over` consumes `outputs`, so thread it through an Option
+        // and capture the returned root for verify + sizing.
+        let mut outputs_holder = Some(outputs);
+        let mut root_opt = None;
+        let (_, t_merge) = time_it(|| {
+            let outputs = outputs_holder.take().expect("outputs taken once");
             if outputs.len() >= 2 {
-                let _ = prove_forest_over(outputs);
+                root_opt = Some(prove_forest_over(outputs));
             }
         });
+        // Verifier side: one succinct check of the boundary-bound root proof —
+        // its Expose public values surface `(Com(S_0), Com(S_E))`.
+        let (verify, proof_bytes) = match &root_opt {
+            Some(root) => {
+                let bytes = proof_size(&root.0) as u64;
+                let (_, tv) = time_it(|| verify_bound_proof(root));
+                (tv, bytes)
+            }
+            None => (Duration::ZERO, INTERVAL_PROOF_BYTES),
+        };
         RunOutcome {
             witness_gen: t_gen,
             prove: t_merge,
-            verify: Duration::ZERO,
-            proof_size_bytes: INTERVAL_PROOF_BYTES,
+            verify,
+            proof_size_bytes: proof_bytes,
             trace_rows: 0,
             num_columns: 0,
         }
@@ -652,6 +719,163 @@ pub fn measure_batches_recursive_bound(
         forest_completion_ms_median: agg.prove_total_ms_median,
         leafgen_ms_median: agg.witness_gen_ms_median,
         merge_ms_median: agg.prove_ms_median,
+        verify_ms_median: agg.verify_ms_median,
+        proof_bytes: agg.proof_size_bytes,
+        peak_rss_mb_median: peak,
+    }
+}
+
+/// Measure whole-stream cost with the **per-batch proof chain** (§Per-batch
+/// Proof Chain): one independent transition proof `π_i` per closed batch, with
+/// **no** recursive fold. This is the prover-friendly / verifier-expensive
+/// baseline the paper opens with.
+///
+/// The `t` leaves are proved sequentially (byte-for-byte the same leaf-gen as
+/// [`measure_batches_recursive`] / [`measure_batches_chain`], so leaf-gen is
+/// directly comparable). Each leaf's full STARK proof is **serialized to
+/// `proof_dir`** (one file per batch, `leaf_XXXX.bin`), so the folder ends up
+/// holding the whole per-batch chain and the total on-disk size is the
+/// verifier-facing artifact.
+///
+/// Metrics recorded to distinguish this mode from the two composed ones:
+/// - **proof_bytes** = the sum of the `t` leaf proof sizes (`Θ(t)`), vs the
+///   composed modes' single `O(1)` root.
+/// - **verify_ms** = the sum of the `t` independent leaf verifications
+///   (`verify_all_tables`, captured from each prover's self-verify) **plus** the
+///   `t-1` boundary equalities (`π_i.final == π_{i+1}.initial`) and the anchor
+///   check (`π_1.initial == Com(S_0)`) — the paper's `Θ(t)` verifier cost, vs
+///   the composed modes' single root check.
+/// - **merge_ms** = 0 (no fold; that is the whole point of this mode).
+///
+/// Works for every CM leaf variant (one_hot/omc/merkle): the anchor recomputes
+/// `Com(S_0)` independently under each variant's own commitment scheme (the
+/// dense commit for one_hot/omc; `combined_commit` of the empty state's per-row
+/// Merkle roots for merkle), so both the anchor and the `Θ(t)` adjacency pass
+/// are real for all three.
+pub fn measure_batches_per_batch(
+    variant: CmLeaf,
+    d: usize,
+    w: usize,
+    batches: &[Vec<u32>],
+    cfg: BenchCfg,
+    proof_dir: &Path,
+) -> E6Cell {
+    let t = batches.len();
+    assert!(t >= 1, "need at least one batch");
+    let m = batches[0].len();
+    assert!(batches.iter().all(|b| b.len() == m), "all batches must have the same length m");
+
+    // Exact, sound Merkle t_max (same as measure_batches).
+    let mut t_max = 1usize;
+    for batch in batches {
+        for i in 0..d {
+            let mut seen = std::collections::HashSet::new();
+            for &key in batch {
+                seen.insert(hash_cell_prf(i, key as u64, w));
+            }
+            t_max = t_max.max(seen.len());
+        }
+    }
+
+    // Native state sequence S₀..S_t (cheap) → the verifier-known boundaries.
+    let mut states = Vec::with_capacity(t + 1);
+    states.push(cm_empty(d, w));
+    for batch in batches {
+        let mut ns = states.last().unwrap().clone();
+        for &key in batch {
+            apply_update_prf(&mut ns, &CountMinUpdate { key: key as u64, value: 1 });
+        }
+        states.push(ns);
+    }
+    // Canonical empty-state commitment `Com(S_0)` for the anchor — recomputed
+    // independently (as an honest verifier would), under each variant's own
+    // commitment scheme, so the anchor is real for ALL three variants. The
+    // merkle scheme is `combined_commit` over the empty state's per-row Merkle
+    // roots at `compress = false` — matching prove_leaf_full's merkle leaf.
+    let empty_commit: [Val; 8] = match variant {
+        CmLeaf::OneHot | CmLeaf::Omc => commit_countmin(&states[0]).0,
+        CmLeaf::Merkle => {
+            let roots: Vec<CountMinCommit> = (0..d)
+                .map(|i| {
+                    let cells: Vec<u64> =
+                        states[0].counters[i].iter().map(|&c| c as u64).collect();
+                    CountMinCommit(merkle_root_mode(&cells, false))
+                })
+                .collect();
+            combined_commit(&roots).0
+        }
+    };
+
+    let agg = bench(cfg, || {
+        // Prove the t leaves sequentially, capturing each leaf's real self-
+        // `verify_all_tables` time (the per-leaf verifier cost). The timed span
+        // wraps ONLY the proving — identical operations to the composed modes'
+        // leaf-gen (they too collect the t leaves into a Vec) — so leaf-gen is
+        // directly comparable; serialization to disk happens afterwards.
+        let mut total_verify = Duration::ZERO;
+        let mut leaves: Vec<CountMinLeafProofV9> = Vec::with_capacity(t);
+        let (_, t_wall) = time_it(|| {
+            for (i, batch) in batches.iter().enumerate() {
+                let leaf = prove_leaf_full(variant, d, w, m, t_max, &states[i], batch);
+                total_verify += timing::take().verify;
+                leaves.push(leaf);
+            }
+        });
+
+        // Store each proof to the folder (fresh per trial) and sum the bytes —
+        // the Θ(t) artifact the verifier holds. Off the prove-timed path.
+        let _ = std::fs::remove_dir_all(proof_dir);
+        std::fs::create_dir_all(proof_dir).expect("create per-batch proof dir");
+        let mut total_bytes = 0u64;
+        let mut boundaries: Vec<(CountMinCommit, CountMinCommit)> = Vec::with_capacity(t);
+        for (i, leaf) in leaves.iter().enumerate() {
+            let bytes = postcard::to_allocvec(&leaf.output.0).expect("serialize leaf proof");
+            total_bytes += bytes.len() as u64;
+            std::fs::write(proof_dir.join(format!("leaf_{i:04}.bin")), &bytes)
+                .expect("write leaf proof");
+            boundaries.push((leaf.initial, leaf.final_));
+        }
+
+        // Verifier's chain-linking pass: 1 anchor (π₁.initial == Com(S₀)) +
+        // (t-1) boundary equalities (π_i.final == π_{i+1}.initial) — native
+        // commitment compares, the paper's Θ(t) link cost.
+        let (chain_ok, t_link) = time_it(|| {
+            let mut ok = boundaries[0].0 .0 == empty_commit;
+            for w in boundaries.windows(2) {
+                ok &= w[0].1 .0 == w[1].0 .0;
+            }
+            ok
+        });
+        assert!(chain_ok, "per-batch chain boundary/anchor check failed");
+
+        RunOutcome {
+            // leafgen = prover wall-clock of the t leaf proofs (proving + each
+            // leaf's self-verify), identical operations to the composed modes.
+            witness_gen: t_wall,
+            prove: Duration::ZERO, // no recursive fold
+            // Verifier cost: the t independent leaf verifications + the chain
+            // links (anchor + t-1 boundary equalities).
+            verify: total_verify + t_link,
+            proof_size_bytes: total_bytes,
+            trace_rows: 0,
+            num_columns: 0,
+        }
+    });
+
+    let peak = if agg.peak_rss_mb_median > 0.0 {
+        agg.peak_rss_mb_median
+    } else {
+        read_vmrss_kb().map(|kb| kb as f64 / 1024.0).unwrap_or(0.0)
+    };
+
+    E6Cell {
+        // total_time = leafgen (prover wall-clock) + merge(0) = whole-stream
+        // prove time, on the same footing as the composed modes.
+        forest_completion_ms_median: agg.prove_total_ms_median,
+        leafgen_ms_median: agg.witness_gen_ms_median,
+        merge_ms_median: agg.prove_ms_median,
+        verify_ms_median: agg.verify_ms_median,
+        proof_bytes: agg.proof_size_bytes,
         peak_rss_mb_median: peak,
     }
 }
@@ -672,6 +896,42 @@ mod tests {
                 cell.forest_completion_ms_median > 0.0,
                 "completion must be measured ({variant:?})"
             );
+        }
+    }
+
+    #[test]
+    fn per_batch_chain_stores_and_verifies() {
+        // Two batches, every leaf variant — the per-batch path proves each leaf
+        // in isolation, writes one serialized proof per batch to the folder,
+        // reports a Θ(t) artifact (sum of leaf proofs) with no fold (merge = 0),
+        // and passes the anchor+adjacency check. Exercising all three variants
+        // covers the anchor recompute per commitment scheme (a mismatch — e.g. a
+        // wrong merkle empty-root — would panic on the chain check).
+        for variant in [CmLeaf::OneHot, CmLeaf::Omc, CmLeaf::Merkle] {
+            let t = 2usize;
+            let m = 8usize;
+            let batches: Vec<Vec<u32>> =
+                (0..t).map(|i| (0..m).map(|j| key_mix(i, j % 4)).collect()).collect();
+            let dir =
+                std::env::temp_dir().join(format!("zksketch_per_batch_{}", variant.label()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let cell = measure_batches_per_batch(
+                variant,
+                4,
+                8,
+                &batches,
+                BenchCfg { warmup: 0, trials: 1 },
+                &dir,
+            );
+            let files = std::fs::read_dir(&dir).map(|it| it.count()).unwrap_or(0);
+            assert_eq!(files, t, "one serialized proof file per batch ({variant:?})");
+            assert!(cell.proof_bytes > 0, "Θ(t) artifact must be measured ({variant:?})");
+            assert_eq!(cell.merge_ms_median, 0.0, "per-batch does no fold ({variant:?})");
+            assert!(
+                cell.forest_completion_ms_median > 0.0,
+                "prove time must be measured ({variant:?})"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
         }
     }
 }

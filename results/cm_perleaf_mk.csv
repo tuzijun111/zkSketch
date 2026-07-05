@@ -1,6 +1,0 @@
-backend,dataset,family,variant,m,d,w,s,trace_rows,num_columns,constraint_count,witness_gen_ms,prove_ms,prove_total_ms,verify_ms,proof_size_bytes,peak_rss_mb,status
-plonky3,aol,cm,merkle,8,7,128,896,19968,1,19968,2.232,115.798,118.031,11.003,414450,102.3,ok
-plonky3,aol,cm,merkle,16,7,128,896,38400,1,38400,4.952,174.299,179.251,12.440,453819,197.1,ok
-plonky3,aol,cm,merkle,32,7,128,896,75264,1,75264,11.898,320.857,332.755,14.386,470453,379.1,ok
-plonky3,aol,cm,merkle,64,7,128,896,280064,1,280064,31.863,826.509,858.372,15.959,524659,1222.3,ok
-plonky3,aol,cm,merkle,128,7,128,896,558592,1,558592,92.001,1630.318,1722.318,13.498,542673,2520.9,ok
