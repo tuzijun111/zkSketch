@@ -1,0 +1,18 @@
+# Local, gitignored cargo config.
+#
+# Route cargo's dependency git fetches through the system `git` CLI instead of
+# the built-in libgit2 client. libgit2's anonymous fetch of the PUBLIC fork
+# github.com/tuzijun111/Plonky3_RangeAir intermittently fails with a spurious
+# "failed to authenticate" (a transient GitHub 401/rate-limit that libgit2
+# reports as an auth error). The system git CLI fetches the same public repo
+# reliably, so cargo's own error message recommends this exact setting:
+#   https://doc.rust-lang.org/cargo/reference/config.html#netgit-fetch-with-cli
+[net]
+git-fetch-with-cli = true
+
+# NOTE: the local `[patch]` override to /home2/binbin/Plonky3_RangeAir has been
+# REMOVED. The `rebuild_common_data` addition it carried is now committed and
+# pushed to the fork (commit e08a370 on branch rebuild-common-data), and
+# Cargo.toml's rev is bumped to it — so the distributed-composition backend now
+# builds from GitHub with no local clone. To hack on the fork again, copy
+# `.cargo/config.toml.example` and add a `[patch]` block pointing at a clone.
