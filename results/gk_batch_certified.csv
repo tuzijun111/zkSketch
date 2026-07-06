@@ -1,3 +1,0 @@
-backend,dataset,family,variant,m,d,w,s,cores,trace_rows,num_columns,constraint_count,witness_gen_ms,prove_ms,prove_total_ms,verify_ms,proof_size_bytes,peak_rss_mb,status
-plonky3,aol,gk,bandmerge2,16,0,0,2048,48,8594432,1,8594432,915.177,20392.945,21308.122,18.404,713778,35031.1,ok
-plonky3,aol,gk,bandmerge2,32,0,0,2048,48,8594432,1,8594432,915.949,20613.230,21529.179,18.460,714039,35093.9,ok

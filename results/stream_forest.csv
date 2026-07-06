@@ -1,2 +1,0 @@
-dataset,variant,d,w,n,m,t,k,cores_per_leaf,merge_mode,total_time_ms,leafgen_ms,merge_ms,records_per_sec,speedup,peak_rss_mb,status
-aol,omc,4,8,8,4,2,4,16,digest,58.174,58.164,0.010,138,1.00,42.2,ok

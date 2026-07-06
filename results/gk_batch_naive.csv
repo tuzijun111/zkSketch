@@ -1,3 +1,6 @@
 backend,dataset,family,variant,m,d,w,s,cores,trace_rows,num_columns,constraint_count,witness_gen_ms,prove_ms,prove_total_ms,verify_ms,proof_size_bytes,peak_rss_mb,status
-plonky3,aol,gk,bandmerge2_naive,16,0,0,2048,48,9184256,1,9184256,1345.758,13402.344,14748.102,18.653,711004,21562.3,ok
-plonky3,aol,gk,bandmerge2_naive,32,0,0,2048,48,18359296,1,18359296,2726.055,26783.709,29509.764,19.242,732111,43003.0,ok
+plonky3,aol,gk,bandmerge2_naive,16,0,0,2048,32,9184256,1,9184256,1740.456,18430.388,20170.844,23.023,711002,21551.6,ok
+plonky3,aol,gk,bandmerge2_naive,32,0,0,2048,32,18359296,1,18359296,3457.134,36164.086,39621.220,23.265,732045,42990.1,ok
+plonky3,aol,gk,bandmerge2_naive,64,0,0,2048,32,36709376,1,36709376,7144.057,71028.859,78172.916,25.193,785439,85833.1,ok
+plonky3,aol,gk,bandmerge2_naive,128,0,0,2048,32,73409536,1,73409536,13644.004,142350.343,155994.347,27.153,808858,171330.4,ok
+plonky3,aol,gk,bandmerge2_naive,256,0,0,2048,32,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,too_large

@@ -1,3 +1,5 @@
 backend,dataset,family,variant,m,d,w,s,cores,trace_rows,num_columns,constraint_count,witness_gen_ms,prove_ms,prove_total_ms,verify_ms,proof_size_bytes,peak_rss_mb,status
-plonky3,aol,ss,naive,16,0,0,16384,48,17335296,1,17335296,1511.878,40861.746,42373.623,17.533,727221,69593.9,ok
-plonky3,aol,ss,naive,32,0,0,16384,48,34636800,1,34636800,3478.917,82788.835,86267.751,19.612,782917,138888.5,ok
+plonky3,aol,ss,naive,16,0,0,16384,32,9995264,1,9995264,1731.744,29800.642,31532.386,21.877,722647,37031.4,ok
+plonky3,aol,ss,naive,32,0,0,16384,32,19956736,1,19956736,3319.555,57414.589,60734.143,23.279,778346,73733.2,ok
+plonky3,aol,ss,naive,64,0,0,16384,32,39879680,1,39879680,6779.251,113824.354,120603.605,24.291,799494,147139.7,ok
+plonky3,aol,ss,naive,128,0,0,16384,32,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,too_large

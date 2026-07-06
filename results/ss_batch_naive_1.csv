@@ -1,3 +1,0 @@
-backend,dataset,family,variant,m,d,w,s,cores,trace_rows,num_columns,constraint_count,witness_gen_ms,prove_ms,prove_total_ms,verify_ms,proof_size_bytes,peak_rss_mb,status
-plonky3,aol,ss,naive,16,0,0,16384,48,9995264,1,9995264,1207.492,21856.658,23064.150,19.378,722579,37045.6,ok
-plonky3,aol,ss,naive,32,0,0,16384,48,19956736,1,19956736,2398.448,43735.835,46134.283,19.172,778479,73749.4,ok
