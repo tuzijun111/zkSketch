@@ -775,19 +775,3 @@ dependencies = [
  "rayon",
  "serde",
 ]
-
-[[patch.unused]]
-name = "p3-circuit"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "p3-circuit-prover"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "p3-poseidon2-circuit-air"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "p3-recursion"
-version = "0.1.0"

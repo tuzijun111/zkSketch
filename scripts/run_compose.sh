@@ -40,8 +40,7 @@
 #                        modes, same four families, same pinned multi-process
 #                        forest + measured comm, over Goldilocks/Poseidon/FRI.
 #                        Caveats vs plonky3: EXP_COMPOSE_CORES/_MACHINES take a
-#                        SINGLE value (no comma-sweep); it uses a synthetic key
-#                        stream (real EXP_DATASET not yet wired); it ignores
+#                        SINGLE value (no comma-sweep); it ignores
 #                        EXP_COMPOSE_EXEC / EXP_GK_S / EXP_COMPOSE_QUERY_EVERY;
 #                        and it adds EXP_COMPOSE_CROSS_FAMILY=1 to also bind the
 #                        four family roots pairwise cross-family. Each
@@ -126,7 +125,7 @@ case "$BACKEND" in
     ENV_JSON="results/env.json"
     ;;
   plonky2|p2|snark)
-    echo "-- plonky2 (SNARK) --  (synthetic stream; single-value CORES/MACHINES; nightly via plonky2/rust-toolchain.toml)"
+    echo "-- plonky2 (SNARK) --  (dataset=${EXP_DATASET:-uniform}; single-value CORES/MACHINES; nightly via plonky2/rust-toolchain.toml)"
     NAME="${OUT_CSV:-stream_compose_p2}"; NAME="${NAME%.csv}"
     # plonky2/ is a self-contained crate; run its example there and surface the
     # CSV in the shared results/ dir so both backends land side by side.
