@@ -63,7 +63,7 @@ impl CmOmcParams {
         (self.num_cells().next_power_of_two().trailing_zeros() as usize).max(1)
     }
     pub fn validate(&self) {
-        assert!((1..=4).contains(&self.d), "d must be in 1..=4 (PRF digest width)");
+        assert!((1..=8).contains(&self.d), "d must be in 1..=8 (two Poseidon digests, 4 rows each)");
         assert!(self.w.is_power_of_two() && self.w >= 2, "w must be a power of two >= 2");
         assert!(self.batch >= 1, "batch >= 1");
     }
@@ -146,12 +146,22 @@ pub fn build_countmin_omc_leaf(params: CmOmcParams) -> CountMinOmcLeaf {
     }
 
     // ---- Stage F: per-record PRF — payload (combined = i·w + pos, value) ----
+    // Row digests: `Poseidon([key])` covers rows 0..4; a second, domain-separated
+    // `Poseidon([key, 1])` covers rows 4..8 (so d up to 8). This MUST match the
+    // native `hash_cell_prf` family (same inputs, same row→element assignment).
+    let dom = b.constant(F::from_canonical_u64(1));
     let mut payload_combined: Vec<Target> = Vec::with_capacity(n_ctr);
     let mut payload_value: Vec<Target> = Vec::with_capacity(n_ctr);
     for k in 0..m {
-        let digest = b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![key[k]]);
+        let digest0 = b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![key[k]]);
+        let digest1 = (d > 4).then(|| b.hash_n_to_hash_no_pad::<PoseidonHash>(vec![key[k], dom]));
         for i in 0..d {
-            let bits = b.split_le(digest.elements[i], 64);
+            let elem = if i < 4 {
+                digest0.elements[i]
+            } else {
+                digest1.as_ref().expect("digest1 built for d>4").elements[i - 4]
+            };
+            let bits = b.split_le(elem, 64);
             let mut pos = b.mul(bits[0].target, pow2[0]);
             for jb in 1..w_log2 {
                 let term = b.mul(bits[jb].target, pow2[jb]);

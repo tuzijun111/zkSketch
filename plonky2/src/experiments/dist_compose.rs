@@ -336,10 +336,9 @@ pub fn read_vmhwm_mb() -> f64 {
 fn validate_shape(family: Family, sh: &FamShape) -> Result<()> {
     match family {
         Family::Cm => ensure!(
-            (1..=4).contains(&sh.d),
-            "plonky2 Count-Min: d must be in 1..=4 (the OMC leaf uses a 4-element \
-             Poseidon digest for row routing; plonky3's width-16 Poseidon reaches d<=8). \
-             Set EXP_D<=4."
+            (1..=8).contains(&sh.d),
+            "plonky2 Count-Min: d must be in 1..=8 (the OMC leaf derives row routing \
+             from two domain-separated Poseidon digests, 4 rows each). Set EXP_D<=8."
         ),
         Family::Hll => ensure!(
             sh.b <= 12,

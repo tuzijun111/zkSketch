@@ -48,16 +48,24 @@ use crate::config::{C, D, F};
 use crate::recursion::Node;
 use crate::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
 
-/// PRF row hash family: `h_i(k) = Poseidon(k)[i] mod w`.
+/// PRF row hash family: `h_i(k) = digest_i mod w`.
 ///
-/// plonky2's `PoseidonHash` digest is 4 field elements, so this family supports
-/// `d <= 4` rows per key (the benchmarks use `d = 4`). The plonky3 original uses
-/// a width-16 Poseidon (8 digest elements, `d <= 8`); for the shared benchmark
-/// shape `(d = 4)` the two are equivalent in cost structure.
+/// plonky2's `PoseidonHash` digest is 4 field elements, so a single call covers
+/// `d <= 4` rows. Rows 4..8 come from a second, domain-separated call
+/// `Poseidon([k, 1])`, extending the family to `d <= 8` — matching the plonky3
+/// original's width-16 Poseidon (8 digest elements). The two inputs differ in
+/// length and in the appended domain tag, so the eight row hashes are
+/// independent. Both the in-circuit derivation (`countmin_omc` Stage F) and this
+/// native routing MUST agree, so any change here must mirror there.
 pub fn hash_cell_prf(row: usize, key: u64, w: usize) -> usize {
-    assert!(row < 4, "plonky2 PRF hash family supports row < 4; got {row}");
-    let digest = PoseidonHash::hash_no_pad(&[F::from_canonical_u64(key)]);
-    (digest.elements[row].to_canonical_u64() as usize) % w
+    assert!(row < 8, "plonky2 PRF hash family supports row < 8; got {row}");
+    let kf = F::from_canonical_u64(key);
+    let e = if row < 4 {
+        PoseidonHash::hash_no_pad(&[kf]).elements[row]
+    } else {
+        PoseidonHash::hash_no_pad(&[kf, F::from_canonical_u64(1)]).elements[row - 4]
+    };
+    (e.to_canonical_u64() as usize) % w
 }
 
 /// Apply one update with the PRF hash family (the certified Count-Min update).
