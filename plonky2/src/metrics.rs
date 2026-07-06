@@ -284,10 +284,37 @@ pub fn append_csv(dir: &std::path::Path, name: &str, header: &[String], row: &[S
     use std::io::Write;
     std::fs::create_dir_all(dir).expect("create results dir");
     let path = dir.join(format!("{name}.csv"));
-    let exists = path.exists();
+    let want_header = header.join(",");
+    // If a file already exists, its first line must match the header we're
+    // about to use. When the CSV schema changes between runs (e.g. a new
+    // `dataset` column), appending a wider/narrower row under the stale header
+    // silently misaligns every column. Rather than corrupt the file, rotate
+    // the stale one aside to a non-clobbering `.bak[N]` and start fresh.
+    let mut fresh = true;
+    if path.exists() {
+        let cur_header = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| s.lines().next().map(str::to_string));
+        if cur_header.as_deref() == Some(want_header.as_str()) {
+            fresh = false;
+        } else {
+            let mut bak = dir.join(format!("{name}.csv.bak"));
+            let mut i = 1;
+            while bak.exists() {
+                bak = dir.join(format!("{name}.csv.bak{i}"));
+                i += 1;
+            }
+            let _ = std::fs::rename(&path, &bak);
+            eprintln!(
+                "append_csv: {}'s header changed (schema differs); rotated the stale file to {} and started a fresh CSV",
+                path.display(),
+                bak.display(),
+            );
+        }
+    }
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).expect("open csv");
-    if !exists {
-        writeln!(f, "{}", header.join(",")).expect("write header");
+    if fresh {
+        writeln!(f, "{}", want_header).expect("write header");
     }
     writeln!(f, "{}", row.join(",")).expect("write row");
     path
