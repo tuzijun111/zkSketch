@@ -1,7 +1,7 @@
 # Template for `.cargo/config.toml` (which is gitignored).
 #
 # By default, `Cargo.toml` pulls the four Plonky3-recursion crates from the
-# GitHub fork at https://github.com/tuzijun111/Plonky3_Permute (pinned to a
+# GitHub fork at https://github.com/tuzijun111/Plonky3_RangeAir (pinned to a
 # specific commit). A fresh `git clone` of this project + `cargo build` works
 # without any local fork setup.
 #
@@ -11,13 +11,13 @@
 #
 # To enable the local override on your machine:
 #
-#   1. git clone https://github.com/tuzijun111/Plonky3_Permute /path/to/Plonky3_Permute
+#   1. git clone https://github.com/tuzijun111/Plonky3_RangeAir /path/to/Plonky3_RangeAir
 #   2. cp .cargo/config.toml.example .cargo/config.toml
-#   3. Replace `/path/to/Plonky3_Permute` below with the absolute path to step-1's clone.
+#   3. Replace `/path/to/Plonky3_RangeAir` below with the absolute path to step-1's clone.
 #   4. cargo build --release  → now compiles the four crates from your local path.
 
-[patch."https://github.com/tuzijun111/Plonky3_Permute"]
-p3-recursion             = { path = "/path/to/Plonky3_Permute/recursion" }
-p3-circuit               = { path = "/path/to/Plonky3_Permute/circuit" }
-p3-circuit-prover        = { path = "/path/to/Plonky3_Permute/circuit-prover" }
-p3-poseidon2-circuit-air = { path = "/path/to/Plonky3_Permute/poseidon2-circuit-air" }
+[patch."https://github.com/tuzijun111/Plonky3_RangeAir"]
+p3-recursion             = { path = "/path/to/Plonky3_RangeAir/recursion" }
+p3-circuit               = { path = "/path/to/Plonky3_RangeAir/circuit" }
+p3-circuit-prover        = { path = "/path/to/Plonky3_RangeAir/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "/path/to/Plonky3_RangeAir/poseidon2-circuit-air" }

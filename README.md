@@ -68,8 +68,16 @@ scripts/run_experiments.sh e1
   plonky2`). It is fully decoupled from the root build.
 - **Network on first build:** dependencies are pinned to exact GitHub revisions
   (no crates.io release). Plonky3 core is pinned to one rev; the recursion crates
-  come from a fork (`tuzijun111/Plonky3_Permute`) that adds extension-degree-`D>1`
-  `PermuteAir` support this project needs.
+  come from a fork (`tuzijun111/Plonky3_RangeAir`) that adds the extension-degree-
+  `D>1` `PermuteAir`, `ExposeAir`, and byte-table `RangeAir` support this project
+  needs. Both that fork and Plonky3 core are **public** — no GitHub credentials
+  or authentication are required to build.
+- **Spurious `failed to authenticate` / `revision … not found` on first build?**
+  That is a transient hiccup in cargo's built-in git client (libgit2) on an
+  *anonymous* fetch of the public forks — not a real access problem. Re-run
+  through the system git CLI, which fetches them reliably:
+  `CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build --release` (or set
+  `git-fetch-with-cli = true` under a `[net]` table in `.cargo/config.toml`).
 - **Optional local fork iteration:** to hack on the recursion fork, copy
   `.cargo/config.toml.example` → `.cargo/config.toml` and point the four
   `p3-{recursion,circuit,circuit-prover,poseidon2-circuit-air}` crates at a local

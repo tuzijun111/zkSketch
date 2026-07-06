@@ -49,7 +49,10 @@ EXP_DATASET=aol scripts/run_experiments.sh
   selects nightly with no `+nightly` needed. (`rustup toolchain install nightly`
   if you don't have it.)
 - Network access on first build (both pull pinned git deps) and to fetch the
-  real datasets.
+  real datasets. The Plonky3 forks are public — no GitHub auth needed. If cargo's
+  built-in git client flakes on the anonymous fetch (`failed to authenticate` /
+  `revision … not found`), re-run with `CARGO_NET_GIT_FETCH_WITH_CLI=true` so the
+  fetch goes through the system git CLI instead.
 - Linux for `peak_rss_mb` (sampled from `/proc/self/status`); on other OSes the
   RSS column reads 0 but everything else works.
 

@@ -38,5 +38,8 @@ Thumbs.db
 
 /latex/
 
-Cargo.lock
+# Cargo.lock IS committed. The primary deps are already rev-pinned in Cargo.toml,
+# but tracking the lock also freezes the crates.io deps (postcard / rand / serde /
+# rayon / tracing …) so a fresh clone builds against the exact validated versions.
+# (plonky2/Cargo.lock is likewise tracked.)
 
