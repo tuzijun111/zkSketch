@@ -38,6 +38,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 pub mod casestudy;
+pub mod dist_compose;
 pub mod e5_ladder;
 pub mod e6_forest;
 pub mod e7_policy;

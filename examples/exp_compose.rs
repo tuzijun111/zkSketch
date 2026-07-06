@@ -18,14 +18,24 @@
 //! - `forest` — streaming forest, Bentley–Saxe tree fold (`O(log t)` depth); one
 //!   `O(1)` root. (`recursive` is accepted as a back-compat alias.)
 //!
-//! ## Cores & machines
+//! ## Cores, machines & the execution engine (`EXP_COMPOSE_EXEC`)
 //! - `EXP_COMPOSE_CORES` (comma-list; default all) — cores per machine/proof.
-//! - `EXP_COMPOSE_MACHINES` (comma-list; default 1) — number of parallel
-//!   machines. Applies to `per_batch` and `forest` (leaf-gen parallelises);
-//!   `chain` is sequential and ignores it. Recursion proofs are `!Send`, so the
-//!   fold cannot cross machines — the parallel leaf-gen is reported as the
-//!   `M`-machine work-partition makespan and the fold runs sequentially (the
-//!   `O(log t)` tail). Each machine uses `EXP_COMPOSE_CORES` cores.
+//! - `EXP_COMPOSE_MACHINES` (comma-list; default 1) — number of machines.
+//! - `EXP_COMPOSE_EXEC=procs|sim` — the execution engine. Default: `procs`
+//!   whenever machines > 1 is requested.
+//!   - `procs` (`experiments::dist_compose`): REAL distributed emulation —
+//!     one OS process per machine, pinned to disjoint physical cores
+//!     (numactl/taskset + NUMA membind), all cross-machine data serialized
+//!     over sockets with measured bytes + a network model at `EXP_NET_MBPS`
+//!     (default 200 Mb/s) and `EXP_NET_RTT_MS` (default 0.2). `per_batch`/
+//!     `forest` distribute leaf
+//!     proving over the machines; the `chain` is inherently sequential and
+//!     runs on ONE machine, folding in place (each fold consumes the previous
+//!     prefix proof — the `machines` knob does not apply). `forest` composes
+//!     IN-PLACE on the leaf machines (local Bentley–Saxe cascade + log₂M
+//!     cross-machine reduction rounds shipping M−1 root proofs).
+//!   - `sim` (legacy `stream_compose`): one process; the machines column is
+//!     a work-partition makespan projection; chain ignores machines.
 //!
 //! ## Shape (per family)
 //! - cm:  `EXP_D` (d, default 4), `EXP_W` (w, default 8)  — needs `d·w % 4 == 0`.
@@ -52,21 +62,27 @@
 //! `1` (chain), `popcount(t')` Bentley–Saxe peaks (forest). NOTE the cm decode
 //! circuit caps `w <= 16`, so with queries on keep `EXP_W` small (default 8).
 //!
-//! Output: results/stream_compose.csv with columns
+//! Output: results/stream_compose.csv. Legacy columns (same meanings under
+//! both engines), then the procs-engine extension block (n/a under sim):
 //!   dataset,family,variant,mode,shape,n,m,t,cores,machines,total_time_ms,
 //!   leafgen_ms,leafgen_seq_ms,merge_ms,verify_ms,proof_bytes,records_per_sec,
 //!   peak_rss_mb,n_queries,query_prove_ms,query_verify_ms,query_proof_bytes,
-//!   query_ctx_verifies,status
+//!   query_ctx_verifies,exec,procs,witness_pass_ms,scatter_ms,
+//!   scatter_state_bytes,scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,
+//!   local_fold_ms,merges_local,merges_cross,cross_rounds,
+//!   comm_msgs,comm_bytes,comm_ms_measured,comm_model_ms,status
 //!
-//! RUNTIME WARNING: every leaf and every merge is a real STARK proof, proved
-//! SEQUENTIALLY (the k-machine split is a makespan projection, not concurrent
-//! proving). Keep N/t small (a handful of leaves) — each merge is a full
-//! recursive proof.
+//! RUNTIME WARNING: every leaf and every merge is a real STARK proof. Under
+//! `sim` everything proves sequentially (the k-machine split is a makespan
+//! projection); under `procs` the machines prove concurrently for real, but
+//! each merge is still a full recursive proof (~seconds) — budget ~t·merge
+//! for the chain and ~(t/M + log M)·merge for the forest.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use zksketch::dataset::{aol, netflix, synthetic_stream, zipf_stream, Synthetic};
+use zksketch::experiments::dist_compose::{measure_compose_dist, DistCell};
 use zksketch::experiments::metrics::write_env_json;
 use zksketch::experiments::results_dir;
 use zksketch::experiments::stream_compose::{
@@ -180,7 +196,62 @@ fn measure_guarded(
     r.ok()
 }
 
+/// Guarded `measure_compose_dist`: machine failures already surface as `Err`;
+/// this additionally catches coordinator-side panics (e.g. a fragmenting GK
+/// witness pass) so a bad shape records a status row instead of aborting the
+/// sweep. Child processes are killed by their drop guards.
+#[allow(clippy::too_many_arguments)]
+fn dist_guarded(
+    family: StreamFamily,
+    shape: StreamShape,
+    batches: &[Vec<u32>],
+    mode: StreamMode,
+    cores: usize,
+    machines: usize,
+    proof_dir: &std::path::Path,
+    mbps: f64,
+    rtt_ms: f64,
+) -> Result<DistCell, String> {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        measure_compose_dist(family, shape, batches, mode, cores, machines, proof_dir, mbps, rtt_ms)
+    }));
+    std::panic::set_hook(prev);
+    match r {
+        Ok(res) => res,
+        Err(p) => Err(p
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".into())),
+    }
+}
+
+/// Map a failure reason onto the CSV status token: shape/capacity blow-ups
+/// keep the sim engine's `too_large`, anything else is `error` (full reason
+/// goes to stderr — CSV cells must stay comma-free).
+fn status_token(reason: &str) -> &'static str {
+    let r = reason.to_ascii_lowercase();
+    if r.contains("too large")
+        || r.contains("too_large")
+        || r.contains("fragment")
+        || r.contains("capacity")
+        || r.contains("exceeds")
+    {
+        "too_large"
+    } else {
+        "error"
+    }
+}
+
 fn main() {
+    // Distributed-engine child dispatch MUST come first: when this binary was
+    // re-executed as a pinned machine (worker role), serve the role
+    // and never fall through to the coordinator sweep.
+    if zksketch::experiments::dist_compose::maybe_run_child() {
+        return;
+    }
     let avail = rayon::current_num_threads();
     let n = env_size("EXP_COMPOSE_N", 32);
     let batches_m = env_size_list("EXP_COMPOSE_BATCHES", &[8]);
@@ -193,6 +264,39 @@ fn main() {
         .map(|c| c.clamp(1, avail))
         .collect();
     let machines_list = env_size_list("EXP_COMPOSE_MACHINES", &[1]);
+
+    // Execution engine: `procs` = the real process-level distributed
+    // emulation (one pinned OS process per machine, serialized socket IPC,
+    // measured communication — see experiments::dist_compose); `sim` = the
+    // legacy single-process run whose machines column is a work-partition
+    // makespan projection. Default: procs whenever a multi-machine sweep is
+    // requested, since that is the claim being defended.
+    let mut exec_procs = match std::env::var("EXP_COMPOSE_EXEC").ok().as_deref() {
+        Some("procs") => true,
+        Some("sim") => false,
+        Some(other) => {
+            eprintln!("unknown EXP_COMPOSE_EXEC '{other}' (sim|procs)");
+            std::process::exit(2);
+        }
+        None => machines_list.iter().copied().max().unwrap_or(1) > 1,
+    };
+    if exec_procs && query_every > 0 {
+        eprintln!(
+            "note: EXP_COMPOSE_QUERY_EVERY is only wired into the sim engine — running sim"
+        );
+        exec_procs = false;
+    }
+    // Modeled network link for the procs engine's comm_model_ms column (bytes
+    // are measured; these set the bandwidth + per-message RTT of the model).
+    let net_mbps: f64 = std::env::var("EXP_NET_MBPS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|&b: &f64| b > 0.0)
+        .unwrap_or(200.0);
+    let net_rtt_ms: f64 = std::env::var("EXP_NET_RTT_MS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0.2);
 
     let families: Vec<StreamFamily> = env_str("EXP_COMPOSE_FAMILY", "cm,hll,ss,gk")
         .split(',')
@@ -281,15 +385,25 @@ fn main() {
     let _ = std::fs::remove_dir_all(&proof_base);
 
     println!(
-        "Stream compose (plonky3) — N={n} datasets={datasets:?} families={:?} modes={:?} m={batches_m:?} cores={cores_list:?} machines={machines_list:?} (avail={avail}){}",
+        "Stream compose (plonky3) — N={n} datasets={datasets:?} families={:?} modes={:?} m={batches_m:?} cores={cores_list:?} machines={machines_list:?} exec={} (avail={avail}){}",
         families.iter().map(|f| f.label()).collect::<Vec<_>>(),
         modes.iter().map(|m| m.label()).collect::<Vec<_>>(),
+        if exec_procs { "procs" } else { "sim" },
         if query_every > 0 {
             format!(" MIXED: query every {query_every} batch(es)")
         } else {
             String::new()
         },
     );
+    if exec_procs {
+        println!(
+            "procs engine: one pinned OS process per machine (numactl/taskset, disjoint \
+             physical cores), all cross-machine data over serialized sockets; the chain runs \
+             sequentially on ONE machine (folds in place), forest composes in-place on the leaf \
+             machines. Communication bytes are measured; the comm_model_ms column uses \
+             EXP_NET_MBPS={net_mbps}Mb/s + EXP_NET_RTT_MS={net_rtt_ms}ms."
+        );
+    }
     if modes.contains(&StreamMode::PerBatch) {
         println!("per-batch proofs → {}", proof_base.display());
     }
@@ -301,6 +415,9 @@ fn main() {
             ("field", "BabyBear".into()),
             ("hash", "Poseidon2".into()),
             ("experiment", "stream_compose".into()),
+            ("exec", if exec_procs { "procs" } else { "sim" }.into()),
+            ("net_mbps", format!("{net_mbps}")),
+            ("net_rtt_ms", format!("{net_rtt_ms}")),
             ("dataset", dataset_str.clone()),
             ("stream_n", n.to_string()),
             ("total_cores", avail.to_string()),
@@ -309,11 +426,18 @@ fn main() {
         ],
     );
 
+    // Legacy columns first (same names/meanings as the sim engine), then the
+    // procs-engine extension block (n/a under sim), status last.
     let hdr: Vec<String> = [
         "dataset", "family", "variant", "mode", "shape", "n", "m", "t", "cores", "machines",
         "total_time_ms", "leafgen_ms", "leafgen_seq_ms", "merge_ms", "verify_ms", "proof_bytes",
         "records_per_sec", "peak_rss_mb", "n_queries", "query_prove_ms", "query_verify_ms",
-        "query_proof_bytes", "query_ctx_verifies", "status",
+        "query_proof_bytes", "query_ctx_verifies",
+        // ── procs-engine extension ──
+        "exec", "procs", "witness_pass_ms", "scatter_ms", "scatter_state_bytes",
+        "scatter_data_bytes", "leaf_busy_min_ms", "leaf_busy_max_ms", "local_fold_ms",
+        "merges_local", "merges_cross", "cross_rounds", "comm_msgs",
+        "comm_bytes", "comm_ms_measured", "comm_model_ms", "status",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -346,8 +470,10 @@ fn main() {
                 let actual_n = t * m;
                 let batches = batches_from(&base, m, t);
                 for &mode in &modes {
-                    // `machines` only applies to per_batch + forest; chain is
-                    // sequential. Dedup to 1 machine for chain.
+                    // The chain is inherently sequential (each fold consumes
+                    // the previous prefix proof), so it runs on ONE machine in
+                    // both engines — sweeping `machines` for it is meaningless.
+                    // per_batch and forest distribute leaves over the machines.
                     let machs: Vec<usize> = if mode == StreamMode::Chain {
                         vec![1]
                     } else {
@@ -363,70 +489,166 @@ fn main() {
                             ));
                             let vl = family.label();
                             let sh = shape_str(family, &fshape);
-                            match measure_guarded(
-                                family, fshape, &batches, mode, cores, machines, &cell_dir,
-                                query_every,
-                            ) {
-                                Some(c) => {
-                                    let rps = if c.total_time_ms > 0.0 {
-                                        (actual_n as f64 * 1000.0 / c.total_time_ms).round() as u64
-                                    } else {
-                                        0
-                                    };
-                                    let row: Vec<String> = vec![
-                                        dataset.clone(), family.family().into(), vl.into(),
-                                        mode.label().into(), sh.clone(), actual_n.to_string(),
-                                        m.to_string(), t.to_string(), cores.to_string(),
-                                        machines.to_string(),
-                                        format!("{:.3}", c.total_time_ms),
-                                        format!("{:.3}", c.leafgen_ms),
-                                        format!("{:.3}", c.leafgen_seq_ms),
-                                        format!("{:.3}", c.merge_ms),
-                                        format!("{:.3}", c.verify_ms),
-                                        c.proof_bytes.to_string(),
-                                        rps.to_string(),
-                                        format!("{:.1}", c.peak_rss_mb),
-                                        c.n_queries.to_string(),
-                                        format!("{:.3}", c.query_prove_ms),
-                                        format!("{:.3}", c.query_verify_ms),
-                                        c.query_proof_bytes.to_string(),
-                                        c.query_ctx_verifies.to_string(),
-                                        "ok".into(),
-                                    ];
-                                    write_row(&csv, &row);
-                                    let qstr = if c.n_queries > 0 {
-                                        format!(
-                                            " q={} qprove={:.2}s qverify={:.3}s qproof={:.1}KB qctx={}",
-                                            c.n_queries, c.query_prove_ms / 1000.0,
-                                            c.query_verify_ms / 1000.0,
-                                            c.query_proof_bytes as f64 / 1024.0,
-                                            c.query_ctx_verifies,
-                                        )
-                                    } else {
-                                        String::new()
-                                    };
-                                    println!(
-                                        "  {vl:<13} {sh:<10} m={m:<4} t={t:<3} [{:<9}] cores={cores} mach={machines} total={:.2}s (leafgen={:.2}s merge={:.2}s) verify={:.3}s proof={:.1}KB rss={:.0}MB{qstr}",
-                                        mode.label(), c.total_time_ms / 1000.0,
-                                        c.leafgen_ms / 1000.0, c.merge_ms / 1000.0,
-                                        c.verify_ms / 1000.0, c.proof_bytes as f64 / 1024.0,
-                                        c.peak_rss_mb,
-                                    );
+                            // The 10 identity columns every row shares.
+                            let prefix = |machines_col: usize| -> Vec<String> {
+                                vec![
+                                    dataset.clone(), family.family().into(), vl.into(),
+                                    mode.label().into(), sh.clone(), actual_n.to_string(),
+                                    m.to_string(), t.to_string(), cores.to_string(),
+                                    machines_col.to_string(),
+                                ]
+                            };
+                            const N_LEGACY_METRICS: usize = 13; // total_time..query_ctx
+                            const N_EXT_AFTER_EXEC: usize = 15; // procs..comm_model_ms
+
+                            if exec_procs {
+                                match dist_guarded(
+                                    family, fshape, &batches, mode, cores, machines, &cell_dir,
+                                    net_mbps, net_rtt_ms,
+                                ) {
+                                    Ok(c) => {
+                                        let rps = if c.total_time_ms > 0.0 {
+                                            (actual_n as f64 * 1000.0 / c.total_time_ms).round()
+                                                as u64
+                                        } else {
+                                            0
+                                        };
+                                        let mut row = prefix(c.machines_eff);
+                                        row.extend([
+                                            format!("{:.3}", c.total_time_ms),
+                                            format!("{:.3}", c.leafgen_ms),
+                                            format!("{:.3}", c.leafgen_seq_ms),
+                                            format!("{:.3}", c.merge_ms),
+                                            format!("{:.3}", c.verify_ms),
+                                            c.proof_bytes.to_string(),
+                                            rps.to_string(),
+                                            format!("{:.1}", c.peak_rss_mb),
+                                            // procs engine is updates-only.
+                                            "0".into(), "0.000".into(), "0.000".into(),
+                                            "0".into(), "0".into(),
+                                            "procs".into(),
+                                            c.procs.to_string(),
+                                            format!("{:.3}", c.witness_pass_ms),
+                                            format!("{:.3}", c.scatter_ms),
+                                            c.scatter_state_bytes.to_string(),
+                                            c.scatter_data_bytes.to_string(),
+                                            format!("{:.3}", c.leaf_busy_min_ms),
+                                            format!("{:.3}", c.leaf_busy_max_ms),
+                                            format!("{:.3}", c.local_fold_ms),
+                                            c.merges_local.to_string(),
+                                            c.merges_cross.to_string(),
+                                            c.cross_rounds.to_string(),
+                                            c.comm_msgs.to_string(),
+                                            c.comm_bytes.to_string(),
+                                            format!("{:.3}", c.comm_ms_measured),
+                                            format!("{:.3}", c.comm_model_ms),
+                                            "ok".into(),
+                                        ]);
+                                        write_row(&csv, &row);
+                                        println!(
+                                            "  {vl:<13} {sh:<10} m={m:<4} t={t:<3} [{:<9}] cores={cores} mach={} procs={} total={:.2}s (wpass={:.2}s leaf={:.2}s merge={:.2}s) verify={:.3}s proof={:.1}KB comm={:.1}KB/{} msgs ({:.0}Mbps model {:.1}ms) rss={:.0}MB",
+                                            mode.label(), c.machines_eff, c.procs,
+                                            c.total_time_ms / 1000.0,
+                                            c.witness_pass_ms / 1000.0,
+                                            c.leafgen_ms / 1000.0, c.merge_ms / 1000.0,
+                                            c.verify_ms / 1000.0,
+                                            c.proof_bytes as f64 / 1024.0,
+                                            c.comm_bytes as f64 / 1024.0, c.comm_msgs,
+                                            net_mbps, c.comm_model_ms, c.peak_rss_mb,
+                                        );
+                                    }
+                                    Err(reason) => {
+                                        let status = status_token(&reason);
+                                        let mut row = prefix(machines);
+                                        row.extend(
+                                            std::iter::repeat("n/a".to_string())
+                                                .take(N_LEGACY_METRICS),
+                                        );
+                                        row.push("procs".into());
+                                        row.extend(
+                                            std::iter::repeat("n/a".to_string())
+                                                .take(N_EXT_AFTER_EXEC),
+                                        );
+                                        row.push(status.into());
+                                        write_row(&csv, &row);
+                                        eprintln!(
+                                            "  {vl} {sh} m={m} t={t} [{}] cores={cores} mach={machines}: SKIPPED ({status}) — {reason}",
+                                            mode.label()
+                                        );
+                                    }
                                 }
-                                None => {
-                                    let mut row: Vec<String> = vec![
-                                        dataset.clone(), family.family().into(), vl.into(),
-                                        mode.label().into(), sh.clone(), actual_n.to_string(),
-                                        m.to_string(), t.to_string(), cores.to_string(),
-                                        machines.to_string(),
-                                    ];
-                                    row.extend(std::iter::repeat("n/a".to_string()).take(13));
-                                    row.push("too_large".into());
-                                    write_row(&csv, &row);
-                                    eprintln!(
-                                        "  {vl} {sh} m={m} t={t} [{}] cores={cores} mach={machines}: SKIPPED — too_large / shape panic",
-                                        mode.label()
-                                    );
+                            } else {
+                                match measure_guarded(
+                                    family, fshape, &batches, mode, cores, machines, &cell_dir,
+                                    query_every,
+                                ) {
+                                    Some(c) => {
+                                        let rps = if c.total_time_ms > 0.0 {
+                                            (actual_n as f64 * 1000.0 / c.total_time_ms).round()
+                                                as u64
+                                        } else {
+                                            0
+                                        };
+                                        let mut row = prefix(machines);
+                                        row.extend([
+                                            format!("{:.3}", c.total_time_ms),
+                                            format!("{:.3}", c.leafgen_ms),
+                                            format!("{:.3}", c.leafgen_seq_ms),
+                                            format!("{:.3}", c.merge_ms),
+                                            format!("{:.3}", c.verify_ms),
+                                            c.proof_bytes.to_string(),
+                                            rps.to_string(),
+                                            format!("{:.1}", c.peak_rss_mb),
+                                            c.n_queries.to_string(),
+                                            format!("{:.3}", c.query_prove_ms),
+                                            format!("{:.3}", c.query_verify_ms),
+                                            c.query_proof_bytes.to_string(),
+                                            c.query_ctx_verifies.to_string(),
+                                            "sim".into(),
+                                        ]);
+                                        row.extend(
+                                            std::iter::repeat("n/a".to_string())
+                                                .take(N_EXT_AFTER_EXEC),
+                                        );
+                                        row.push("ok".into());
+                                        write_row(&csv, &row);
+                                        let qstr = if c.n_queries > 0 {
+                                            format!(
+                                                " q={} qprove={:.2}s qverify={:.3}s qproof={:.1}KB qctx={}",
+                                                c.n_queries, c.query_prove_ms / 1000.0,
+                                                c.query_verify_ms / 1000.0,
+                                                c.query_proof_bytes as f64 / 1024.0,
+                                                c.query_ctx_verifies,
+                                            )
+                                        } else {
+                                            String::new()
+                                        };
+                                        println!(
+                                            "  {vl:<13} {sh:<10} m={m:<4} t={t:<3} [{:<9}] cores={cores} mach={machines} total={:.2}s (leafgen={:.2}s merge={:.2}s) verify={:.3}s proof={:.1}KB rss={:.0}MB{qstr}",
+                                            mode.label(), c.total_time_ms / 1000.0,
+                                            c.leafgen_ms / 1000.0, c.merge_ms / 1000.0,
+                                            c.verify_ms / 1000.0, c.proof_bytes as f64 / 1024.0,
+                                            c.peak_rss_mb,
+                                        );
+                                    }
+                                    None => {
+                                        let mut row = prefix(machines);
+                                        row.extend(
+                                            std::iter::repeat("n/a".to_string())
+                                                .take(N_LEGACY_METRICS),
+                                        );
+                                        row.push("sim".into());
+                                        row.extend(
+                                            std::iter::repeat("n/a".to_string())
+                                                .take(N_EXT_AFTER_EXEC),
+                                        );
+                                        row.push("too_large".into());
+                                        write_row(&csv, &row);
+                                        eprintln!(
+                                            "  {vl} {sh} m={m} t={t} [{}] cores={cores} mach={machines}: SKIPPED — too_large / shape panic",
+                                            mode.label()
+                                        );
+                                    }
                                 }
                             }
                         }

@@ -22,11 +22,11 @@
 
 use std::rc::Rc;
 
-use p3_batch_stark::ProverData;
+use p3_batch_stark::{CommonData, ProverData};
 use p3_circuit::CircuitBuilder;
 use p3_circuit::ops::generate_expose_trace;
 use p3_circuit_prover::{
-    BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
+    BatchStarkProof, BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     common::get_airs_and_degrees_with_prep,
 };
 use p3_field::PrimeCharacteristicRing;
@@ -63,20 +63,65 @@ fn agg_params() -> ProveNextLayerParams {
 pub fn recursion_input_with_public_values(
     output: &RecursionOutput<ConfigWithFriParams>,
 ) -> RecursionInput<'_, ConfigWithFriParams, BatchOnly> {
-    let n_instances = output.0.proof.opened_values.instances.len();
-    let n_non_prim = output.0.non_primitives.len();
+    recursion_input_from_proof(&output.0)
+}
+
+/// [`recursion_input_with_public_values`] from a bare proof. Everything the
+/// next layer's verifier circuit needs lives in the `BatchStarkProof` itself
+/// (`proof`, `stark_common`, the non-primitives' recorded `public_values`) —
+/// the `Rc<CircuitProverData>` half of a `RecursionOutput` is never consumed.
+/// This is what makes proofs **portable across machines**: a merge node can
+/// deserialize a peer's proof bytes and fold them without any local circuit
+/// state from the producing process. (Wire-crossing proofs additionally need
+/// their `CommonData` rebuilt — see [`rebuilt_common_for`].)
+pub fn recursion_input_from_proof(
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+) -> RecursionInput<'_, ConfigWithFriParams, BatchOnly> {
+    recursion_input_with_common(proof, &proof.stark_common)
+}
+
+/// [`recursion_input_from_proof`] with an explicit [`CommonData`] — the
+/// deserialized-proof path, where `proof.stark_common` lost its lookups on
+/// the wire and a rebuilt copy must be supplied.
+pub fn recursion_input_with_common<'a>(
+    proof: &'a BatchStarkProof<ConfigWithFriParams>,
+    common: &'a CommonData<ConfigWithFriParams>,
+) -> RecursionInput<'a, ConfigWithFriParams, BatchOnly> {
+    let n_instances = proof.proof.opened_values.instances.len();
+    let n_non_prim = proof.non_primitives.len();
     let n_prim = n_instances - n_non_prim;
 
     let mut table_public_inputs: Vec<Vec<Val>> = vec![Vec::new(); n_prim];
-    for entry in &output.0.non_primitives {
+    for entry in &proof.non_primitives {
         table_public_inputs.push(entry.public_values.clone());
     }
 
-    RecursionInput::BatchStark {
-        proof: &output.0,
-        common_data: &output.0.stark_common,
-        table_public_inputs,
+    RecursionInput::BatchStark { proof, common_data: common, table_public_inputs }
+}
+
+/// Rebuild a wire-crossing proof's [`CommonData`], or `None` when the proof's
+/// own `stark_common` is intact (in-process proofs). Serialization
+/// intentionally drops the lookup contexts (`serde_stark_common` in the
+/// fork), so a deserialized proof carries an empty `lookups` and would fail
+/// the recursive verifier's shape check; the fork's
+/// `BatchStarkProver::rebuild_common_data` re-derives them from AIRs
+/// reconstructed out of proof metadata. Every non-primitive any zkSketch
+/// proof can carry is registered (aggregation trio + the sketch leaves'
+/// permute/range), so leaves and merge roots both rebuild.
+pub fn rebuilt_common_for(
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+) -> Option<CommonData<ConfigWithFriParams>> {
+    let n_instances = proof.proof.opened_values.instances.len();
+    if proof.stark_common.lookups.len() == n_instances {
+        return None;
     }
+    let mut prover = BatchStarkProver::new(make_leaf_config());
+    prover.register_poseidon2_table::<EXT_D>(Poseidon2Config::BABY_BEAR_D4_W16);
+    prover.register_recompose_table::<EXT_D>(Poseidon2Config::BABY_BEAR_D4_W16.d() != EXT_D);
+    prover.register_expose_table::<EXT_D>();
+    prover.register_permute_table::<EXT_D>();
+    prover.register_range_table::<EXT_D>();
+    Some(prover.rebuild_common_data(proof).expect("rebuild common data for deserialized proof"))
 }
 
 /// Prove a minimal leaf that exposes the given Challenge values via the Expose
@@ -153,8 +198,15 @@ fn boundary_targets(result: &impl VerifierCircuitResult<ConfigWithFriParams, Bat
 pub fn read_exposed_boundary(
     output: &RecursionOutput<ConfigWithFriParams>,
 ) -> (CountMinCommit, CountMinCommit) {
-    let pv = output
-        .0
+    read_exposed_boundary_proof(&output.0)
+}
+
+/// [`read_exposed_boundary`] from a bare proof (e.g. one deserialized from a
+/// peer machine's bytes).
+pub fn read_exposed_boundary_proof(
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+) -> (CountMinCommit, CountMinCommit) {
+    let pv = proof
         .non_primitives
         .iter()
         .map(|e| &e.public_values)
@@ -175,12 +227,31 @@ pub fn prove_hiding_merge(
     left: &RecursionOutput<ConfigWithFriParams>,
     right: &RecursionOutput<ConfigWithFriParams>,
 ) -> RecursionOutput<ConfigWithFriParams> {
+    prove_hiding_merge_proofs(&left.0, &right.0)
+}
+
+/// [`prove_hiding_merge`] over bare proofs. The merge circuit consumes only
+/// the children's `BatchStarkProof`s (see [`recursion_input_from_proof`]), so
+/// either child may have been produced by a **different process/machine** and
+/// deserialized from wire bytes — the enabling property for distributed
+/// composition (each machine folds its own slice, then subtree roots cross
+/// machines as serialized proofs).
+pub fn prove_hiding_merge_proofs(
+    left: &BatchStarkProof<ConfigWithFriParams>,
+    right: &BatchStarkProof<ConfigWithFriParams>,
+) -> RecursionOutput<ConfigWithFriParams> {
     let config = make_leaf_config();
     let backend = make_backend();
     let params = agg_params();
 
-    let left_input = recursion_input_with_public_values(left);
-    let right_input = recursion_input_with_public_values(right);
+    // Deserialized children carry no lookup contexts — rebuild before wiring
+    // the verifier circuits (in-process children skip this, `None`).
+    let left_common = rebuilt_common_for(left);
+    let right_common = rebuilt_common_for(right);
+    let left_input =
+        recursion_input_with_common(left, left_common.as_ref().unwrap_or(&left.stark_common));
+    let right_input =
+        recursion_input_with_common(right, right_common.as_ref().unwrap_or(&right.stark_common));
 
     // Assemble a custom aggregation circuit: verify both children, then bind +
     // re-expose their boundaries.
@@ -255,6 +326,12 @@ pub fn prove_hiding_merge(
 /// from the proof via [`read_exposed_boundary`] — it is bound in-circuit, not
 /// natively trusted).
 pub fn verify_bound_proof(output: &RecursionOutput<ConfigWithFriParams>) {
+    verify_bound_stark_proof(&output.0)
+}
+
+/// [`verify_bound_proof`] from a bare proof — the auditor path for a root that
+/// arrived as serialized bytes from another machine.
+pub fn verify_bound_stark_proof(proof: &BatchStarkProof<ConfigWithFriParams>) {
     let config = make_leaf_config();
     let params = agg_params();
     let mut verifier =
@@ -262,7 +339,7 @@ pub fn verify_bound_proof(output: &RecursionOutput<ConfigWithFriParams>) {
     verifier.register_poseidon2_table::<EXT_D>(Poseidon2Config::BABY_BEAR_D4_W16);
     verifier.register_recompose_table::<EXT_D>(Poseidon2Config::BABY_BEAR_D4_W16.d() != EXT_D);
     verifier.register_expose_table::<EXT_D>();
-    verifier.verify_all_tables(&output.0).expect("verify bound proof");
+    verifier.verify_all_tables(proof).expect("verify bound proof");
 }
 
 /// Bentley–Saxe cascade over boundary leaves, producing one root proof whose
@@ -545,6 +622,47 @@ mod tests {
         let (initial, final_) = read_exposed_boundary(&root);
         assert_eq!(initial.0, commit_gk2_state(&s0).0, "root initial = real Com(S_0)");
         assert_eq!(final_.0, commit_gk2_state(&s2).0, "root final = real Com(S_2)");
+    }
+
+    /// WIRE-MERGEABILITY GATE (distributed composition): proofs round-trip
+    /// through postcard serialization and merge as bare `BatchStarkProof`s —
+    /// no `CircuitProverData` from the producing context. This is exactly what
+    /// a multi-machine deployment does: leaves/subtree roots cross machines as
+    /// bytes and the receiving machine folds them. A regression here breaks
+    /// `experiments::dist_compose`.
+    #[test]
+    fn merge_from_deserialized_proof_bytes() {
+        let l0 = prove_boundary_leaf(commit(0), commit(1));
+        let l1 = prove_boundary_leaf(commit(1), commit(2));
+
+        // Simulate the machine boundary: serialize, drop the originals'
+        // prover halves, deserialize on "the other side".
+        let b0 = postcard::to_allocvec(&l0.0).expect("serialize left");
+        let b1 = postcard::to_allocvec(&l1.0).expect("serialize right");
+        drop((l0, l1));
+        let p0: BatchStarkProof<ConfigWithFriParams> =
+            postcard::from_bytes(&b0).expect("deserialize left");
+        let p1: BatchStarkProof<ConfigWithFriParams> =
+            postcard::from_bytes(&b1).expect("deserialize right");
+
+        let merged = prove_hiding_merge_proofs(&p0, &p1);
+        verify_bound_proof(&merged);
+        let (initial, final_) = read_exposed_boundary(&merged);
+        assert_eq!(initial, commit(0), "outer initial survives the wire");
+        assert_eq!(final_, commit(2), "outer final survives the wire");
+
+        // Second hop: the merged root itself round-trips and re-merges (the
+        // forest's cross-machine reduction rounds fold fold-outputs).
+        let rb = postcard::to_allocvec(&merged.0).expect("serialize root");
+        let rp: BatchStarkProof<ConfigWithFriParams> =
+            postcard::from_bytes(&rb).expect("deserialize root");
+        let l2 = prove_boundary_leaf(commit(2), commit(3));
+        let l3 = prove_boundary_leaf(commit(3), commit(4));
+        let right = prove_hiding_merge(&l2, &l3);
+        let root = prove_hiding_merge_proofs(&rp, &right.0);
+        verify_bound_proof(&root);
+        let (ri, rf) = read_exposed_boundary(&root);
+        assert_eq!((ri, rf), (commit(0), commit(4)), "fold-of-folds over the wire");
     }
 
     /// 4-leaf bound forest (exercises `agg + agg`): the single root proof
