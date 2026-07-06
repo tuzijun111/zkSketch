@@ -17,6 +17,11 @@ anyhow = "1.0"
 # Used only to report the prover thread count in the benchmark output, matching
 # the plonky3 `countmin_final` benchmarks. plonky2 already depends on rayon.
 rayon = "1.10"
+# Distributed composition engine (experiments::dist_compose): the cross-process
+# wire codec for subtree-root proofs (proof + CommonCircuitData + verifier-only
+# bytes) and the socket IPC framing. Matches the plonky3 crate's versions.
+serde = { version = "1.0", features = ["derive"] }
+postcard = { version = "1.1", features = ["alloc"] }
 
 [profile.release]
 opt-level = 3

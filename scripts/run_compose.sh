@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Streaming proof-composition COMPARISON (plonky3 / STARK).
+# Streaming proof-composition COMPARISON.
+#
+# Backend-selectable via EXP_COMPOSE_BACKEND (default plonky3 / STARK; set
+# plonky2 for the SNARK backend — same distributed engine, same CSV schema).
 #
 # Compares the three §Streaming-Proof-Composition modes — per-batch chain,
 # recursive linear chain, and streaming forest — over four sketch families, each
@@ -32,6 +35,20 @@
 #   EXP_COMPOSE_MACHINES=1,2,4,8 EXP_COMPOSE_CORES=8 scripts/run_compose.sh forest.csv
 #
 # Config (env):
+#   EXP_COMPOSE_BACKEND  plonky3|plonky2  (default plonky3). plonky2 runs the
+#                        SNARK port (plonky2/examples/exp_compose): same three
+#                        modes, same four families, same pinned multi-process
+#                        forest + measured comm, over Goldilocks/Poseidon/FRI.
+#                        Caveats vs plonky3: EXP_COMPOSE_CORES/_MACHINES take a
+#                        SINGLE value (no comma-sweep); it uses a synthetic key
+#                        stream (real EXP_DATASET not yet wired); it ignores
+#                        EXP_COMPOSE_EXEC / EXP_GK_S / EXP_COMPOSE_QUERY_EVERY;
+#                        and it adds EXP_COMPOSE_CROSS_FAMILY=1 to also bind the
+#                        four family roots pairwise cross-family. Each
+#                        cross-machine root ships proof+CommonCircuitData
+#                        (merge_wire tag in env.json), so its comm bytes run a
+#                        bit above plonky3's proof-only wire. Builds on nightly
+#                        (pinned by plonky2/rust-toolchain.toml, auto-selected).
 #   EXP_COMPOSE_FAMILY   cm|hll|ss|gk comma-list                 (default cm,hll,ss,gk)
 #   EXP_COMPOSE_MODE     per_batch|chain|forest comma-list       (default all three;
 #                        `recursive` is accepted as an alias for forest)
@@ -94,20 +111,38 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 OUT_CSV="${EXP_OUT:-${1:-}}"
+BACKEND="${EXP_COMPOSE_BACKEND:-plonky3}"
 mkdir -p results
 
-echo "== zkSketch stream-compose == N=${EXP_COMPOSE_N:-32} dataset=${EXP_DATASET:-uniform} families=${EXP_COMPOSE_FAMILY:-cm,hll,ss,gk} modes=${EXP_COMPOSE_MODE:-per_batch,chain,forest} m=${EXP_COMPOSE_BATCHES:-8} cores=${EXP_COMPOSE_CORES:-all} machines=${EXP_COMPOSE_MACHINES:-1}"
+echo "== zkSketch stream-compose == backend=$BACKEND N=${EXP_COMPOSE_N:-32} dataset=${EXP_DATASET:-uniform} families=${EXP_COMPOSE_FAMILY:-cm,hll,ss,gk} modes=${EXP_COMPOSE_MODE:-per_batch,chain,forest} m=${EXP_COMPOSE_BATCHES:-8} cores=${EXP_COMPOSE_CORES:-all} machines=${EXP_COMPOSE_MACHINES:-1}"
 
-echo "-- plonky3 (STARK) --"
-# EXP_OUT is consumed by the example itself for the rename; pass it through.
-EXP_OUT="${OUT_CSV}" cargo run --release --example exp_compose
+case "$BACKEND" in
+  plonky3|p3|stark)
+    echo "-- plonky3 (STARK) --"
+    # EXP_OUT is consumed by the example itself for the rename; pass it through.
+    EXP_OUT="${OUT_CSV}" cargo run --release --example exp_compose
+    FINAL_CSV="results/stream_compose.csv"
+    [[ -n "$OUT_CSV" ]] && FINAL_CSV="results/${OUT_CSV%.csv}.csv"
+    ENV_JSON="results/env.json"
+    ;;
+  plonky2|p2|snark)
+    echo "-- plonky2 (SNARK) --  (synthetic stream; single-value CORES/MACHINES; nightly via plonky2/rust-toolchain.toml)"
+    NAME="${OUT_CSV:-stream_compose_p2}"; NAME="${NAME%.csv}"
+    # plonky2/ is a self-contained crate; run its example there and surface the
+    # CSV in the shared results/ dir so both backends land side by side.
+    ( cd plonky2 && EXP_OUT="$NAME" cargo run --release --example exp_compose )
+    [[ -f "plonky2/results/${NAME}.csv" ]] && cp -f "plonky2/results/${NAME}.csv" "results/${NAME}.csv"
+    FINAL_CSV="results/${NAME}.csv"
+    ENV_JSON="plonky2/results/env.json"
+    ;;
+  *)
+    echo "error: unknown EXP_COMPOSE_BACKEND='$BACKEND' (use plonky3|plonky2)" >&2
+    exit 2
+    ;;
+esac
 
-FINAL_CSV="results/stream_compose.csv"
-if [[ -n "$OUT_CSV" ]]; then
-  FINAL_CSV="results/${OUT_CSV%.csv}.csv"
-fi
 if [[ -f "$FINAL_CSV" ]]; then
   echo "results -> $FINAL_CSV"
   column -t -s, "$FINAL_CSV" | sed -n '1,200p'
 fi
-echo "env.json: results/env.json"
+echo "env.json: $ENV_JSON"
