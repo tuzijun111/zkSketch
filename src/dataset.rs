@@ -416,10 +416,11 @@ mod tests {
         use crate::sketch::ss_final_full::{SsFullParams, SsFullUpdate, commit_ss_state, generate_proof};
         let params = SsFullParams { capacity: 8, batch: 8 };
         for (name, keys) in sources(params.batch) {
-            // SS keys: keep < 2^30 and non-zero (0 is the dummy sentinel; the
-            // group-by needs distinct keys mod the field).
+            // SS keys: keep < 2^29 (ss_final_full's KEY_DIFF_BITS contract)
+            // and non-zero (0 is the dummy sentinel; the group-by needs
+            // distinct keys mod the field).
             let updates: Vec<SsFullUpdate> =
-                keys.iter().map(|&k| SsFullUpdate::real(((k & 0x3FFF_FFFF) | 1) as u64, 1)).collect();
+                keys.iter().map(|&k| SsFullUpdate::real(((k & 0x1FFF_FFFF) | 1) as u64, 1)).collect();
             let r = generate_proof(params, updates);
             assert_eq!(commit_ss_state(&r.final_state).0, r.proof.final_.0, "ss on {name}");
         }

@@ -60,13 +60,13 @@ use std::rc::Rc;
 
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
-use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_recompose_trace};
+use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_range_trace, generate_recompose_trace};
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        range_air_builders, range_preprocessor, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -185,6 +185,7 @@ pub fn prove_gk_decode(params: GkDecodeParams, state: GKFullState, query: u64) -
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
 
     // PIs: committed state, query, released answer.
     let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
@@ -271,7 +272,7 @@ pub fn prove_gk_decode(params: GkDecodeParams, state: GKFullState, query: u64) -
         let small_q = b.mul(nle, q_plus_1); // (1−le)·(q+1)
         let small = b.add(small_v, small_q);
         let diff = b.sub(big, small);
-        let _ = b.decompose_to_bits::<Val>(diff, DIFF_BITS).expect("diff >= 0");
+        let _ = b.add_range_bits::<Val>(diff, DIFF_BITS).expect("diff >= 0");
 
         // P_i prefix mass: active_r · le_r · count_r. active_r and count_r lead
         // (lhs).
@@ -364,7 +365,7 @@ pub fn prove_gk_decode(params: GkDecodeParams, state: GKFullState, query: u64) -
     let res_plus0 = b.add(res_w, zero);
     let zero_sum = b.add(zero, zero);
     let diff_res = b.sub(res_plus0, zero_sum);
-    let _ = b.decompose_to_bits::<Val>(diff_res, DIFF_BITS).expect("res >= 0");
+    let _ = b.add_range_bits::<Val>(diff_res, DIFF_BITS).expect("res >= 0");
 
     // ── Stage 5: release policy → answer ──
     match release {
@@ -387,7 +388,7 @@ pub fn prove_gk_decode(params: GkDecodeParams, state: GKFullState, query: u64) -
             let a = b.mul(fl, res_minus_t);
             let nft = b.mul(nf, t_minus_res_m1);
             let chosen = b.add(a, nft);
-            let _ = b.decompose_to_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
+            let _ = b.add_range_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
             let released = b.mul(fl, res_w);
             b.connect(released, answer_pi);
         }
@@ -434,9 +435,10 @@ pub fn prove_gk_decode(params: GkDecodeParams, state: GKFullState, query: u64) -
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
     let preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
+        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -456,6 +458,7 @@ pub fn prove_gk_decode(params: GkDecodeParams, state: GKFullState, query: u64) -
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    prover.register_range_table::<4>();
     let __t_p = std::time::Instant::now();
     let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove gk decode");
     let __prove = __t_p.elapsed();

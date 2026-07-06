@@ -1,0 +1,5 @@
+dataset,family,variant,mode,shape,n,m,t,cores,machines,total_time_ms,leafgen_ms,leafgen_seq_ms,merge_ms,verify_ms,proof_bytes,records_per_sec,peak_rss_mb,n_queries,query_prove_ms,query_verify_ms,query_proof_bytes,query_ctx_verifies,status
+aol,cm,cm_omc,forest,d4_w8,16,8,2,8,1,2719.823,133.898,133.898,2585.925,12.590,511019,6,850.3,2,55.131,17.169,574090,2,ok
+aol,hll,hll_omc,forest,b4,16,8,2,8,1,2699.545,136.887,136.887,2562.658,12.708,511331,6,904.9,2,64.938,18.297,638239,2,ok
+aol,ss,ss_certified,forest,cap8,16,8,2,8,1,2679.233,108.615,108.615,2570.618,12.766,510990,6,873.7,2,63.554,16.541,572204,2,ok
+aol,gk,gk_bandmerge2,forest,cap32_s4,16,8,2,8,1,3054.856,435.194,435.194,2619.662,12.676,510762,5,913.4,2,64.368,18.306,636437,2,ok

@@ -1,6 +1,6 @@
 # zkSketch — Experiment Log
 
-A chronological, reproducible record of every phase, test, and measured number in this prototype. The README is the public-facing project description; this file is the **lab notebook** — what we tried, what changed, what we learned, and exactly how to reproduce each result.
+A chronological, reproducible record of every phase, test, and measured number in this prototype. The README is the public-facing project description; this file is the **lab notebook** — what we tried, what changed, what we learned, and exactly how to reproduce each result. (For the *current* evaluation surface — which experiments are live vs archived and how to run them — see [REPRODUCE.md](REPRODUCE.md); this log predates several later refactors.)
 
 If you only have five minutes, read [§ Quickstart](#quickstart-reproduction) and skim [§ Phase history](#phase-history). If you want to verify a specific claim, jump to the phase that produced it; every phase has its own "How to run" + "Measured" block.
 

@@ -42,10 +42,21 @@
 //! default 8), `EXP_DATASET` (uniform|gaussian|zipf|aol|netflix; default
 //! uniform), `EXP_OUT`/`$1` (rename CSV).
 //!
+//! ## Mixed updates + queries (`EXP_COMPOSE_QUERY_EVERY`, default 0 = off)
+//! With `EXP_COMPOSE_QUERY_EVERY=k`, one **query leaf** (the family's decode
+//! circuit: cm point count, hll cardinality, ss top-1 mass, gk rank) is proved
+//! after every `k`-th batch against the state commitment the update leaf just
+//! exposed. Query costs land in the `query_*` columns (kept separate from the
+//! update-side totals); `query_ctx_verifies` counts the composition proofs the
+//! verifier checks at query time to trust `Com(S_{t'})` — `t'` (per_batch),
+//! `1` (chain), `popcount(t')` Bentley–Saxe peaks (forest). NOTE the cm decode
+//! circuit caps `w <= 16`, so with queries on keep `EXP_W` small (default 8).
+//!
 //! Output: results/stream_compose.csv with columns
 //!   dataset,family,variant,mode,shape,n,m,t,cores,machines,total_time_ms,
 //!   leafgen_ms,leafgen_seq_ms,merge_ms,verify_ms,proof_bytes,records_per_sec,
-//!   peak_rss_mb,status
+//!   peak_rss_mb,n_queries,query_prove_ms,query_verify_ms,query_proof_bytes,
+//!   query_ctx_verifies,status
 //!
 //! RUNTIME WARNING: every leaf and every merge is a real STARK proof, proved
 //! SEQUENTIALLY (the k-machine split is a makespan projection, not concurrent
@@ -158,11 +169,12 @@ fn measure_guarded(
     cores: usize,
     machines: usize,
     proof_dir: &std::path::Path,
+    query_every: usize,
 ) -> Option<ComposeCell> {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let r = catch_unwind(AssertUnwindSafe(|| {
-        measure_compose(family, shape, batches, mode, cores, machines, proof_dir)
+        measure_compose(family, shape, batches, mode, cores, machines, proof_dir, query_every)
     }));
     std::panic::set_hook(prev);
     r.ok()
@@ -172,6 +184,10 @@ fn main() {
     let avail = rayon::current_num_threads();
     let n = env_size("EXP_COMPOSE_N", 32);
     let batches_m = env_size_list("EXP_COMPOSE_BATCHES", &[8]);
+    // Mixed workload: prove one query leaf after every k-th batch (0 = off).
+    // NOTE the cm decode circuit caps w <= 16; with queries on, larger EXP_W
+    // records the cm cells as too_large.
+    let query_every = env_size("EXP_COMPOSE_QUERY_EVERY", 0);
     let cores_list: Vec<usize> = env_size_list("EXP_COMPOSE_CORES", &[avail])
         .into_iter()
         .map(|c| c.clamp(1, avail))
@@ -265,9 +281,14 @@ fn main() {
     let _ = std::fs::remove_dir_all(&proof_base);
 
     println!(
-        "Stream compose (plonky3) — N={n} datasets={datasets:?} families={:?} modes={:?} m={batches_m:?} cores={cores_list:?} machines={machines_list:?} (avail={avail})",
+        "Stream compose (plonky3) — N={n} datasets={datasets:?} families={:?} modes={:?} m={batches_m:?} cores={cores_list:?} machines={machines_list:?} (avail={avail}){}",
         families.iter().map(|f| f.label()).collect::<Vec<_>>(),
         modes.iter().map(|m| m.label()).collect::<Vec<_>>(),
+        if query_every > 0 {
+            format!(" MIXED: query every {query_every} batch(es)")
+        } else {
+            String::new()
+        },
     );
     if modes.contains(&StreamMode::PerBatch) {
         println!("per-batch proofs → {}", proof_base.display());
@@ -291,7 +312,8 @@ fn main() {
     let hdr: Vec<String> = [
         "dataset", "family", "variant", "mode", "shape", "n", "m", "t", "cores", "machines",
         "total_time_ms", "leafgen_ms", "leafgen_seq_ms", "merge_ms", "verify_ms", "proof_bytes",
-        "records_per_sec", "peak_rss_mb", "status",
+        "records_per_sec", "peak_rss_mb", "n_queries", "query_prove_ms", "query_verify_ms",
+        "query_proof_bytes", "query_ctx_verifies", "status",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -343,6 +365,7 @@ fn main() {
                             let sh = shape_str(family, &fshape);
                             match measure_guarded(
                                 family, fshape, &batches, mode, cores, machines, &cell_dir,
+                                query_every,
                             ) {
                                 Some(c) => {
                                     let rps = if c.total_time_ms > 0.0 {
@@ -363,11 +386,27 @@ fn main() {
                                         c.proof_bytes.to_string(),
                                         rps.to_string(),
                                         format!("{:.1}", c.peak_rss_mb),
+                                        c.n_queries.to_string(),
+                                        format!("{:.3}", c.query_prove_ms),
+                                        format!("{:.3}", c.query_verify_ms),
+                                        c.query_proof_bytes.to_string(),
+                                        c.query_ctx_verifies.to_string(),
                                         "ok".into(),
                                     ];
                                     write_row(&csv, &row);
+                                    let qstr = if c.n_queries > 0 {
+                                        format!(
+                                            " q={} qprove={:.2}s qverify={:.3}s qproof={:.1}KB qctx={}",
+                                            c.n_queries, c.query_prove_ms / 1000.0,
+                                            c.query_verify_ms / 1000.0,
+                                            c.query_proof_bytes as f64 / 1024.0,
+                                            c.query_ctx_verifies,
+                                        )
+                                    } else {
+                                        String::new()
+                                    };
                                     println!(
-                                        "  {vl:<13} {sh:<10} m={m:<4} t={t:<3} [{:<9}] cores={cores} mach={machines} total={:.2}s (leafgen={:.2}s merge={:.2}s) verify={:.3}s proof={:.1}KB rss={:.0}MB",
+                                        "  {vl:<13} {sh:<10} m={m:<4} t={t:<3} [{:<9}] cores={cores} mach={machines} total={:.2}s (leafgen={:.2}s merge={:.2}s) verify={:.3}s proof={:.1}KB rss={:.0}MB{qstr}",
                                         mode.label(), c.total_time_ms / 1000.0,
                                         c.leafgen_ms / 1000.0, c.merge_ms / 1000.0,
                                         c.verify_ms / 1000.0, c.proof_bytes as f64 / 1024.0,
@@ -381,7 +420,7 @@ fn main() {
                                         m.to_string(), t.to_string(), cores.to_string(),
                                         machines.to_string(),
                                     ];
-                                    row.extend(std::iter::repeat("n/a".to_string()).take(8));
+                                    row.extend(std::iter::repeat("n/a".to_string()).take(13));
                                     row.push("too_large".into());
                                     write_row(&csv, &row);
                                     eprintln!(

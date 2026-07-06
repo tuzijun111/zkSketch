@@ -202,7 +202,7 @@ pub fn ss_epoch(
     assert_eq!(keys.len(), params.batch, "SS: keys.len != batch");
     let updates: Vec<SsFullUpdate> = keys
         .iter()
-        .map(|&k| SsFullUpdate::real(((k & 0x3FFF_FFFF) | 1) as u64, 1))
+        .map(|&k| SsFullUpdate::real(((k & 0x1FFF_FFFF) | 1) as u64, 1))
         .collect();
 
     let (final_state, _residual) = apply_batch_ss_full(initial, &updates);
@@ -214,7 +214,7 @@ pub fn ss_epoch(
     let correct = leaf.final_.0 == com_after;
 
     // Decoded answer: frequency of the first probe key.
-    let probe = ((keys[0] & 0x3FFF_FFFF) | 1) as u64;
+    let probe = ((keys[0] & 0x1FFF_FFFF) | 1) as u64;
     let answer = final_state.frequency(probe) as f64;
 
     let outcome = EpochOutcome {

@@ -73,15 +73,15 @@ use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
 use p3_circuit::ops::{
     Poseidon2Config, generate_expose_trace, generate_permute_trace, generate_poseidon2_trace,
-    generate_recompose_trace,
+    generate_range_trace, generate_recompose_trace,
 };
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         expose_air_builders, expose_preprocessor, permute_air_builders, permute_preprocessor,
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        poseidon2_air_builders_d4, poseidon2_preprocessor, range_air_builders, range_preprocessor,
+        recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -532,6 +532,7 @@ fn prove_ss_full_inner(
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
     if expose_boundary {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
@@ -662,7 +663,7 @@ fn prove_ss_full_inner(
     for r in 0..total {
         b.connect(key_sorted_fields[r][1], zero); // single-limb: key_hi = 0
         let _ = b
-            .decompose_to_bits::<Val>(key_sorted_fields[r][0], KEY_DIFF_BITS)
+            .add_range_bits::<Val>(key_sorted_fields[r][0], KEY_DIFF_BITS)
             .expect("union key range-check");
         // Bound every union count at the SOURCE to `< 2^(COUNT_DIFF_BITS−1)` so
         // no single input can approach `p`; combined with the g_sorted count
@@ -670,13 +671,13 @@ fn prove_ss_full_inner(
         // a committed S_old count `≈ p` (plus one batch occurrence of the same
         // key) wraps a segment sum down to a small residue and is silently kept.
         let _ = b
-            .decompose_to_bits::<Val>(key_sorted_fields[r][2], COUNT_DIFF_BITS - 1)
+            .add_range_bits::<Val>(key_sorted_fields[r][2], COUNT_DIFF_BITS - 1)
             .expect("union count range-check");
     }
     for r in 1..total {
         let kdiff = b.sub(ks_keyfield[r], ks_keyfield[r - 1]);
         let _ = b
-            .decompose_to_bits::<Val>(kdiff, KEY_DIFF_BITS)
+            .add_range_bits::<Val>(kdiff, KEY_DIFF_BITS)
             .expect("union key-sortedness");
     }
 
@@ -788,7 +789,7 @@ fn prove_ss_full_inner(
     // here. This is the count analog of the union key range-check in Stage 5.
     for r in 0..total {
         let _ = b
-            .decompose_to_bits::<Val>(g_sorted_fields[r][2], COUNT_DIFF_BITS - 1)
+            .add_range_bits::<Val>(g_sorted_fields[r][2], COUNT_DIFF_BITS - 1)
             .expect("g_sorted count range-check");
     }
     // active monotone increasing (dummies first):
@@ -831,7 +832,7 @@ fn prove_ss_full_inner(
         let kdiff = b.sub(gk_r1, gk_r);
         let gated = b.mul(count_eq, kdiff);
         let _ = b
-            .decompose_to_bits::<Val>(gated, KEY_DIFF_BITS)
+            .add_range_bits::<Val>(gated, KEY_DIFF_BITS)
             .expect("key tie-break within count-equal run");
     }
 
@@ -960,9 +961,11 @@ fn prove_ss_full_inner(
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
     let mut preprocessors = vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
     preprocessors.push(permute_preprocessor::<Val>());
+    preprocessors.push(range_preprocessor::<Val>());
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
     if expose_boundary {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
@@ -986,6 +989,7 @@ fn prove_ss_full_inner(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
+    prover.register_range_table::<4>();
     if expose_boundary {
         prover.register_expose_table::<4>();
     }

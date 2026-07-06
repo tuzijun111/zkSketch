@@ -174,51 +174,50 @@ not bigger proofs. Both crates read the same `data/` directory.
 
 ## Running the experiments
 
-The evaluation suite (`latex/EVAL_SPEC.md`) is **E1–E10 + inputfold**. The driver
-runs the relevant backend(s), merges rows into a combined `results/<exp>.csv` with
-a `backend` column, and writes per-backend `env.json` (CPU/RAM/OS/rustc + config).
+The current evaluation (`latex/zk1.tex` §Evaluation) runs through **four script
+surfaces**. `run_experiments.sh` runs the relevant backend(s), merges rows into
+a combined `results/<exp>.csv` with a `backend` column, and writes per-backend
+`env.json` (CPU/RAM/OS/rustc + config); the other three scripts are
+plonky3-only drivers with their own CSVs.
 
 ```bash
-scripts/run_experiments.sh            # E1 (default), both backends, small slice
-scripts/run_experiments.sh e2         # by name: e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 inputfold
+scripts/run_experiments.sh            # e1 (default), both backends, small slice
+scripts/run_experiments.sh e2         # by name: e1 e2 e5 e8
 EXP_DATASET=aol scripts/run_experiments.sh e1
-BACKENDS=plonky2 scripts/run_experiments.sh e8
+scripts/run_compose.sh                # real recursive composition (+ mixed queries)
+scripts/run_stream.sh                 # whole-stream total prove time
+scripts/run_decode.sh                 # decode/query circuits (tests + table)
 ```
 
-| Exp | What it measures | Backends | Command | Output |
-| --- | --- | --- | --- | --- |
-| **E1** | per-family circuit cost (witness/prove/verify split, proof size, peak RSS) | both | `run_experiments.sh e1` | `results/e1_circuit.csv` |
-| **E2** | integrity: tamper-rejection + fidelity vs. plaintext | both | `run_experiments.sh e2` | `results/e2_integrity.csv` |
-| **E3** | decode / query cost vs. state size `s` (all 4 families) | both | `run_experiments.sh e3` | `results/e3_decode.csv` |
-| **E4** | scalability sweeps (certified Count-Min) | plonky3 | `run_experiments.sh e4` | `results/e4_scaling.csv` |
-| **E5** | composition ladder — verifier cost flat vs. recursive | plonky3 | `run_experiments.sh e5` | `results/e5_ladder.csv` |
-| **E6** | streaming forest: cores × batch size | plonky3 | `run_experiments.sh e6` | `results/e6_forest.csv` |
-| **E7** | maintenance policy × query rate | plonky3 | `run_experiments.sh e7` | `results/e7_policy.csv` |
-| **E8** | cross-stack head-to-head (plonky2 vs plonky3) | both | `run_experiments.sh e8` | `results/e8_crossstack.csv` |
-| **E9** | optimisation ablations | plonky3 | `run_experiments.sh e9` | `results/e9_optim.csv` |
-| **E10** | cost-model validation (post-processes E1/E3/E4 CSVs) | — | `run_experiments.sh e10` | console report |
-| **inputfold** | input-commitment binding + history-fold into `R(t)` + MMR ULog over real `Com(B_t)` | plonky3 | `run_experiments.sh inputfold` | `results/input_fold.csv` |
-| **casestudy** | AOL/Netflix end-to-end: ingest + audit + tamper across all four families | plonky3 | `run_experiments.sh casestudy` | `results/casestudy_{ingest,audit}.csv` |
+| Surface | What it measures | Backends | Output |
+| --- | --- | --- | --- |
+| `run_experiments.sh e1` | **the per-family circuit-cost matrix**: family × variant × batch sweep (witness/prove/verify split, proof size, peak RSS), incl. the naive replay baselines (`EXP_SS_VARIANT=naive`, `EXP_GK_VARIANT=naive`) and the CM/HLL rebind variants | both | `results/e1_circuit.csv` (rename per run via `EXP_OUT`) |
+| `run_experiments.sh e2` | integrity: tamper-rejection + fidelity vs. plaintext | both | `results/e2_integrity.csv` |
+| `run_experiments.sh e5` | composition-topology ladder (structural digest lift) — auditor cost `Θ(E)→O(1)` | plonky3 | `results/e5_ladder.csv` |
+| `run_experiments.sh e8` | cross-stack head-to-head: leaf + recursive merge on both proof systems | both | `results/e8_crossstack.csv` |
+| `run_compose.sh` | composition over **real recursive proofs**: 4 families × {per_batch, chain, forest}, cores/machines budgets; **mixed updates+queries** via `EXP_COMPOSE_QUERY_EVERY=k` | plonky3 | `results/stream_compose.csv` |
+| `run_stream.sh` | **whole-stream total prove time**: fixed `N`, sweep batch size × cores, `omc` vs `merkle` CM leaves | plonky3 | `results/stream_forest.csv` |
+| `run_decode.sh` | decode/query circuits of the **deployed** variants (unit tests + proven results table) | plonky3 | console |
 
-**Config (env vars, forwarded to the runners):**
+**Config (env vars — the most common; full lists in the script headers):**
 
 | Var | Meaning | Default |
 | --- | --- | --- |
 | `EXP_DATASET` | `uniform` \| `gaussian` \| `zipf` \| `aol` \| `netflix` | `uniform` |
-| `EXP_M` | E1 batch sizes (CSV, e.g. `4,8,16,32`); E2 single batch | `4,8,16,32` / `16` |
-| `EXP_TRIALS` / `EXP_WARMUP` | measured trials / warm-ups for median+p95 | `5` / `1` |
-| `EXP_TAMPER_TRIALS` | E2 tamper trials | `50` |
+| `EXP_M` | e1 batch sizes (comma list only, e.g. `4,8,16,32`); e2 single batch | `4,8,16,32` / `16` |
+| `EXP_FAMILY` | e1: `all` or comma-list of `cm,gk,hll,ss` | `all` |
+| `EXP_{CM,HLL}_VARIANT` | e1 rebind variant sweeps (`one_hot`/`merkle`/…/`omc`) | `one_hot` |
+| `EXP_{SS,GK}_VARIANT` | e1: `certified` \| `naive` (replay baseline) \| `both` | `certified` |
+| `EXP_OUT` | rename the output CSV so successive runs don't overwrite | per-exp name |
+| `EXP_CORES` | e1/plonky3: cores-per-proof pin (distributed-setting knob) | all cores |
 | `BACKENDS` | `plonky3` \| `plonky2` \| `both` | `both` |
 
-### Figures (RQ panels)
-
-A second track maps to the paper's RQ figures. Run the RQ runners, then render:
-
-```bash
-cargo run --release --example exp_rq1   # … exp_rq2, exp_rq3, exp_rq4, exp_casestudy
-python3 scripts/plot_experiments.py     # → results/figures/*.pdf (+ .png)
-python3 scripts/plot_experiments.py rq2a rq4ab   # just some panels
-```
+Earlier modes of the E1–E10 ladder (**e3, e4, e6, e7, e9, e10, inputfold,
+casestudy**) and the RQ1–RQ4 figure track are **retired from the driver** —
+each was superseded by one of the four surfaces above. Their runners stay in
+`examples/` and remain directly runnable; the mapping (what replaced what, and
+the direct commands) is in
+[`docs/REPRODUCE.md` §Archived experiments](docs/REPRODUCE.md#archived-experiments).
 
 ### Standalone comparison demos
 
@@ -229,7 +228,6 @@ cargo run --release --example chain_two            # §4.1 flat vs §4.2 recursi
 cargo run --release --example countmin_chain_n     # recursive chain sweep E ∈ {2,4,8}
 cargo run --release --example countmin_v1_vs_v2    # §5.1 strawman vs §5.4-shaped leaf
 cargo run --release --example hll_chain_n          # HLL chain sweep
-cargo run --release --example exp_inputfold        # input-commit + fold + MMR over real batches
 ```
 
 Full per-experiment details, expected output, and the partial-vs-whole-dataset
@@ -240,7 +238,7 @@ guidance live in [`docs/REPRODUCE.md`](docs/REPRODUCE.md).
 ## Tests
 
 ```bash
-cargo test --release                       # plonky3: ~200 lib unit tests + tests/ integration
+cargo test --release                       # plonky3: ~290 lib unit tests + tests/ integration
 cargo test --release --lib dataset::       # one module
 cargo test --release --test two_leaf_hll   # one integration suite
 (cd plonky2 && cargo test --release)       # plonky2 backend (nightly auto)
@@ -274,7 +272,7 @@ boundaries) accompany every honest path.
 | `examples/` | Experiment runners (`exp_*`), the dataset generator (`gen_synthetic`), and comparison demos. |
 | `tests/` | §4 chain/merge integration suites (Count-Min + HLL). |
 | `plonky2/` | The SNARK backend: `src/sketch/`, `src/leaf/` (in-circuit leaves + `countmin_merkle`), `src/decode/` (query circuits, E3), `src/recursion/`, `src/metrics.rs`, its own `examples/`. |
-| `scripts/` | `run_experiments.sh`, `fetch_datasets.py`, `plot_experiments.py`, `cost_model_e10.py`. |
+| `scripts/` | `run_experiments.sh` (e1/e2/e5/e8 driver), `run_compose.sh`, `run_stream.sh`, `run_decode.sh`, `fetch_datasets.py`; legacy: `plot_experiments.py` (RQ figures), `cost_model_e10.py`. |
 | `data/` | Key streams: synthetic (`gaussian/uniform/zipf.keys` + manifest) and real (`aol/netflix.keys`). |
 | `docs/` | Documentation (see below). |
 | `paper/`, `latex/` | Paper PDF + `zk1.tex` source and `EVAL_SPEC.md`. |
@@ -285,12 +283,14 @@ boundaries) accompany every honest path.
 
 | Doc | Contents |
 | --- | --- |
-| [`docs/REPRODUCE.md`](docs/REPRODUCE.md) | End-to-end reproduction recipe: every experiment's command, config, expected output, partial-vs-whole dataset. |
-| [`docs/EVALUATION.md`](docs/EVALUATION.md) | RQ → figure mapping and how the plots are produced. |
+| [`docs/REPRODUCE.md`](docs/REPRODUCE.md) | End-to-end reproduction recipe: every live experiment's command, config, expected output, partial-vs-whole dataset — plus the archived-experiments mapping. |
+| [`docs/EVALUATION.md`](docs/EVALUATION.md) | **Historical**: the original RQ1–RQ4 figure track and the old E1–E10 status table. |
 | [`docs/datasets.md`](docs/datasets.md) | Dataset recipe (S³-matched), reproducibility model, materialization. |
 | [`docs/framework.md`](docs/framework.md) | The §4 composition framework (chain / merge atom / streaming forest). |
 | [`docs/countmin.md`](docs/countmin.md) | Count-Min circuit variants (v1 → v9h) and the §5.2 design. |
 | [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) | Phase-by-phase build log with measured numbers and gotchas. |
 
-`latex/EVAL_SPEC.md` is the authoritative evaluation spec (metrics, trial counts,
-E1–E10 definitions).
+`latex/EVAL_SPEC.md` is the original evaluation spec (metrics, trial counts,
+E1–E10 definitions); the paper's §Evaluation (`latex/zk1.tex`) has since
+reorganized it around the four live surfaces above, and the spec is kept as a
+historical reference.

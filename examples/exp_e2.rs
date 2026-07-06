@@ -175,7 +175,7 @@ fn main() {
     // ── SS (frequency) ────────────────────────────────────────────────
     {
         let p = SsFullParams { capacity: 16, batch: m };
-        let mk = |k: u32| ((k & 0x3FFF_FFFF) | 1) as u64;
+        let mk = |k: u32| ((k & 0x1FFF_FFFF) | 1) as u64;
         let ups: Vec<SsFullUpdate> = keys.iter().map(|&k| SsFullUpdate::real(mk(k), 1)).collect();
         let r = ss_prove(p, ups.clone());
         let probe = mk(keys[0]);

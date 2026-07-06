@@ -145,7 +145,7 @@ fn main() {
         let mut state = ss_empty(params);
         let (mut rows, mut leaves) = (Vec::new(), Vec::new());
         for i in 1..=n {
-            let ks = keys(me, me, i as usize, 0x3FFF_FFFF, true);
+            let ks = keys(me, me, i as usize, 0x1FFF_FFFF, true);
             let (o, next) = ss_epoch(params, &state, &ks);
             rows.push(row_of(i, &o, me));
             leaves.push(leaf_of(i, &o));

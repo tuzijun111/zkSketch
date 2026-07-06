@@ -21,6 +21,20 @@
 //! folds nothing — it stores the `t` leaf proofs to a folder and the verifier
 //! holds all of them.
 //!
+//! ## Mixed updates + queries (`query_every`)
+//!
+//! With `query_every = k > 0`, a **query leaf** (the family's `src/decode/*`
+//! circuit: cm point count, hll cardinality, ss top-1 mass, gk rank) is proved
+//! after every `k`-th batch against the state at that point. The query circuit
+//! re-hashes the state and binds the same `Com(S_{t'})` the update leaf just
+//! exposed (asserted by the harness), so the verifier checks the answer against
+//! the composition proof(s) live at `t'`: all `t'` leaves (per_batch), the
+//! current fold (chain), or the `popcount(t')` Bentley–Saxe peaks (forest).
+//! Query costs are reported separately (`query_*` fields) and the per-mode
+//! verifier context is the structural `query_ctx_verifies` count — interior
+//! boundaries are hidden by the final root, so mid-stream queries verify
+//! against the composition state at query time, not the end-of-stream root.
+//!
 //! ## Cores and machines
 //!
 //! Every mode honours a **cores** budget: the whole measurement runs inside a
@@ -44,6 +58,11 @@ use std::time::Duration;
 use rayon::ThreadPoolBuilder;
 
 use crate::config::Val;
+use crate::decode::countmin::{prove_cm_decode, CmDecodeParams};
+use crate::decode::gk_bandmerge::{prove_gk2_decode, Gkb2DecodeParams};
+use crate::decode::hyperloglog::{prove_hll_decode_omc, HllDecodeParams};
+use crate::decode::spacesaving::{prove_ss_decode, SsDecodeParams};
+use crate::decode::{DecodeProof, ReleasePolicy};
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::expose_forest::{
     prove_chain_over, prove_forest_over, verify_bound_proof,
@@ -177,6 +196,20 @@ pub struct ComposeCell {
     /// single root proof (chain/forest, `O(1)`).
     pub proof_bytes: u64,
     pub peak_rss_mb: f64,
+    /// Mixed workload: number of interleaved query events (0 = updates only).
+    pub n_queries: usize,
+    /// Σ query-leaf prove time over all query events.
+    pub query_prove_ms: f64,
+    /// Σ query-leaf self-verify time over all query events.
+    pub query_verify_ms: f64,
+    /// Σ query-leaf proof bytes over all query events.
+    pub query_proof_bytes: u64,
+    /// Σ over query events of the number of COMPOSITION proofs the verifier must
+    /// check at query time to trust the bound state commitment `Com(S_{t'})`:
+    /// `t'` leaf proofs (per_batch), the 1 current fold (chain), or the
+    /// `popcount(t')` Bentley–Saxe peaks (forest). Structural count — the folds
+    /// exist at query time in a live stream; this harness does not re-time them.
+    pub query_ctx_verifies: u64,
 }
 
 /// A boundary-exposing leaf proof plus the Send metrics we keep off-thread.
@@ -188,16 +221,63 @@ struct LeafArt {
     verify_ms: f64,
 }
 
+/// One interleaved query event's Send metrics (the query proof itself is
+/// dropped — only its cost and size are kept).
+struct QueryArt {
+    /// Number of leaves covered when the query fired (`t'`, 1-based).
+    at_leaf: usize,
+    prove_ms: f64,
+    verify_ms: f64,
+    proof_bytes: u64,
+}
+
+/// Record one query event: take the decode prover's self-timings, check the
+/// harness-level binding (the state the query circuit hashed must be exactly
+/// the leaf-boundary commitment at `t'` — the decode proof binds it in-circuit
+/// via public inputs, this asserts the two sides agree), and keep the metrics.
+fn record_query(
+    queries: &mut Vec<QueryArt>,
+    at_leaf: usize,
+    dp: &DecodeProof,
+    native_commit: [Val; 8],
+    leaf_final: [Val; 8],
+) {
+    let tm = timing::take();
+    assert_eq!(
+        native_commit, leaf_final,
+        "query state commitment must equal the leaf boundary at t'={at_leaf}"
+    );
+    queries.push(QueryArt {
+        at_leaf,
+        prove_ms: (tm.witness + tm.prove).as_secs_f64() * 1000.0,
+        verify_ms: tm.verify.as_secs_f64() * 1000.0,
+        proof_bytes: dp.proof_size() as u64,
+    });
+}
+
 /// Prove the `t` exposed, boundary-chained leaves for `family` at `shape`,
 /// returning them (leaves stay on the calling thread — they are `!Send`) plus
-/// the canonical empty-state commitment `Com(S_0)` for the per-batch anchor.
+/// the canonical empty-state commitment `Com(S_0)` for the per-batch anchor and
+/// the interleaved query events (empty when `query_every == 0`).
+///
+/// Mixed workload: when `query_every = k > 0`, after every `k`-th batch a
+/// **query leaf** (the family's decode circuit, `src/decode/*`) is proved
+/// against the state at that point — it re-hashes the state in-circuit and
+/// binds the SAME commitment the update leaf just exposed as its `final_`
+/// boundary (asserted here), so a verifier holding the composition proof(s) at
+/// `t'` can check the answer against `Com(S_{t'})`. Probes mirror the per-family
+/// key masks: cm = first key of the batch (point count), hll = cardinality (no
+/// probe), ss = top-1 heavy-hitter mass, gk = rank of the first masked value.
 fn prove_leaves(
     family: StreamFamily,
     shape: StreamShape,
     batches: &[Vec<u32>],
-) -> (Vec<LeafArt>, [Val; 8]) {
+    query_every: usize,
+) -> (Vec<LeafArt>, [Val; 8], Vec<QueryArt>) {
     let m = batches[0].len();
     let mut leaves: Vec<LeafArt> = Vec::with_capacity(batches.len());
+    let mut queries: Vec<QueryArt> = Vec::new();
+    let query_due = |bi: usize| query_every > 0 && (bi + 1) % query_every == 0;
     // Capture each leaf's real self-timing right after proving.
     let mut push = |output: RecursionOutput<ConfigWithFriParams>, initial: [Val; 8], final_: [Val; 8]| {
         let tm = timing::take();
@@ -215,7 +295,7 @@ fn prove_leaves(
             let StreamShape { d, w, .. } = shape;
             let mut state = cm_empty(d, w);
             let e = commit_countmin(&state).0;
-            for batch in batches {
+            for (bi, batch) in batches.iter().enumerate() {
                 let ups: Vec<CountMinUpdate> =
                     batch.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
                 let leaf = prove_countmin_omc_exposed(
@@ -223,9 +303,20 @@ fn prove_leaves(
                     state.clone(),
                     ups.clone(),
                 );
-                push(leaf.output, leaf.initial_commit.0, leaf.final_commit.0);
+                let leaf_final = leaf.final_commit.0;
+                push(leaf.output, leaf.initial_commit.0, leaf_final);
                 for u in &ups {
                     apply_update_prf(&mut state, u);
+                }
+                if query_due(bi) {
+                    // Point-count query for the batch's first key. NOTE the cm
+                    // decode circuit caps w <= 16 (one-hot column selector).
+                    let dp = prove_cm_decode(
+                        CmDecodeParams { d, w, release: ReleasePolicy::Identity },
+                        state.clone(),
+                        batch[0] as u64,
+                    );
+                    record_query(&mut queries, bi + 1, &dp, commit_countmin(&state).0, leaf_final);
                 }
             }
             e
@@ -235,15 +326,25 @@ fn prove_leaves(
             let m_reg = 1usize << b;
             let mut regs = hll_omc_empty(b);
             let e = commit_hll_omc(&regs, b);
-            for batch in batches {
+            for (bi, batch) in batches.iter().enumerate() {
                 let keys: Vec<u64> = batch.iter().map(|&k| k as u64).collect();
                 let leaf = prove_hll_omc_exposed(
                     HllOmcParams { b, batch: m },
                     regs.clone(),
                     keys.clone(),
                 );
-                push(leaf.output, leaf.initial_commit.0, leaf.final_commit.0);
+                let leaf_final = leaf.final_commit.0;
+                push(leaf.output, leaf.initial_commit.0, leaf_final);
                 hll_omc_advance(&mut regs, &keys, m_reg);
+                if query_due(bi) {
+                    // Cardinality query (no probe key).
+                    let dp = prove_hll_decode_omc(
+                        HllDecodeParams { b, release: ReleasePolicy::Identity },
+                        regs.clone(),
+                        0,
+                    );
+                    record_query(&mut queries, bi + 1, &dp, commit_hll_omc(&regs, b), leaf_final);
+                }
             }
             e
         }
@@ -252,18 +353,28 @@ fn prove_leaves(
             let params = SsFullParams { capacity, batch: m };
             let mut state = SsFullState::empty(params);
             let e = commit_ss_state(&state).0;
-            for batch in batches {
+            for (bi, batch) in batches.iter().enumerate() {
                 // SS binds keys to `[0, 2^KEY_DIFF_BITS)` with KEY_DIFF_BITS=29
                 // (the union-sort diff range-check), so mask to 29 bits — NOT the
-                // 30-bit mask families.rs uses, which overflows for large keys.
-                // Low bit forced 1 so no real key collides with the 0 dummy.
+                // 30-bit mask families.rs used to use, which overflows for large
+                // keys. Low bit forced 1 so no real key collides with the 0 dummy.
                 let ups: Vec<SsFullUpdate> = batch
                     .iter()
                     .map(|&k| SsFullUpdate::real(((k & 0x1FFF_FFFF) | 1) as u64, 1))
                     .collect();
                 let leaf = prove_ss_full_exposed(params, state.clone(), ups.clone());
-                push(leaf.output, leaf.initial.0, leaf.final_.0);
+                let leaf_final = leaf.final_.0;
+                push(leaf.output, leaf.initial.0, leaf_final);
                 state = apply_batch_ss_full(&state, &ups).0;
+                if query_due(bi) {
+                    // Top-1 heavy-hitter mass query.
+                    let dp = prove_ss_decode(
+                        SsDecodeParams { capacity, c: 1, release: ReleasePolicy::Identity },
+                        state.clone(),
+                        1,
+                    );
+                    record_query(&mut queries, bi + 1, &dp, commit_ss_state(&state).0, leaf_final);
+                }
             }
             e
         }
@@ -272,20 +383,30 @@ fn prove_leaves(
             let params = GkbParams { capacity, batch: m, s: gk_s };
             let mut state = Gk2State::empty(params);
             let e = commit_gk2_state(&state).0;
-            for batch in batches {
+            for (bi, batch) in batches.iter().enumerate() {
                 // GK is over values; the leaf reserves E_MAX = 2^22-1 for dummies,
                 // so mask to 21 bits (< E_MAX) — strictly below the reserved value
                 // (families.rs's 22-bit mask can hit E_MAX exactly).
                 let vals: Vec<u32> = batch.iter().map(|&k| k & 0x001F_FFFF).collect();
                 let leaf = prove_gkb2_exposed(params, state.clone(), vals.clone());
-                push(leaf.output, leaf.initial.0, leaf.final_.0);
+                let leaf_final = leaf.final_.0;
+                push(leaf.output, leaf.initial.0, leaf_final);
                 state = apply_batch2(&state, &vals);
+                if query_due(bi) {
+                    // Rank query for the batch's first (masked) value.
+                    let dp = prove_gk2_decode(
+                        Gkb2DecodeParams { capacity, release: ReleasePolicy::Identity },
+                        state.clone(),
+                        batch[0] & 0x001F_FFFF,
+                    );
+                    record_query(&mut queries, bi + 1, &dp, commit_gk2_state(&state).0, leaf_final);
+                }
             }
             e
         }
     };
 
-    (leaves, empty_commit)
+    (leaves, empty_commit, queries)
 }
 
 /// `M`-machine work-partition makespan of `per_leaf` prove times: split the
@@ -312,7 +433,9 @@ fn makespan(per_leaf: &[f64], machines: usize) -> f64 {
 /// `batches` (raw dataset keys, all of length `m`). The whole measurement runs
 /// inside a `cores`-thread pool so each proof uses that many cores. `proof_dir`
 /// is the folder the per-batch mode stores its `t` proofs under (ignored by the
-/// composed modes).
+/// composed modes). `query_every = k > 0` interleaves one query leaf after every
+/// `k`-th batch (mixed updates+queries workload); its costs are reported in the
+/// separate `query_*` fields, NOT folded into the update-side totals.
 #[allow(clippy::too_many_arguments)]
 pub fn measure_compose(
     family: StreamFamily,
@@ -322,6 +445,7 @@ pub fn measure_compose(
     cores: usize,
     machines: usize,
     proof_dir: &Path,
+    query_every: usize,
 ) -> ComposeCell {
     assert!(!batches.is_empty(), "need at least one batch");
     let m = batches[0].len();
@@ -338,13 +462,34 @@ pub fn measure_compose(
     // Sequential leaf-gen (Σ per-leaf) written out at full f64 precision — a
     // reference / speedup denominator, captured via a mutable rather than
     // squeezed through the u64 RunOutcome fields (trials = 1, set once).
+    // Query-event aggregates are captured the same way (trials = 1, set once).
     let mut leafgen_seq_out = 0.0f64;
+    let mut q_out = (0usize, 0.0f64, 0.0f64, 0u64, 0u64);
     let agg = pool.install(|| {
         bench(BenchCfg { warmup: 0, trials: 1 }, || {
-            let (leaves, empty_commit) = prove_leaves(family, shape, batches);
+            let (leaves, empty_commit, query_arts) =
+                prove_leaves(family, shape, batches, query_every);
             let prove_ms: Vec<f64> = leaves.iter().map(|l| l.prove_ms).collect();
             let leafgen_seq: f64 = prove_ms.iter().sum();
             leafgen_seq_out = leafgen_seq;
+            // Mixed-workload aggregates. `ctx` = composition proofs the verifier
+            // checks at query time to trust Com(S_{t'}): t' stored leaves
+            // (per_batch), the current fold (chain), or the Bentley–Saxe peaks
+            // popcount(t') (forest).
+            q_out = (
+                query_arts.len(),
+                query_arts.iter().map(|q| q.prove_ms).sum(),
+                query_arts.iter().map(|q| q.verify_ms).sum(),
+                query_arts.iter().map(|q| q.proof_bytes).sum(),
+                query_arts
+                    .iter()
+                    .map(|q| match mode {
+                        StreamMode::PerBatch => q.at_leaf as u64,
+                        StreamMode::Chain => 1u64,
+                        StreamMode::Forest => q.at_leaf.count_ones() as u64,
+                    })
+                    .sum(),
+            );
 
             match mode {
                 StreamMode::PerBatch => {
@@ -446,6 +591,11 @@ pub fn measure_compose(
         verify_ms: agg.verify_ms_median,
         proof_bytes: agg.proof_size_bytes,
         peak_rss_mb: peak,
+        n_queries: q_out.0,
+        query_prove_ms: q_out.1,
+        query_verify_ms: q_out.2,
+        query_proof_bytes: q_out.3,
+        query_ctx_verifies: q_out.4,
     }
 }
 
@@ -475,12 +625,13 @@ mod tests {
                     .join(format!("zksketch_compose_{}_{}", family.label(), mode.label()));
                 let _ = std::fs::remove_dir_all(&dir);
                 let cell =
-                    measure_compose(family, shape(), &batches, mode, 1, 1, &dir);
+                    measure_compose(family, shape(), &batches, mode, 1, 1, &dir, 0);
                 assert!(
                     cell.total_time_ms > 0.0,
                     "measured ({family:?}, {mode:?})"
                 );
                 assert!(cell.proof_bytes > 0, "artifact ({family:?}, {mode:?})");
+                assert_eq!(cell.n_queries, 0, "updates-only run has no queries");
                 if mode == StreamMode::PerBatch {
                     let files = std::fs::read_dir(&dir).map(|it| it.count()).unwrap_or(0);
                     assert_eq!(files, 2, "one proof/batch ({family:?})");
@@ -489,6 +640,45 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&dir);
             }
         }
+    }
+
+    /// Mixed updates+queries: every batch is followed by a query leaf. Checks
+    /// the query events fire, carry real costs, bind the leaf boundary (a
+    /// mismatch would panic `record_query`'s assert), and the per-mode verifier
+    /// context counts are the structural values: forest peaks = popcount(t'),
+    /// per_batch = t', chain = 1.
+    #[test]
+    fn mixed_queries_smoke() {
+        let batches: Vec<Vec<u32>> =
+            (0..2).map(|i| (0..4).map(|j| (i * 4 + j + 1) as u32).collect()).collect();
+        for family in [
+            StreamFamily::CmOmc,
+            StreamFamily::HllOmc,
+            StreamFamily::SsCertified,
+            StreamFamily::GkBandmerge2,
+        ] {
+            let dir = std::env::temp_dir().join(format!("zksketch_mixed_{}", family.label()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let cell =
+                measure_compose(family, shape(), &batches, StreamMode::Forest, 1, 1, &dir, 1);
+            assert_eq!(cell.n_queries, 2, "one query per batch ({family:?})");
+            assert!(cell.query_prove_ms > 0.0, "query prove timed ({family:?})");
+            assert!(cell.query_proof_bytes > 0, "query artifact ({family:?})");
+            // Forest peaks at t'=1 and t'=2: popcount(1)+popcount(2) = 1+1.
+            assert_eq!(cell.query_ctx_verifies, 2, "forest peaks ctx ({family:?})");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        // Mode-dependent ctx on one family: per_batch = 1+2, chain = 1+1.
+        let dir = std::env::temp_dir().join("zksketch_mixed_ctx");
+        let cell = measure_compose(
+            StreamFamily::CmOmc, shape(), &batches, StreamMode::PerBatch, 1, 1, &dir, 1,
+        );
+        assert_eq!(cell.query_ctx_verifies, 3, "per_batch ctx = t' sum");
+        let cell = measure_compose(
+            StreamFamily::CmOmc, shape(), &batches, StreamMode::Chain, 1, 1, &dir, 1,
+        );
+        assert_eq!(cell.query_ctx_verifies, 2, "chain ctx = 1 per query");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A single-leaf (t=1) stream: chain/forest have nothing to compose, so the
@@ -500,7 +690,7 @@ mod tests {
         let batches: Vec<Vec<u32>> = vec![(0..4).map(|j| (j + 1) as u32).collect()];
         let dir = std::env::temp_dir().join("zksketch_compose_t1");
         for mode in [StreamMode::Chain, StreamMode::Forest] {
-            let cell = measure_compose(StreamFamily::CmOmc, shape(), &batches, mode, 1, 1, &dir);
+            let cell = measure_compose(StreamFamily::CmOmc, shape(), &batches, mode, 1, 1, &dir, 0);
             assert!(cell.total_time_ms > 0.0, "t=1 measured ({mode:?})");
             assert!(cell.proof_bytes > 0, "t=1 artifact ({mode:?})");
             // No real fold — the "root" is the lone leaf (sub-ms to select).

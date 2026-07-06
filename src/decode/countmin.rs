@@ -18,13 +18,13 @@ use std::rc::Rc;
 
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
-use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_recompose_trace};
+use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_range_trace, generate_recompose_trace};
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        range_air_builders, range_preprocessor, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -104,6 +104,7 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
 
     // PIs: committed state, query key, released answer.
     let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
@@ -198,14 +199,14 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
     }
     // Consume the unused digest limbs (WitnessChecks discipline).
     for k in d..8 {
-        let _ = b.decompose_to_bits::<Val>(h_vals[k], Val::bits()).expect("consume h_val");
+        let _ = b.add_range_bits::<Val>(h_vals[k], Val::bits()).expect("consume h_val");
     }
 
     // ── Stage 3: min gadget ──
     let mut prod = one;
     for &v in &vals_expr {
         let diff = b.sub(v, mn_b);
-        let _ = b.decompose_to_bits::<Val>(diff, DIFF_BITS).expect("v - mn >= 0"); // range check
+        let _ = b.add_range_bits::<Val>(diff, DIFF_BITS).expect("v - mn >= 0"); // range check
         prod = b.mul(prod, diff);
     }
     b.connect(prod, zero);
@@ -232,7 +233,7 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
             let a = b.mul(fl, mn_minus_t);
             let nft = b.mul(nf, t_minus_mn_m1);
             let chosen = b.add(a, nft);
-            let _ = b.decompose_to_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
+            let _ = b.add_range_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
             let released = b.mul(fl, mn_b);
             b.connect(released, answer_pi);
         }
@@ -291,9 +292,10 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
     let preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
+        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -313,6 +315,7 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    prover.register_range_table::<4>();
     let __t_p = std::time::Instant::now();
     let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove cm decode");
     let __prove = __t_p.elapsed();

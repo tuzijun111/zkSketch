@@ -52,14 +52,14 @@ use std::rc::Rc;
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
 use p3_circuit::ops::{
-    Poseidon2Config, generate_poseidon2_trace, generate_recompose_trace,
+    Poseidon2Config, generate_poseidon2_trace, generate_range_trace, generate_recompose_trace,
 };
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        poseidon2_air_builders_d4, poseidon2_preprocessor, range_air_builders, range_preprocessor,
+        recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -328,6 +328,7 @@ pub fn prove_ss_naive(
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
 
     // Public inputs: initial / final / batch commitments (2 Challenge each).
     let init_pis: [ExprId; DIGEST_PACKING] =
@@ -580,7 +581,7 @@ pub fn prove_ss_naive(
             let diff = b.sub(prev[l][2], evicted_count);
             let gated = b.mul(is_evict, diff);
             let _bits = b
-                .decompose_to_bits::<Val>(gated, COUNT_DIFF_BITS)
+                .add_range_bits::<Val>(gated, COUNT_DIFF_BITS)
                 .expect("decompose evict-min diff");
         }
 
@@ -722,9 +723,10 @@ pub fn prove_ss_naive(
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
     let preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
+        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -744,6 +746,7 @@ pub fn prove_ss_naive(
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    prover.register_range_table::<4>();
     let __t_p = std::time::Instant::now();
     let proof = prover
         .prove_all_tables(&traces, &circuit_prover_data)

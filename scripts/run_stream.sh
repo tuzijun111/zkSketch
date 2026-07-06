@@ -7,8 +7,9 @@
 # Swept over batch size m and core count k, for the `omc` and `merkle` leaf
 # provers. SINGLE run — no warm-up, no measured trials, no target insert-rate.
 #
-# (Contrast with `run_experiments.sh e6`, which fixes the epoch count and
-# reports per-insert latency + sustained insert-rate. This runner answers
+# (Contrast with the retired e6 runner — `cargo run --release --example
+# exp_e6` — which fixes the epoch count and reports per-insert latency +
+# sustained insert-rate. This runner supersedes it for the paper and answers
 # "how long to ingest the whole 2^16-record stream?".)
 #
 # Usage:

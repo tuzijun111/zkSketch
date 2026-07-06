@@ -1,37 +1,42 @@
-# Evaluation — implementing `latex/zk1.tex` §Evaluation
+# Evaluation — HISTORICAL: the RQ1–RQ4 track and the old E1–E10 ladder
 
-> **Reproducing the EVAL_SPEC experiments (E1 on both backends, dataset config,
-> full vs partial):** see **[REPRODUCE.md](REPRODUCE.md)** and
-> `scripts/run_experiments.sh`. This file documents the original RQ1–RQ4 runners.
+> **This file is a historical reference.** The current evaluation runs through
+> four surfaces — `scripts/run_experiments.sh {e1,e2,e5,e8}`,
+> `scripts/run_compose.sh`, `scripts/run_stream.sh`, `scripts/run_decode.sh` —
+> documented in **[REPRODUCE.md](REPRODUCE.md)** (including the
+> archived-experiments mapping). This file documents the original RQ1–RQ4
+> runners and the old E-series status for provenance; the RQ runners remain
+> runnable (`cargo run --release --example exp_rq1` …) but several panels are
+> obsolete after the per-record CM refactor (rq2b, rq3d, e4b — `distinct_bound`
+> no longer exists).
 
-## EVAL_SPEC E1–E10 status (all implemented)
+## The old EVAL_SPEC E1–E10 ladder (superseded)
 
-The `latex/EVAL_SPEC.md` experiment suite is fully wired via
-`scripts/run_experiments.sh <e1..e10>` (see [REPRODUCE.md](REPRODUCE.md) for
-per-experiment detail). The RQ1–RQ4 runners below are the earlier framing and
-remain valid; the E-series is the spec-aligned, both-backends version.
+The `latex/EVAL_SPEC.md` E1–E10 suite was fully implemented; the modes below
+marked *retired* were later removed from the `run_experiments.sh` dispatch when
+the compose/stream/decode surfaces superseded them (the runner sources remain
+in `examples/` — see [REPRODUCE.md §Archived experiments](REPRODUCE.md#archived-experiments)).
 
-| Exp | What | Backends | Runner | CSV |
-| --- | ---- | -------- | ------ | --- |
-| E1 | per-family circuit cost (certified + CM replay) | plonky3 + plonky2 | `exp_e1` / `e1_metrics_demo` | `e1_circuit.csv` |
-| E2 | integrity (tamper + fidelity) | both | `exp_e2` / `e2_integrity` | `e2_integrity.csv` |
-| E3 | decode/query cost vs `s` | plonky2 | `e3_decode` | `e3_decode.csv` |
-| E4 | scalability sweeps a/b/c/d (incl. stream-length flatness) | plonky3 | `exp_e4` | `e4_scaling.csv` |
-| E5 | composition ladder (verifier Θ(E)→O(1)) | plonky3 | `exp_e5` | `e5_ladder.csv` |
-| E6 | streaming-forest cores × batch | plonky3 | `exp_e6` | `e6_forest.csv` |
-| E7 | maintenance policy × query rate | plonky3 | `exp_e7` | `e7_policy.csv` |
-| E8 | cross-stack head-to-head | both | `exp_e8` / `e8_crossstack` | `e8_crossstack.csv` |
-| E9 | optimisation ablations | plonky3 | `exp_e9` | `e9_optim.csv` |
-| E10 | cost-model validation (post-processing) | — | `cost_model_e10.py` | `e10_costmodel.csv` |
+| Exp | What | Backends | Runner | Status |
+| --- | ---- | -------- | ------ | ------ |
+| E1 | per-family circuit cost (certified + naive baselines, variant sweeps) | both | `exp_e1` / `e1_metrics_demo` | **live** |
+| E2 | integrity (tamper + fidelity) | both | `exp_e2` / `e2_integrity` | **live** |
+| E3 | decode/query cost vs `s` | both | `exp_e3` / `e3_decode` | retired → `run_decode.sh` (e3 benches non-deployed decode variants; the plonky3 decode AIRs in `src/decode/` are complete and live) |
+| E4 | scalability sweeps a/b/c/d | plonky3 | `exp_e4` | retired → e1 axes + `run_stream.sh`; e4b obsolete (no `distinct_bound`) |
+| E5 | composition ladder (verifier Θ(E)→O(1)) | plonky3 | `exp_e5` | **live** (digest lift; real-proof ladder = `run_compose.sh`) |
+| E6 | streaming-forest cores × batch | plonky3 | `exp_e6` | retired → `run_stream.sh` |
+| E7 | maintenance policy × query rate (sim) | plonky3 | `exp_e7` | retired → `run_compose.sh` mixed queries |
+| E8 | cross-stack head-to-head | both | `exp_e8` / `e8_crossstack` | **live** |
+| E9 | optimisation ablations | plonky3 | `exp_e9` | retired (ss_single_round premise gone — GK is single-pass) |
+| E10 | cost-model validation (post-processing) | — | `cost_model_e10.py` | retired with its e3/e4 inputs |
 
-Genuine future work (large new circuits, not in this prototype): a plonky3
-**decode AIR** (E3 on the STARK backend) and a **recursive cross-family merge**
-(E8 currently composes cm+hll only via the §4 framework digest, on plonky3).
+Genuine future work: a **recursive cross-family merge** (E8 composes cm+hll
+only via the §4 framework digest, on plonky3).
 
-This document maps every experiment in the paper's **Evaluation** section
-(`\section{Evaluation (in progress)}`, RQ1–RQ4 + end-to-end case study +
-cost-model validation) to a runnable experiment in this repo, says how to run
-it, what metric it emits, and flags which panels are **measured** vs
+The rest of this document maps every experiment in the paper's earlier
+**Evaluation** framing (RQ1–RQ4 + end-to-end case study + cost-model
+validation) to a runnable experiment in this repo, says how to run it, what
+metric it emits, and flags which panels are **measured** vs
 **analytical/planned**.
 
 Everything runs at **small scale** by design (the paper notes the camera-ready

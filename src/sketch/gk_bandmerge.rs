@@ -172,15 +172,15 @@ use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
 use p3_circuit::ops::{
     Poseidon2Config, generate_expose_trace, generate_permute_trace, generate_poseidon2_trace,
-    generate_recompose_trace,
+    generate_range_trace, generate_recompose_trace,
 };
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         expose_air_builders, expose_preprocessor, permute_air_builders, permute_preprocessor,
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        poseidon2_air_builders_d4, poseidon2_preprocessor, range_air_builders, range_preprocessor,
+        recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -423,7 +423,7 @@ fn force_le(
     let omc = b.sub(one, cond);
     let lo = b.mul(omc, xmym1); // (1−cond)·(x−y−1)
     let w = b.add(hi, lo);
-    let _ = b.decompose_to_bits::<Val>(w, bits).expect("force_le range");
+    let _ = b.add_range_bits::<Val>(w, bits).expect("force_le range");
 }
 
 /// Return boolean `nz = [x ≠ 0]`, using the inverse hint `x_inv` (= 1/x, or 0).
@@ -471,6 +471,7 @@ pub fn prove_gkb(
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
 
     // Public inputs: init, final, batch commits (2 each) + θ, N_prev, N_t.
     let init_pis: [ExprId; DIGEST_PACKING] =
@@ -579,14 +580,14 @@ pub fn prove_gkb(
 
     // ── Stage 4: union_raw range-checks + value sortedness (dummies e=E_MAX last) ──
     for r in 0..total {
-        let _ = b.decompose_to_bits::<Val>(uraw_f[r][0], E_BITS).expect("e range");
-        let _ = b.decompose_to_bits::<Val>(uraw_f[r][1], MASS_BITS).expect("g range");
-        let _ = b.decompose_to_bits::<Val>(uraw_f[r][2], MASS_BITS).expect("Δ range");
-        let _ = b.decompose_to_bits::<Val>(uraw_f[r][3], MASS_BITS).expect("t range");
+        let _ = b.add_range_bits::<Val>(uraw_f[r][0], E_BITS).expect("e range");
+        let _ = b.add_range_bits::<Val>(uraw_f[r][1], MASS_BITS).expect("g range");
+        let _ = b.add_range_bits::<Val>(uraw_f[r][2], MASS_BITS).expect("Δ range");
+        let _ = b.add_range_bits::<Val>(uraw_f[r][3], MASS_BITS).expect("t range");
     }
     for r in 0..total - 1 {
         let diff = b.sub(uraw_f[r + 1][0], uraw_f[r][0]);
-        let _ = b.decompose_to_bits::<Val>(diff, E_BITS).expect("union e sortedness");
+        let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("union e sortedness");
     }
 
     // ── Stage 5: neighbor-init Δ (right-to-left) → union_init ──
@@ -683,14 +684,14 @@ pub fn prove_gkb(
         }
         // resorted range-checks + value sortedness (dummies E_MAX last).
         for r in 0..total {
-            let _ = b.decompose_to_bits::<Val>(resort_f[round][r][0], E_BITS).expect("rs e");
-            let _ = b.decompose_to_bits::<Val>(resort_f[round][r][1], MASS_BITS).expect("rs g");
-            let _ = b.decompose_to_bits::<Val>(resort_f[round][r][2], MASS_BITS).expect("rs Δ");
-            let _ = b.decompose_to_bits::<Val>(resort_f[round][r][3], MASS_BITS).expect("rs t");
+            let _ = b.add_range_bits::<Val>(resort_f[round][r][0], E_BITS).expect("rs e");
+            let _ = b.add_range_bits::<Val>(resort_f[round][r][1], MASS_BITS).expect("rs g");
+            let _ = b.add_range_bits::<Val>(resort_f[round][r][2], MASS_BITS).expect("rs Δ");
+            let _ = b.add_range_bits::<Val>(resort_f[round][r][3], MASS_BITS).expect("rs t");
         }
         for r in 0..total - 1 {
             let diff = b.sub(resort_f[round][r + 1][0], resort_f[round][r][0]);
-            let _ = b.decompose_to_bits::<Val>(diff, E_BITS).expect("rs sortedness");
+            let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("rs sortedness");
         }
         cur_f = resort_f[round].clone();
     }
@@ -702,16 +703,16 @@ pub fn prove_gkb(
     let excess_f: Vec<Vec<ExprId>> =
         excess_packed.iter().map(|&p| dec(&mut b, p)).collect();
     for i in 0..cap {
-        let _ = b.decompose_to_bits::<Val>(final_f[i][0], E_BITS).expect("final e");
-        let _ = b.decompose_to_bits::<Val>(final_f[i][1], MASS_BITS).expect("final g");
-        let _ = b.decompose_to_bits::<Val>(final_f[i][2], MASS_BITS).expect("final Δ");
-        let _ = b.decompose_to_bits::<Val>(final_f[i][3], MASS_BITS).expect("final t");
+        let _ = b.add_range_bits::<Val>(final_f[i][0], E_BITS).expect("final e");
+        let _ = b.add_range_bits::<Val>(final_f[i][1], MASS_BITS).expect("final g");
+        let _ = b.add_range_bits::<Val>(final_f[i][2], MASS_BITS).expect("final Δ");
+        let _ = b.add_range_bits::<Val>(final_f[i][3], MASS_BITS).expect("final t");
     }
     for j in 0..m {
-        let _ = b.decompose_to_bits::<Val>(excess_f[j][0], E_BITS).expect("excess e");
-        let _ = b.decompose_to_bits::<Val>(excess_f[j][1], MASS_BITS).expect("excess g");
-        let _ = b.decompose_to_bits::<Val>(excess_f[j][2], MASS_BITS).expect("excess Δ");
-        let _ = b.decompose_to_bits::<Val>(excess_f[j][3], MASS_BITS).expect("excess t");
+        let _ = b.add_range_bits::<Val>(excess_f[j][0], E_BITS).expect("excess e");
+        let _ = b.add_range_bits::<Val>(excess_f[j][1], MASS_BITS).expect("excess g");
+        let _ = b.add_range_bits::<Val>(excess_f[j][2], MASS_BITS).expect("excess Δ");
+        let _ = b.add_range_bits::<Val>(excess_f[j][3], MASS_BITS).expect("excess t");
     }
     for i in 0..cap {
         for k in 0..4 {
@@ -834,10 +835,12 @@ pub fn prove_gkb(
         poseidon2_preprocessor::<Val>(),
         recompose_preprocessor::<Val>(false),
         permute_preprocessor::<Val>(),
+        range_preprocessor::<Val>(),
     ];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
             &circuit,
@@ -856,6 +859,7 @@ pub fn prove_gkb(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
+    prover.register_range_table::<4>();
     let __t_p = std::time::Instant::now();
     let proof = prover
         .prove_all_tables(&traces, &circuit_prover_data)
@@ -1409,6 +1413,7 @@ pub fn prove_gkb2_naive(
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
 
     let init_pis: [ExprId; DIGEST_PACKING] =
         std::array::from_fn(|i| b.alloc_public_input(if i == 0 { "init_lo" } else { "init_hi" }));
@@ -1511,24 +1516,24 @@ pub fn prove_gkb2_naive(
                           de_inv: Option<&[ExprId]>| {
         for r in 0..n {
             let fl = fld6(f, r);
-            let _ = b.decompose_to_bits::<Val>(fl[0], E_BITS).expect("e");
-            let _ = b.decompose_to_bits::<Val>(fl[1], MASS_BITS).expect("g1");
-            let _ = b.decompose_to_bits::<Val>(fl[2], MASS_BITS).expect("g2");
-            let _ = b.decompose_to_bits::<Val>(fl[3], MASS_BITS).expect("d1");
-            let _ = b.decompose_to_bits::<Val>(fl[4], MASS_BITS).expect("d2");
-            let _ = b.decompose_to_bits::<Val>(fl[5], MASS_BITS).expect("t");
+            let _ = b.add_range_bits::<Val>(fl[0], E_BITS).expect("e");
+            let _ = b.add_range_bits::<Val>(fl[1], MASS_BITS).expect("g1");
+            let _ = b.add_range_bits::<Val>(fl[2], MASS_BITS).expect("g2");
+            let _ = b.add_range_bits::<Val>(fl[3], MASS_BITS).expect("d1");
+            let _ = b.add_range_bits::<Val>(fl[4], MASS_BITS).expect("d2");
+            let _ = b.add_range_bits::<Val>(fl[5], MASS_BITS).expect("t");
             b.connect(f[2 * r + 1][2], zero);
             b.connect(f[2 * r + 1][3], zero);
         }
         for r in 0..n - 1 {
             let diff = b.sub(f[2 * (r + 1)][0], f[2 * r][0]);
-            let _ = b.decompose_to_bits::<Val>(diff, E_BITS).expect("e sort");
+            let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("e sort");
             if let Some(di) = de_inv {
                 let nz = force_nz(b, diff, di[r], one, zero);
                 let is0 = b.sub(one, nz);
                 let dt = b.sub(f[2 * (r + 1) + 1][1], f[2 * r + 1][1]);
                 let w = b.mul(is0, dt);
-                let _ = b.decompose_to_bits::<Val>(w, MASS_BITS).expect("t tiebreak");
+                let _ = b.add_range_bits::<Val>(w, MASS_BITS).expect("t tiebreak");
             }
         }
     };
@@ -1840,10 +1845,12 @@ pub fn prove_gkb2_naive(
         poseidon2_preprocessor::<Val>(),
         recompose_preprocessor::<Val>(false),
         permute_preprocessor::<Val>(),
+        range_preprocessor::<Val>(),
     ];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
             &circuit,
@@ -1862,6 +1869,7 @@ pub fn prove_gkb2_naive(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
+    prover.register_range_table::<4>();
     let __t_p = std::time::Instant::now();
     let proof = prover
         .prove_all_tables(&traces, &circuit_prover_data)
@@ -2085,6 +2093,7 @@ fn prove_gkb2_inner(
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
     if expose_boundary {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
@@ -2209,24 +2218,24 @@ fn prove_gkb2_inner(
     // ── Stage 4: union_raw range-checks + value sortedness + padding ──
     for r in 0..total {
         let f = fld6(&uraw_f, r);
-        let _ = b.decompose_to_bits::<Val>(f[0], E_BITS).expect("e range");
-        let _ = b.decompose_to_bits::<Val>(f[1], MASS_BITS).expect("g₁ range");
-        let _ = b.decompose_to_bits::<Val>(f[2], MASS_BITS).expect("g₂ range");
-        let _ = b.decompose_to_bits::<Val>(f[3], MASS_BITS).expect("Δ₁ range");
-        let _ = b.decompose_to_bits::<Val>(f[4], MASS_BITS).expect("Δ₂ range");
-        let _ = b.decompose_to_bits::<Val>(f[5], MASS_BITS).expect("t range");
+        let _ = b.add_range_bits::<Val>(f[0], E_BITS).expect("e range");
+        let _ = b.add_range_bits::<Val>(f[1], MASS_BITS).expect("g₁ range");
+        let _ = b.add_range_bits::<Val>(f[2], MASS_BITS).expect("g₂ range");
+        let _ = b.add_range_bits::<Val>(f[3], MASS_BITS).expect("Δ₁ range");
+        let _ = b.add_range_bits::<Val>(f[4], MASS_BITS).expect("Δ₂ range");
+        let _ = b.add_range_bits::<Val>(f[5], MASS_BITS).expect("t range");
         b.connect(uraw_f[2 * r + 1][2], zero);
         b.connect(uraw_f[2 * r + 1][3], zero);
     }
     for r in 0..total - 1 {
         let diff = b.sub(uraw_f[2 * (r + 1)][0], uraw_f[2 * r][0]);
-        let _ = b.decompose_to_bits::<Val>(diff, E_BITS).expect("union e sortedness");
+        let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("union e sortedness");
         // (e,t) tiebreak: if e_{r+1}=e_r then t_{r+1} ≥ t_r (pins equal-e order).
         let nz = force_nz(&mut b, diff, de_inv_union[r], one, zero);
         let is_de_zero = b.sub(one, nz);
         let dt = b.sub(uraw_f[2 * (r + 1) + 1][1], uraw_f[2 * r + 1][1]);
         let w = b.mul(is_de_zero, dt);
-        let _ = b.decompose_to_bits::<Val>(w, MASS_BITS).expect("union t tiebreak");
+        let _ = b.add_range_bits::<Val>(w, MASS_BITS).expect("union t tiebreak");
     }
 
     // ── Stage 5: two-sided neighbor-init (no gate: a dummy neighbor is 0) ──
@@ -2376,24 +2385,24 @@ fn prove_gkb2_inner(
         }
         for r in 0..total {
             let f = fld6(&resort_f[round], r);
-            let _ = b.decompose_to_bits::<Val>(f[0], E_BITS).expect("rs e");
-            let _ = b.decompose_to_bits::<Val>(f[1], MASS_BITS).expect("rs g₁");
-            let _ = b.decompose_to_bits::<Val>(f[2], MASS_BITS).expect("rs g₂");
-            let _ = b.decompose_to_bits::<Val>(f[3], MASS_BITS).expect("rs Δ₁");
-            let _ = b.decompose_to_bits::<Val>(f[4], MASS_BITS).expect("rs Δ₂");
-            let _ = b.decompose_to_bits::<Val>(f[5], MASS_BITS).expect("rs t");
+            let _ = b.add_range_bits::<Val>(f[0], E_BITS).expect("rs e");
+            let _ = b.add_range_bits::<Val>(f[1], MASS_BITS).expect("rs g₁");
+            let _ = b.add_range_bits::<Val>(f[2], MASS_BITS).expect("rs g₂");
+            let _ = b.add_range_bits::<Val>(f[3], MASS_BITS).expect("rs Δ₁");
+            let _ = b.add_range_bits::<Val>(f[4], MASS_BITS).expect("rs Δ₂");
+            let _ = b.add_range_bits::<Val>(f[5], MASS_BITS).expect("rs t");
             b.connect(resort_f[round][2 * r + 1][2], zero);
             b.connect(resort_f[round][2 * r + 1][3], zero);
         }
         for r in 0..total - 1 {
             let diff = b.sub(resort_f[round][2 * (r + 1)][0], resort_f[round][2 * r][0]);
-            let _ = b.decompose_to_bits::<Val>(diff, E_BITS).expect("rs sortedness");
+            let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("rs sortedness");
             // (e,t) tiebreak (audit fix #5).
             let nz = force_nz(&mut b, diff, de_inv_round[round][r], one, zero);
             let is_de_zero = b.sub(one, nz);
             let dt = b.sub(resort_f[round][2 * (r + 1) + 1][1], resort_f[round][2 * r + 1][1]);
             let w = b.mul(is_de_zero, dt);
-            let _ = b.decompose_to_bits::<Val>(w, MASS_BITS).expect("rs t tiebreak");
+            let _ = b.add_range_bits::<Val>(w, MASS_BITS).expect("rs t tiebreak");
         }
         cur_f = (0..total).map(|r| fld6(&resort_f[round], r)).collect();
     }
@@ -2402,12 +2411,12 @@ fn prove_gkb2_inner(
     let excess_f: Vec<Vec<ExprId>> = excess_packed.iter().map(|&p| dec(&mut b, p)).collect();
     for i in 0..cap {
         let f = fld6(&final_f, i);
-        let _ = b.decompose_to_bits::<Val>(f[0], E_BITS).expect("final e");
-        let _ = b.decompose_to_bits::<Val>(f[1], MASS_BITS).expect("final g₁");
-        let _ = b.decompose_to_bits::<Val>(f[2], MASS_BITS).expect("final g₂");
-        let _ = b.decompose_to_bits::<Val>(f[3], MASS_BITS).expect("final Δ₁");
-        let _ = b.decompose_to_bits::<Val>(f[4], MASS_BITS).expect("final Δ₂");
-        let _ = b.decompose_to_bits::<Val>(f[5], MASS_BITS).expect("final t");
+        let _ = b.add_range_bits::<Val>(f[0], E_BITS).expect("final e");
+        let _ = b.add_range_bits::<Val>(f[1], MASS_BITS).expect("final g₁");
+        let _ = b.add_range_bits::<Val>(f[2], MASS_BITS).expect("final g₂");
+        let _ = b.add_range_bits::<Val>(f[3], MASS_BITS).expect("final Δ₁");
+        let _ = b.add_range_bits::<Val>(f[4], MASS_BITS).expect("final Δ₂");
+        let _ = b.add_range_bits::<Val>(f[5], MASS_BITS).expect("final t");
         b.connect(final_f[2 * i + 1][2], zero);
         b.connect(final_f[2 * i + 1][3], zero);
     }
@@ -2596,10 +2605,12 @@ fn prove_gkb2_inner(
         poseidon2_preprocessor::<Val>(),
         recompose_preprocessor::<Val>(false),
         permute_preprocessor::<Val>(),
+        range_preprocessor::<Val>(),
     ];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
     if expose_boundary {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
@@ -2622,6 +2633,7 @@ fn prove_gkb2_inner(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
+    prover.register_range_table::<4>();
     if expose_boundary {
         prover.register_expose_table::<4>();
     }

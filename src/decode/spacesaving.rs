@@ -52,13 +52,13 @@ use std::rc::Rc;
 
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
-use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_recompose_trace};
+use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_range_trace, generate_recompose_trace};
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        range_air_builders, range_preprocessor, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -158,6 +158,7 @@ pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> 
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
 
     // PIs: committed state, query size c, released answer.
     let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
@@ -247,7 +248,7 @@ pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> 
     for r in 0..cap - 1 {
         let neg_cr = b.mul(cnt[r], neg_one);
         let cdiff = b.add(cnt[r + 1], neg_cr); // count[r+1] − count[r]
-        let _ = b.decompose_to_bits::<Val>(cdiff, DIFF_BITS).expect("count sortedness");
+        let _ = b.add_range_bits::<Val>(cdiff, DIFF_BITS).expect("count sortedness");
     }
 
     // ── Check 3: distinct-key on adjacent ACTIVE rows ──
@@ -311,7 +312,7 @@ pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> 
     // Combined with sel ≤ active (⇒ Σsel ≤ #active), this pins Σsel = min.
     let neg_sum_sel = b.mul(sum_sel_e, neg_one);
     let c_minus_sel = b.add(c_pi, neg_sum_sel); // c − Σsel  (forward)
-    let _ = b.decompose_to_bits::<Val>(c_minus_sel, DIFF_BITS).expect("c − Σsel ≥ 0");
+    let _ = b.add_range_bits::<Val>(c_minus_sel, DIFF_BITS).expect("c − Σsel ≥ 0");
     let act_minus_sel = b.add(n_active_e, neg_sum_sel); // #active − Σsel (forward)
     let prod = b.mul(c_minus_sel, act_minus_sel);
     b.connect(prod, zero);
@@ -355,7 +356,7 @@ pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> 
             let a = b.mul(fl, mass_minus_t);
             let nft = b.mul(nf, t_minus_mass_m1);
             let chosen = b.add(a, nft);
-            let _ = b.decompose_to_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
+            let _ = b.add_range_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
             let released = b.mul(fl, mass_v);
             b.connect(released, answer_pi);
         }
@@ -401,9 +402,10 @@ pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> 
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
     let preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
+        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -423,6 +425,7 @@ pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> 
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    prover.register_range_table::<4>();
     let __t_p = std::time::Instant::now();
     let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove ss decode");
     let __prove = __t_p.elapsed();
@@ -572,6 +575,7 @@ mod tests {
                 default_babybear_poseidon2_16(),
             );
             b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+            b.enable_range(generate_range_trace::<Val, Challenge>);
             let commit_pis: [ExprId; DIGEST_PACKING] =
                 std::array::from_fn(|_| b.alloc_public_input("c"));
             let c_pi = b.alloc_public_input("c");
@@ -617,7 +621,7 @@ mod tests {
             for r in 0..cap - 1 {
                 let neg_cr = b.mul(cnt[r], neg_one);
                 let cdiff = b.add(cnt[r + 1], neg_cr);
-                let _ = b.decompose_to_bits::<Val>(cdiff, DIFF_BITS).unwrap();
+                let _ = b.add_range_bits::<Val>(cdiff, DIFF_BITS).unwrap();
             }
             for r in 0..cap - 1 {
                 let neg_klo = b.mul(klo[r], neg_one);
@@ -657,7 +661,7 @@ mod tests {
             }
             let neg_sum_sel = b.mul(sum_sel_e, neg_one);
             let c_minus_sel = b.add(c_pi, neg_sum_sel);
-            let _ = b.decompose_to_bits::<Val>(c_minus_sel, DIFF_BITS).unwrap();
+            let _ = b.add_range_bits::<Val>(c_minus_sel, DIFF_BITS).unwrap();
             let act_minus_sel = b.add(n_active_e, neg_sum_sel);
             let prod = b.mul(c_minus_sel, act_minus_sel);
             b.connect(prod, zero);

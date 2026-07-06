@@ -225,10 +225,10 @@ fn panel_1d() -> Table {
         let params = SsFullParams { capacity: 16, batch: 16 };
         let keys = zipf_stream(1.2, 8, params.batch, 34);
         let (o, _state) = ss_epoch(params, &ss_empty(params), &keys);
-        let probe = ((keys[0] & 0x3FFF_FFFF) | 1) as u64;
+        let probe = ((keys[0] & 0x1FFF_FFFF) | 1) as u64;
         let mut exact: HashMap<u64, u32> = HashMap::new();
         for &k in &keys {
-            *exact.entry(((k & 0x3FFF_FFFF) | 1) as u64).or_insert(0) += 1;
+            *exact.entry(((k & 0x1FFF_FFFF) | 1) as u64).or_insert(0) += 1;
         }
         let truth = *exact.get(&probe).unwrap_or(&0) as f64;
         push_fidelity(&mut t, "SS", o.answer, o.answer, truth, o.correct);

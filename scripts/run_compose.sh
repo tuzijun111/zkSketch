@@ -30,6 +30,15 @@
 #   EXP_COMPOSE_CORES    cores per machine/proof, comma-list      (default all)
 #   EXP_COMPOSE_MACHINES machines (per_batch + forest), comma-list(default 1)
 #   EXP_COMPOSE_PROOF_DIR folder the per_batch mode stores proofs (default results/compose_per_batch_proofs)
+#   EXP_COMPOSE_QUERY_EVERY  MIXED updates+queries: prove one query leaf (the
+#                        family's decode circuit — cm point count, hll cardinality,
+#                        ss top-1 mass, gk rank) after every k-th batch, bound to
+#                        the state commitment at that point (default 0 = off).
+#                        Query costs land in the query_* columns, separate from
+#                        the update-side totals; query_ctx_verifies counts the
+#                        composition proofs the verifier checks at query time
+#                        (t' for per_batch, 1 for chain, popcount(t') peaks for
+#                        forest). NOTE: cm decode caps w <= 16 — keep EXP_W small.
 #   --- per-family shape ---
 #   EXP_D / EXP_W        Count-Min d, w    (default 4, 8; needs d·w % 4 == 0)
 #   EXP_HLL_B            HLL register bits  (default 4; needs 2^b % 4 == 0)
@@ -48,7 +57,8 @@
 # Output: results/stream_compose.csv with columns
 #   dataset,family,variant,mode,shape,n,m,t,cores,machines,total_time_ms,
 #   leafgen_ms,leafgen_seq_ms,merge_ms,verify_ms,proof_bytes,records_per_sec,
-#   peak_rss_mb,status
+#   peak_rss_mb,n_queries,query_prove_ms,query_verify_ms,query_proof_bytes,
+#   query_ctx_verifies,status
 #   (total_time_ms = leafgen_ms + merge_ms; leafgen_ms = M-machine makespan,
 #    leafgen_seq_ms = sequential Σ; proof_bytes/verify_ms are Θ(t) for per_batch
 #    vs O(1) for chain/forest.)

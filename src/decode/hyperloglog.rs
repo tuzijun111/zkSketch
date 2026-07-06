@@ -50,13 +50,13 @@ use std::rc::Rc;
 
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
-use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_recompose_trace};
+use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_range_trace, generate_recompose_trace};
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        range_air_builders, range_preprocessor, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -201,6 +201,7 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
 
     // PIs: committed state, released answer. (No query key for cardinality.)
     let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
@@ -295,10 +296,10 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     // (lhs) in `z·invZ` so it gets a bus creator.
     let z_invz = b.mul(invz_w, z_expr);
     let residual = b.sub(z_invz, target);
-    let _ = b.decompose_to_bits::<Val>(residual, DIFF_BITS).expect("Z·invZ − T >= 0");
+    let _ = b.add_range_bits::<Val>(residual, DIFF_BITS).expect("Z·invZ − T >= 0");
     let zm1 = b.sub(z_expr, one);
     let upper = b.sub(zm1, residual);
-    let _ = b.decompose_to_bits::<Val>(upper, DIFF_BITS).expect("residual < Z");
+    let _ = b.add_range_bits::<Val>(upper, DIFF_BITS).expect("residual < Z");
     // res = K_num · invZ (fixed-point cardinality, scale 2^β). invZ already has a
     // bus creator from `z_invz` above; using it as rhs here is fine.
     let res_expr = b.mul(knum_c, invz_w);
@@ -322,7 +323,7 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
             let a = b.mul(fl, res_minus_t);
             let nft = b.mul(nf, t_minus_res_m1);
             let chosen = b.add(a, nft);
-            let _ = b.decompose_to_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
+            let _ = b.add_range_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
             let released = b.mul(fl, res_expr);
             b.connect(released, answer_pi);
         }
@@ -366,9 +367,10 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
     let preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
+        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -388,6 +390,7 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    prover.register_range_table::<4>();
     let __t_p = std::time::Instant::now();
     let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove hll decode");
     let __prove = __t_p.elapsed();
@@ -436,6 +439,7 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
 
     let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
         b.alloc_public_input(if i == 0 { "commit_lo" } else { "commit_hi" })
@@ -479,7 +483,7 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
     for &p in &cells_packed {
         let c = b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose cell");
         for k in 0..4 {
-            let _ = b.decompose_to_bits::<Val>(c[k], REG_BITS).expect("reg range");
+            let _ = b.add_range_bits::<Val>(c[k], REG_BITS).expect("reg range");
             regs_expr.push(c[k]);
         }
     }
@@ -510,10 +514,10 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
     // ── Stage 4: witnessed reciprocal invZ, residual range-check, res = K·invZ ──
     let z_invz = b.mul(invz_w, z_expr);
     let residual = b.sub(z_invz, target);
-    let _ = b.decompose_to_bits::<Val>(residual, DIFF_BITS).expect("Z·invZ − T >= 0");
+    let _ = b.add_range_bits::<Val>(residual, DIFF_BITS).expect("Z·invZ − T >= 0");
     let zm1 = b.sub(z_expr, one);
     let upper = b.sub(zm1, residual);
-    let _ = b.decompose_to_bits::<Val>(upper, DIFF_BITS).expect("residual < Z");
+    let _ = b.add_range_bits::<Val>(upper, DIFF_BITS).expect("residual < Z");
     let res_expr = b.mul(knum_c, invz_w);
 
     // ── Stage 5: release policy → answer ──
@@ -534,7 +538,7 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
             let a = b.mul(fl, res_minus_t);
             let nft = b.mul(nf, t_minus_res_m1);
             let chosen = b.add(a, nft);
-            let _ = b.decompose_to_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
+            let _ = b.add_range_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
             let released = b.mul(fl, res_expr);
             b.connect(released, answer_pi);
         }
@@ -579,9 +583,10 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
     let preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
+        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -601,6 +606,7 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    prover.register_range_table::<4>();
     let __t_p = std::time::Instant::now();
     let proof =
         prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove hll omc decode");
