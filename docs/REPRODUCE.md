@@ -312,8 +312,8 @@ cardinality, `ss certified → prove_ss_decode` top-c mass,
 `gk bandmerge2 → prove_gk2_decode` two-sided rank). Each decode proof re-hashes
 the committed state (binding `Com(S_t)`) and proves the query answer — cost is
 Θ(s) in the state size, not the stream length. The same decode leaves are what
-`EXP_COMPOSE_QUERY_EVERY` proves mid-stream. Note: the CM decode circuit
-currently caps `w ≤ 16`.
+`EXP_COMPOSE_QUERY_EVERY` proves mid-stream. The CM decode circuit takes any
+power-of-two `w` (same in-circuit position derivation as the leaf; cost ∝ `d·w`).
 
 ---
 

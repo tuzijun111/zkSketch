@@ -97,7 +97,7 @@ use crate::recursion::recursive::timing;
 use p3_circuit_prover::BatchStarkProof;
 use p3_recursion::RecursionOutput;
 
-use crate::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
+use crate::sketch::countmin::{CountMinParams, CountMinState};
 use crate::sketch::countmin_final::apply_update_prf;
 use crate::sketch::countmin_omc::{prove_countmin_omc_exposed, CmOmcParams};
 use crate::sketch::gk_bandmerge::{
@@ -108,11 +108,14 @@ use crate::sketch::hll_omc::{
 };
 use crate::sketch::ss_final_full::{
     apply_batch_ss_full, commit_ss_state, prove_ss_full_exposed, SsFullParams, SsFullRow,
-    SsFullState, SsFullUpdate,
+    SsFullState,
 };
 
 use super::families::cm_empty;
-use super::stream_compose::{StreamFamily, StreamMode, StreamShape};
+use super::stream_compose::{
+    cm_updates_of, gk_vals_of, hll_keys_of, measure_queries_dist, ss_updates_of, QueryKeyMode,
+    StreamFamily, StreamMode, StreamShape,
+};
 
 use crate::commitment::countmin::commit_countmin;
 
@@ -168,19 +171,10 @@ enum FamState {
     Gk(Gk2State),
 }
 
-/// The per-family key masks `stream_compose` applies before proving.
-fn ss_updates(batch: &[u32]) -> Vec<SsFullUpdate> {
-    batch.iter().map(|&k| SsFullUpdate::real(((k & 0x1FFF_FFFF) | 1) as u64, 1)).collect()
-}
-fn gk_vals(batch: &[u32]) -> Vec<u32> {
-    batch.iter().map(|&k| k & 0x001F_FFFF).collect()
-}
-fn cm_updates(batch: &[u32]) -> Vec<CountMinUpdate> {
-    batch.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect()
-}
-fn hll_keys(batch: &[u32]) -> Vec<u64> {
-    batch.iter().map(|&k| k as u64).collect()
-}
+// The per-family record mappings (key masks + PAD_KEY no-op handling) are the
+// CANONICAL `stream_compose::{cm_updates_of, hll_keys_of, ss_updates_of,
+// gk_vals_of}` — shared with the sim engine and the query replay so the
+// in-circuit boundary bind can never diverge between engines.
 
 impl FamState {
     fn empty(family: StreamFamily, shape: &StreamShape, m: usize) -> Self {
@@ -202,13 +196,13 @@ impl FamState {
     fn advance(&mut self, shape: &StreamShape, batch: &[u32]) {
         match self {
             Self::Cm(state) => {
-                for u in &cm_updates(batch) {
+                for u in &cm_updates_of(batch) {
                     apply_update_prf(state, u);
                 }
             }
-            Self::Hll(regs) => hll_omc_advance(regs, &hll_keys(batch), 1usize << shape.b),
-            Self::Ss(state) => *state = apply_batch_ss_full(state, &ss_updates(batch)).0,
-            Self::Gk(state) => *state = apply_batch2(state, &gk_vals(batch)),
+            Self::Hll(regs) => hll_omc_advance(regs, &hll_keys_of(batch), 1usize << shape.b),
+            Self::Ss(state) => *state = apply_batch_ss_full(state, &ss_updates_of(batch)).0,
+            Self::Gk(state) => *state = apply_batch2(state, &gk_vals_of(batch)),
         }
     }
 
@@ -235,7 +229,7 @@ impl FamState {
                 prove_countmin_omc_exposed(
                     CmOmcParams { d: shape.d, w: shape.w, batch: m },
                     state.clone(),
-                    cm_updates(batch),
+                    cm_updates_of(batch),
                 )
                 .output
             }
@@ -243,7 +237,7 @@ impl FamState {
                 prove_hll_omc_exposed(
                     HllOmcParams { b: shape.b, batch: m },
                     regs.clone(),
-                    hll_keys(batch),
+                    hll_keys_of(batch),
                 )
                 .output
             }
@@ -251,7 +245,7 @@ impl FamState {
                 prove_ss_full_exposed(
                     SsFullParams { capacity: shape.capacity, batch: m },
                     state.clone(),
-                    ss_updates(batch),
+                    ss_updates_of(batch),
                 )
                 .output
             }
@@ -259,7 +253,7 @@ impl FamState {
                 prove_gkb2_exposed(
                     GkbParams { capacity: shape.capacity, batch: m, s: shape.gk_s },
                     state.clone(),
-                    gk_vals(batch),
+                    gk_vals_of(batch),
                 )
                 .output
             }
@@ -857,6 +851,14 @@ pub struct DistCell {
     pub total_time_ms: f64,
     /// Max child peak RSS (VmHWM) — the per-machine memory bound.
     pub peak_rss_mb: f64,
+    // ── Mixed workload (non-empty query_at): the interleaved decode queries,
+    // proved on the coordinator after the update makespan (θ(state) each,
+    // NOT folded into total_time_ms). Zero when updates-only.
+    pub n_queries: usize,
+    pub query_prove_ms: f64,
+    pub query_verify_ms: f64,
+    pub query_proof_bytes: u64,
+    pub query_ctx_verifies: u64,
 }
 
 /// Network-model transfer time for one message: serialization at `mbps`
@@ -931,6 +933,8 @@ pub fn measure_compose_dist(
     proof_dir: &Path,
     mbps: f64,
     rtt_ms: f64,
+    query_at: &[usize],
+    query_key_mode: QueryKeyMode,
 ) -> Result<DistCell, String> {
     assert!(!batches.is_empty(), "need at least one batch");
     let m = batches[0].len();
@@ -1272,6 +1276,14 @@ pub fn measure_compose_dist(
     children.clear();
     let _ = std::fs::remove_file(&sock_path);
 
+    // ── Mixed workload (non-empty query_at): prove the interleaved decode queries
+    // on the coordinator — single-prover, θ(state) each — after the update
+    // makespan. `total_time_ms` was captured at root-received above, so the
+    // query cost stays in the separate `query_*` columns (S³'s sequential,
+    // report-separately discipline), not folded into the distributed update
+    // total. No-op (all zero) when the schedule is empty.
+    let q = measure_queries_dist(family, shape, batches, mode, cores, query_at, query_key_mode);
+
     // ── Network models (critical path): scatter (parallel links, max) +
     // composition-path proof transfers + root delivery.
     let root_sz = root_bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
@@ -1332,6 +1344,11 @@ pub fn measure_compose_dist(
         verify_ms,
         total_time_ms,
         peak_rss_mb,
+        n_queries: q.n_queries,
+        query_prove_ms: q.query_prove_ms,
+        query_verify_ms: q.query_verify_ms,
+        query_proof_bytes: q.query_proof_bytes,
+        query_ctx_verifies: q.query_ctx_verifies,
     })
 }
 

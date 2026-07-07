@@ -59,15 +59,50 @@
 //! exposed. Query costs land in the `query_*` columns (kept separate from the
 //! update-side totals); `query_ctx_verifies` counts the composition proofs the
 //! verifier checks at query time to trust `Com(S_{t'})` — `t'` (per_batch),
-//! `1` (chain), `popcount(t')` Bentley–Saxe peaks (forest). NOTE the cm decode
-//! circuit caps `w <= 16`, so with queries on keep `EXP_W` small (default 8).
+//! `1` (chain), `popcount(t')` Bentley–Saxe peaks (forest). The cm decode
+//! circuit takes any power-of-two `w` (cost ∝ `d·w`), same as the leaf.
+//! The `query_*_avg` columns report the amortized proven cost of ONE query
+//! (`Σ query_* / n_queries`) — the headline mixed-workload number.
+//!
+//! `EXP_COMPOSE_QUERY_EVERY_OPS=Q` (mutually exclusive with the above) runs
+//! the paper's OPERATION-STREAM model: the stream is `N` operations and a
+//! query OCCUPIES a stream position — every `Q`-th position (`Q, 2Q, …`) is a
+//! query, the rest are updates, so `N` stream points carry `N − ⌊N/Q⌋` update
+//! records (100 points with Q=10 ⇒ 10 queries + 90 updates). No batch
+//! alignment required: a query landing mid-batch seals the batch early and
+//! pads its tail with the family's provable no-op records (cm value-0 update,
+//! ss circuit dummy, gk E_MAX dummy via a short batch, hll repeated key —
+//! `max` is idempotent), so the state is committed at the exact stream
+//! position and the circuit shape stays uniform. The early-sealed leaves are
+//! the honest "query at any point" premium, reported in `query_split_leaves`
+//! / `query_pad_records`; the stream tail is pad-sealed too (no phantom
+//! records). The CSV `n` column = TOTAL stream operations; update records =
+//! `n − n_queries`, and `records_per_sec` counts update records only.
+//!
+//! Mixed workloads run under BOTH engines. Under `sim` the queries interleave
+//! with the update leaves in the single-process replay. Under `procs` the
+//! workers prove the distributed update leaves as usual, then the coordinator
+//! proves each interleaved decode query (single-prover, `θ(state)` each) after
+//! the update makespan — so `total_time_ms` stays update-only and the query
+//! cost lands in the separate `query_*` columns (S³'s sequential,
+//! report-separately discipline). Queries are not proved concurrently with
+//! updates on a live-stream critical path; that is a deliberate first cut.
+//!
+//! `EXP_QUERY_KEY_MODE` (default `first`) picks the probe key a KEYED query
+//! targets — cm point-count / gk rank (hll cardinality and ss top-1 are keyless
+//! and ignore it): `first` = the batch's first key (baseline); `uniform_stream`
+//! = a frequency-weighted sample of keys seen so far (S³-style); `hot` = the
+//! most-frequent key; `absent` = an in-domain key NOT in the stream. All modes
+//! are deterministic in the query index, so runs are reproducible.
 //!
 //! Output: results/stream_compose.csv. Legacy columns (same meanings under
 //! both engines), then the procs-engine extension block (n/a under sim):
 //!   dataset,family,variant,mode,shape,n,m,t,cores,machines,total_time_ms,
 //!   leafgen_ms,leafgen_seq_ms,merge_ms,verify_ms,proof_bytes,records_per_sec,
 //!   peak_rss_mb,n_queries,query_prove_ms,query_verify_ms,query_proof_bytes,
-//!   query_ctx_verifies,exec,procs,witness_pass_ms,scatter_ms,
+//!   query_ctx_verifies,query_prove_ms_avg,query_verify_ms_avg,
+//!   query_proof_bytes_avg,query_ctx_verifies_avg,query_split_leaves,
+//!   query_pad_records,exec,procs,witness_pass_ms,scatter_ms,
 //!   scatter_state_bytes,scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,
 //!   local_fold_ms,merges_local,merges_cross,cross_rounds,
 //!   comm_msgs,comm_bytes,comm_ms_measured,comm_model_ms,status
@@ -86,7 +121,8 @@ use zksketch::experiments::dist_compose::{measure_compose_dist, DistCell};
 use zksketch::experiments::metrics::write_env_json;
 use zksketch::experiments::results_dir;
 use zksketch::experiments::stream_compose::{
-    measure_compose, ComposeCell, StreamFamily, StreamMode, StreamShape,
+    build_query_schedule_batches, measure_compose, ComposeCell, QueryKeyMode, StreamFamily,
+    StreamMode, StreamShape,
 };
 
 fn parse_size(s: &str) -> Option<usize> {
@@ -132,6 +168,15 @@ fn env_size_list(key: &str, default: &[usize]) -> Vec<usize> {
 
 fn env_str(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// Amortized-per-query value: `total / n`, or 0 when there were no queries.
+fn q_avg(total: f64, n: usize) -> f64 {
+    if n > 0 {
+        total / n as f64
+    } else {
+        0.0
+    }
 }
 
 /// Largest GK accuracy `s = 1/ε` the capacity supports at stream length `N` — the
@@ -185,12 +230,15 @@ fn measure_guarded(
     cores: usize,
     machines: usize,
     proof_dir: &std::path::Path,
-    query_every: usize,
+    query_at: &[usize],
+    query_key_mode: QueryKeyMode,
 ) -> Option<ComposeCell> {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let r = catch_unwind(AssertUnwindSafe(|| {
-        measure_compose(family, shape, batches, mode, cores, machines, proof_dir, query_every)
+        measure_compose(
+            family, shape, batches, mode, cores, machines, proof_dir, query_at, query_key_mode,
+        )
     }));
     std::panic::set_hook(prev);
     r.ok()
@@ -211,11 +259,16 @@ fn dist_guarded(
     proof_dir: &std::path::Path,
     mbps: f64,
     rtt_ms: f64,
+    query_at: &[usize],
+    query_key_mode: QueryKeyMode,
 ) -> Result<DistCell, String> {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let r = catch_unwind(AssertUnwindSafe(|| {
-        measure_compose_dist(family, shape, batches, mode, cores, machines, proof_dir, mbps, rtt_ms)
+        measure_compose_dist(
+            family, shape, batches, mode, cores, machines, proof_dir, mbps, rtt_ms, query_at,
+            query_key_mode,
+        )
     }));
     std::panic::set_hook(prev);
     match r {
@@ -258,9 +311,40 @@ fn main() {
     let n = env_size("EXP_COMPOSE_N", 32);
     let batches_m = env_size_list("EXP_COMPOSE_BATCHES", &[8]);
     // Mixed workload: prove one query leaf after every k-th batch (0 = off).
-    // NOTE the cm decode circuit caps w <= 16; with queries on, larger EXP_W
-    // records the cm cells as too_large.
+    // The cm decode circuit takes any power-of-two w (same in-circuit position
+    // derivation as the leaf), so EXP_W is unconstrained by queries.
     let query_every = env_size("EXP_COMPOSE_QUERY_EVERY", 0);
+    // Mixed OPERATION stream (the paper's streaming model): the stream is N
+    // operations and a query OCCUPIES a stream position — every Q-th position
+    // is a query, the rest are updates, so N points carry N − ⌊N/Q⌋ update
+    // records. No batch alignment required: a query landing mid-batch seals
+    // the batch early and pads its tail with the family's provable no-op
+    // records, so Com(S) is committed at the exact stream position. The
+    // early-sealed leaves are the honest "query at any point" premium,
+    // reported in query_split_leaves / query_pad_records.
+    let query_every_ops = env_size("EXP_COMPOSE_QUERY_EVERY_OPS", 0);
+    if query_every > 0 && query_every_ops > 0 {
+        eprintln!(
+            "EXP_COMPOSE_QUERY_EVERY (per batch, extra events) and \
+             EXP_COMPOSE_QUERY_EVERY_OPS (per stream position) are mutually exclusive — set one"
+        );
+        std::process::exit(2);
+    }
+    if query_every_ops == 1 {
+        eprintln!("EXP_COMPOSE_QUERY_EVERY_OPS=1 makes EVERY stream position a query (no updates)");
+        std::process::exit(2);
+    }
+    // Which probe key a keyed query (cm point-count, gk rank) targets: first
+    // (baseline, the batch's first key) | uniform_stream (frequency-weighted
+    // sample of seen keys, S³-style) | hot (most-frequent key) | absent (an
+    // in-domain key NOT in the stream). No effect on hll/ss (keyless queries).
+    let query_key_mode = {
+        let raw = env_str("EXP_QUERY_KEY_MODE", "first");
+        QueryKeyMode::parse(&raw).unwrap_or_else(|| {
+            eprintln!("unknown EXP_QUERY_KEY_MODE '{raw}' (first|uniform_stream|hot|absent) — using first");
+            QueryKeyMode::First
+        })
+    };
     let cores_list: Vec<usize> = env_size_list("EXP_COMPOSE_CORES", &[avail])
         .into_iter()
         .map(|c| c.clamp(1, avail))
@@ -273,7 +357,7 @@ fn main() {
     // legacy single-process run whose machines column is a work-partition
     // makespan projection. Default: procs whenever a multi-machine sweep is
     // requested, since that is the claim being defended.
-    let mut exec_procs = match std::env::var("EXP_COMPOSE_EXEC").ok().as_deref() {
+    let exec_procs = match std::env::var("EXP_COMPOSE_EXEC").ok().as_deref() {
         Some("procs") => true,
         Some("sim") => false,
         Some(other) => {
@@ -282,12 +366,9 @@ fn main() {
         }
         None => machines_list.iter().copied().max().unwrap_or(1) > 1,
     };
-    if exec_procs && query_every > 0 {
-        eprintln!(
-            "note: EXP_COMPOSE_QUERY_EVERY is only wired into the sim engine — running sim"
-        );
-        exec_procs = false;
-    }
+    // Mixed workload now runs on BOTH engines: procs proves the interleaved
+    // decode queries on the coordinator (θ(state) each) after the distributed
+    // update makespan, reported in the same query_* columns as sim.
     // Modeled network link for the procs engine's comm_model_ms column (bytes
     // are measured; these set the bandwidth + per-message RTT of the model).
     let net_mbps: f64 = std::env::var("EXP_NET_MBPS")
@@ -391,8 +472,14 @@ fn main() {
         families.iter().map(|f| f.label()).collect::<Vec<_>>(),
         modes.iter().map(|m| m.label()).collect::<Vec<_>>(),
         if exec_procs { "procs" } else { "sim" },
-        if query_every > 0 {
-            format!(" MIXED: query every {query_every} batch(es)")
+        if query_every_ops > 0 {
+            format!(
+                " MIXED: every {query_every_ops}-th stream position is a query (occupies the \
+                 position; split+pad batches) key_mode={}",
+                query_key_mode.label()
+            )
+        } else if query_every > 0 {
+            format!(" MIXED: query every {query_every} batch(es) key_mode={}", query_key_mode.label())
         } else {
             String::new()
         },
@@ -435,6 +522,14 @@ fn main() {
         "total_time_ms", "leafgen_ms", "leafgen_seq_ms", "merge_ms", "verify_ms", "proof_bytes",
         "records_per_sec", "peak_rss_mb", "n_queries", "query_prove_ms", "query_verify_ms",
         "query_proof_bytes", "query_ctx_verifies",
+        // Amortized-per-query headline (Σ query_* / n_queries; 0 when no queries).
+        "query_prove_ms_avg", "query_verify_ms_avg", "query_proof_bytes_avg",
+        "query_ctx_verifies_avg",
+        // Split+pad accounting under EXP_COMPOSE_QUERY_EVERY_UPDATES: leaves
+        // sealed early (padded) so a query could bind mid-batch, and the total
+        // no-op pad records — the "query at any point" premium. 0 when the
+        // query grid is batch-aligned.
+        "query_split_leaves", "query_pad_records",
         // ── procs-engine extension ──
         "exec", "procs", "witness_pass_ms", "scatter_ms", "scatter_state_bytes",
         "scatter_data_bytes", "leaf_busy_min_ms", "leaf_busy_max_ms", "local_fold_ms",
@@ -472,9 +567,34 @@ fn main() {
                 _ => {}
             }
             for &m in &batches_m {
-                let t = n.div_ceil(m);
-                let actual_n = t * m;
-                let batches = batches_from(&base, m, t);
+                // Build the batch list + query schedule (1-based leaf indices).
+                // Operation-stream mode: n = TOTAL stream positions; every
+                // Q-th position is a query (consuming the position), so the
+                // update-record count is n − n_queries; batches split+pad at
+                // each query point. The legacy per-batch mode treats queries
+                // as EXTRA events and rounds the stream UP to whole batches of
+                // real keys.
+                let (batches, query_at, pad_records, split_leaves, actual_n) =
+                    if query_every_ops > 0 {
+                        let (b, qat, pads, splits) = build_query_schedule_batches(
+                            &base, n, m, query_every_ops, family,
+                        );
+                        (b, qat, pads, splits, n)
+                    } else {
+                        let t = n.div_ceil(m);
+                        let qat: Vec<usize> = if query_every > 0 {
+                            (1..=t).filter(|i| i % query_every == 0).collect()
+                        } else {
+                            Vec::new()
+                        };
+                        (batches_from(&base, m, t), qat, 0, 0, t * m)
+                    };
+                let t = batches.len();
+                // Update-record count: in operation-stream mode queries occupy
+                // stream positions, so records = n − n_queries; records_per_sec
+                // measures sketch records folded, not stream positions.
+                let n_upd =
+                    actual_n - if query_every_ops > 0 { query_at.len() } else { 0 };
                 for &mode in &modes {
                     // The chain is inherently sequential (each fold consumes
                     // the previous prefix proof), so it runs on ONE machine in
@@ -504,17 +624,17 @@ fn main() {
                                     machines_col.to_string(),
                                 ]
                             };
-                            const N_LEGACY_METRICS: usize = 13; // total_time..query_ctx
+                            const N_LEGACY_METRICS: usize = 19; // total_time..query_ctx + 4 amortized + split/pad
                             const N_EXT_AFTER_EXEC: usize = 16; // procs..comm_model_ms, merge_total_ms
 
                             if exec_procs {
                                 match dist_guarded(
                                     family, fshape, &batches, mode, cores, machines, &cell_dir,
-                                    net_mbps, net_rtt_ms,
+                                    net_mbps, net_rtt_ms, &query_at, query_key_mode,
                                 ) {
                                     Ok(c) => {
                                         let rps = if c.total_time_ms > 0.0 {
-                                            (actual_n as f64 * 1000.0 / c.total_time_ms).round()
+                                            (n_upd as f64 * 1000.0 / c.total_time_ms).round()
                                                 as u64
                                         } else {
                                             0
@@ -529,9 +649,19 @@ fn main() {
                                             c.proof_bytes.to_string(),
                                             rps.to_string(),
                                             format!("{:.1}", c.peak_rss_mb),
-                                            // procs engine is updates-only.
-                                            "0".into(), "0.000".into(), "0.000".into(),
-                                            "0".into(), "0".into(),
+                                            // Mixed workload: queries proved on the
+                                            // coordinator (0 when query_every=0).
+                                            c.n_queries.to_string(),
+                                            format!("{:.3}", c.query_prove_ms),
+                                            format!("{:.3}", c.query_verify_ms),
+                                            c.query_proof_bytes.to_string(),
+                                            c.query_ctx_verifies.to_string(),
+                                            format!("{:.3}", q_avg(c.query_prove_ms, c.n_queries)),
+                                            format!("{:.3}", q_avg(c.query_verify_ms, c.n_queries)),
+                                            format!("{:.3}", q_avg(c.query_proof_bytes as f64, c.n_queries)),
+                                            format!("{:.3}", q_avg(c.query_ctx_verifies as f64, c.n_queries)),
+                                            split_leaves.to_string(),
+                                            pad_records.to_string(),
                                             "procs".into(),
                                             c.procs.to_string(),
                                             format!("{:.3}", c.witness_pass_ms),
@@ -555,8 +685,24 @@ fn main() {
                                             "ok".into(),
                                         ]);
                                         write_row(&csv, &row);
+                                        let qstr = if c.n_queries > 0 {
+                                            format!(
+                                                " | q={} /query: {:.1}ms prove, {:.1}KB, {:.1} ctx{}",
+                                                c.n_queries,
+                                                q_avg(c.query_prove_ms, c.n_queries),
+                                                q_avg(c.query_proof_bytes as f64, c.n_queries) / 1024.0,
+                                                q_avg(c.query_ctx_verifies as f64, c.n_queries),
+                                                if split_leaves > 0 {
+                                                    format!(" (split={split_leaves} pad={pad_records})")
+                                                } else {
+                                                    String::new()
+                                                },
+                                            )
+                                        } else {
+                                            String::new()
+                                        };
                                         println!(
-                                            "  {vl:<13} {sh:<10} m={m:<4} t={t:<3} [{:<9}] cores={cores} mach={} procs={} total={:.2}s (wpass={:.2}s leaf={:.2}s merge={:.1}s [fold {:.1}s + xmerge {:.2}s]) verify={:.3}s proof={:.1}KB comm={:.1}KB/{} msgs ({:.0}Mbps model {:.1}ms) rss={:.0}MB",
+                                            "  {vl:<13} {sh:<10} m={m:<4} t={t:<3} [{:<9}] cores={cores} mach={} procs={} total={:.2}s (wpass={:.2}s leaf={:.2}s merge={:.1}s [fold {:.1}s + xmerge {:.2}s]) verify={:.3}s proof={:.1}KB comm={:.1}KB/{} msgs ({:.0}Mbps model {:.1}ms) rss={:.0}MB{qstr}",
                                             mode.label(), c.machines_eff, c.procs,
                                             c.total_time_ms / 1000.0,
                                             c.witness_pass_ms / 1000.0,
@@ -592,11 +738,11 @@ fn main() {
                             } else {
                                 match measure_guarded(
                                     family, fshape, &batches, mode, cores, machines, &cell_dir,
-                                    query_every,
+                                    &query_at, query_key_mode,
                                 ) {
                                     Some(c) => {
                                         let rps = if c.total_time_ms > 0.0 {
-                                            (actual_n as f64 * 1000.0 / c.total_time_ms).round()
+                                            (n_upd as f64 * 1000.0 / c.total_time_ms).round()
                                                 as u64
                                         } else {
                                             0
@@ -616,6 +762,13 @@ fn main() {
                                             format!("{:.3}", c.query_verify_ms),
                                             c.query_proof_bytes.to_string(),
                                             c.query_ctx_verifies.to_string(),
+                                            // Amortized per query event (0 when none).
+                                            format!("{:.3}", q_avg(c.query_prove_ms, c.n_queries)),
+                                            format!("{:.3}", q_avg(c.query_verify_ms, c.n_queries)),
+                                            format!("{:.3}", q_avg(c.query_proof_bytes as f64, c.n_queries)),
+                                            format!("{:.3}", q_avg(c.query_ctx_verifies as f64, c.n_queries)),
+                                            split_leaves.to_string(),
+                                            pad_records.to_string(),
                                             "sim".into(),
                                         ]);
                                         row.extend(
@@ -626,11 +779,19 @@ fn main() {
                                         write_row(&csv, &row);
                                         let qstr = if c.n_queries > 0 {
                                             format!(
-                                                " q={} qprove={:.2}s qverify={:.3}s qproof={:.1}KB qctx={}",
+                                                " q={} qprove={:.2}s qverify={:.3}s qproof={:.1}KB qctx={} | /query: {:.1}ms prove, {:.1}KB, {:.1} ctx{}",
                                                 c.n_queries, c.query_prove_ms / 1000.0,
                                                 c.query_verify_ms / 1000.0,
                                                 c.query_proof_bytes as f64 / 1024.0,
                                                 c.query_ctx_verifies,
+                                                q_avg(c.query_prove_ms, c.n_queries),
+                                                q_avg(c.query_proof_bytes as f64, c.n_queries) / 1024.0,
+                                                q_avg(c.query_ctx_verifies as f64, c.n_queries),
+                                                if split_leaves > 0 {
+                                                    format!(" (split={split_leaves} pad={pad_records})")
+                                                } else {
+                                                    String::new()
+                                                },
                                             )
                                         } else {
                                             String::new()

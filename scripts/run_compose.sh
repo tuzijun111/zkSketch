@@ -72,7 +72,40 @@
 #                        the update-side totals; query_ctx_verifies counts the
 #                        composition proofs the verifier checks at query time
 #                        (t' for per_batch, 1 for chain, popcount(t') peaks for
-#                        forest). NOTE: cm decode caps w <= 16 — keep EXP_W small.
+#                        forest). (cm decode takes any power-of-two w, same as
+#                        the leaf — EXP_W is unconstrained by queries.)
+#                        Also emits amortized-per-query columns (query_*_avg =
+#                        Σ query_* / n_queries) — the headline proven cost of one
+#                        query. Runs under BOTH engines: sim interleaves the
+#                        queries; procs proves them on the coordinator after the
+#                        distributed update makespan (total_time_ms stays
+#                        update-only). plonky3 only (plonky2 ignores QUERY_EVERY).
+#   EXP_COMPOSE_QUERY_EVERY_OPS  MIXED OPERATION stream (the paper's streaming
+#                        model; mutually exclusive with the per-batch knob
+#                        above): the stream is N operations and a query
+#                        OCCUPIES a stream position — every Q-th position is a
+#                        query, the rest are updates, so N points carry
+#                        N - floor(N/Q) update records (100 points, Q=10 ⇒ 10
+#                        queries + 90 updates). Q >= 2, no batch alignment
+#                        needed. A query landing mid-batch seals the batch
+#                        EARLY and pads its tail with the family's provable
+#                        no-op records (cm value-0 update, ss circuit dummy,
+#                        gk E_MAX dummy via a short batch, hll repeated key —
+#                        max is idempotent), so the state is committed at the
+#                        exact stream position with a uniform circuit shape.
+#                        The early-sealed leaves are the honest "query at any
+#                        point" premium (query_split_leaves/query_pad_records);
+#                        the CSV n column = TOTAL stream operations (updates =
+#                        n - n_queries; records_per_sec counts updates only;
+#                        the stream tail is pad-sealed, not extended).
+#                        plonky3 only.
+#   EXP_QUERY_KEY_MODE   which probe key a KEYED query targets (cm point-count,
+#                        gk rank; no effect on hll/ss which are keyless):
+#                        first (default — the batch's first key, the baseline) |
+#                        uniform_stream (frequency-weighted sample of keys seen
+#                        so far, S³-style) | hot (most-frequent key) | absent
+#                        (an in-domain key NOT in the stream). Deterministic /
+#                        reproducible. plonky3 only.
 #   --- per-family shape ---
 #   EXP_D / EXP_W        Count-Min d, w    (default 4, 8; needs d·w % 4 == 0)
 #   EXP_HLL_B            HLL register bits  (default 4; needs 2^b % 4 == 0)
@@ -92,7 +125,9 @@
 #   dataset,family,variant,mode,shape,n,m,t,cores,machines,total_time_ms,
 #   leafgen_ms,leafgen_seq_ms,merge_ms,verify_ms,proof_bytes,records_per_sec,
 #   peak_rss_mb,n_queries,query_prove_ms,query_verify_ms,query_proof_bytes,
-#   query_ctx_verifies
+#   query_ctx_verifies,query_prove_ms_avg,query_verify_ms_avg,
+#   query_proof_bytes_avg,query_ctx_verifies_avg,query_split_leaves,
+#   query_pad_records
 # plus the procs-engine extension block (n/a under sim)
 #   exec,procs,witness_pass_ms,scatter_ms,scatter_state_bytes,
 #   scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,local_fold_ms,
