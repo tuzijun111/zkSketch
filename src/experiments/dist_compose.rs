@@ -79,9 +79,9 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, OnceLock};
 use std::time::Instant;
 
 use serde::de::DeserializeOwned;
@@ -683,6 +683,89 @@ fn have_cmd(cmd: &str) -> bool {
         .is_ok()
 }
 
+/// Run-private temp name for this coordinator's executable snapshot.
+fn exe_snapshot_name() -> String {
+    format!("zks_dc_exe_{}", std::process::id())
+}
+
+/// A rebuild-proof path to *this* executable for pinned child spawns.
+///
+/// A multi-family × multi-mode sweep spends hours per cell. If a concurrent
+/// `cargo build`/`cargo run` of the same example relinks the binary, the
+/// coordinator's running inode is unlinked and `std::env::current_exe()` then
+/// returns a bogus `".../exp_compose (deleted)"` path. The next
+/// `numactl <that path>` child spawn dies with "No such file or directory",
+/// aborting the sweep partway (exactly the failure seen after the cm family).
+///
+/// So snapshot the executable ONCE, on first spawn, into a run-private temp copy
+/// and exec that copy for every worker thereafter — immune to the on-disk binary
+/// being rebuilt/removed later, and guaranteeing every worker runs byte-for-byte
+/// the coordinator's build. The copy source is `/proc/self/exe` on Linux, which
+/// serves the running inode's bytes even after the file is unlinked, so the
+/// snapshot succeeds even if the binary was already replaced before this call.
+///
+/// Only a *successful* snapshot is memoized: if the first call hits a transient
+/// error (a momentary `EINTR`/`ENOSPC` on copy, say), it is returned but NOT
+/// cached, so the next cell retries — matching the old per-cell `current_exe()`
+/// resilience instead of dooming the whole sweep on one blip.
+fn stable_self_exe() -> Result<PathBuf, String> {
+    static SNAPSHOT: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(p) = SNAPSHOT.get() {
+        return Ok(p.clone());
+    }
+    let dst = take_exe_snapshot()?;
+    // The coordinator spawns sequentially, but tolerate a race anyway: keep
+    // whatever ended up stored.
+    let _ = SNAPSHOT.set(dst.clone());
+    Ok(SNAPSHOT.get().cloned().unwrap_or(dst))
+}
+
+/// Copy this executable to its run-private snapshot path and mark it executable.
+fn take_exe_snapshot() -> Result<PathBuf, String> {
+    let resolved = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    // Prefer /proc/self/exe (serves the running inode even if unlinked);
+    // fall back to the resolved path on non-Linux.
+    let proc_exe = PathBuf::from("/proc/self/exe");
+    let src = if proc_exe.exists() { proc_exe } else { resolved.clone() };
+    let dst = std::env::temp_dir().join(exe_snapshot_name());
+    // Remove any stale same-named file (e.g. leaked by an earlier crashed run
+    // with this PID) so the copy can't hit ETXTBSY truncating a busy file.
+    let _ = std::fs::remove_file(&dst);
+    std::fs::copy(&src, &dst)
+        .map_err(|e| format!("snapshot exe {} -> {}: {e}", src.display(), dst.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("chmod exe snapshot {}: {e}", dst.display()))?;
+    }
+    Ok(dst)
+}
+
+/// Remove the executable snapshot created by [`stable_self_exe`] (best effort).
+/// A no-op when no pinned processes were spawned. Prefer holding an
+/// [`ExeSnapshotGuard`] over calling this directly, so cleanup also runs on the
+/// error/panic exit paths.
+pub fn cleanup_exe_snapshot() {
+    let _ = std::fs::remove_file(std::env::temp_dir().join(exe_snapshot_name()));
+}
+
+/// RAII guard that removes the exe snapshot on drop — covering *every* exit path
+/// of a sweep (normal return, `?` error propagation, and panic unwinding), not
+/// just the success path. Hold one for the lifetime of the sweep in `main`.
+#[derive(Default)]
+pub struct ExeSnapshotGuard(());
+impl ExeSnapshotGuard {
+    pub fn new() -> Self {
+        Self(())
+    }
+}
+impl Drop for ExeSnapshotGuard {
+    fn drop(&mut self) {
+        cleanup_exe_snapshot();
+    }
+}
+
 /// Build the pinned child command for CPUs `[lo, hi]` (inclusive):
 /// `numactl --physcpubind=lo-hi --membind=<node>` when available (and the
 /// range sits in one NUMA node), else `taskset -c lo-hi`, else unpinned (with
@@ -895,7 +978,7 @@ pub fn measure_compose_dist(
     ));
     let _ = std::fs::remove_file(&sock_path);
     let listener = UnixListener::bind(&sock_path).map_err(|e| format!("bind socket: {e}"))?;
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let exe = stable_self_exe()?;
 
     let spawn_child = |role: &str, id: usize, lo: usize, hi: usize| -> Result<ChildGuard, String> {
         let mut cmd = pinned_command(&exe, lo, hi);

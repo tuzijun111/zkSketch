@@ -27,7 +27,8 @@
 
 use zksketch_snark::dataset::{aol, netflix, synthetic_stream, zipf_stream, Synthetic};
 use zksketch_snark::experiments::dist_compose::{
-    cross_family_pairs, maybe_run_child, measure_compose_dist, DistCell, Family, FamShape, Mode,
+    cross_family_pairs, maybe_run_child, measure_compose_dist, DistCell, ExeSnapshotGuard, Family,
+    FamShape, Mode,
 };
 use zksketch_snark::metrics::{append_csv, results_dir, write_env_json};
 
@@ -82,6 +83,8 @@ fn main() -> anyhow::Result<()> {
     if maybe_run_child() {
         return Ok(());
     }
+    // Drop the pinned-child exe snapshot on ANY exit path (success, `?`, panic).
+    let _exe_guard = ExeSnapshotGuard::new();
 
     let n = env_usize("EXP_COMPOSE_N", 16);
     let m = env_usize("EXP_COMPOSE_BATCHES", 4);

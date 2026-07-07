@@ -252,6 +252,8 @@ fn main() {
     if zksketch::experiments::dist_compose::maybe_run_child() {
         return;
     }
+    // Drop the pinned-child exe snapshot on ANY exit path (return or panic).
+    let _exe_guard = zksketch::experiments::dist_compose::ExeSnapshotGuard::new();
     let avail = rayon::current_num_threads();
     let n = env_size("EXP_COMPOSE_N", 32);
     let batches_m = env_size_list("EXP_COMPOSE_BATCHES", &[8]);
@@ -442,7 +444,11 @@ fn main() {
     .iter()
     .map(|s| s.to_string())
     .collect();
-    let csv = dir.join("stream_compose.csv");
+    // Write rows to a PID-private intermediate, not the shared
+    // `stream_compose.csv`, so two concurrent sweeps on the same host can't
+    // interleave/clobber each other's rows. It's renamed to the caller's
+    // EXP_OUT name (or to `stream_compose.csv`) once the sweep completes.
+    let csv = dir.join(format!("stream_compose.{}.part.csv", std::process::id()));
     let _ = std::fs::remove_file(&csv);
     write_row(&csv, &hdr);
 
@@ -658,17 +664,20 @@ fn main() {
         }
     }
 
-    // Rename to a caller-chosen file so successive sweeps accumulate.
+    // Move the PID-private intermediate to the caller-chosen file (or the
+    // default `stream_compose.csv`). The exe snapshot is cleaned up by
+    // `_exe_guard` on return. (A concurrent no-EXP_OUT sweep can still race on
+    // the default name, but each renamed file is internally consistent — the
+    // per-row interleaving that corrupted a shared file is gone.)
     let out = std::env::var("EXP_OUT").ok().or_else(|| std::env::args().nth(1));
-    if let Some(name) = out {
-        let final_csv = dir.join(format!("{}.csv", name.trim_end_matches(".csv")));
-        if final_csv != csv {
-            let _ = std::fs::rename(&csv, &final_csv);
-            println!("results -> {}", final_csv.display());
-            return;
-        }
+    let final_csv = match out {
+        Some(name) => dir.join(format!("{}.csv", name.trim_end_matches(".csv"))),
+        None => dir.join("stream_compose.csv"),
+    };
+    if final_csv != csv {
+        let _ = std::fs::rename(&csv, &final_csv);
     }
-    println!("results -> {}", csv.display());
+    println!("results -> {}", final_csv.display());
 }
 
 /// Append one CSV row.
