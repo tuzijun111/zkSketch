@@ -59,12 +59,36 @@ pub struct CmDecodeParams {
 impl CmDecodeParams {
     pub fn validate(&self) {
         assert!(self.d >= 1 && self.d <= 8, "d in 1..=8 (PRF rows), got {}", self.d);
+        // `w` must be a power of two: the in-circuit position is the low
+        // `log2(w)` bits of the PRF digest, which equals `% w` only for powers
+        // of two. This is the SAME derivation as the `countmin_final` leaf,
+        // which already runs at arbitrary power-of-two `w`; the old `w ≤ 16`
+        // cap here was a stale copy of the leaf's crude proxy. There is no fixed
+        // upper bound — the real limit is the selector-cost guard below. (`w ≥ 2`
+        // also because `w = 1` gives an empty `pow2`/position basis.)
         assert!(
-            self.w.is_power_of_two() && (1..=16).contains(&self.w),
-            "w power of 2 in {{2,4,8,16}}, got {}",
+            self.w.is_power_of_two() && self.w >= 2,
+            "w must be a power of two ≥ 2, got {}",
             self.w
         );
         assert!((self.d * self.w) % 4 == 0, "d·w must be a multiple of 4 (Challenge align)");
+        // Cost guard. The one-hot selector is `d × w` private witnesses — the
+        // decode circuit's dominant cost. A single point query has no batch, so
+        // this is far cheaper than the leaf's `batch·d·(d·w)`; still reject the
+        // catastrophic case with a clean panic. Shares `COUNTMIN_MAX_SEL_CELLS`
+        // with the leaf so one knob raises both.
+        let sel_cells = self.d.saturating_mul(self.w);
+        let max_sel = std::env::var("COUNTMIN_MAX_SEL_CELLS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(16_000_000);
+        assert!(
+            sel_cells <= max_sel,
+            "selector budget exceeded: d·w = {sel_cells} > {max_sel} (d={}, w={}). \
+             Reduce w, or raise COUNTMIN_MAX_SEL_CELLS (expect heavy RAM/time).",
+            self.d,
+            self.w
+        );
     }
 }
 
@@ -359,5 +383,22 @@ mod tests {
         let p = CmDecodeParams { d: 4, w: 8, release: ReleasePolicy::Threshold(1000) };
         let proof = prove_cm_decode(p, state(), 7);
         assert_eq!(proof.answer, 0, "estimate below θ ⇒ released 0");
+    }
+
+    /// The decode circuit proves and self-verifies at w > 16 (the old `w ≤ 16`
+    /// cap was a stale copy of the leaf's proxy; the in-circuit position
+    /// derivation is identical to the leaf, which already runs at large w). The
+    /// point-count answer stays a sound overestimate of the true count.
+    #[test]
+    fn cm_decode_large_w_round_trips() {
+        for w in [32usize, 64] {
+            let mut s = CountMin::new(&CountMinParams { d: 4, w });
+            for k in [7u64, 7, 11, 7, 11, 3, 42, 99, 42] {
+                apply_update_prf(&mut s, &CountMinUpdate { key: k, value: 1 });
+            }
+            let p = CmDecodeParams { d: 4, w, release: ReleasePolicy::Identity };
+            let proof = prove_cm_decode(p, s, 7);
+            assert!(proof.answer >= 3, "w={w}: estimate >= true count 3, got {}", proof.answer);
+        }
     }
 }

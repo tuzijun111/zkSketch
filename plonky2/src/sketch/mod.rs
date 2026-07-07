@@ -12,6 +12,7 @@
 //! versions as baselines.
 
 pub mod countmin;
+pub mod gk_bandmerge2;
 pub mod greenwald_khanna;
 pub mod greenwald_khanna_simple;
 pub mod hyperloglog;
