@@ -439,7 +439,7 @@ fn main() {
         "exec", "procs", "witness_pass_ms", "scatter_ms", "scatter_state_bytes",
         "scatter_data_bytes", "leaf_busy_min_ms", "leaf_busy_max_ms", "local_fold_ms",
         "merges_local", "merges_cross", "cross_rounds", "comm_msgs",
-        "comm_bytes", "comm_ms_measured", "comm_model_ms", "status",
+        "comm_bytes", "comm_ms_measured", "comm_model_ms", "merge_total_ms", "status",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -505,7 +505,7 @@ fn main() {
                                 ]
                             };
                             const N_LEGACY_METRICS: usize = 13; // total_time..query_ctx
-                            const N_EXT_AFTER_EXEC: usize = 15; // procs..comm_model_ms
+                            const N_EXT_AFTER_EXEC: usize = 16; // procs..comm_model_ms, merge_total_ms
 
                             if exec_procs {
                                 match dist_guarded(
@@ -548,15 +548,21 @@ fn main() {
                                             c.comm_bytes.to_string(),
                                             format!("{:.3}", c.comm_ms_measured),
                                             format!("{:.3}", c.comm_model_ms),
+                                            // merge_total_ms: ALL merge proving = local
+                                            // Bentley–Saxe folds (in-worker) + cross-machine
+                                            // merges. `merge_ms` alone is only the cross part.
+                                            format!("{:.3}", c.local_fold_ms + c.merge_ms),
                                             "ok".into(),
                                         ]);
                                         write_row(&csv, &row);
                                         println!(
-                                            "  {vl:<13} {sh:<10} m={m:<4} t={t:<3} [{:<9}] cores={cores} mach={} procs={} total={:.2}s (wpass={:.2}s leaf={:.2}s merge={:.2}s) verify={:.3}s proof={:.1}KB comm={:.1}KB/{} msgs ({:.0}Mbps model {:.1}ms) rss={:.0}MB",
+                                            "  {vl:<13} {sh:<10} m={m:<4} t={t:<3} [{:<9}] cores={cores} mach={} procs={} total={:.2}s (wpass={:.2}s leaf={:.2}s merge={:.1}s [fold {:.1}s + xmerge {:.2}s]) verify={:.3}s proof={:.1}KB comm={:.1}KB/{} msgs ({:.0}Mbps model {:.1}ms) rss={:.0}MB",
                                             mode.label(), c.machines_eff, c.procs,
                                             c.total_time_ms / 1000.0,
                                             c.witness_pass_ms / 1000.0,
-                                            c.leafgen_ms / 1000.0, c.merge_ms / 1000.0,
+                                            c.leafgen_ms / 1000.0,
+                                            (c.local_fold_ms + c.merge_ms) / 1000.0,
+                                            c.local_fold_ms / 1000.0, c.merge_ms / 1000.0,
                                             c.verify_ms / 1000.0,
                                             c.proof_bytes as f64 / 1024.0,
                                             c.comm_bytes as f64 / 1024.0, c.comm_msgs,

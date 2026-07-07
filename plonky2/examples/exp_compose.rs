@@ -164,7 +164,7 @@ fn main() -> anyhow::Result<()> {
         "total_time_ms", "witness_pass_ms", "scatter_ms", "leafgen_ms", "leafgen_seq_ms",
         "merge_ms", "local_fold_ms", "merges_local", "merges_cross", "cross_rounds", "verify_ms",
         "proof_bytes", "records_per_sec", "peak_rss_mb", "comm_msgs", "comm_bytes",
-        "comm_model_ms", "status",
+        "comm_model_ms", "merge_total_ms", "status",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -221,11 +221,14 @@ fn main() -> anyhow::Result<()> {
                 cell.comm_msgs.to_string(),
                 cell.comm_bytes.to_string(),
                 format!("{:.3}", cell.comm_model_ms),
+                // merge_total_ms: ALL merge proving = local Bentley–Saxe folds
+                // (in-worker) + cross-machine merges. `merge_ms` is only the cross part.
+                format!("{:.3}", cell.local_fold_ms + cell.merge_ms),
                 "ok".into(),
             ];
             append_csv(&dir, &out_name, &hdr, &row);
             println!(
-                "  {:<3} {:<10} m={m:<4} t={:<3} [{:<9}] mach={} total={:.2}s (leaf={:.2}s merge={:.2}s) verify={:.3}s proof={:.1}KB comm={:.1}KB/{} msgs rss={:.0}MB",
+                "  {:<3} {:<10} m={m:<4} t={:<3} [{:<9}] mach={} total={:.2}s (leaf={:.2}s merge={:.1}s [fold {:.1}s + xmerge {:.2}s]) verify={:.3}s proof={:.1}KB comm={:.1}KB/{} msgs rss={:.0}MB",
                 family.label(),
                 shape_str(family),
                 cell.t,
@@ -233,6 +236,8 @@ fn main() -> anyhow::Result<()> {
                 cell.machines_eff,
                 cell.total_time_ms / 1000.0,
                 cell.leafgen_ms / 1000.0,
+                (cell.local_fold_ms + cell.merge_ms) / 1000.0,
+                cell.local_fold_ms / 1000.0,
                 cell.merge_ms / 1000.0,
                 cell.verify_ms / 1000.0,
                 cell.proof_bytes as f64 / 1024.0,
@@ -284,6 +289,8 @@ fn main() -> anyhow::Result<()> {
             "0".into(),
             "0".into(),
             "0.000".into(),
+            // merge_total_ms: cross-family has no local fold, so = cross_merge_ms.
+            format!("{:.3}", cf.cross_merge_ms),
             "ok".into(),
         ];
         append_csv(&dir, &out_name, &hdr, &row);
