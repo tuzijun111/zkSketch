@@ -25,7 +25,7 @@ use anyhow::{ensure, Result};
 use plonky2::hash::hash_types::HashOut;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::circuit_data::CircuitData;
 use plonky2::plonk::proof::ProofWithPublicInputs;
 
 use super::{merge, Node};
@@ -172,7 +172,7 @@ fn cross_family_digest(
 /// both boundaries, and bind them under one combined digest. Unlike
 /// [`merge`](super::merge) there is **no** `left.final == right.initial` connect.
 pub fn merge_cross_family(a: &Node, b: &Node) -> Result<CrossFamilyNode> {
-    let mut bld = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut bld = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
 
     let apt = bld.add_virtual_proof_with_pis(&a.data.common);
     let bpt = bld.add_virtual_proof_with_pis(&b.data.common);

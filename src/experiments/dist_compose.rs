@@ -99,16 +99,18 @@ use p3_recursion::RecursionOutput;
 
 use crate::sketch::countmin::{CountMinParams, CountMinState};
 use crate::sketch::countmin_final::apply_update_prf;
-use crate::sketch::countmin_omc::{prove_countmin_omc_exposed, CmOmcParams};
+use crate::sketch::countmin_omc::{build_countmin_omc_leaf, CmOmcLeafCircuit, CmOmcParams};
 use crate::sketch::gk_bandmerge::{
-    apply_batch2, commit_gk2_state, prove_gkb2_exposed, Gk2State, Gk2Tuple, GkbParams,
+    apply_batch2, build_gkb2_leaf, commit_gk2_state, Gk2State, Gk2Tuple, Gkb2LeafCircuit,
+    GkbParams,
 };
 use crate::sketch::hll_omc::{
-    commit_hll_omc, hll_omc_advance, hll_omc_empty, prove_hll_omc_exposed, HllOmcParams,
+    build_hll_omc_leaf, commit_hll_omc, hll_omc_advance, hll_omc_empty, HllOmcLeafCircuit,
+    HllOmcParams,
 };
 use crate::sketch::ss_final_full::{
-    apply_batch_ss_full, commit_ss_state, prove_ss_full_exposed, SsFullParams, SsFullRow,
-    SsFullState,
+    apply_batch_ss_full, build_ss_full_leaf, commit_ss_state, SsFullLeafCircuit, SsFullParams,
+    SsFullRow, SsFullState,
 };
 
 use super::families::cm_empty;
@@ -216,47 +218,28 @@ impl FamState {
         }
     }
 
-    /// Prove one transition leaf from the current state over `batch`.
-    /// Returns the boundary-exposing output plus the prover's self-timings.
+    /// Prove one transition leaf from the current state over `batch`, on the
+    /// worker's prebuilt leaf circuit. Returns the boundary-exposing output
+    /// plus the prover's self-timings.
     fn prove_leaf(
         &self,
-        shape: &StreamShape,
-        m: usize,
+        leaf: &mut FamLeafCircuit,
         batch: &[u32],
     ) -> (RecursionOutput<ConfigWithFriParams>, f64, f64) {
-        let output = match self {
-            Self::Cm(state) => {
-                prove_countmin_omc_exposed(
-                    CmOmcParams { d: shape.d, w: shape.w, batch: m },
-                    state.clone(),
-                    cm_updates_of(batch),
-                )
-                .output
+        let output = match (leaf, self) {
+            (FamLeafCircuit::Cm(l), Self::Cm(state)) => {
+                l.prove_epoch(state.clone(), cm_updates_of(batch)).output
             }
-            Self::Hll(regs) => {
-                prove_hll_omc_exposed(
-                    HllOmcParams { b: shape.b, batch: m },
-                    regs.clone(),
-                    hll_keys_of(batch),
-                )
-                .output
+            (FamLeafCircuit::Hll(l), Self::Hll(regs)) => {
+                l.prove_epoch(regs.clone(), hll_keys_of(batch)).output
             }
-            Self::Ss(state) => {
-                prove_ss_full_exposed(
-                    SsFullParams { capacity: shape.capacity, batch: m },
-                    state.clone(),
-                    ss_updates_of(batch),
-                )
-                .output
+            (FamLeafCircuit::Ss(l), Self::Ss(state)) => {
+                l.prove_epoch(state.clone(), ss_updates_of(batch)).output
             }
-            Self::Gk(state) => {
-                prove_gkb2_exposed(
-                    GkbParams { capacity: shape.capacity, batch: m, s: shape.gk_s },
-                    state.clone(),
-                    gk_vals_of(batch),
-                )
-                .output
+            (FamLeafCircuit::Gk(l), Self::Gk(state)) => {
+                l.prove_epoch(state.clone(), gk_vals_of(batch)).output
             }
+            _ => panic!("FamLeafCircuit/FamState family mismatch"),
         };
         let tm = timing::take();
         (
@@ -327,6 +310,40 @@ impl FamState {
                 params: GkbParams { capacity: *capacity as usize, batch: m, s: *s },
                 n: *n,
             }),
+        }
+    }
+}
+
+/// The reusable per-family leaf circuit — built ONCE per worker and reused
+/// every epoch. The graph build + AIR/`ProverData` prep dominate per-leaf wall
+/// time (they roughly equal witness+prove at the deployed shapes), so hoisting
+/// them out of the epoch loop nearly halves leafgen wall; each epoch only
+/// swaps the Permute ops' sigma hints (`Circuit::update_permute_witnesses`).
+enum FamLeafCircuit {
+    Cm(CmOmcLeafCircuit),
+    Hll(HllOmcLeafCircuit),
+    Ss(SsFullLeafCircuit),
+    Gk(Gkb2LeafCircuit),
+}
+
+impl FamLeafCircuit {
+    fn build(family: StreamFamily, shape: &StreamShape, m: usize) -> Self {
+        match family {
+            StreamFamily::CmOmc => Self::Cm(build_countmin_omc_leaf(
+                CmOmcParams { d: shape.d, w: shape.w, batch: m },
+                true,
+            )),
+            StreamFamily::HllOmc => {
+                Self::Hll(build_hll_omc_leaf(HllOmcParams { b: shape.b, batch: m }, true))
+            }
+            StreamFamily::SsCertified => Self::Ss(build_ss_full_leaf(
+                SsFullParams { capacity: shape.capacity, batch: m },
+                true,
+            )),
+            StreamFamily::GkBandmerge2 => Self::Gk(build_gkb2_leaf(
+                GkbParams { capacity: shape.capacity, batch: m, s: shape.gk_s },
+                true,
+            )),
         }
     }
 }
@@ -509,11 +526,13 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
             panic!("first message must be Task");
         };
         // The state's wire tag fixes the family; parse validates agreement.
-        let _ = StreamFamily::parse(&family).expect("family");
+        let family = StreamFamily::parse(&family).expect("family");
         let mode = StreamMode::parse(&mode).expect("mode");
         let shape = shape.to_shape();
         let m = m as usize;
         let mut state = FamState::decode(&start, m);
+        // Build the leaf circuit ONCE; every epoch below reuses it.
+        let mut leaf = FamLeafCircuit::build(family, &shape, m);
 
         // Forest: Bentley–Saxe peak stack `(size, root)`, folded as we go.
         let mut peaks: Vec<(u64, RecursionOutput<ConfigWithFriParams>)> = Vec::new();
@@ -522,7 +541,7 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
         let mut root: Option<RecursionOutput<ConfigWithFriParams>> = None;
 
         for (i, batch) in batches.iter().enumerate() {
-            let (output, prove_ms, verify_ms) = state.prove_leaf(&shape, m, batch);
+            let (output, prove_ms, verify_ms) = state.prove_leaf(&mut leaf, batch);
             state.advance(&shape, batch);
 
             let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);

@@ -141,9 +141,16 @@ impl HllOmcParams {
         self.b
     }
     pub fn validate(&self) {
-        assert!(self.b >= 2 && self.b <= 22, "b must be in 2..=22, got {}", self.b);
+        assert!(
+            self.b >= 2 && self.b <= 22,
+            "b must be in 2..=22, got {}",
+            self.b
+        );
         assert!(self.batch >= 1, "batch must be ≥ 1, got {}", self.batch);
-        assert!(self.m() % 4 == 0, "m = 2^b must be a multiple of 4 (Challenge packing)");
+        assert!(
+            self.m() % 4 == 0,
+            "m = 2^b must be a multiple of 4 (Challenge packing)"
+        );
     }
 }
 
@@ -199,7 +206,12 @@ pub fn commit_hll_omc(regs: &[u64], b: usize) -> [Val; 8] {
 }
 
 fn pack_cells_to_challenge(state: &CountMinState) -> Vec<Challenge> {
-    let flat: Vec<Val> = state.counters.iter().flatten().map(|&c| Val::from_u32(c)).collect();
+    let flat: Vec<Val> = state
+        .counters
+        .iter()
+        .flatten()
+        .map(|&c| Val::from_u32(c))
+        .collect();
     flat.chunks(4)
         .map(|chunk| Challenge::from_basis_coefficients_slice(chunk).expect("4 base coeffs"))
         .collect()
@@ -210,9 +222,13 @@ fn pack_cells_to_challenge(state: &CountMinState) -> Vec<Challenge> {
 /// to `RANK_BITS` bits, so the values must be `< 2^RANK_BITS`.
 fn prove_max(b: &mut CircuitBuilder<Challenge>, mx: ExprId, a: ExprId, bb: ExprId, zero: ExprId) {
     let da = b.sub(mx, a);
-    let _ = b.decompose_to_bits::<Val>(da, RANK_BITS).expect("max: mx>=a");
+    let _ = b
+        .decompose_to_bits::<Val>(da, RANK_BITS)
+        .expect("max: mx>=a");
     let dbb = b.sub(mx, bb);
-    let _ = b.decompose_to_bits::<Val>(dbb, RANK_BITS).expect("max: mx>=bb");
+    let _ = b
+        .decompose_to_bits::<Val>(dbb, RANK_BITS)
+        .expect("max: mx>=bb");
     let prod = b.mul(da, dbb);
     b.connect(prod, zero);
 }
@@ -235,155 +251,29 @@ pub fn prove_hll_omc_exposed(
     prove_hll_omc_impl(params, initial, keys, true)
 }
 
-fn prove_hll_omc_impl(
+/// A built, reusable `omc` HLL leaf: the circuit graph, its prover data, and
+/// a registered prover. Build once per `(params, expose_boundary)` and call
+/// [`Self::prove_epoch`] per batch — the graph is a pure function of the shape
+/// except for the two Permute ops’ trace-generation hints, which each prove
+/// swaps in via `Circuit::update_permute_witnesses`. This hoists the dominant
+/// per-leaf costs (graph build + AIR/`ProverData` prep) out of the epoch loop.
+pub struct HllOmcLeafCircuit {
     params: HllOmcParams,
-    initial: Vec<u64>,
-    keys: Vec<u64>,
-    expose_boundary: bool,
-) -> HllOmcProof {
+    circuit: p3_circuit::Circuit<Challenge>,
+    prover: BatchStarkProver<ConfigWithFriParams>,
+    circuit_prover_data: Rc<CircuitProverData<ConfigWithFriParams>>,
+    trace_rows: u64,
+}
+
+/// Build the reusable `omc` HLL leaf circuit for a shape.
+pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmcLeafCircuit {
     params.validate();
-    let HllOmcParams { b, batch: m_batch } = params;
+    let HllOmcParams { batch: m_batch, .. } = params;
     let m = params.m();
     let addr_bits = params.addr_bits();
-    assert_eq!(initial.len(), m, "initial registers != m");
-    assert_eq!(keys.len(), m_batch, "keys length != batch");
     let num_cells = m;
     let cell_packing = num_cells / 4;
     let l = num_cells + m_batch; // multiset side length
-
-    // ─── Native side: route + sort by register + max-fold ────────────────
-    let init_regs: Vec<u32> = initial.iter().map(|&x| x as u32).collect();
-    let mut idx_of = vec![0usize; m_batch];
-    let mut rho_of = vec![0u32; m_batch];
-    for (k, &key) in keys.iter().enumerate() {
-        let (i, r) = route(key, m);
-        idx_of[k] = i;
-        rho_of[k] = r;
-    }
-    // Stable sort of the record indices by register, so per-register keys are
-    // adjacent (mirrors countmin_omc's counter sort).
-    let mut order: Vec<usize> = (0..m_batch).collect();
-    order.sort_by_key(|&k| idx_of[k]);
-    let sigma_reg: Vec<usize> = order.clone();
-    let idx_sorted: Vec<u64> = order.iter().map(|&k| idx_of[k] as u64).collect();
-    let rho_sorted: Vec<u32> = order.iter().map(|&k| rho_of[k]).collect();
-
-    let mut tag_native = vec![0u32; m_batch];
-    for r in 1..m_batch {
-        if idx_sorted[r] == idx_sorted[r - 1] {
-            tag_native[r] = 1;
-        }
-    }
-    // Running max ρ over each register's contiguous segment.
-    let mut acc_native = vec![0u32; m_batch];
-    if m_batch > 0 {
-        acc_native[0] = rho_sorted[0];
-        for r in 1..m_batch {
-            acc_native[r] = if tag_native[r] == 1 {
-                acc_native[r - 1].max(rho_sorted[r])
-            } else {
-                rho_sorted[r]
-            };
-        }
-    }
-    // Segment-end flag: last row of each register's run.
-    let mut a_active_native = vec![0u32; m_batch];
-    for r in 0..m_batch {
-        let ends = if r == m_batch - 1 { true } else { tag_native[r + 1] == 0 };
-        a_active_native[r] = u32::from(ends);
-    }
-    // Old register value at each row's register (from the honest initial state).
-    let mut op_old_native: Vec<u32> =
-        (0..m_batch).map(|r| init_regs[idx_sorted[r] as usize]).collect();
-    // New register value = max(old, running max ρ). Only meaningful at
-    // segment-ends; harmless elsewhere (inactive rows never enter the multiset).
-    let mut op_new_native: Vec<u32> =
-        (0..m_batch).map(|r| op_old_native[r].max(acc_native[r])).collect();
-
-    // Honest final register array: max update per touched register.
-    let mut final_regs = init_regs.clone();
-    for r in 0..m_batch {
-        if a_active_native[r] == 1 {
-            let a = idx_sorted[r] as usize;
-            final_regs[a] = final_regs[a].max(op_new_native[r]);
-        }
-    }
-
-    // Test-only max-suppression attack: claim every raised register was already
-    // at the batch max (op_old = op_new = acc, so prove_max passes) and commit
-    // the state UNCHANGED. Pre-fix this produced an accepting proof for a wrong
-    // final; the ts-based read binding must now make the multiset unmatchable.
-    if TAMPER_SUPPRESS.with(|f| f.get()) {
-        for r in 0..m_batch {
-            if a_active_native[r] == 1 {
-                op_old_native[r] = acc_native[r];
-                op_new_native[r] = acc_native[r];
-            }
-        }
-        final_regs = init_regs.clone(); // commit no change
-    }
-
-    let init_state = regs_to_state(&init_regs, b);
-    let mut committed_final_regs = final_regs.clone();
-    if TAMPER_FINAL_CELL.with(|f| f.get()) {
-        committed_final_regs[0] = committed_final_regs[0].wrapping_add(1);
-    }
-    let committed_final = regs_to_state(&committed_final_regs, b);
-    let initial_commit = commit_countmin(&init_state);
-    let final_commit = commit_countmin(&committed_final);
-
-    // Batch commitment over the keys (one Val each, MyHash([key,0,0,0]) blocks).
-    let batch_commit: [Val; 8] = {
-        let hasher = MyHash::new(make_perm());
-        let flat: Vec<Val> = keys
-            .iter()
-            .flat_map(|&k| [Val::from_u64(k), Val::ZERO, Val::ZERO, Val::ZERO])
-            .collect();
-        hasher.hash_iter(flat.iter().copied())
-    };
-
-    // Dense old/new register multisets + touched read/write rows, in the
-    // offline-memory-checking read/write-set form with a time coordinate `ts`:
-    //   write set  = init-writes (a, o[a], ts=0) ⊎ update-writes (idx, N, ts=1)
-    //   read set   = final-reads (a, n[a], ts=ft_a) ⊎ update-reads (idx, O, ts=0)
-    // The `ts` breaks the max-degenerate pairing: a touched cell's ts=0 init
-    // write can only cancel the ts=0 update read, forcing O == committed old
-    // value (a plain additive Count-Min needs no `ts`, but max's write==read
-    // case does — see the soundness note in the module header).
-    let o_cells_native: Vec<u32> = init_state.counters[0].clone();
-    let n_cells_native: Vec<u32> = committed_final.counters[0].clone();
-    // ft_a = 1 iff register a is touched (its final value was written at ts=1).
-    let mut ft_native = vec![0u64; num_cells];
-    for r in 0..m_batch {
-        if a_active_native[r] == 1 {
-            ft_native[idx_sorted[r] as usize] = 1;
-        }
-    }
-    let mut input_native: Vec<Option<(u64, u64, u64)>> = Vec::with_capacity(l);
-    let mut target_native: Vec<Option<(u64, u64, u64)>> = Vec::with_capacity(l);
-    for a in 0..num_cells {
-        input_native.push(Some((a as u64, o_cells_native[a] as u64, 0))); // init write
-        target_native.push(Some((a as u64, n_cells_native[a] as u64, ft_native[a]))); // final read
-    }
-    for r in 0..m_batch {
-        if a_active_native[r] == 1 {
-            let addr = idx_sorted[r];
-            input_native.push(Some((addr, op_new_native[r] as u64, 1))); // update write, ts=1
-            target_native.push(Some((addr, op_old_native[r] as u64, 0))); // update read, ts=0
-        } else {
-            input_native.push(None);
-            target_native.push(None);
-        }
-    }
-    // sigma_mset s.t. input[sigma[r]] == target[r] (multiset matching).
-    let mut buckets: HashMap<Option<(u64, u64, u64)>, Vec<usize>> = HashMap::new();
-    for (i, v) in input_native.iter().enumerate() {
-        buckets.entry(*v).or_default().push(i);
-    }
-    let sigma_mset: Vec<usize> = target_native
-        .iter()
-        .map(|t| buckets.get_mut(t).and_then(|v| v.pop()).expect("honest multiset matching exists"))
-        .collect();
 
     // ─── Circuit ─────────────────────────────────────────────────────────
     let cfg = Poseidon2Config::BABY_BEAR_D4_W16;
@@ -403,8 +293,13 @@ fn prove_hll_omc_impl(
     let final_commit_pis: [ExprId; DIGEST_PACKING] =
         std::array::from_fn(|i| b.alloc_public_input(if i == 0 { "final_lo" } else { "final_hi" }));
     if expose_boundary {
-        b.add_expose(&[init_commit_pis[0], init_commit_pis[1], final_commit_pis[0], final_commit_pis[1]])
-            .expect("add_expose boundary");
+        b.add_expose(&[
+            init_commit_pis[0],
+            init_commit_pis[1],
+            final_commit_pis[0],
+            final_commit_pis[1],
+        ])
+        .expect("add_expose boundary");
     }
     let batch_commit_pis: [ExprId; DIGEST_PACKING] =
         std::array::from_fn(|i| b.alloc_public_input(if i == 0 { "batch_lo" } else { "batch_hi" }));
@@ -412,38 +307,63 @@ fn prove_hll_omc_impl(
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
     let shift_val_const = b.alloc_const(Challenge::from_u64(SHIFT_VAL), "shift_val");
-    let pow2_consts: Vec<ExprId> =
-        (0..addr_bits).map(|j| b.alloc_const(Challenge::from_u64(1u64 << j), "2^j")).collect();
+    let pow2_consts: Vec<ExprId> = (0..addr_bits)
+        .map(|j| b.alloc_const(Challenge::from_u64(1u64 << j), "2^j"))
+        .collect();
     let cell_idx_consts: Vec<ExprId> = (0..num_cells)
         .map(|idx| b.alloc_const(Challenge::from_u64(idx as u64), "cell_idx"))
         .collect();
 
     // Private witnesses (allocation order MUST match the value push order).
-    let init_packed: Vec<ExprId> =
-        (0..cell_packing).map(|_| b.alloc_private_input("init_cell_packed")).collect();
-    let final_packed: Vec<ExprId> =
-        (0..cell_packing).map(|_| b.alloc_private_input("final_cell_packed")).collect();
-    let key_coeff: Vec<ExprId> = (0..m_batch).map(|_| b.alloc_private_input("key_coeff")).collect();
-    let key_h0: Vec<ExprId> = (0..m_batch).map(|_| b.alloc_private_input("key_h0")).collect();
-    let key_h1: Vec<ExprId> = (0..m_batch).map(|_| b.alloc_private_input("key_h1")).collect();
-    let idx_sorted_w: Vec<ExprId> =
-        (0..m_batch).map(|_| b.alloc_private_input("idx_sorted")).collect();
-    let rho_sorted_w: Vec<ExprId> =
-        (0..m_batch).map(|_| b.alloc_private_input("rho_sorted")).collect();
-    let eq_tag: Vec<ExprId> = (0..m_batch).map(|_| b.alloc_private_input("eq_tag")).collect();
-    let inv_diff: Vec<ExprId> = (0..m_batch).map(|_| b.alloc_private_input("inv_diff")).collect();
-    let op_old: Vec<ExprId> = (0..m_batch).map(|_| b.alloc_private_input("op_old")).collect();
+    let init_packed: Vec<ExprId> = (0..cell_packing)
+        .map(|_| b.alloc_private_input("init_cell_packed"))
+        .collect();
+    let final_packed: Vec<ExprId> = (0..cell_packing)
+        .map(|_| b.alloc_private_input("final_cell_packed"))
+        .collect();
+    let key_coeff: Vec<ExprId> = (0..m_batch)
+        .map(|_| b.alloc_private_input("key_coeff"))
+        .collect();
+    let key_h0: Vec<ExprId> = (0..m_batch)
+        .map(|_| b.alloc_private_input("key_h0"))
+        .collect();
+    let key_h1: Vec<ExprId> = (0..m_batch)
+        .map(|_| b.alloc_private_input("key_h1"))
+        .collect();
+    let idx_sorted_w: Vec<ExprId> = (0..m_batch)
+        .map(|_| b.alloc_private_input("idx_sorted"))
+        .collect();
+    let rho_sorted_w: Vec<ExprId> = (0..m_batch)
+        .map(|_| b.alloc_private_input("rho_sorted"))
+        .collect();
+    let eq_tag: Vec<ExprId> = (0..m_batch)
+        .map(|_| b.alloc_private_input("eq_tag"))
+        .collect();
+    let inv_diff: Vec<ExprId> = (0..m_batch)
+        .map(|_| b.alloc_private_input("inv_diff"))
+        .collect();
+    let op_old: Vec<ExprId> = (0..m_batch)
+        .map(|_| b.alloc_private_input("op_old"))
+        .collect();
     let acc: Vec<ExprId> = (0..m_batch).map(|_| b.alloc_private_input("acc")).collect();
-    let op_new: Vec<ExprId> = (0..m_batch).map(|_| b.alloc_private_input("op_new")).collect();
+    let op_new: Vec<ExprId> = (0..m_batch)
+        .map(|_| b.alloc_private_input("op_new"))
+        .collect();
     // Per-cell final-read timestamp (1 iff the cell was written this batch).
-    let ft_w: Vec<ExprId> = (0..num_cells).map(|_| b.alloc_private_input("ft")).collect();
+    let ft_w: Vec<ExprId> = (0..num_cells)
+        .map(|_| b.alloc_private_input("ft"))
+        .collect();
 
     // ── Stage A: bind both register arrays + batch to their commitments ──
-    let digest_init = b.add_hash_slice(&cfg, &init_packed, true).expect("hash init");
+    let digest_init = b
+        .add_hash_slice(&cfg, &init_packed, true)
+        .expect("hash init");
     for i in 0..DIGEST_PACKING {
         b.connect(digest_init[i], init_commit_pis[i]);
     }
-    let digest_final = b.add_hash_slice(&cfg, &final_packed, true).expect("hash final");
+    let digest_final = b
+        .add_hash_slice(&cfg, &final_packed, true)
+        .expect("hash final");
     for i in 0..DIGEST_PACKING {
         b.connect(digest_final[i], final_commit_pis[i]);
     }
@@ -470,19 +390,29 @@ fn prove_hll_omc_impl(
     // ── Stage F: per record, derive (idx, ρ) from the key hash → payload ──
     let mut payload = Vec::with_capacity(m_batch);
     for k in 0..m_batch {
-        let hashed = b.add_hash_slice(&cfg, &[keys_t[k]], true).expect("hash key");
+        let hashed = b
+            .add_hash_slice(&cfg, &[keys_t[k]], true)
+            .expect("hash key");
         b.connect(hashed[0], key_h0[k]);
         b.connect(hashed[1], key_h1[k]);
-        let c0 = b.decompose_ext_to_base_coeffs::<Val>(key_h0[k]).expect("decompose h0");
-        let c1 = b.decompose_ext_to_base_coeffs::<Val>(key_h1[k]).expect("decompose h1");
+        let c0 = b
+            .decompose_ext_to_base_coeffs::<Val>(key_h0[k])
+            .expect("decompose h0");
+        let c1 = b
+            .decompose_ext_to_base_coeffs::<Val>(key_h1[k])
+            .expect("decompose h1");
         // idx = digest[0] mod m = bottom `addr_bits` bits of c0[0].
-        let idx_bits = b.decompose_to_bits::<Val>(c0[0], val_bits()).expect("bits digest0");
+        let idx_bits = b
+            .decompose_to_bits::<Val>(c0[0], val_bits())
+            .expect("bits digest0");
         let mut idx = zero;
         for j in 0..addr_bits {
             idx = b.mul_add(idx_bits[j], pow2_consts[j], idx);
         }
         // ρ = 1 + trailing_zeros(digest[1]) = 1 + Σ_k ∏_{i≤k}(1 − bit_i) over c0[1].
-        let dbits = b.decompose_to_bits::<Val>(c0[1], val_bits()).expect("bits digest1");
+        let dbits = b
+            .decompose_to_bits::<Val>(c0[1], val_bits())
+            .expect("bits digest1");
         let mut acc_zero = b.sub(one, dbits[0]);
         let mut tz = acc_zero;
         for k2 in 1..val_bits() {
@@ -494,20 +424,30 @@ fn prove_hll_omc_impl(
         // Consume the remaining decompose coeffs (every coeff must flow through
         // an ALU lhs — decompose_to_bits does).
         for idx2 in 2..4 {
-            let _ = b.decompose_to_bits::<Val>(c0[idx2], val_bits()).expect("consume c0");
+            let _ = b
+                .decompose_to_bits::<Val>(c0[idx2], val_bits())
+                .expect("consume c0");
         }
         for idx2 in 0..4 {
-            let _ = b.decompose_to_bits::<Val>(c1[idx2], val_bits()).expect("consume c1");
+            let _ = b
+                .decompose_to_bits::<Val>(c1[idx2], val_bits())
+                .expect("consume c1");
         }
         let packed = b.mul(idx, shift_val_const);
         payload.push(b.add(packed, rho));
     }
 
     // ── Stage G: permute payload into register-sorted order ──────────────
-    let payload_sorted = b.add_permute(&payload, sigma_reg.clone()).expect("permute reg");
+    // Placeholder identity permutation — `prove_epoch` swaps in the real
+    // per-batch sigma via `update_permute_witnesses` before each run.
+    let payload_sorted = b
+        .add_permute(&payload, (0..m_batch).collect::<Vec<_>>())
+        .expect("permute reg");
     for r in 0..m_batch {
         // Range-check ρ_sorted < 2^RANK_BITS so idx·2^SHIFT + ρ inverts uniquely.
-        let _ = b.decompose_to_bits::<Val>(rho_sorted_w[r], RANK_BITS).expect("rho range");
+        let _ = b
+            .decompose_to_bits::<Val>(rho_sorted_w[r], RANK_BITS)
+            .expect("rho range");
         let packed = b.mul(idx_sorted_w[r], shift_val_const);
         let rec = b.add(packed, rho_sorted_w[r]);
         b.connect(rec, payload_sorted[r]);
@@ -532,7 +472,9 @@ fn prove_hll_omc_impl(
         b.connect(l2, zero);
         // sortedness: gap = idx_sorted[r] − idx_sorted[r-1] ∈ [0, 2^addr_bits).
         let gap = b.sub(idx_sorted_w[r], idx_sorted_w[r - 1]);
-        let gb = b.decompose_to_bits::<Val>(gap, val_bits()).expect("gap bits");
+        let gb = b
+            .decompose_to_bits::<Val>(gap, val_bits())
+            .expect("gap bits");
         for &bit in gb.iter().skip(addr_bits) {
             b.connect(bit, zero);
         }
@@ -543,16 +485,26 @@ fn prove_hll_omc_impl(
     // Segment-end flags (derived from eq_tag).
     let mut a_active = Vec::with_capacity(m_batch);
     for r in 0..m_batch {
-        a_active.push(if r == m_batch - 1 { one } else { b.sub(one, eq_tag[r + 1]) });
+        a_active.push(if r == m_batch - 1 {
+            one
+        } else {
+            b.sub(one, eq_tag[r + 1])
+        });
     }
     // Range-check every max-gadget operand to RANK_BITS so the difference-based
     // `≥` checks in prove_max are sound — an unbounded operand (e.g. a garbage
     // committed cell ≈ p−k) could otherwise wrap a difference into [0,2^RANK_BITS)
     // and certify a decrease.
     for r in 0..m_batch {
-        let _ = b.decompose_to_bits::<Val>(op_old[r], RANK_BITS).expect("op_old range");
-        let _ = b.decompose_to_bits::<Val>(acc[r], RANK_BITS).expect("acc range");
-        let _ = b.decompose_to_bits::<Val>(op_new[r], RANK_BITS).expect("op_new range");
+        let _ = b
+            .decompose_to_bits::<Val>(op_old[r], RANK_BITS)
+            .expect("op_old range");
+        let _ = b
+            .decompose_to_bits::<Val>(acc[r], RANK_BITS)
+            .expect("acc range");
+        let _ = b
+            .decompose_to_bits::<Val>(op_new[r], RANK_BITS)
+            .expect("op_new range");
     }
     // Touched new value: op_new[r] = max(op_old[r], acc[r]).
     for r in 0..m_batch {
@@ -571,7 +523,8 @@ fn prove_hll_omc_impl(
     // `ts` in coord-2 forces the read at a touched cell to see the ts=0 init
     // value, binding op_old to the committed old register (the max fix).
     let enc = |b: &mut CircuitBuilder<Challenge>, a: ExprId, v: ExprId, ts: ExprId| -> ExprId {
-        b.recompose_base_coeffs_to_ext_via_alu::<Val>(&[a, v, ts, one]).expect("enc")
+        b.recompose_base_coeffs_to_ext_via_alu::<Val>(&[a, v, ts, one])
+            .expect("enc")
     };
     let mut input: Vec<ExprId> = Vec::with_capacity(l);
     let mut target: Vec<ExprId> = Vec::with_capacity(l);
@@ -589,86 +542,21 @@ fn prove_hll_omc_impl(
         let r_elem = b.mul(a_active[r], enc_r);
         target.push(r_elem);
     }
-    let permuted = b.add_permute(&input, sigma_mset).expect("permute mset");
+    let permuted = b
+        .add_permute(&input, (0..l).collect::<Vec<_>>())
+        .expect("permute mset");
     for r in 0..l {
         b.connect(permuted[r], target[r]);
     }
 
     let circuit = b.build().expect("build hll_omc circuit");
 
-    // ─── Public + private values (order matches allocation) ──────────────
-    let mut public_inputs: Vec<Challenge> = Vec::new();
-    public_inputs.extend_from_slice(&pack_commit_to_challenge(&initial_commit));
-    public_inputs.extend_from_slice(&pack_commit_to_challenge(&final_commit));
-    public_inputs.extend_from_slice(&pack_commit_to_challenge(&CountMinCommit(batch_commit)));
-
-    let mut private_inputs: Vec<Challenge> = Vec::new();
-    private_inputs.extend_from_slice(&pack_cells_to_challenge(&init_state));
-    private_inputs.extend_from_slice(&pack_cells_to_challenge(&committed_final));
-    for &k in &keys {
-        private_inputs.push(Challenge::from_u64(k));
-    }
-    {
-        let hasher = MyHash::new(make_perm());
-        for &k in &keys {
-            let input = [Val::from_u64(k), Val::ZERO, Val::ZERO, Val::ZERO];
-            let digest: [Val; 8] = hasher.hash_iter(input.iter().copied());
-            private_inputs
-                .push(Challenge::from_basis_coefficients_slice(&digest[0..4]).expect("4 coeffs"));
-        }
-        for &k in &keys {
-            let input = [Val::from_u64(k), Val::ZERO, Val::ZERO, Val::ZERO];
-            let digest: [Val; 8] = hasher.hash_iter(input.iter().copied());
-            private_inputs
-                .push(Challenge::from_basis_coefficients_slice(&digest[4..8]).expect("4 coeffs"));
-        }
-    }
-    for r in 0..m_batch {
-        private_inputs.push(Challenge::from_u64(idx_sorted[r]));
-    }
-    for r in 0..m_batch {
-        private_inputs.push(Challenge::from_u32(rho_sorted[r]));
-    }
-    for r in 0..m_batch {
-        private_inputs.push(Challenge::from_u64(tag_native[r] as u64));
-    }
-    for r in 0..m_batch {
-        let inv = if r == 0 || idx_sorted[r - 1] == idx_sorted[r] {
-            Challenge::ZERO
-        } else {
-            (Challenge::from_u64(idx_sorted[r - 1]) - Challenge::from_u64(idx_sorted[r]))
-                .try_inverse()
-                .expect("nonzero diff inverts")
-        };
-        private_inputs.push(inv);
-    }
-    for r in 0..m_batch {
-        private_inputs.push(Challenge::from_u32(op_old_native[r]));
-    }
-    for r in 0..m_batch {
-        private_inputs.push(Challenge::from_u32(acc_native[r]));
-    }
-    for r in 0..m_batch {
-        private_inputs.push(Challenge::from_u32(op_new_native[r]));
-    }
-    for a in 0..num_cells {
-        private_inputs.push(Challenge::from_u64(ft_native[a]));
-    }
-
-    // ─── Run + prove ─────────────────────────────────────────────────────
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set pubs");
-        runner.set_private_inputs(&private_inputs).expect("set privs");
-        runner.run().expect("run hll_omc")
-    };
-    let __witness = __t_w.elapsed();
-
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
-    let mut preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
+    let mut preprocessors = vec![
+        poseidon2_preprocessor::<Val>(),
+        recompose_preprocessor::<Val>(false),
+    ];
     preprocessors.push(permute_preprocessor::<Val>());
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
@@ -700,26 +588,289 @@ fn prove_hll_omc_impl(
     if expose_boundary {
         prover.register_expose_table::<4>();
     }
-    let __t_p = std::time::Instant::now();
-    let proof =
-        prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove_all_tables (hll_omc)");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify hll_omc leaf");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
-    });
+    let trace_rows: u64 = ext_degrees.iter().map(|&d| 1u64 << d).sum();
 
-    HllOmcProof {
-        output: RecursionOutput(proof, Rc::new(circuit_prover_data)),
-        initial_commit,
-        final_commit,
-        batch_commit: CountMinCommit(batch_commit),
+    HllOmcLeafCircuit {
         params,
+        circuit,
+        prover,
+        circuit_prover_data: Rc::new(circuit_prover_data),
+        trace_rows,
     }
+}
+
+impl HllOmcLeafCircuit {
+    /// Prove one epoch on the prebuilt circuit. `initial` is the `m` register
+    /// values; `keys` is the `params.batch` record keys.
+    pub fn prove_epoch(&mut self, initial: Vec<u64>, keys: Vec<u64>) -> HllOmcProof {
+        let params = self.params;
+        let HllOmcParams { b, batch: m_batch } = params;
+        let m = params.m();
+        assert_eq!(initial.len(), m, "initial registers != m");
+        assert_eq!(keys.len(), m_batch, "keys length != batch");
+        let num_cells = m;
+        let l = num_cells + m_batch; // multiset side length
+
+        // ─── Native side: route + sort by register + max-fold ────────────────
+        let init_regs: Vec<u32> = initial.iter().map(|&x| x as u32).collect();
+        let mut idx_of = vec![0usize; m_batch];
+        let mut rho_of = vec![0u32; m_batch];
+        for (k, &key) in keys.iter().enumerate() {
+            let (i, r) = route(key, m);
+            idx_of[k] = i;
+            rho_of[k] = r;
+        }
+        // Stable sort of the record indices by register, so per-register keys are
+        // adjacent (mirrors countmin_omc's counter sort).
+        let mut order: Vec<usize> = (0..m_batch).collect();
+        order.sort_by_key(|&k| idx_of[k]);
+        let sigma_reg: Vec<usize> = order.clone();
+        let idx_sorted: Vec<u64> = order.iter().map(|&k| idx_of[k] as u64).collect();
+        let rho_sorted: Vec<u32> = order.iter().map(|&k| rho_of[k]).collect();
+
+        let mut tag_native = vec![0u32; m_batch];
+        for r in 1..m_batch {
+            if idx_sorted[r] == idx_sorted[r - 1] {
+                tag_native[r] = 1;
+            }
+        }
+        // Running max ρ over each register's contiguous segment.
+        let mut acc_native = vec![0u32; m_batch];
+        if m_batch > 0 {
+            acc_native[0] = rho_sorted[0];
+            for r in 1..m_batch {
+                acc_native[r] = if tag_native[r] == 1 {
+                    acc_native[r - 1].max(rho_sorted[r])
+                } else {
+                    rho_sorted[r]
+                };
+            }
+        }
+        // Segment-end flag: last row of each register's run.
+        let mut a_active_native = vec![0u32; m_batch];
+        for r in 0..m_batch {
+            let ends = if r == m_batch - 1 {
+                true
+            } else {
+                tag_native[r + 1] == 0
+            };
+            a_active_native[r] = u32::from(ends);
+        }
+        // Old register value at each row's register (from the honest initial state).
+        let mut op_old_native: Vec<u32> = (0..m_batch)
+            .map(|r| init_regs[idx_sorted[r] as usize])
+            .collect();
+        // New register value = max(old, running max ρ). Only meaningful at
+        // segment-ends; harmless elsewhere (inactive rows never enter the multiset).
+        let mut op_new_native: Vec<u32> = (0..m_batch)
+            .map(|r| op_old_native[r].max(acc_native[r]))
+            .collect();
+
+        // Honest final register array: max update per touched register.
+        let mut final_regs = init_regs.clone();
+        for r in 0..m_batch {
+            if a_active_native[r] == 1 {
+                let a = idx_sorted[r] as usize;
+                final_regs[a] = final_regs[a].max(op_new_native[r]);
+            }
+        }
+
+        // Test-only max-suppression attack: claim every raised register was already
+        // at the batch max (op_old = op_new = acc, so prove_max passes) and commit
+        // the state UNCHANGED. Pre-fix this produced an accepting proof for a wrong
+        // final; the ts-based read binding must now make the multiset unmatchable.
+        if TAMPER_SUPPRESS.with(|f| f.get()) {
+            for r in 0..m_batch {
+                if a_active_native[r] == 1 {
+                    op_old_native[r] = acc_native[r];
+                    op_new_native[r] = acc_native[r];
+                }
+            }
+            final_regs = init_regs.clone(); // commit no change
+        }
+
+        let init_state = regs_to_state(&init_regs, b);
+        let mut committed_final_regs = final_regs.clone();
+        if TAMPER_FINAL_CELL.with(|f| f.get()) {
+            committed_final_regs[0] = committed_final_regs[0].wrapping_add(1);
+        }
+        let committed_final = regs_to_state(&committed_final_regs, b);
+        let initial_commit = commit_countmin(&init_state);
+        let final_commit = commit_countmin(&committed_final);
+
+        // Batch commitment over the keys (one Val each, MyHash([key,0,0,0]) blocks).
+        let batch_commit: [Val; 8] = {
+            let hasher = MyHash::new(make_perm());
+            let flat: Vec<Val> = keys
+                .iter()
+                .flat_map(|&k| [Val::from_u64(k), Val::ZERO, Val::ZERO, Val::ZERO])
+                .collect();
+            hasher.hash_iter(flat.iter().copied())
+        };
+
+        // Dense old/new register multisets + touched read/write rows, in the
+        // offline-memory-checking read/write-set form with a time coordinate `ts`:
+        //   write set  = init-writes (a, o[a], ts=0) ⊎ update-writes (idx, N, ts=1)
+        //   read set   = final-reads (a, n[a], ts=ft_a) ⊎ update-reads (idx, O, ts=0)
+        // The `ts` breaks the max-degenerate pairing: a touched cell's ts=0 init
+        // write can only cancel the ts=0 update read, forcing O == committed old
+        // value (a plain additive Count-Min needs no `ts`, but max's write==read
+        // case does — see the soundness note in the module header).
+        let o_cells_native: Vec<u32> = init_state.counters[0].clone();
+        let n_cells_native: Vec<u32> = committed_final.counters[0].clone();
+        // ft_a = 1 iff register a is touched (its final value was written at ts=1).
+        let mut ft_native = vec![0u64; num_cells];
+        for r in 0..m_batch {
+            if a_active_native[r] == 1 {
+                ft_native[idx_sorted[r] as usize] = 1;
+            }
+        }
+        let mut input_native: Vec<Option<(u64, u64, u64)>> = Vec::with_capacity(l);
+        let mut target_native: Vec<Option<(u64, u64, u64)>> = Vec::with_capacity(l);
+        for a in 0..num_cells {
+            input_native.push(Some((a as u64, o_cells_native[a] as u64, 0))); // init write
+            target_native.push(Some((a as u64, n_cells_native[a] as u64, ft_native[a]))); // final read
+        }
+        for r in 0..m_batch {
+            if a_active_native[r] == 1 {
+                let addr = idx_sorted[r];
+                input_native.push(Some((addr, op_new_native[r] as u64, 1))); // update write, ts=1
+                target_native.push(Some((addr, op_old_native[r] as u64, 0))); // update read, ts=0
+            } else {
+                input_native.push(None);
+                target_native.push(None);
+            }
+        }
+        // sigma_mset s.t. input[sigma[r]] == target[r] (multiset matching).
+        let mut buckets: HashMap<Option<(u64, u64, u64)>, Vec<usize>> = HashMap::new();
+        for (i, v) in input_native.iter().enumerate() {
+            buckets.entry(*v).or_default().push(i);
+        }
+        let sigma_mset: Vec<usize> = target_native
+            .iter()
+            .map(|t| {
+                buckets
+                    .get_mut(t)
+                    .and_then(|v| v.pop())
+                    .expect("honest multiset matching exists")
+            })
+            .collect();
+
+        // Swap the real per-batch permutation hints into the prebuilt graph
+        // (op order: register-sort permute, then multiset permute).
+        self.circuit
+            .update_permute_witnesses(&[sigma_reg, sigma_mset])
+            .expect("update permute witnesses (hll_omc)");
+
+        // ─── Public + private values (order matches allocation) ──────────────
+        let mut public_inputs: Vec<Challenge> = Vec::new();
+        public_inputs.extend_from_slice(&pack_commit_to_challenge(&initial_commit));
+        public_inputs.extend_from_slice(&pack_commit_to_challenge(&final_commit));
+        public_inputs.extend_from_slice(&pack_commit_to_challenge(&CountMinCommit(batch_commit)));
+
+        let mut private_inputs: Vec<Challenge> = Vec::new();
+        private_inputs.extend_from_slice(&pack_cells_to_challenge(&init_state));
+        private_inputs.extend_from_slice(&pack_cells_to_challenge(&committed_final));
+        for &k in &keys {
+            private_inputs.push(Challenge::from_u64(k));
+        }
+        {
+            let hasher = MyHash::new(make_perm());
+            for &k in &keys {
+                let input = [Val::from_u64(k), Val::ZERO, Val::ZERO, Val::ZERO];
+                let digest: [Val; 8] = hasher.hash_iter(input.iter().copied());
+                private_inputs.push(
+                    Challenge::from_basis_coefficients_slice(&digest[0..4]).expect("4 coeffs"),
+                );
+            }
+            for &k in &keys {
+                let input = [Val::from_u64(k), Val::ZERO, Val::ZERO, Val::ZERO];
+                let digest: [Val; 8] = hasher.hash_iter(input.iter().copied());
+                private_inputs.push(
+                    Challenge::from_basis_coefficients_slice(&digest[4..8]).expect("4 coeffs"),
+                );
+            }
+        }
+        for r in 0..m_batch {
+            private_inputs.push(Challenge::from_u64(idx_sorted[r]));
+        }
+        for r in 0..m_batch {
+            private_inputs.push(Challenge::from_u32(rho_sorted[r]));
+        }
+        for r in 0..m_batch {
+            private_inputs.push(Challenge::from_u64(tag_native[r] as u64));
+        }
+        for r in 0..m_batch {
+            let inv = if r == 0 || idx_sorted[r - 1] == idx_sorted[r] {
+                Challenge::ZERO
+            } else {
+                (Challenge::from_u64(idx_sorted[r - 1]) - Challenge::from_u64(idx_sorted[r]))
+                    .try_inverse()
+                    .expect("nonzero diff inverts")
+            };
+            private_inputs.push(inv);
+        }
+        for r in 0..m_batch {
+            private_inputs.push(Challenge::from_u32(op_old_native[r]));
+        }
+        for r in 0..m_batch {
+            private_inputs.push(Challenge::from_u32(acc_native[r]));
+        }
+        for r in 0..m_batch {
+            private_inputs.push(Challenge::from_u32(op_new_native[r]));
+        }
+        for a in 0..num_cells {
+            private_inputs.push(Challenge::from_u64(ft_native[a]));
+        }
+
+        // ─── Run + prove ─────────────────────────────────────────────────────
+        let __t_w = std::time::Instant::now();
+        let traces = {
+            let mut runner = self.circuit.runner();
+            runner.set_public_inputs(&public_inputs).expect("set pubs");
+            runner
+                .set_private_inputs(&private_inputs)
+                .expect("set privs");
+            runner.run().expect("run hll_omc")
+        };
+        let __witness = __t_w.elapsed();
+
+        let __t_p = std::time::Instant::now();
+        let proof = self
+            .prover
+            .prove_all_tables(&traces, &self.circuit_prover_data)
+            .expect("prove_all_tables (hll_omc)");
+        let __prove = __t_p.elapsed();
+        let __t_v = std::time::Instant::now();
+        self.prover
+            .verify_all_tables(&proof)
+            .expect("self-verify hll_omc leaf");
+        crate::recursion::recursive::timing::record(
+            crate::recursion::recursive::timing::LeafTiming {
+                witness: __witness,
+                prove: __prove,
+                verify: __t_v.elapsed(),
+                trace_rows: self.trace_rows,
+            },
+        );
+
+        HllOmcProof {
+            output: RecursionOutput(proof, Rc::clone(&self.circuit_prover_data)),
+            initial_commit,
+            final_commit,
+            batch_commit: CountMinCommit(batch_commit),
+            params,
+        }
+    }
+}
+
+fn prove_hll_omc_impl(
+    params: HllOmcParams,
+    initial: Vec<u64>,
+    keys: Vec<u64>,
+    expose_boundary: bool,
+) -> HllOmcProof {
+    build_hll_omc_leaf(params, expose_boundary).prove_epoch(initial, keys)
 }
 
 #[cfg(test)]
@@ -745,17 +896,27 @@ mod tests {
         let params = HllOmcParams { b: 4, batch: 8 };
         let m = params.m();
         // Seed a non-trivial prior register array.
-        let prior_keys: Vec<u64> = (0..20u64).map(|k| k.wrapping_mul(0x9E37_79B9) ^ 0x55).collect();
+        let prior_keys: Vec<u64> = (0..20u64)
+            .map(|k| k.wrapping_mul(0x9E37_79B9) ^ 0x55)
+            .collect();
         let mut prior = vec![0u64; m];
         for &k in &prior_keys {
             let (idx, rho) = route(k, m);
             prior[idx] = prior[idx].max(rho as u64);
         }
-        let keys: Vec<u64> =
-            (0..params.batch as u64).map(|i| i.wrapping_mul(0xABCD_1234) ^ 0x7).collect();
+        let keys: Vec<u64> = (0..params.batch as u64)
+            .map(|i| i.wrapping_mul(0xABCD_1234) ^ 0x7)
+            .collect();
         let expect = native_final(params.b, &prior, &keys);
         let r = prove_hll_omc(params, prior.clone(), keys);
-        assert_eq!(r.initial_commit.0, commit_countmin(&regs_to_state(&prior.iter().map(|&x| x as u32).collect::<Vec<_>>(), params.b)).0);
+        assert_eq!(
+            r.initial_commit.0,
+            commit_countmin(&regs_to_state(
+                &prior.iter().map(|&x| x as u32).collect::<Vec<_>>(),
+                params.b
+            ))
+            .0
+        );
         assert_eq!(
             r.final_commit.0,
             commit_countmin(&regs_to_state(&expect, params.b)).0,
@@ -775,7 +936,10 @@ mod tests {
         let keys: Vec<u64> = (0..params.batch as u64).map(|i| i % 3).collect();
         let expect = native_final(params.b, &initial, &keys);
         let r = prove_hll_omc(params, initial, keys);
-        assert_eq!(r.final_commit.0, commit_countmin(&regs_to_state(&expect, params.b)).0);
+        assert_eq!(
+            r.final_commit.0,
+            commit_countmin(&regs_to_state(&expect, params.b)).0
+        );
     }
 
     /// **Tamper.** Commit a corrupted final register (one bumped) while the
@@ -798,7 +962,10 @@ mod tests {
         }));
         std::panic::set_hook(prev);
         TAMPER_FINAL_CELL.with(|f| f.set(false));
-        assert!(res.is_err(), "corrupted final register must break the multiset equality");
+        assert!(
+            res.is_err(),
+            "corrupted final register must break the multiset equality"
+        );
     }
 
     /// **Max-suppression attack (regression for the OMC soundness fix).** A batch
@@ -814,7 +981,10 @@ mod tests {
         let keys: Vec<u64> = vec![7, 11, 13, 17, 3, 5, 19, 23];
         // Honest proof accepts and actually changes the state.
         let honest = prove_hll_omc(params, initial.clone(), keys.clone());
-        assert_ne!(honest.initial_commit.0, honest.final_commit.0, "honest batch changes state");
+        assert_ne!(
+            honest.initial_commit.0, honest.final_commit.0,
+            "honest batch changes state"
+        );
 
         TAMPER_SUPPRESS.with(|f| f.set(true));
         let prev = std::panic::take_hook();
@@ -824,6 +994,9 @@ mod tests {
         }));
         std::panic::set_hook(prev);
         TAMPER_SUPPRESS.with(|f| f.set(false));
-        assert!(res.is_err(), "max-suppression (unchanged commit) must be rejected");
+        assert!(
+            res.is_err(),
+            "max-suppression (unchanged commit) must be rejected"
+        );
     }
 }

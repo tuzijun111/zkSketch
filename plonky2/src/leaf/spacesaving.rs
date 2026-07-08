@@ -27,7 +27,7 @@ use plonky2::hash::poseidon::PoseidonHash;
 use plonky2::iop::target::Target;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::circuit_data::CircuitData;
 use plonky2::plonk::config::Hasher;
 
 use crate::config::{C, D, F};
@@ -98,7 +98,7 @@ pub fn build_spacesaving_leaf(params: SsLeafParams) -> SpaceSavingLeaf {
     let SsLeafParams { capacity: cap, batch: m } = params;
     let total = cap + m;
 
-    let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut b = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
     let one = b.one();
     let zero = b.zero();
 

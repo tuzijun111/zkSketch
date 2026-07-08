@@ -35,7 +35,7 @@ use plonky2::hash::poseidon::PoseidonHash;
 use plonky2::iop::target::{BoolTarget, Target};
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::circuit_data::CircuitData;
 use plonky2::plonk::config::Hasher;
 
 use crate::config::{C, D, F};
@@ -125,7 +125,7 @@ pub fn build_hll_merkle_leaf(params: HllMerkleParams) -> HllMerkleLeaf {
     params.validate();
     let HllMerkleParams { b: bb, batch, t_max } = params;
     let h = params.height();
-    let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut b = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
     let one = b.one();
     let zero = b.zero();
 

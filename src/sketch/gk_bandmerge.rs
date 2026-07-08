@@ -77,7 +77,13 @@ pub struct GkbTuple {
 
 impl GkbTuple {
     pub fn dummy() -> Self {
-        Self { e: E_MAX, g: 0, delta: 0, t: 0, active: 0 }
+        Self {
+            e: E_MAX,
+            g: 0,
+            delta: 0,
+            t: 0,
+            active: 0,
+        }
     }
 }
 
@@ -102,12 +108,20 @@ pub struct GkbState {
 
 impl GkbState {
     pub fn empty(params: GkbParams) -> Self {
-        Self { tuples: vec![GkbTuple::dummy(); params.capacity], params, n: 0 }
+        Self {
+            tuples: vec![GkbTuple::dummy(); params.capacity],
+            params,
+            n: 0,
+        }
     }
 
     /// Active tuples in value order.
     pub fn actives(&self) -> Vec<GkbTuple> {
-        self.tuples.iter().copied().filter(|t| t.active == 1).collect()
+        self.tuples
+            .iter()
+            .copied()
+            .filter(|t| t.active == 1)
+            .collect()
     }
 
     /// Estimated rank of `x` = `Σ_{e_j ≤ x} g_j` (the `r_min` estimator of the
@@ -133,16 +147,19 @@ pub fn num_rounds(total: usize) -> usize {
 /// Mergeable predicate (Def 7): both the invariant-preserving rank-mass bound
 /// and the timestamp direction.
 fn mergeable(a: &GkbTuple, b: &GkbTuple, theta: u64) -> bool {
-    a.active == 1
-        && b.active == 1
-        && a.g + b.g + b.delta <= theta
-        && a.t > b.t
+    a.active == 1 && b.active == 1 && a.g + b.g + b.delta <= theta && a.t > b.t
 }
 
 /// Merge `a` (left, smaller value, younger) into `b` (right, larger value,
 /// older): keep `b`'s value/Δ/t, fold `a`'s mass. (Alg 2.)
 fn merge(a: &GkbTuple, b: &GkbTuple) -> GkbTuple {
-    GkbTuple { e: b.e, g: a.g + b.g, delta: b.delta, t: b.t, active: 1 }
+    GkbTuple {
+        e: b.e,
+        g: a.g + b.g,
+        delta: b.delta,
+        t: b.t,
+        active: 1,
+    }
 }
 
 /// Apply the batch update to `s_old` with active batch values `batch_vals`
@@ -159,7 +176,11 @@ pub fn apply_batch(s_old: &GkbState, batch_vals: &[u32]) -> GkbState {
         "bounded-GK hard case: active survivors exceed capacity {} (declare a larger s')",
         s_old.params.capacity
     );
-    GkbState { tuples: b.final_tuples, params: s_old.params, n: b.n_t }
+    GkbState {
+        tuples: b.final_tuples,
+        params: s_old.params,
+        n: b.n_t,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -247,7 +268,13 @@ pub fn fresh_tuples(vals: &[u32], m: usize, n_prev: u64) -> Vec<GkbTuple> {
     (0..m)
         .map(|j| {
             if j < vals.len() {
-                GkbTuple { e: vals[j], g: 1, delta: 0, t: n_prev + 1 + j as u64, active: 1 }
+                GkbTuple {
+                    e: vals[j],
+                    g: 1,
+                    delta: 0,
+                    t: n_prev + 1 + j as u64,
+                    active: 1,
+                }
             } else {
                 GkbTuple::dummy()
             }
@@ -389,7 +416,12 @@ fn build_bm(s_old: &GkbState, batch_vals: &[u32]) -> BmBuild {
     for _ in 0..lf {
         let (fused, decisions) = fuse_round_fixed(&cur, theta);
         let (resorted, sigma) = resort_fixed(&fused);
-        rounds.push(BmRound { decisions, fused, resorted: resorted.clone(), sigma });
+        rounds.push(BmRound {
+            decisions,
+            fused,
+            resorted: resorted.clone(),
+            sigma,
+        });
         cur = resorted;
     }
 
@@ -397,7 +429,17 @@ fn build_bm(s_old: &GkbState, batch_vals: &[u32]) -> BmBuild {
     let final_tuples = cur[..cap].to_vec();
     let excess = cur[cap..cap + m].to_vec();
 
-    BmBuild { sigma_union, union_raw, union_init, rounds, final_tuples, excess, theta, n_prev, n_t }
+    BmBuild {
+        sigma_union,
+        union_raw,
+        union_init,
+        rounds,
+        final_tuples,
+        excess,
+        theta,
+        n_prev,
+        n_t,
+    }
 }
 
 // ── Forced comparison / is-nonzero gadgets ──────────────────────────────
@@ -443,11 +485,7 @@ fn force_nz(
 
 // ── Prover ───────────────────────────────────────────────────────────────
 
-pub fn prove_gkb(
-    params: GkbParams,
-    initial_state: GkbState,
-    batch_vals: Vec<u32>,
-) -> GkbLeafProof {
+pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32>) -> GkbLeafProof {
     let cap = params.capacity;
     let m = params.batch;
     let total = cap + m;
@@ -456,7 +494,11 @@ pub fn prove_gkb(
 
     // ── Native side: replay + commitments ──
     let build = build_bm(&initial_state, &batch_vals);
-    let final_state = GkbState { tuples: build.final_tuples.clone(), params, n: build.n_t };
+    let final_state = GkbState {
+        tuples: build.final_tuples.clone(),
+        params,
+        n: build.n_t,
+    };
     let initial_commit = commit_gkb_state(&initial_state);
     let final_commit = commit_gkb_state(&final_state);
     let batch_commit = commit_gkb_batch(&batch_vals, m, build.n_prev);
@@ -492,32 +534,56 @@ pub fn prove_gkb(
     let init_packed: Vec<ExprId> = (0..cap).map(|_| b.alloc_private_input("init")).collect();
     let final_packed: Vec<ExprId> = (0..cap).map(|_| b.alloc_private_input("final")).collect();
     let batch_packed: Vec<ExprId> = (0..m).map(|_| b.alloc_private_input("batch")).collect();
-    let union_raw_packed: Vec<ExprId> =
-        (0..total).map(|_| b.alloc_private_input("union_raw")).collect();
+    let union_raw_packed: Vec<ExprId> = (0..total)
+        .map(|_| b.alloc_private_input("union_raw"))
+        .collect();
     // per-round pre-resort fused table (private; bound field-by-field below).
     let fused_packed: Vec<Vec<ExprId>> = (0..lf)
         .map(|_| (0..total).map(|_| b.alloc_private_input("fused")).collect())
         .collect();
     let resorted_packed: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..total).map(|_| b.alloc_private_input("resorted")).collect())
+        .map(|_| {
+            (0..total)
+                .map(|_| b.alloc_private_input("resorted"))
+                .collect()
+        })
         .collect();
     let excess_packed: Vec<ExprId> = (0..m).map(|_| b.alloc_private_input("excess")).collect();
     // Hint witnesses.
-    let is_fresh: Vec<ExprId> = (0..total).map(|_| b.alloc_private_input("is_fresh")).collect();
+    let is_fresh: Vec<ExprId> = (0..total)
+        .map(|_| b.alloc_private_input("is_fresh"))
+        .collect();
     let cond1: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("cond1")).collect())
+        .map(|_| {
+            (0..num_pairs)
+                .map(|_| b.alloc_private_input("cond1"))
+                .collect()
+        })
         .collect();
     let cond2: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("cond2")).collect())
+        .map(|_| {
+            (0..num_pairs)
+                .map(|_| b.alloc_private_input("cond2"))
+                .collect()
+        })
         .collect();
     let a_inv: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("a_inv")).collect())
+        .map(|_| {
+            (0..num_pairs)
+                .map(|_| b.alloc_private_input("a_inv"))
+                .collect()
+        })
         .collect();
     let b_inv: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("b_inv")).collect())
+        .map(|_| {
+            (0..num_pairs)
+                .map(|_| b.alloc_private_input("b_inv"))
+                .collect()
+        })
         .collect();
-    let g_inv_union: Vec<ExprId> =
-        (0..total).map(|_| b.alloc_private_input("g_inv_union")).collect();
+    let g_inv_union: Vec<ExprId> = (0..total)
+        .map(|_| b.alloc_private_input("g_inv_union"))
+        .collect();
 
     // ── Stage 1: commit bindings ──
     let h_init = b
@@ -580,14 +646,24 @@ pub fn prove_gkb(
 
     // ── Stage 4: union_raw range-checks + value sortedness (dummies e=E_MAX last) ──
     for r in 0..total {
-        let _ = b.add_range_bits::<Val>(uraw_f[r][0], E_BITS).expect("e range");
-        let _ = b.add_range_bits::<Val>(uraw_f[r][1], MASS_BITS).expect("g range");
-        let _ = b.add_range_bits::<Val>(uraw_f[r][2], MASS_BITS).expect("Δ range");
-        let _ = b.add_range_bits::<Val>(uraw_f[r][3], MASS_BITS).expect("t range");
+        let _ = b
+            .add_range_bits::<Val>(uraw_f[r][0], E_BITS)
+            .expect("e range");
+        let _ = b
+            .add_range_bits::<Val>(uraw_f[r][1], MASS_BITS)
+            .expect("g range");
+        let _ = b
+            .add_range_bits::<Val>(uraw_f[r][2], MASS_BITS)
+            .expect("Δ range");
+        let _ = b
+            .add_range_bits::<Val>(uraw_f[r][3], MASS_BITS)
+            .expect("t range");
     }
     for r in 0..total - 1 {
         let diff = b.sub(uraw_f[r + 1][0], uraw_f[r][0]);
-        let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("union e sortedness");
+        let _ = b
+            .add_range_bits::<Val>(diff, E_BITS)
+            .expect("union e sortedness");
     }
 
     // ── Stage 5: neighbor-init Δ (right-to-left) → union_init ──
@@ -595,7 +671,15 @@ pub fn prove_gkb(
     // (g_{r+1}+Δ_init[r+1]−1) : Δ_raw[r]. e/g/t unchanged from union_raw.
     let n_prev_p1 = b.add(n_prev_pi, one);
     for r in 0..total {
-        force_le(&mut b, is_fresh[r], n_prev_p1, uraw_f[r][3], one, zero, MASS_BITS);
+        force_le(
+            &mut b,
+            is_fresh[r],
+            n_prev_p1,
+            uraw_f[r][3],
+            one,
+            zero,
+            MASS_BITS,
+        );
     }
     // g_nz[r] = [g_r ≠ 0] (active), for the right-neighbor gate below.
     let mut g_nz: Vec<ExprId> = Vec::with_capacity(total);
@@ -636,8 +720,10 @@ pub fn prove_gkb(
     let mut cur_f: Vec<Vec<ExprId>> = uinit_f.clone();
     for round in 0..lf {
         // this round's pre-resort fused table (private input, bound below).
-        let fused_f: Vec<Vec<ExprId>> =
-            fused_packed[round].iter().map(|&p| dec(&mut b, p)).collect();
+        let fused_f: Vec<Vec<ExprId>> = fused_packed[round]
+            .iter()
+            .map(|&p| dec(&mut b, p))
+            .collect();
         for k in 0..num_pairs {
             let a = cur_f[2 * k].clone();
             let bb = cur_f[2 * k + 1].clone();
@@ -684,14 +770,24 @@ pub fn prove_gkb(
         }
         // resorted range-checks + value sortedness (dummies E_MAX last).
         for r in 0..total {
-            let _ = b.add_range_bits::<Val>(resort_f[round][r][0], E_BITS).expect("rs e");
-            let _ = b.add_range_bits::<Val>(resort_f[round][r][1], MASS_BITS).expect("rs g");
-            let _ = b.add_range_bits::<Val>(resort_f[round][r][2], MASS_BITS).expect("rs Δ");
-            let _ = b.add_range_bits::<Val>(resort_f[round][r][3], MASS_BITS).expect("rs t");
+            let _ = b
+                .add_range_bits::<Val>(resort_f[round][r][0], E_BITS)
+                .expect("rs e");
+            let _ = b
+                .add_range_bits::<Val>(resort_f[round][r][1], MASS_BITS)
+                .expect("rs g");
+            let _ = b
+                .add_range_bits::<Val>(resort_f[round][r][2], MASS_BITS)
+                .expect("rs Δ");
+            let _ = b
+                .add_range_bits::<Val>(resort_f[round][r][3], MASS_BITS)
+                .expect("rs t");
         }
         for r in 0..total - 1 {
             let diff = b.sub(resort_f[round][r + 1][0], resort_f[round][r][0]);
-            let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("rs sortedness");
+            let _ = b
+                .add_range_bits::<Val>(diff, E_BITS)
+                .expect("rs sortedness");
         }
         cur_f = resort_f[round].clone();
     }
@@ -700,19 +796,34 @@ pub fn prove_gkb(
     // Range-check every final/excess field first: besides bounding the certified
     // state, this gives each decompose-output field a WitnessChecks-bus creator
     // so the field-by-field compaction connects below balance.
-    let excess_f: Vec<Vec<ExprId>> =
-        excess_packed.iter().map(|&p| dec(&mut b, p)).collect();
+    let excess_f: Vec<Vec<ExprId>> = excess_packed.iter().map(|&p| dec(&mut b, p)).collect();
     for i in 0..cap {
-        let _ = b.add_range_bits::<Val>(final_f[i][0], E_BITS).expect("final e");
-        let _ = b.add_range_bits::<Val>(final_f[i][1], MASS_BITS).expect("final g");
-        let _ = b.add_range_bits::<Val>(final_f[i][2], MASS_BITS).expect("final Δ");
-        let _ = b.add_range_bits::<Val>(final_f[i][3], MASS_BITS).expect("final t");
+        let _ = b
+            .add_range_bits::<Val>(final_f[i][0], E_BITS)
+            .expect("final e");
+        let _ = b
+            .add_range_bits::<Val>(final_f[i][1], MASS_BITS)
+            .expect("final g");
+        let _ = b
+            .add_range_bits::<Val>(final_f[i][2], MASS_BITS)
+            .expect("final Δ");
+        let _ = b
+            .add_range_bits::<Val>(final_f[i][3], MASS_BITS)
+            .expect("final t");
     }
     for j in 0..m {
-        let _ = b.add_range_bits::<Val>(excess_f[j][0], E_BITS).expect("excess e");
-        let _ = b.add_range_bits::<Val>(excess_f[j][1], MASS_BITS).expect("excess g");
-        let _ = b.add_range_bits::<Val>(excess_f[j][2], MASS_BITS).expect("excess Δ");
-        let _ = b.add_range_bits::<Val>(excess_f[j][3], MASS_BITS).expect("excess t");
+        let _ = b
+            .add_range_bits::<Val>(excess_f[j][0], E_BITS)
+            .expect("excess e");
+        let _ = b
+            .add_range_bits::<Val>(excess_f[j][1], MASS_BITS)
+            .expect("excess g");
+        let _ = b
+            .add_range_bits::<Val>(excess_f[j][2], MASS_BITS)
+            .expect("excess Δ");
+        let _ = b
+            .add_range_bits::<Val>(excess_f[j][3], MASS_BITS)
+            .expect("excess t");
     }
     for i in 0..cap {
         for k in 0..4 {
@@ -776,7 +887,11 @@ pub fn prove_gkb(
     // is_fresh
     for r in 0..total {
         let fresh = is_active(&build.union_raw[r]) && build.union_raw[r].t > build.n_prev;
-        private_inputs.push(if fresh { Challenge::ONE } else { Challenge::ZERO });
+        private_inputs.push(if fresh {
+            Challenge::ONE
+        } else {
+            Challenge::ZERO
+        });
     }
     // per-round hint witnesses — emitted GROUPED BY TYPE to match the alloc
     // order (all cond1, then all cond2, all a_inv, all b_inv), then g_inv_union.
@@ -787,13 +902,20 @@ pub fn prove_gkb(
         for round in 0..lf {
             curs.push(build.rounds[round].resorted.clone());
         }
-        let inv = |x: u64| if x == 0 { Challenge::ZERO } else { Challenge::from_u64(x).inverse() };
+        let inv = |x: u64| {
+            if x == 0 {
+                Challenge::ZERO
+            } else {
+                Challenge::from_u64(x).inverse()
+            }
+        };
         // cond1 = [g_a+g_b+Δ_b ≤ θ]
         for round in 0..lf {
             for k in 0..num_pairs {
                 let (a, bb) = (curs[round][2 * k], curs[round][2 * k + 1]);
-                private_inputs
-                    .push(Challenge::from_u64((a.g + bb.g + bb.delta <= build.theta) as u64));
+                private_inputs.push(Challenge::from_u64(
+                    (a.g + bb.g + bb.delta <= build.theta) as u64,
+                ));
             }
         }
         // cond2 = [t_a > t_b]
@@ -825,7 +947,9 @@ pub fn prove_gkb(
     let traces = {
         let mut runner = circuit.runner();
         runner.set_public_inputs(&public_inputs).expect("set pub");
-        runner.set_private_inputs(&private_inputs).expect("set priv");
+        runner
+            .set_private_inputs(&private_inputs)
+            .expect("set priv");
         runner.run().expect("run gkb circuit")
     };
     let __witness = __t_w.elapsed();
@@ -866,7 +990,9 @@ pub fn prove_gkb(
         .expect("prove_all_tables (gkb)");
     let __prove = __t_p.elapsed();
     let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify gkb leaf");
+    prover
+        .verify_all_tables(&proof)
+        .expect("self-verify gkb leaf");
     crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
         witness: __witness,
         prove: __prove,
@@ -934,7 +1060,15 @@ pub struct Gk2Tuple {
 
 impl Gk2Tuple {
     pub fn dummy() -> Self {
-        Self { e: E_MAX, g: 0, g_o: 0, delta: 0, delta_o: 0, t: 0, active: 0 }
+        Self {
+            e: E_MAX,
+            g: 0,
+            g_o: 0,
+            delta: 0,
+            delta_o: 0,
+            t: 0,
+            active: 0,
+        }
     }
     /// Total mass this representative accounts for: its two sets plus itself.
     fn mass(&self) -> u64 {
@@ -953,12 +1087,20 @@ pub struct Gk2State {
 
 impl Gk2State {
     pub fn empty(params: GkbParams) -> Self {
-        Self { tuples: vec![Gk2Tuple::dummy(); params.capacity], params, n: 0 }
+        Self {
+            tuples: vec![Gk2Tuple::dummy(); params.capacity],
+            params,
+            n: 0,
+        }
     }
 
     /// Active tuples in value order.
     pub fn actives(&self) -> Vec<Gk2Tuple> {
-        self.tuples.iter().copied().filter(|t| t.active == 1).collect()
+        self.tuples
+            .iter()
+            .copied()
+            .filter(|t| t.active == 1)
+            .collect()
     }
 
     /// S³ rank query (Alg 5): for the bracket `e_i ≤ q` (largest such `i`),
@@ -982,7 +1124,11 @@ impl Gk2State {
             None => (0, if a.is_empty() { 0 } else { a[0].g + a[0].delta }),
             Some(i) => {
                 let r_min = pi.saturating_sub(a[i].g_o + a[i].delta_o);
-                let r_max = if i + 1 < a.len() { pi + a[i + 1].g + a[i + 1].delta } else { pi };
+                let r_max = if i + 1 < a.len() {
+                    pi + a[i + 1].g + a[i + 1].delta
+                } else {
+                    pi
+                };
                 (r_min, r_max)
             }
         }
@@ -1055,7 +1201,11 @@ pub fn apply_batch2(s_old: &Gk2State, batch_vals: &[u32]) -> Gk2State {
         "two-sided sketch exceeded capacity {} (declare s' ≥ 2s·ln(N/s+2)+2)",
         s_old.params.capacity
     );
-    Gk2State { tuples: b.final_tuples, params: s_old.params, n: b.n_t }
+    Gk2State {
+        tuples: b.final_tuples,
+        params: s_old.params,
+        n: b.n_t,
+    }
 }
 
 /// One fixed-size parity-0 two-sided fuse round: pairs `(2i, 2i+1)`; per pair it
@@ -1185,14 +1335,20 @@ fn build_bm2(s_old: &Gk2State, batch_vals: &[u32]) -> Bm2Build {
     let mut union_init = union_raw.clone();
     for i in (0..total).rev() {
         if union_init[i].active == 1 && union_init[i].t > n_prev {
-            union_init[i].delta =
-                if i + 1 < total { union_init[i + 1].g + union_init[i + 1].delta } else { 0 };
+            union_init[i].delta = if i + 1 < total {
+                union_init[i + 1].g + union_init[i + 1].delta
+            } else {
+                0
+            };
         }
     }
     for i in 0..total {
         if union_init[i].active == 1 && union_init[i].t > n_prev {
-            union_init[i].delta_o =
-                if i >= 1 { union_init[i - 1].g_o + union_init[i - 1].delta_o } else { 0 };
+            union_init[i].delta_o = if i >= 1 {
+                union_init[i - 1].g_o + union_init[i - 1].delta_o
+            } else {
+                0
+            };
         }
     }
 
@@ -1205,13 +1361,30 @@ fn build_bm2(s_old: &Gk2State, batch_vals: &[u32]) -> Bm2Build {
         let mut ridx: Vec<usize> = (0..total).collect();
         ridx.sort_by_key(|&i| (fused[i].e, fused[i].t));
         let resorted: Vec<Gk2Tuple> = ridx.iter().map(|&i| fused[i]).collect();
-        rounds.push(Bm2Round { dir, cond1, cond2, fused, resorted: resorted.clone(), sigma: ridx });
+        rounds.push(Bm2Round {
+            dir,
+            cond1,
+            cond2,
+            fused,
+            resorted: resorted.clone(),
+            sigma: ridx,
+        });
         cur = resorted;
     }
 
     let final_tuples = cur[..cap].to_vec();
     let excess = cur[cap..cap + m].to_vec();
-    Bm2Build { sigma_union, union_raw, union_init, rounds, final_tuples, excess, theta, n_prev, n_t }
+    Bm2Build {
+        sigma_union,
+        union_raw,
+        union_init,
+        rounds,
+        final_tuples,
+        excess,
+        theta,
+        n_prev,
+        n_t,
+    }
 }
 
 /// The Gribelyuk §4 worst-case space bound `s'(N) = ⌈2s·ln(N/s + 2) + 2⌉`.
@@ -1282,11 +1455,23 @@ fn replay_step2(
     n_before: u64,
     val: Option<u32>,
 ) -> (Naive2Step, Vec<Gk2Tuple>) {
-    let n_after = if val.is_some() { n_before + 1 } else { n_before };
+    let n_after = if val.is_some() {
+        n_before + 1
+    } else {
+        n_before
+    };
     let theta = n_after / s;
     // fresh singleton (or a dummy for a padding record).
     let fresh = match val {
-        Some(v) => Gk2Tuple { e: v, g: 0, g_o: 0, delta: 0, delta_o: 0, t: n_after, active: 1 },
+        Some(v) => Gk2Tuple {
+            e: v,
+            g: 0,
+            g_o: 0,
+            delta: 0,
+            delta_o: 0,
+            t: n_after,
+            active: 1,
+        },
         None => Gk2Tuple::dummy(),
     };
     let mut combined = prev.to_vec();
@@ -1296,7 +1481,10 @@ fn replay_step2(
     // neighbor-init the fresh tuple (the one with t == n_after, if active).
     let mut work_init = work.clone();
     if val.is_some() {
-        let p = work_init.iter().position(|t| t.active == 1 && t.t == n_after).unwrap();
+        let p = work_init
+            .iter()
+            .position(|t| t.active == 1 && t.t == n_after)
+            .unwrap();
         // Δ₁ from the right (value-successor), Δ₂ from the left (predecessor).
         work_init[p].delta = if p + 1 < work_init.len() && work_init[p + 1].active == 1 {
             work_init[p + 1].g + work_init[p + 1].delta
@@ -1373,7 +1561,12 @@ fn replay_batch2(s_old: &Gk2State, batch_vals: &[u32]) -> Naive2Build {
         steps.push(step);
         states.push(cur.clone());
     }
-    Naive2Build { states, steps, n_prev, n_final: n }
+    Naive2Build {
+        states,
+        steps,
+        n_prev,
+        n_final: n,
+    }
 }
 
 /// Naive per-record replay as a plaintext state transition (the reference the
@@ -1381,7 +1574,11 @@ fn replay_batch2(s_old: &Gk2State, batch_vals: &[u32]) -> Naive2Build {
 /// merge schedule than [`apply_batch2`], but the same algorithm).
 pub fn apply_batch2_naive(s_old: &Gk2State, batch_vals: &[u32]) -> Gk2State {
     let b = replay_batch2(s_old, batch_vals);
-    Gk2State { tuples: b.states[b.states.len() - 1].clone(), params: s_old.params, n: b.n_final }
+    Gk2State {
+        tuples: b.states[b.states.len() - 1].clone(),
+        params: s_old.params,
+        n: b.n_final,
+    }
 }
 
 /// The naive per-record replay leaf: certifies the same two-sided transition as
@@ -1400,8 +1597,11 @@ pub fn prove_gkb2_naive(
     assert!(batch_vals.len() <= m);
 
     let build = replay_batch2(&initial_state, &batch_vals);
-    let final_state =
-        Gk2State { tuples: build.states[m].clone(), params, n: build.n_final };
+    let final_state = Gk2State {
+        tuples: build.states[m].clone(),
+        params,
+        n: build.n_final,
+    };
     let initial_commit = commit_gk2_state(&initial_state);
     let final_commit = commit_gk2_state(&final_state);
     let batch_commit = commit_gk2_batch(&batch_vals, m, build.n_prev);
@@ -1430,36 +1630,79 @@ pub fn prove_gkb2_naive(
 
     // Private inputs (2 challenges/tuple). Alloc order == packing order below.
     let state_packed: Vec<Vec<ExprId>> = (0..=m)
-        .map(|_| (0..2 * cap).map(|_| b.alloc_private_input("state")).collect())
+        .map(|_| {
+            (0..2 * cap)
+                .map(|_| b.alloc_private_input("state"))
+                .collect()
+        })
         .collect();
     let batch_packed: Vec<ExprId> = (0..2 * m).map(|_| b.alloc_private_input("batch")).collect();
     let work_packed: Vec<Vec<ExprId>> = (0..m)
-        .map(|_| (0..2 * work_len).map(|_| b.alloc_private_input("work")).collect())
+        .map(|_| {
+            (0..2 * work_len)
+                .map(|_| b.alloc_private_input("work"))
+                .collect()
+        })
         .collect();
     let fused_packed: Vec<Vec<ExprId>> = (0..m)
-        .map(|_| (0..2 * work_len).map(|_| b.alloc_private_input("fused")).collect())
+        .map(|_| {
+            (0..2 * work_len)
+                .map(|_| b.alloc_private_input("fused"))
+                .collect()
+        })
         .collect();
     let resorted_packed: Vec<Vec<ExprId>> = (0..m)
-        .map(|_| (0..2 * work_len).map(|_| b.alloc_private_input("resorted")).collect())
+        .map(|_| {
+            (0..2 * work_len)
+                .map(|_| b.alloc_private_input("resorted"))
+                .collect()
+        })
         .collect();
     // hints
     let is_fresh: Vec<Vec<ExprId>> = (0..m)
-        .map(|_| (0..work_len).map(|_| b.alloc_private_input("is_fresh")).collect())
+        .map(|_| {
+            (0..work_len)
+                .map(|_| b.alloc_private_input("is_fresh"))
+                .collect()
+        })
         .collect();
-    let merge_sel: Vec<Vec<ExprId>> =
-        (0..m).map(|_| (0..cap).map(|_| b.alloc_private_input("merge_sel")).collect()).collect();
-    let lt: Vec<Vec<ExprId>> =
-        (0..m).map(|_| (0..cap).map(|_| b.alloc_private_input("lt")).collect()).collect();
-    let cond1: Vec<Vec<ExprId>> =
-        (0..m).map(|_| (0..cap).map(|_| b.alloc_private_input("cond1")).collect()).collect();
-    let cond2: Vec<Vec<ExprId>> =
-        (0..m).map(|_| (0..cap).map(|_| b.alloc_private_input("cond2")).collect()).collect();
-    let de_inv_work: Vec<Vec<ExprId>> =
-        (0..m).map(|_| (0..work_len - 1).map(|_| b.alloc_private_input("de_w")).collect()).collect();
-    let de_inv_rs: Vec<Vec<ExprId>> =
-        (0..m).map(|_| (0..work_len - 1).map(|_| b.alloc_private_input("de_r")).collect()).collect();
-    let e_inv_work: Vec<Vec<ExprId>> =
-        (0..m).map(|_| (0..work_len).map(|_| b.alloc_private_input("e_inv_w")).collect()).collect();
+    let merge_sel: Vec<Vec<ExprId>> = (0..m)
+        .map(|_| {
+            (0..cap)
+                .map(|_| b.alloc_private_input("merge_sel"))
+                .collect()
+        })
+        .collect();
+    let lt: Vec<Vec<ExprId>> = (0..m)
+        .map(|_| (0..cap).map(|_| b.alloc_private_input("lt")).collect())
+        .collect();
+    let cond1: Vec<Vec<ExprId>> = (0..m)
+        .map(|_| (0..cap).map(|_| b.alloc_private_input("cond1")).collect())
+        .collect();
+    let cond2: Vec<Vec<ExprId>> = (0..m)
+        .map(|_| (0..cap).map(|_| b.alloc_private_input("cond2")).collect())
+        .collect();
+    let de_inv_work: Vec<Vec<ExprId>> = (0..m)
+        .map(|_| {
+            (0..work_len - 1)
+                .map(|_| b.alloc_private_input("de_w"))
+                .collect()
+        })
+        .collect();
+    let de_inv_rs: Vec<Vec<ExprId>> = (0..m)
+        .map(|_| {
+            (0..work_len - 1)
+                .map(|_| b.alloc_private_input("de_r"))
+                .collect()
+        })
+        .collect();
+    let e_inv_work: Vec<Vec<ExprId>> = (0..m)
+        .map(|_| {
+            (0..work_len)
+                .map(|_| b.alloc_private_input("e_inv_w"))
+                .collect()
+        })
+        .collect();
 
     // ── Stage 1: commit bindings (state[0]=init, state[m]=final, batch) ──
     let h_init = b
@@ -1559,7 +1802,15 @@ pub fn prove_gkb2_naive(
         // is_fresh[r] = [t_r > n_before_k] = [n_before_k + 1 ≤ t_r].
         let nbefore_p1 = b.add(nbefore_pis[k], one);
         for r in 0..work_len {
-            force_le(&mut b, is_fresh[k][r], nbefore_p1, work_f[k][2 * r + 1][1], one, zero, MASS_BITS);
+            force_le(
+                &mut b,
+                is_fresh[k][r],
+                nbefore_p1,
+                work_f[k][2 * r + 1][1],
+                one,
+                zero,
+                MASS_BITS,
+            );
         }
         let mut d1: Vec<ExprId> = vec![zero; work_len];
         for r in (0..work_len).rev() {
@@ -1575,7 +1826,11 @@ pub fn prove_gkb2_naive(
         }
         let mut d2: Vec<ExprId> = vec![zero; work_len];
         for r in 0..work_len {
-            let base = if r >= 1 { b.add(work_f[k][2 * (r - 1)][2], d2[r - 1]) } else { zero };
+            let base = if r >= 1 {
+                b.add(work_f[k][2 * (r - 1)][2], d2[r - 1])
+            } else {
+                zero
+            };
             let fp = b.mul(is_fresh[k][r], base);
             let omf = b.sub(one, is_fresh[k][r]);
             let op = b.mul(omf, work_f[k][2 * r + 1][0]);
@@ -1689,21 +1944,36 @@ pub fn prove_gkb2_naive(
         b.connect(sel_sum, act[work_len - 1]);
         // build fused: fused[pos] = sel[pos]·merged_lo[pos] + sel[pos-1]·merged_hi[pos-1]
         //              + (1 − sel[pos] − sel[pos-1])·work_init[pos].
-        let fused_f: Vec<Vec<ExprId>> =
-            fused_packed[k].iter().map(|&p| dec(&mut b, p)).collect();
+        let fused_f: Vec<Vec<ExprId>> = fused_packed[k].iter().map(|&p| dec(&mut b, p)).collect();
         for pos in 0..work_len {
             let sl = if pos < cap { merge_sel[k][pos] } else { zero };
-            let sr = if pos >= 1 { merge_sel[k][pos - 1] } else { zero };
+            let sr = if pos >= 1 {
+                merge_sel[k][pos - 1]
+            } else {
+                zero
+            };
             let both = b.add(sl, sr);
             let keep = b.sub(one, both);
             for c in 0..6 {
-                let lo_term = if pos < cap { b.mul(sl, merged_lo[pos][c]) } else { zero };
-                let hi_term = if pos >= 1 { b.mul(sr, merged_hi[pos - 1][c]) } else { zero };
+                let lo_term = if pos < cap {
+                    b.mul(sl, merged_lo[pos][c])
+                } else {
+                    zero
+                };
+                let hi_term = if pos >= 1 {
+                    b.mul(sr, merged_hi[pos - 1][c])
+                } else {
+                    zero
+                };
                 let keep_term = b.mul(keep, wi[pos][c]);
                 let s = b.add(lo_term, hi_term);
                 let val = b.add(s, keep_term);
                 // map field c → (challenge, coeff): 0..3 → lo[c], 4 → hi[0], 5 → hi[1].
-                let (ci, co) = if c < 4 { (2 * pos, c) } else { (2 * pos + 1, c - 4) };
+                let (ci, co) = if c < 4 {
+                    (2 * pos, c)
+                } else {
+                    (2 * pos + 1, c - 4)
+                };
                 b.connect(fused_f[ci][co], val);
             }
             b.connect(fused_f[2 * pos + 1][2], zero);
@@ -1767,14 +2037,24 @@ pub fn prove_gkb2_naive(
     }
     {
         use p3_field::Field;
-        let inv = |x: u64| if x == 0 { Challenge::ZERO } else { Challenge::from_u64(x).inverse() };
+        let inv = |x: u64| {
+            if x == 0 {
+                Challenge::ZERO
+            } else {
+                Challenge::from_u64(x).inverse()
+            }
+        };
         // is_fresh per step (over work): [t > n_before_k].
         let mut nb = build.n_prev;
         for j in 0..m {
             let step = &build.steps[j];
             for r in 0..work_len {
                 let fresh = step.work[r].active == 1 && step.work[r].t > nb;
-                private_inputs.push(if fresh { Challenge::ONE } else { Challenge::ZERO });
+                private_inputs.push(if fresh {
+                    Challenge::ONE
+                } else {
+                    Challenge::ZERO
+                });
             }
             if batch_vals.get(j).is_some() {
                 nb += 1;
@@ -1799,7 +2079,9 @@ pub fn prove_gkb2_naive(
             let theta = build.steps[j].theta;
             for p in 0..cap {
                 let (a, bb) = (w[p], w[p + 1]);
-                private_inputs.push(Challenge::from_u64((a.g + a.g_o + bb.g + bb.delta + 1 <= theta) as u64));
+                private_inputs.push(Challenge::from_u64(
+                    (a.g + a.g_o + bb.g + bb.delta + 1 <= theta) as u64,
+                ));
             }
         }
         for j in 0..m {
@@ -1807,7 +2089,9 @@ pub fn prove_gkb2_naive(
             let theta = build.steps[j].theta;
             for p in 0..cap {
                 let (a, bb) = (w[p], w[p + 1]);
-                private_inputs.push(Challenge::from_u64((bb.g_o + bb.g + a.g_o + a.delta_o + 1 <= theta) as u64));
+                private_inputs.push(Challenge::from_u64(
+                    (bb.g_o + bb.g + a.g_o + a.delta_o + 1 <= theta) as u64,
+                ));
             }
         }
         // de_inv_work, de_inv_rs.
@@ -1835,7 +2119,9 @@ pub fn prove_gkb2_naive(
     let traces = {
         let mut runner = circuit.runner();
         runner.set_public_inputs(&public_inputs).expect("set pub");
-        runner.set_private_inputs(&private_inputs).expect("set priv");
+        runner
+            .set_private_inputs(&private_inputs)
+            .expect("set priv");
         runner.run().expect("run gkb2_naive circuit")
     };
     let __witness = __t_w.elapsed();
@@ -1876,7 +2162,9 @@ pub fn prove_gkb2_naive(
         .expect("prove_all_tables (gkb2_naive)");
     let __prove = __t_p.elapsed();
     let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify gkb2_naive leaf");
+    prover
+        .verify_all_tables(&proof)
+        .expect("self-verify gkb2_naive leaf");
     crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
         witness: __witness,
         prove: __prove,
@@ -1936,7 +2224,12 @@ fn enc2(t: &Gk2Tuple) -> [Challenge; 2] {
         Val::from_u32(t.g_o as u32),
         Val::from_u32(t.delta as u32),
     ];
-    let hi = [Val::from_u32(t.delta_o as u32), Val::from_u32(t.t as u32), Val::ZERO, Val::ZERO];
+    let hi = [
+        Val::from_u32(t.delta_o as u32),
+        Val::from_u32(t.t as u32),
+        Val::ZERO,
+        Val::ZERO,
+    ];
     [
         Challenge::from_basis_coefficients_slice(&lo).expect("4 lo coeffs"),
         Challenge::from_basis_coefficients_slice(&hi).expect("4 hi coeffs"),
@@ -2012,7 +2305,14 @@ fn expand_sigma(sigma: &[usize]) -> Vec<usize> {
 /// Read tuple `r`'s six fields `[e, g₁, g₂, Δ₁, Δ₂, t]` from a decomposed table
 /// (`f[2r]` = lo coeffs, `f[2r+1]` = hi coeffs).
 fn fld6(f: &[Vec<ExprId>], r: usize) -> [ExprId; 6] {
-    [f[2 * r][0], f[2 * r][1], f[2 * r][2], f[2 * r][3], f[2 * r + 1][0], f[2 * r + 1][1]]
+    [
+        f[2 * r][0],
+        f[2 * r][1],
+        f[2 * r][2],
+        f[2 * r][3],
+        f[2 * r + 1][0],
+        f[2 * r + 1][1],
+    ]
 }
 
 #[cfg(test)]
@@ -2064,24 +2364,26 @@ pub fn prove_gkb2_exposed(
     prove_gkb2_inner(params, initial_state, batch_vals, true)
 }
 
-fn prove_gkb2_inner(
+/// A built, reusable GK band-merge leaf: circuit graph + prover data +
+/// registered prover. Build once per `(params, expose_boundary)`; each
+/// [`Self::prove_epoch`] swaps the `1 + lf` Permute ops’ trace-generation
+/// hints (union sort + per-round resorts) via
+/// `Circuit::update_permute_witnesses`, hoisting graph build and
+/// AIR/`ProverData` prep out of the epoch loop.
+pub struct Gkb2LeafCircuit {
     params: GkbParams,
-    initial_state: Gk2State,
-    batch_vals: Vec<u32>,
-    expose_boundary: bool,
-) -> Gk2LeafProof {
+    circuit: p3_circuit::Circuit<Challenge>,
+    prover: BatchStarkProver<ConfigWithFriParams>,
+    circuit_prover_data: Rc<CircuitProverData<ConfigWithFriParams>>,
+    trace_rows: u64,
+}
+
+/// Build the reusable GK band-merge leaf circuit for a shape.
+pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCircuit {
     let cap = params.capacity;
     let m = params.batch;
     let total = cap + m;
     assert_eq!(total % 2, 0, "total = cap+m must be even");
-    assert!(batch_vals.len() <= m);
-
-    // ── Native replay + commitments ──
-    let build = build_bm2(&initial_state, &batch_vals);
-    let final_state = Gk2State { tuples: build.final_tuples.clone(), params, n: build.n_t };
-    let initial_commit = commit_gk2_state(&initial_state);
-    let final_commit = commit_gk2_state(&final_state);
-    let batch_commit = commit_gk2_batch(&batch_vals, m, build.n_prev);
     let lf = num_rounds(total);
     let num_pairs = total / 2;
 
@@ -2120,46 +2422,90 @@ fn prove_gkb2_inner(
     let e_max = b.alloc_const(Challenge::from_u64(E_MAX as u64), "e_max");
 
     // Private inputs — 2 challenges per tuple. Alloc order == packing order.
-    let init_packed: Vec<ExprId> = (0..2 * cap).map(|_| b.alloc_private_input("init")).collect();
-    let final_packed: Vec<ExprId> = (0..2 * cap).map(|_| b.alloc_private_input("final")).collect();
+    let init_packed: Vec<ExprId> = (0..2 * cap)
+        .map(|_| b.alloc_private_input("init"))
+        .collect();
+    let final_packed: Vec<ExprId> = (0..2 * cap)
+        .map(|_| b.alloc_private_input("final"))
+        .collect();
     let batch_packed: Vec<ExprId> = (0..2 * m).map(|_| b.alloc_private_input("batch")).collect();
-    let union_raw_packed: Vec<ExprId> =
-        (0..2 * total).map(|_| b.alloc_private_input("union_raw")).collect();
+    let union_raw_packed: Vec<ExprId> = (0..2 * total)
+        .map(|_| b.alloc_private_input("union_raw"))
+        .collect();
     let fused_packed: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..2 * total).map(|_| b.alloc_private_input("fused")).collect())
+        .map(|_| {
+            (0..2 * total)
+                .map(|_| b.alloc_private_input("fused"))
+                .collect()
+        })
         .collect();
     let resorted_packed: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..2 * total).map(|_| b.alloc_private_input("resorted")).collect())
+        .map(|_| {
+            (0..2 * total)
+                .map(|_| b.alloc_private_input("resorted"))
+                .collect()
+        })
         .collect();
-    let excess_packed: Vec<ExprId> = (0..2 * m).map(|_| b.alloc_private_input("excess")).collect();
+    let excess_packed: Vec<ExprId> = (0..2 * m)
+        .map(|_| b.alloc_private_input("excess"))
+        .collect();
     // Hints.
-    let is_fresh: Vec<ExprId> = (0..total).map(|_| b.alloc_private_input("is_fresh")).collect();
+    let is_fresh: Vec<ExprId> = (0..total)
+        .map(|_| b.alloc_private_input("is_fresh"))
+        .collect();
     let lt: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("lt")).collect())
+        .map(|_| {
+            (0..num_pairs)
+                .map(|_| b.alloc_private_input("lt"))
+                .collect()
+        })
         .collect();
     let cond1: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("cond1")).collect())
+        .map(|_| {
+            (0..num_pairs)
+                .map(|_| b.alloc_private_input("cond1"))
+                .collect()
+        })
         .collect();
     let cond2: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("cond2")).collect())
+        .map(|_| {
+            (0..num_pairs)
+                .map(|_| b.alloc_private_input("cond2"))
+                .collect()
+        })
         .collect();
     let ea_inv: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("ea_inv")).collect())
+        .map(|_| {
+            (0..num_pairs)
+                .map(|_| b.alloc_private_input("ea_inv"))
+                .collect()
+        })
         .collect();
     let eb_inv: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("eb_inv")).collect())
+        .map(|_| {
+            (0..num_pairs)
+                .map(|_| b.alloc_private_input("eb_inv"))
+                .collect()
+        })
         .collect();
-    let e_inv_final: Vec<ExprId> =
-        (0..cap).map(|_| b.alloc_private_input("e_inv_final")).collect();
-    let e_inv_batch: Vec<ExprId> =
-        (0..m).map(|_| b.alloc_private_input("e_inv_batch")).collect();
+    let e_inv_final: Vec<ExprId> = (0..cap)
+        .map(|_| b.alloc_private_input("e_inv_final"))
+        .collect();
+    let e_inv_batch: Vec<ExprId> = (0..m)
+        .map(|_| b.alloc_private_input("e_inv_batch"))
+        .collect();
     // Audit fix #5: (e,t) tiebreak inverses — one per adjacent pair of the union
     // and of each round's resorted table, so equal-e rows are pinned to ascending
     // t (the native (e,t) sort) rather than left prover-orderable.
-    let de_inv_union: Vec<ExprId> =
-        (0..total - 1).map(|_| b.alloc_private_input("de_inv_u")).collect();
+    let de_inv_union: Vec<ExprId> = (0..total - 1)
+        .map(|_| b.alloc_private_input("de_inv_u"))
+        .collect();
     let de_inv_round: Vec<Vec<ExprId>> = (0..lf)
-        .map(|_| (0..total - 1).map(|_| b.alloc_private_input("de_inv_r")).collect())
+        .map(|_| {
+            (0..total - 1)
+                .map(|_| b.alloc_private_input("de_inv_r"))
+                .collect()
+        })
         .collect();
 
     // ── Stage 1: commit bindings ──
@@ -2208,8 +2554,10 @@ fn prove_gkb2_inner(
     }
     let mut combined: Vec<ExprId> = init_packed.clone();
     combined.extend(batch_packed.iter().copied());
+    // Placeholder identity permutations — `prove_epoch` swaps in the real
+    // per-batch sigmas via `update_permute_witnesses` before each run.
     let union_perm = b
-        .add_permute(&combined, expand_sigma(&build.sigma_union))
+        .add_permute(&combined, (0..combined.len()).collect::<Vec<_>>())
         .expect("permute union");
     for i in 0..2 * total {
         b.connect(union_perm[i], union_raw_packed[i]);
@@ -2229,19 +2577,31 @@ fn prove_gkb2_inner(
     }
     for r in 0..total - 1 {
         let diff = b.sub(uraw_f[2 * (r + 1)][0], uraw_f[2 * r][0]);
-        let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("union e sortedness");
+        let _ = b
+            .add_range_bits::<Val>(diff, E_BITS)
+            .expect("union e sortedness");
         // (e,t) tiebreak: if e_{r+1}=e_r then t_{r+1} ≥ t_r (pins equal-e order).
         let nz = force_nz(&mut b, diff, de_inv_union[r], one, zero);
         let is_de_zero = b.sub(one, nz);
         let dt = b.sub(uraw_f[2 * (r + 1) + 1][1], uraw_f[2 * r + 1][1]);
         let w = b.mul(is_de_zero, dt);
-        let _ = b.add_range_bits::<Val>(w, MASS_BITS).expect("union t tiebreak");
+        let _ = b
+            .add_range_bits::<Val>(w, MASS_BITS)
+            .expect("union t tiebreak");
     }
 
     // ── Stage 5: two-sided neighbor-init (no gate: a dummy neighbor is 0) ──
     let n_prev_p1 = b.add(n_prev_pi, one);
     for r in 0..total {
-        force_le(&mut b, is_fresh[r], n_prev_p1, uraw_f[2 * r + 1][1], one, zero, MASS_BITS);
+        force_le(
+            &mut b,
+            is_fresh[r],
+            n_prev_p1,
+            uraw_f[2 * r + 1][1],
+            one,
+            zero,
+            MASS_BITS,
+        );
     }
     // Δ₁_init right-to-left: fresh ? (g₁_{r+1} + Δ₁_init[r+1]) : Δ₁_raw[r].
     let mut d1: Vec<ExprId> = vec![zero; total];
@@ -2272,15 +2632,24 @@ fn prove_gkb2_inner(
     // uinit fields [e, g₁, g₂, Δ₁_init, Δ₂_init, t].
     let uinit_f: Vec<[ExprId; 6]> = (0..total)
         .map(|r| {
-            [uraw_f[2 * r][0], uraw_f[2 * r][1], uraw_f[2 * r][2], d1[r], d2[r], uraw_f[2 * r + 1][1]]
+            [
+                uraw_f[2 * r][0],
+                uraw_f[2 * r][1],
+                uraw_f[2 * r][2],
+                d1[r],
+                d2[r],
+                uraw_f[2 * r + 1][1],
+            ]
         })
         .collect();
 
     // ── Stage 6: L_f parity-0 two-sided fuse + resort rounds ──
     let mut cur_f: Vec<[ExprId; 6]> = uinit_f.clone();
     for round in 0..lf {
-        let fused_f: Vec<Vec<ExprId>> =
-            fused_packed[round].iter().map(|&p| dec(&mut b, p)).collect();
+        let fused_f: Vec<Vec<ExprId>> = fused_packed[round]
+            .iter()
+            .map(|&p| dec(&mut b, p))
+            .collect();
         for k in 0..num_pairs {
             let a = cur_f[2 * k];
             let bb = cur_f[2 * k + 1];
@@ -2378,7 +2747,10 @@ fn prove_gkb2_inner(
         }
         // resort
         let perm = b
-            .add_permute(&fused_packed[round], expand_sigma(&build.rounds[round].sigma))
+            .add_permute(
+                &fused_packed[round],
+                (0..fused_packed[round].len()).collect::<Vec<_>>(),
+            )
             .expect("permute resort");
         for i in 0..2 * total {
             b.connect(perm[i], resorted_packed[round][i]);
@@ -2396,13 +2768,20 @@ fn prove_gkb2_inner(
         }
         for r in 0..total - 1 {
             let diff = b.sub(resort_f[round][2 * (r + 1)][0], resort_f[round][2 * r][0]);
-            let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("rs sortedness");
+            let _ = b
+                .add_range_bits::<Val>(diff, E_BITS)
+                .expect("rs sortedness");
             // (e,t) tiebreak (audit fix #5).
             let nz = force_nz(&mut b, diff, de_inv_round[round][r], one, zero);
             let is_de_zero = b.sub(one, nz);
-            let dt = b.sub(resort_f[round][2 * (r + 1) + 1][1], resort_f[round][2 * r + 1][1]);
+            let dt = b.sub(
+                resort_f[round][2 * (r + 1) + 1][1],
+                resort_f[round][2 * r + 1][1],
+            );
             let w = b.mul(is_de_zero, dt);
-            let _ = b.add_range_bits::<Val>(w, MASS_BITS).expect("rs t tiebreak");
+            let _ = b
+                .add_range_bits::<Val>(w, MASS_BITS)
+                .expect("rs t tiebreak");
         }
         cur_f = (0..total).map(|r| fld6(&resort_f[round], r)).collect();
     }
@@ -2483,122 +2862,6 @@ fn prove_gkb2_inner(
 
     let circuit = b.build().expect("build gkb2 circuit");
 
-    // ── Pack public + private ──
-    let initial_commit_packed =
-        pack_commit_to_challenge(&crate::commitment::CountMinCommit(initial_commit.0));
-    let final_commit_packed =
-        pack_commit_to_challenge(&crate::commitment::CountMinCommit(final_commit.0));
-    let batch_commit_packed =
-        pack_commit_to_challenge(&crate::commitment::CountMinCommit(batch_commit.0));
-    let mut public_inputs: Vec<Challenge> = Vec::new();
-    public_inputs.extend_from_slice(&initial_commit_packed);
-    public_inputs.extend_from_slice(&final_commit_packed);
-    public_inputs.extend_from_slice(&batch_commit_packed);
-    public_inputs.push(Challenge::from_u64(build.theta));
-    let n_prev_pub = {
-        let mut v = build.n_prev;
-        #[cfg(test)]
-        {
-            if let Some(t) = TAMPER_NPREV.with(|c| c.get()) {
-                v = t;
-            }
-        }
-        v
-    };
-    public_inputs.push(Challenge::from_u64(n_prev_pub));
-    public_inputs.push(Challenge::from_u64(build.n_t));
-
-    let mut private_inputs: Vec<Challenge> = Vec::new();
-    private_inputs.extend_from_slice(&pack_tuples2(&initial_state.tuples));
-    private_inputs.extend_from_slice(&pack_tuples2(&final_state.tuples));
-    private_inputs.extend_from_slice(&pack_tuples2(&fresh_tuples2(&batch_vals, m, build.n_prev)));
-    private_inputs.extend_from_slice(&pack_tuples2(&build.union_raw));
-    for round in &build.rounds {
-        private_inputs.extend_from_slice(&pack_tuples2(&round.fused));
-    }
-    for round in &build.rounds {
-        private_inputs.extend_from_slice(&pack_tuples2(&round.resorted));
-    }
-    private_inputs.extend_from_slice(&pack_tuples2(&build.excess));
-    // is_fresh
-    for r in 0..total {
-        let fresh = build.union_raw[r].active == 1 && build.union_raw[r].t > build.n_prev;
-        private_inputs.push(if fresh { Challenge::ONE } else { Challenge::ZERO });
-    }
-    // per-round hints, GROUPED BY TYPE to match alloc order.
-    {
-        use p3_field::Field;
-        let mut curs: Vec<Vec<Gk2Tuple>> = vec![build.union_init.clone()];
-        for round in 0..lf {
-            curs.push(build.rounds[round].resorted.clone());
-        }
-        let inv = |x: u64| if x == 0 { Challenge::ZERO } else { Challenge::from_u64(x).inverse() };
-        // lt
-        for round in 0..lf {
-            for k in 0..num_pairs {
-                let (a, bb) = (curs[round][2 * k], curs[round][2 * k + 1]);
-                private_inputs.push(Challenge::from_u64((a.t > bb.t) as u64));
-            }
-        }
-        // cond1
-        for round in 0..lf {
-            for k in 0..num_pairs {
-                private_inputs.push(Challenge::from_u64(build.rounds[round].cond1[k] as u64));
-            }
-        }
-        // cond2
-        for round in 0..lf {
-            for k in 0..num_pairs {
-                private_inputs.push(Challenge::from_u64(build.rounds[round].cond2[k] as u64));
-            }
-        }
-        // ea_inv = 1/(E_MAX − a.e)
-        for round in 0..lf {
-            for k in 0..num_pairs {
-                let a = curs[round][2 * k];
-                private_inputs.push(inv((E_MAX - a.e) as u64));
-            }
-        }
-        // eb_inv = 1/(E_MAX − b.e)
-        for round in 0..lf {
-            for k in 0..num_pairs {
-                let bb = curs[round][2 * k + 1];
-                private_inputs.push(inv((E_MAX - bb.e) as u64));
-            }
-        }
-        // e_inv_final = 1/(E_MAX − final.e)
-        for i in 0..cap {
-            private_inputs.push(inv((E_MAX - build.final_tuples[i].e) as u64));
-        }
-        // e_inv_batch = 1/(E_MAX − batch.e)  (dummy batch slot → 0)
-        let fresh = fresh_tuples2(&batch_vals, m, build.n_prev);
-        for j in 0..m {
-            private_inputs.push(inv((E_MAX - fresh[j].e) as u64));
-        }
-        // de_inv_union = 1/(e_{r+1} − e_r) over the sorted union (0 when equal).
-        for r in 0..total - 1 {
-            let de = (build.union_raw[r + 1].e - build.union_raw[r].e) as u64;
-            private_inputs.push(inv(de));
-        }
-        // de_inv_round = same over each round's resorted table.
-        for round in 0..lf {
-            let rs = &build.rounds[round].resorted;
-            for r in 0..total - 1 {
-                let de = (rs[r + 1].e - rs[r].e) as u64;
-                private_inputs.push(inv(de));
-            }
-        }
-    }
-
-    // ── Run + prove ──
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set pub");
-        runner.set_private_inputs(&private_inputs).expect("set priv");
-        runner.run().expect("run gkb2 circuit")
-    };
-    let __witness = __t_w.elapsed();
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
     let mut preprocessors = vec![
@@ -2637,27 +2900,220 @@ fn prove_gkb2_inner(
     if expose_boundary {
         prover.register_expose_table::<4>();
     }
-    let __t_p = std::time::Instant::now();
-    let proof = prover
-        .prove_all_tables(&traces, &circuit_prover_data)
-        .expect("prove_all_tables (gkb2)");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify gkb2 leaf");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
-    });
+    let trace_rows: u64 = ext_degrees.iter().map(|&d| 1u64 << d).sum();
 
-    Gk2LeafProof {
-        output: RecursionOutput(proof, Rc::new(circuit_prover_data)),
-        initial: initial_commit,
-        final_: final_commit,
-        batch_commit,
+    Gkb2LeafCircuit {
         params,
+        circuit,
+        prover,
+        circuit_prover_data: Rc::new(circuit_prover_data),
+        trace_rows,
     }
+}
+
+impl Gkb2LeafCircuit {
+    /// Prove one epoch on the prebuilt circuit.
+    pub fn prove_epoch(&mut self, initial_state: Gk2State, batch_vals: Vec<u32>) -> Gk2LeafProof {
+        let params = self.params;
+        assert!(batch_vals.len() <= params.batch);
+        let cap = params.capacity;
+        let m = params.batch;
+        let total = cap + m;
+        assert_eq!(total % 2, 0, "total = cap+m must be even");
+
+        // ── Native replay + commitments ──
+        let build = build_bm2(&initial_state, &batch_vals);
+        let final_state = Gk2State {
+            tuples: build.final_tuples.clone(),
+            params,
+            n: build.n_t,
+        };
+        let initial_commit = commit_gk2_state(&initial_state);
+        let final_commit = commit_gk2_state(&final_state);
+        let batch_commit = commit_gk2_batch(&batch_vals, m, build.n_prev);
+        let lf = num_rounds(total);
+        let num_pairs = total / 2;
+
+        // Swap the real per-batch permutation hints into the prebuilt graph
+        // (op order: union-sort permute, then the lf per-round resort permutes).
+        let mut sigmas: Vec<Vec<usize>> = Vec::with_capacity(1 + lf);
+        sigmas.push(expand_sigma(&build.sigma_union));
+        for round in 0..lf {
+            sigmas.push(expand_sigma(&build.rounds[round].sigma));
+        }
+        self.circuit
+            .update_permute_witnesses(&sigmas)
+            .expect("update permute witnesses (gkb2)");
+
+        // ── Pack public + private ──
+        let initial_commit_packed =
+            pack_commit_to_challenge(&crate::commitment::CountMinCommit(initial_commit.0));
+        let final_commit_packed =
+            pack_commit_to_challenge(&crate::commitment::CountMinCommit(final_commit.0));
+        let batch_commit_packed =
+            pack_commit_to_challenge(&crate::commitment::CountMinCommit(batch_commit.0));
+        let mut public_inputs: Vec<Challenge> = Vec::new();
+        public_inputs.extend_from_slice(&initial_commit_packed);
+        public_inputs.extend_from_slice(&final_commit_packed);
+        public_inputs.extend_from_slice(&batch_commit_packed);
+        public_inputs.push(Challenge::from_u64(build.theta));
+        let n_prev_pub = {
+            let mut v = build.n_prev;
+            #[cfg(test)]
+            {
+                if let Some(t) = TAMPER_NPREV.with(|c| c.get()) {
+                    v = t;
+                }
+            }
+            v
+        };
+        public_inputs.push(Challenge::from_u64(n_prev_pub));
+        public_inputs.push(Challenge::from_u64(build.n_t));
+
+        let mut private_inputs: Vec<Challenge> = Vec::new();
+        private_inputs.extend_from_slice(&pack_tuples2(&initial_state.tuples));
+        private_inputs.extend_from_slice(&pack_tuples2(&final_state.tuples));
+        private_inputs.extend_from_slice(&pack_tuples2(&fresh_tuples2(
+            &batch_vals,
+            m,
+            build.n_prev,
+        )));
+        private_inputs.extend_from_slice(&pack_tuples2(&build.union_raw));
+        for round in &build.rounds {
+            private_inputs.extend_from_slice(&pack_tuples2(&round.fused));
+        }
+        for round in &build.rounds {
+            private_inputs.extend_from_slice(&pack_tuples2(&round.resorted));
+        }
+        private_inputs.extend_from_slice(&pack_tuples2(&build.excess));
+        // is_fresh
+        for r in 0..total {
+            let fresh = build.union_raw[r].active == 1 && build.union_raw[r].t > build.n_prev;
+            private_inputs.push(if fresh {
+                Challenge::ONE
+            } else {
+                Challenge::ZERO
+            });
+        }
+        // per-round hints, GROUPED BY TYPE to match alloc order.
+        {
+            use p3_field::Field;
+            let mut curs: Vec<Vec<Gk2Tuple>> = vec![build.union_init.clone()];
+            for round in 0..lf {
+                curs.push(build.rounds[round].resorted.clone());
+            }
+            let inv = |x: u64| {
+                if x == 0 {
+                    Challenge::ZERO
+                } else {
+                    Challenge::from_u64(x).inverse()
+                }
+            };
+            // lt
+            for round in 0..lf {
+                for k in 0..num_pairs {
+                    let (a, bb) = (curs[round][2 * k], curs[round][2 * k + 1]);
+                    private_inputs.push(Challenge::from_u64((a.t > bb.t) as u64));
+                }
+            }
+            // cond1
+            for round in 0..lf {
+                for k in 0..num_pairs {
+                    private_inputs.push(Challenge::from_u64(build.rounds[round].cond1[k] as u64));
+                }
+            }
+            // cond2
+            for round in 0..lf {
+                for k in 0..num_pairs {
+                    private_inputs.push(Challenge::from_u64(build.rounds[round].cond2[k] as u64));
+                }
+            }
+            // ea_inv = 1/(E_MAX − a.e)
+            for round in 0..lf {
+                for k in 0..num_pairs {
+                    let a = curs[round][2 * k];
+                    private_inputs.push(inv((E_MAX - a.e) as u64));
+                }
+            }
+            // eb_inv = 1/(E_MAX − b.e)
+            for round in 0..lf {
+                for k in 0..num_pairs {
+                    let bb = curs[round][2 * k + 1];
+                    private_inputs.push(inv((E_MAX - bb.e) as u64));
+                }
+            }
+            // e_inv_final = 1/(E_MAX − final.e)
+            for i in 0..cap {
+                private_inputs.push(inv((E_MAX - build.final_tuples[i].e) as u64));
+            }
+            // e_inv_batch = 1/(E_MAX − batch.e)  (dummy batch slot → 0)
+            let fresh = fresh_tuples2(&batch_vals, m, build.n_prev);
+            for j in 0..m {
+                private_inputs.push(inv((E_MAX - fresh[j].e) as u64));
+            }
+            // de_inv_union = 1/(e_{r+1} − e_r) over the sorted union (0 when equal).
+            for r in 0..total - 1 {
+                let de = (build.union_raw[r + 1].e - build.union_raw[r].e) as u64;
+                private_inputs.push(inv(de));
+            }
+            // de_inv_round = same over each round's resorted table.
+            for round in 0..lf {
+                let rs = &build.rounds[round].resorted;
+                for r in 0..total - 1 {
+                    let de = (rs[r + 1].e - rs[r].e) as u64;
+                    private_inputs.push(inv(de));
+                }
+            }
+        }
+
+        // ── Run + prove ──
+        let __t_w = std::time::Instant::now();
+        let traces = {
+            let mut runner = self.circuit.runner();
+            runner.set_public_inputs(&public_inputs).expect("set pub");
+            runner
+                .set_private_inputs(&private_inputs)
+                .expect("set priv");
+            runner.run().expect("run gkb2 circuit")
+        };
+        let __witness = __t_w.elapsed();
+
+        let __t_p = std::time::Instant::now();
+        let proof = self
+            .prover
+            .prove_all_tables(&traces, &self.circuit_prover_data)
+            .expect("prove_all_tables (gkb2)");
+        let __prove = __t_p.elapsed();
+        let __t_v = std::time::Instant::now();
+        self.prover
+            .verify_all_tables(&proof)
+            .expect("self-verify gkb2 leaf");
+        crate::recursion::recursive::timing::record(
+            crate::recursion::recursive::timing::LeafTiming {
+                witness: __witness,
+                prove: __prove,
+                verify: __t_v.elapsed(),
+                trace_rows: self.trace_rows,
+            },
+        );
+
+        Gk2LeafProof {
+            output: RecursionOutput(proof, Rc::clone(&self.circuit_prover_data)),
+            initial: initial_commit,
+            final_: final_commit,
+            batch_commit,
+            params,
+        }
+    }
+}
+
+fn prove_gkb2_inner(
+    params: GkbParams,
+    initial_state: Gk2State,
+    batch_vals: Vec<u32>,
+    expose_boundary: bool,
+) -> Gk2LeafProof {
+    build_gkb2_leaf(params, expose_boundary).prove_epoch(initial_state, batch_vals)
 }
 
 /// Prove one two-sided band-merge epoch from empty, returning proof + final state.
@@ -2678,7 +3134,9 @@ mod tests {
         let mut x = seed | 1;
         (0..n)
             .map(|_| {
-                x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 ((x >> 33) as u32) % universe
             })
             .collect()
@@ -2706,7 +3164,11 @@ mod tests {
     #[test]
     fn bandmerge_epsilon_guarantee() {
         let s = 64u64; // ε = 1/64
-        let params = GkbParams { capacity: 4096, batch: 256, s };
+        let params = GkbParams {
+            capacity: 4096,
+            batch: 256,
+            s,
+        };
         let mut state = GkbState::empty(params);
 
         let universe = 100_000u32;
@@ -2764,7 +3226,11 @@ mod tests {
     #[test]
     fn distinct_values_merge() {
         let s = 4u64; // coarse ε = 1/4 so merging is aggressive
-        let params = GkbParams { capacity: 64, batch: 32, s };
+        let params = GkbParams {
+            capacity: 64,
+            batch: 32,
+            s,
+        };
         let mut state = GkbState::empty(params);
         // 32 distinct values, arriving largest-first.
         let batch: Vec<u32> = (0..32u32).rev().map(|i| i * 10).collect();
@@ -2781,21 +3247,35 @@ mod tests {
         );
         // Values are distinct and sorted; mass conserved.
         for w in active.windows(2) {
-            assert!(w[0].e < w[1].e, "representatives must be value-sorted & distinct");
+            assert!(
+                w[0].e < w[1].e,
+                "representatives must be value-sorted & distinct"
+            );
         }
         assert_eq!(active.iter().map(|t| t.g).sum::<u64>(), 32);
         // Every retained representative was an input value.
         for t in &active {
-            assert!(batch.contains(&t.e), "representative {} not from the input", t.e);
+            assert!(
+                batch.contains(&t.e),
+                "representative {} not from the input",
+                t.e
+            );
         }
-        eprintln!("distinct-value merge: 32 distinct values → {} representatives", active.len());
+        eprintln!(
+            "distinct-value merge: 32 distinct values → {} representatives",
+            active.len()
+        );
     }
 
     /// **The circuit: an honest band-merge transition self-verifies**, and its
     /// certified final commit matches the natively-computed final state.
     #[test]
     fn gkb_circuit_round_trip() {
-        let params = GkbParams { capacity: 8, batch: 4, s: 2 };
+        let params = GkbParams {
+            capacity: 8,
+            batch: 4,
+            s: 2,
+        };
         // largest-first arrival so the timestamp rule permits distinct-value merges.
         let batch = vec![300u32, 200, 100, 50];
         let result = generate_proof(params, batch);
@@ -2813,7 +3293,11 @@ mod tests {
     /// self-verify with commits chaining (init₂ = final₁).
     #[test]
     fn gkb_circuit_chained_epoch() {
-        let params = GkbParams { capacity: 16, batch: 8, s: 3 };
+        let params = GkbParams {
+            capacity: 16,
+            batch: 8,
+            s: 3,
+        };
         let b1: Vec<u32> = vec![900, 800, 700, 600, 500, 400, 300, 200];
         let e1 = generate_proof(params, b1);
         let s1 = e1.final_state.clone();
@@ -2834,9 +3318,16 @@ mod tests {
     #[test]
     fn neighbor_init_and_invariant_small() {
         let s = 8u64;
-        let params = GkbParams { capacity: 32, batch: 8, s };
+        let params = GkbParams {
+            capacity: 32,
+            batch: 8,
+            s,
+        };
         let mut state = GkbState::empty(params);
-        for chunk in [[5u32, 20, 8, 8, 30, 1, 25, 12], [7, 7, 7, 40, 2, 18, 22, 33]] {
+        for chunk in [
+            [5u32, 20, 8, 8, 30, 1, 25, 12],
+            [7, 7, 7, 40, 2, 18, 22, 33],
+        ] {
             state = apply_batch(&state, &chunk);
             check_invariant(&state);
             assert_eq!(state.actives().iter().map(|t| t.g).sum::<u64>(), state.n);
@@ -2870,7 +3361,11 @@ mod tests {
     #[test]
     fn two_sided_epsilon_and_bounded_space() {
         let s = 64u64; // ε = 1/64
-        let params = GkbParams { capacity: 4096, batch: 256, s };
+        let params = GkbParams {
+            capacity: 4096,
+            batch: 256,
+            s,
+        };
         let mut state = Gk2State::empty(params);
 
         let universe = 100_000u32;
@@ -2935,7 +3430,11 @@ mod tests {
     #[test]
     fn two_sided_handles_hard_case() {
         let s = 16u64;
-        let params = GkbParams { capacity: 8192, batch: 256, s };
+        let params = GkbParams {
+            capacity: 8192,
+            batch: 256,
+            s,
+        };
         let mut two = Gk2State::empty(params);
 
         let n: u32 = 8_000;
@@ -2965,7 +3464,11 @@ mod tests {
 
         // Sanity: the one-sided toy really *cannot* compress this sorted arrival
         // (its merge needs t_i>t_{i+1}); it keeps a representative per value.
-        let mut one = GkbState::empty(GkbParams { capacity: 8192, batch: 256, s });
+        let mut one = GkbState::empty(GkbParams {
+            capacity: 8192,
+            batch: 256,
+            s,
+        });
         one = apply_batch(&one, &(0..256u32).collect::<Vec<_>>());
         assert_eq!(
             one.actives().len(),
@@ -2985,7 +3488,11 @@ mod tests {
     /// self-verifies**, and its certified final commit matches the native state.
     #[test]
     fn gk2_circuit_round_trip() {
-        let params = GkbParams { capacity: 8, batch: 4, s: 2 };
+        let params = GkbParams {
+            capacity: 8,
+            batch: 4,
+            s: 2,
+        };
         // increasing arrival so the mirror (case-2) branch fires.
         let batch = vec![50u32, 100, 200, 300];
         let result = generate_proof2(params, batch);
@@ -3003,7 +3510,11 @@ mod tests {
     #[test]
     fn naive2_replay_is_valid_gk() {
         let s = 32u64;
-        let params = GkbParams { capacity: 2048, batch: 128, s };
+        let params = GkbParams {
+            capacity: 2048,
+            batch: 128,
+            s,
+        };
         let mut state = Gk2State::empty(params);
         let stream = lcg_stream(0x5EED, 6_000, 100_000);
         let mut seen = 0usize;
@@ -3015,11 +3526,18 @@ mod tests {
             assert_eq!(state.n as usize, seen);
             let theta = state.n / s;
             for t in state.actives() {
-                assert!(t.g + t.delta <= theta && t.g_o + t.delta_o <= theta, "B2 violated");
+                assert!(
+                    t.g + t.delta <= theta && t.g_o + t.delta_o <= theta,
+                    "B2 violated"
+                );
             }
             assert!(state.actives().len() <= params.capacity);
         }
-        eprintln!("naive replay: N={}, kept {} reps", state.n, state.actives().len());
+        eprintln!(
+            "naive replay: N={}, kept {} reps",
+            state.n,
+            state.actives().len()
+        );
     }
 
     /// **The naive per-record replay circuit self-verifies**, exercising the
@@ -3027,7 +3545,11 @@ mod tests {
     /// certified final commit matches the native per-record state.
     #[test]
     fn gk2_naive_circuit_round_trip() {
-        let params = GkbParams { capacity: 3, batch: 6, s: 1 };
+        let params = GkbParams {
+            capacity: 3,
+            batch: 6,
+            s: 1,
+        };
         let batch = vec![10u32, 20, 30, 40, 50, 60];
         let result = generate_proof2_naive(params, batch);
         assert_eq!(
@@ -3045,10 +3567,26 @@ mod tests {
     #[test]
     #[should_panic]
     fn gk2_poisoned_dummy_rejected() {
-        let params = GkbParams { capacity: 8, batch: 4, s: 2 };
+        let params = GkbParams {
+            capacity: 8,
+            batch: 4,
+            s: 2,
+        };
         let mut tuples = vec![Gk2Tuple::dummy(); params.capacity];
-        tuples[0] = Gk2Tuple { e: E_MAX, g: 5, g_o: 0, delta: 0, delta_o: 0, t: 0, active: 0 };
-        let init = Gk2State { tuples, params, n: 0 };
+        tuples[0] = Gk2Tuple {
+            e: E_MAX,
+            g: 5,
+            g_o: 0,
+            delta: 0,
+            delta_o: 0,
+            t: 0,
+            active: 0,
+        };
+        let init = Gk2State {
+            tuples,
+            params,
+            n: 0,
+        };
         // Empty batch: N_prev=0, N_t=0, but the poisoned dummy carries mass 5.
         let _ = prove_gkb2(params, init, vec![]);
     }
@@ -3060,7 +3598,11 @@ mod tests {
     #[test]
     #[should_panic]
     fn gk2_wrong_n_prev_rejected() {
-        let params = GkbParams { capacity: 8, batch: 4, s: 2 };
+        let params = GkbParams {
+            capacity: 8,
+            batch: 4,
+            s: 2,
+        };
         let init = Gk2State::empty(params); // N_prev = 0 honestly
         let batch = vec![50u32, 100, 200, 300];
         // Tamper the public N_prev to 999 while the honest state has N_prev=0.
@@ -3076,7 +3618,11 @@ mod tests {
     /// (init₂ = final₁).
     #[test]
     fn gk2_circuit_chained_epoch() {
-        let params = GkbParams { capacity: 16, batch: 8, s: 3 };
+        let params = GkbParams {
+            capacity: 16,
+            batch: 8,
+            s: 3,
+        };
         // mixed arrival so both the newer-left and newer-right (mirror) branches fire.
         let b1: Vec<u32> = vec![100, 400, 200, 700, 300, 600, 500, 800];
         let e1 = generate_proof2(params, b1);
@@ -3100,7 +3646,11 @@ mod tests {
     #[test]
     fn two_sided_mirror_branch_fires() {
         let s = 4u64; // coarse ε so merging is aggressive
-        let params = GkbParams { capacity: 64, batch: 32, s };
+        let params = GkbParams {
+            capacity: 64,
+            batch: 32,
+            s,
+        };
         let mut state = Gk2State::empty(params);
         // Increasing values => each larger value is younger => case-2 (mirror) merges.
         let batch: Vec<u32> = (0..32u32).map(|i| i * 10).collect();
@@ -3116,7 +3666,10 @@ mod tests {
         );
         // Value-sorted, distinct, mass conserved.
         for w in active.windows(2) {
-            assert!(w[0].e < w[1].e, "representatives must be value-sorted & distinct");
+            assert!(
+                w[0].e < w[1].e,
+                "representatives must be value-sorted & distinct"
+            );
         }
         assert_eq!(active.iter().map(|t| t.mass()).sum::<u64>(), 32);
         // Some representative absorbed mass on its RIGHT (g° > 0) — the mirror at work.
@@ -3124,6 +3677,9 @@ mod tests {
             active.iter().any(|t| t.g_o > 0),
             "expected a nonzero right-mass g° from the mirror branch"
         );
-        eprintln!("mirror branch: 32 increasing values → {} reps (g° absorbed)", active.len());
+        eprintln!(
+            "mirror branch: 32 increasing values → {} reps (g° absorbed)",
+            active.len()
+        );
     }
 }

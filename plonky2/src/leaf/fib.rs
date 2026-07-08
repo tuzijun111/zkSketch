@@ -7,7 +7,7 @@ use anyhow::Result;
 use plonky2::iop::target::Target;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::circuit_data::CircuitData;
 use plonky2::plonk::proof::ProofWithPublicInputs;
 
 use crate::config::{C, D, F};
@@ -21,7 +21,7 @@ pub struct FibLeaf {
 
 /// Build a circuit that advances the Fibonacci recurrence `num_steps` times.
 pub fn build_fib_leaf(num_steps: usize) -> FibLeaf {
-    let config = CircuitConfig::standard_recursion_config();
+    let config = crate::config::circuit_config();
     let mut builder = CircuitBuilder::<F, D>::new(config);
 
     let a0 = builder.add_virtual_target();
@@ -73,7 +73,7 @@ mod tests {
         let inner = prove_fib_leaf(&leaf, F::ZERO, F::ONE)?;
 
         // Outer circuit that verifies the inner proof — the §4.2 recursion primitive.
-        let config = CircuitConfig::standard_recursion_config();
+        let config = crate::config::circuit_config();
         let mut builder = CircuitBuilder::<F, D>::new(config);
         let pt = builder.add_virtual_proof_with_pis(&leaf.data.common);
         let vdt = builder.add_virtual_verifier_data(leaf.data.common.config.fri_config.cap_height);

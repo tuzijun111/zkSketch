@@ -26,7 +26,7 @@ use plonky2::hash::poseidon::PoseidonHash;
 use plonky2::iop::target::Target;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::circuit_data::CircuitData;
 
 use crate::config::{C, D, F};
 use crate::recursion::Node;
@@ -80,7 +80,7 @@ fn virtual_hash(b: &mut CircuitBuilder<F, D>) -> HashOutTarget {
 pub fn build_countmin_leaf(params: CmLeafParams) -> CountMinLeaf {
     params.validate();
     let CmLeafParams { d, w, batch: m } = params;
-    let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut b = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
 
     // ---- Public inputs ----
     let init_commit = virtual_hash(&mut b);

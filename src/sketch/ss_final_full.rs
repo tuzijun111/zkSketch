@@ -124,10 +124,18 @@ pub struct SsFullRow {
 
 impl SsFullRow {
     pub const fn real(key: u64, count: u32) -> Self {
-        Self { key, count, active: 1 }
+        Self {
+            key,
+            count,
+            active: 1,
+        }
     }
     pub const fn dummy() -> Self {
-        Self { key: 0, count: 0, active: 0 }
+        Self {
+            key: 0,
+            count: 0,
+            active: 0,
+        }
     }
 }
 
@@ -140,10 +148,18 @@ pub struct SsFullUpdate {
 
 impl SsFullUpdate {
     pub const fn real(key: u64, value: u32) -> Self {
-        Self { key, value, active: 1 }
+        Self {
+            key,
+            value,
+            active: 1,
+        }
     }
     pub const fn dummy() -> Self {
-        Self { key: 0, value: 0, active: 0 }
+        Self {
+            key: 0,
+            value: 0,
+            active: 0,
+        }
     }
 }
 
@@ -172,13 +188,20 @@ pub struct SsFullState {
 
 impl SsFullState {
     pub fn empty(params: SsFullParams) -> Self {
-        Self { rows: vec![SsFullRow::dummy(); params.capacity], params }
+        Self {
+            rows: vec![SsFullRow::dummy(); params.capacity],
+            params,
+        }
     }
     pub fn active_count(&self) -> usize {
         self.rows.iter().filter(|r| r.active == 1).count()
     }
     pub fn total_mass(&self) -> u64 {
-        self.rows.iter().filter(|r| r.active == 1).map(|r| r.count as u64).sum()
+        self.rows
+            .iter()
+            .filter(|r| r.active == 1)
+            .map(|r| r.count as u64)
+            .sum()
     }
     pub fn frequency(&self, key: u64) -> u32 {
         self.rows
@@ -277,7 +300,12 @@ fn flat_state_vals(state: &SsFullState) -> Vec<Val> {
         .iter()
         .flat_map(|r| {
             let (lo, hi) = key_lo_hi(r.key);
-            [Val::from_u32(lo), Val::from_u32(hi), Val::from_u32(r.count), Val::from_u32(r.active)]
+            [
+                Val::from_u32(lo),
+                Val::from_u32(hi),
+                Val::from_u32(r.count),
+                Val::from_u32(r.active),
+            ]
         })
         .collect()
 }
@@ -287,7 +315,12 @@ fn flat_batch_vals(batch: &[SsFullUpdate]) -> Vec<Val> {
         .iter()
         .flat_map(|u| {
             let (lo, hi) = key_lo_hi(u.key);
-            [Val::from_u32(lo), Val::from_u32(hi), Val::from_u32(u.value), Val::from_u32(u.active)]
+            [
+                Val::from_u32(lo),
+                Val::from_u32(hi),
+                Val::from_u32(u.value),
+                Val::from_u32(u.active),
+            ]
         })
         .collect()
 }
@@ -345,7 +378,11 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
         combined.push(*r);
     }
     for u in batch {
-        combined.push(SsFullRow { key: u.key, count: u.value, active: u.active });
+        combined.push(SsFullRow {
+            key: u.key,
+            count: u.value,
+            active: u.active,
+        });
     }
 
     // key-sort (ascending by key_field; stable for determinism).
@@ -377,11 +414,12 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
     }
     let mut seg_end = vec![0u32; total];
     for r in 0..total {
-        seg_end[r] = if r + 1 == total || key_field(key_sorted[r + 1].key) != key_field(key_sorted[r].key) {
-            1
-        } else {
-            0
-        };
+        seg_end[r] =
+            if r + 1 == total || key_field(key_sorted[r + 1].key) != key_field(key_sorted[r].key) {
+                1
+            } else {
+                0
+            };
     }
 
     // grouped table G: segment-end rows carry the summed count; the row is
@@ -413,20 +451,38 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
 
     // count-sort G by (active asc, count asc, key asc).
     let mut idx2: Vec<usize> = (0..total).collect();
-    idx2.sort_by_key(|&i| (grouped[i].active, grouped[i].count, key_field(grouped[i].key)));
+    idx2.sort_by_key(|&i| {
+        (
+            grouped[i].active,
+            grouped[i].count,
+            key_field(grouped[i].key),
+        )
+    });
     // Test-only: break count ties by DESCENDING key, a non-canonical order that
     // keeps a different equal-count subset across the top-s cut. The key
     // tie-break constraint must reject it. (Prod callers never set this.)
     #[cfg(test)]
     if TAMPER_TIE.with(|f| f.get()) {
         idx2.sort_by_key(|&i| {
-            (grouped[i].active, grouped[i].count, std::cmp::Reverse(key_field(grouped[i].key)))
+            (
+                grouped[i].active,
+                grouped[i].count,
+                std::cmp::Reverse(key_field(grouped[i].key)),
+            )
         });
     }
     let sigma_count = idx2.clone();
     let g_sorted: Vec<SsFullRow> = idx2.iter().map(|&i| grouped[i]).collect();
 
-    SsBuild { combined, sigma_key, grouped, key_eq_tag, seg_end, sigma_count, g_sorted }
+    SsBuild {
+        combined,
+        sigma_key,
+        grouped,
+        key_eq_tag,
+        seg_end,
+        sigma_count,
+        g_sorted,
+    }
 }
 
 /// Apply the batched SpaceSaving top-`s` update natively, returning
@@ -442,7 +498,13 @@ pub fn apply_batch_ss_full(
     let b = build_ss(s_old, batch);
     let residual: Vec<SsFullRow> = b.g_sorted[..m].to_vec();
     let s_new: Vec<SsFullRow> = b.g_sorted[m..m + cap].to_vec();
-    (SsFullState { rows: s_new, params: s_old.params }, residual)
+    (
+        SsFullState {
+            rows: s_new,
+            params: s_old.params,
+        },
+        residual,
+    )
 }
 
 // ─── Test-only soundness hook ─────────────────────────────────────────────
@@ -495,34 +557,25 @@ pub fn prove_ss_full_exposed(
     prove_ss_full_inner(params, initial_state, batch, true)
 }
 
-fn prove_ss_full_inner(
+/// A built, reusable SpaceSaving leaf: circuit graph + prover data +
+/// registered prover. Build once per `(params, expose_boundary)`; each
+/// [`Self::prove_epoch`] swaps the two Permute ops’ trace-generation hints via
+/// `Circuit::update_permute_witnesses`, hoisting graph build and
+/// AIR/`ProverData` prep out of the epoch loop.
+pub struct SsFullLeafCircuit {
     params: SsFullParams,
-    initial_state: SsFullState,
-    batch: Vec<SsFullUpdate>,
-    expose_boundary: bool,
-) -> SsFullLeafProof {
-    params.validate();
-    assert_eq!(initial_state.params, params);
-    assert_eq!(batch.len(), params.batch);
+    circuit: p3_circuit::Circuit<Challenge>,
+    prover: BatchStarkProver<ConfigWithFriParams>,
+    circuit_prover_data: Rc<CircuitProverData<ConfigWithFriParams>>,
+    trace_rows: u64,
+}
 
+/// Build the reusable SpaceSaving leaf circuit for a shape.
+pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFullLeafCircuit {
+    params.validate();
     let cap = params.capacity;
     let m = params.batch;
     let total = cap + m;
-
-    // ─── Native side ────────────────────────────────────────────────────
-    let (final_state, residual_rows) = apply_batch_ss_full(&initial_state, &batch);
-    let build = build_ss(&initial_state, &batch);
-    let initial_commit = commit_ss_state(&initial_state);
-    let final_commit = commit_ss_state(&final_state);
-    let batch_commit = commit_ss_batch(&batch);
-
-    // Sanity: mass conservation.
-    let init_mass = initial_state.total_mass();
-    let batch_mass: u64 = batch.iter().filter(|u| u.active == 1).map(|u| u.value as u64).sum();
-    let final_mass = final_state.total_mass();
-    let residual_mass: u64 =
-        residual_rows.iter().filter(|r| r.active == 1).map(|r| r.count as u64).sum();
-    assert_eq!(final_mass + residual_mass, init_mass + batch_mass);
 
     // ─── Build circuit ──────────────────────────────────────────────────
     let mut b = CircuitBuilder::<Challenge>::new();
@@ -555,57 +608,88 @@ fn prove_ss_full_inner(
     // Private inputs (alloc order MUST match the packing below):
     //   init, final(=s_new), batch, key_sorted, grouped, g_sorted,
     //   residual, key_eq_tag, key_inv_diff.
-    let init_packed: Vec<ExprId> = (0..cap).map(|_| b.alloc_private_input("init_packed")).collect();
-    let final_packed: Vec<ExprId> =
-        (0..cap).map(|_| b.alloc_private_input("final_packed")).collect();
-    let batch_packed: Vec<ExprId> =
-        (0..m).map(|_| b.alloc_private_input("batch_packed")).collect();
-    let key_sorted_packed: Vec<ExprId> =
-        (0..total).map(|_| b.alloc_private_input("key_sorted_packed")).collect();
-    let grouped_packed: Vec<ExprId> =
-        (0..total).map(|_| b.alloc_private_input("grouped_packed")).collect();
-    let g_sorted_packed: Vec<ExprId> =
-        (0..total).map(|_| b.alloc_private_input("g_sorted_packed")).collect();
-    let residual_packed: Vec<ExprId> =
-        (0..m).map(|_| b.alloc_private_input("residual_packed")).collect();
-    let key_eq_tag: Vec<ExprId> =
-        (0..total).map(|_| b.alloc_private_input("key_eq_tag")).collect();
-    let key_inv_diff: Vec<ExprId> =
-        (0..total).map(|_| b.alloc_private_input("key_inv_diff")).collect();
+    let init_packed: Vec<ExprId> = (0..cap)
+        .map(|_| b.alloc_private_input("init_packed"))
+        .collect();
+    let final_packed: Vec<ExprId> = (0..cap)
+        .map(|_| b.alloc_private_input("final_packed"))
+        .collect();
+    let batch_packed: Vec<ExprId> = (0..m)
+        .map(|_| b.alloc_private_input("batch_packed"))
+        .collect();
+    let key_sorted_packed: Vec<ExprId> = (0..total)
+        .map(|_| b.alloc_private_input("key_sorted_packed"))
+        .collect();
+    let grouped_packed: Vec<ExprId> = (0..total)
+        .map(|_| b.alloc_private_input("grouped_packed"))
+        .collect();
+    let g_sorted_packed: Vec<ExprId> = (0..total)
+        .map(|_| b.alloc_private_input("g_sorted_packed"))
+        .collect();
+    let residual_packed: Vec<ExprId> = (0..m)
+        .map(|_| b.alloc_private_input("residual_packed"))
+        .collect();
+    let key_eq_tag: Vec<ExprId> = (0..total)
+        .map(|_| b.alloc_private_input("key_eq_tag"))
+        .collect();
+    let key_inv_diff: Vec<ExprId> = (0..total)
+        .map(|_| b.alloc_private_input("key_inv_diff"))
+        .collect();
     // Inverse hint for the per-segment active running sum (is-nonzero gadget
     // that binds grouped.active = se·(acc_active≠0)).
-    let acc_active_inv: Vec<ExprId> =
-        (0..total).map(|_| b.alloc_private_input("acc_active_inv")).collect();
+    let acc_active_inv: Vec<ExprId> = (0..total)
+        .map(|_| b.alloc_private_input("acc_active_inv"))
+        .collect();
 
     // ─── Stage 1: commit bindings ───────────────────────────────────────
-    let h_init = b.add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &init_packed, true).expect("hash init");
+    let h_init = b
+        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &init_packed, true)
+        .expect("hash init");
     for i in 0..DIGEST_PACKING {
         b.connect(h_init[i], init_pis[i]);
     }
-    let h_final = b.add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &final_packed, true).expect("hash final");
+    let h_final = b
+        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &final_packed, true)
+        .expect("hash final");
     for i in 0..DIGEST_PACKING {
         b.connect(h_final[i], final_pis[i]);
     }
-    let h_batch = b.add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &batch_packed, true).expect("hash batch");
+    let h_batch = b
+        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &batch_packed, true)
+        .expect("hash batch");
     for i in 0..DIGEST_PACKING {
         b.connect(h_batch[i], batch_pis[i]);
     }
 
     // ─── Stage 2: decompose all packed sequences ────────────────────────
-    let init_fields: Vec<Vec<ExprId>> =
-        init_packed.iter().map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d init")).collect();
-    let final_fields: Vec<Vec<ExprId>> =
-        final_packed.iter().map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d final")).collect();
-    let batch_fields: Vec<Vec<ExprId>> =
-        batch_packed.iter().map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d batch")).collect();
-    let key_sorted_fields: Vec<Vec<ExprId>> =
-        key_sorted_packed.iter().map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d ks")).collect();
-    let grouped_fields: Vec<Vec<ExprId>> =
-        grouped_packed.iter().map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d g")).collect();
-    let g_sorted_fields: Vec<Vec<ExprId>> =
-        g_sorted_packed.iter().map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d gs")).collect();
-    let residual_fields: Vec<Vec<ExprId>> =
-        residual_packed.iter().map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d res")).collect();
+    let init_fields: Vec<Vec<ExprId>> = init_packed
+        .iter()
+        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d init"))
+        .collect();
+    let final_fields: Vec<Vec<ExprId>> = final_packed
+        .iter()
+        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d final"))
+        .collect();
+    let batch_fields: Vec<Vec<ExprId>> = batch_packed
+        .iter()
+        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d batch"))
+        .collect();
+    let key_sorted_fields: Vec<Vec<ExprId>> = key_sorted_packed
+        .iter()
+        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d ks"))
+        .collect();
+    let grouped_fields: Vec<Vec<ExprId>> = grouped_packed
+        .iter()
+        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d g"))
+        .collect();
+    let g_sorted_fields: Vec<Vec<ExprId>> = g_sorted_packed
+        .iter()
+        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d gs"))
+        .collect();
+    let residual_fields: Vec<Vec<ExprId>> = residual_packed
+        .iter()
+        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d res"))
+        .collect();
 
     // ─── Stage 3: boolean active-flag checks ────────────────────────────
     let bool_check = |b: &mut CircuitBuilder<Challenge>, a: ExprId| {
@@ -645,15 +729,20 @@ fn prove_ss_full_inner(
     let mut combined: Vec<ExprId> = Vec::with_capacity(total);
     combined.extend(init_packed.iter().copied());
     combined.extend(batch_packed.iter().copied());
-    let ks_permuted = b.add_permute(&combined, build.sigma_key.clone()).expect("permute key-sort");
+    // Placeholder identity permutations — `prove_epoch` swaps in the real
+    // per-batch sigmas via `update_permute_witnesses` before each run.
+    let ks_permuted = b
+        .add_permute(&combined, (0..combined.len()).collect::<Vec<_>>())
+        .expect("permute key-sort");
     for i in 0..total {
         b.connect(ks_permuted[i], key_sorted_packed[i]);
     }
 
     // ─── Stage 5: group-by-key (adjacency tags + running sum) ───────────
     // key_eq_tag[r] ∈ {0,1}, tag[0]=0. PoneglyphDB §4.3 constraints.
-    let ks_keyfield: Vec<ExprId> =
-        (0..total).map(|r| key_field_of(&mut b, &key_sorted_fields[r])).collect();
+    let ks_keyfield: Vec<ExprId> = (0..total)
+        .map(|r| key_field_of(&mut b, &key_sorted_fields[r]))
+        .collect();
 
     // ── Union key-sortedness (closes the fragmentation soundness hole) ──
     // Bind every union key to a single limb in [0, 2^KEY_DIFF_BITS) and force
@@ -775,7 +864,12 @@ fn prove_ss_full_inner(
     }
 
     // ─── Stage 6: count-sort G → g_sorted via PermuteAir ────────────────
-    let cs_permuted = b.add_permute(&grouped_packed, build.sigma_count.clone()).expect("permute count-sort");
+    let cs_permuted = b
+        .add_permute(
+            &grouped_packed,
+            (0..grouped_packed.len()).collect::<Vec<_>>(),
+        )
+        .expect("permute count-sort");
     for i in 0..total {
         b.connect(cs_permuted[i], g_sorted_packed[i]);
     }
@@ -878,88 +972,12 @@ fn prove_ss_full_inner(
 
     let circuit = b.build().expect("build ss_full circuit");
 
-    // ─── Pack public + private ──────────────────────────────────────────
-    let init_commit_packed = pack_commit_to_challenge(&crate::commitment::CountMinCommit(initial_commit.0));
-    let final_commit_packed = pack_commit_to_challenge(&crate::commitment::CountMinCommit(final_commit.0));
-    let batch_commit_packed = pack_commit_to_challenge(&crate::commitment::CountMinCommit(batch_commit.0));
-
-    let mut public_inputs: Vec<Challenge> = Vec::new();
-    public_inputs.extend_from_slice(&init_commit_packed);
-    public_inputs.extend_from_slice(&final_commit_packed);
-    public_inputs.extend_from_slice(&batch_commit_packed);
-
-    // MUST match alloc order.
-    let mut private_inputs: Vec<Challenge> = Vec::new();
-    private_inputs.extend_from_slice(&pack_state_to_challenge(&initial_state));
-    private_inputs.extend_from_slice(&pack_state_to_challenge(&final_state));
-    private_inputs.extend_from_slice(&pack_batch_to_challenge(&batch));
-    let key_sorted_rows: Vec<SsFullRow> =
-        build.sigma_key.iter().map(|&i| build.combined[i]).collect();
-    private_inputs.extend_from_slice(&pack_rows_to_challenge(&key_sorted_rows));
-    private_inputs.extend_from_slice(&pack_rows_to_challenge(&build.grouped));
-    #[allow(unused_mut)]
-    let mut g_sorted_vals = pack_rows_to_challenge(&build.g_sorted);
-    // [test-only] corrupt the post-retention table to confirm the
-    // count-sort PermuteAir + sortedness + compaction reject it.
-    #[cfg(test)]
-    if TAMPER_GSORTED.with(|c| c.get()) {
-        g_sorted_vals[0] += Challenge::ONE;
-    }
-    private_inputs.extend_from_slice(&g_sorted_vals);
-    private_inputs.extend_from_slice(&pack_rows_to_challenge(&residual_rows));
-    // key_eq_tag
-    for &t in &build.key_eq_tag {
-        private_inputs.push(if t == 1 { Challenge::ONE } else { Challenge::ZERO });
-    }
-    // key_inv_diff: inverse of (key_sorted[r] − key_sorted[r-1]) when
-    // distinct, else 0. r=0 unused (push 0).
-    {
-        use p3_field::Field;
-        private_inputs.push(Challenge::ZERO);
-        for r in 1..total {
-            let d = key_field(key_sorted_rows[r].key) as i128
-                - key_field(key_sorted_rows[r - 1].key) as i128;
-            let inv = if d == 0 {
-                Challenge::ZERO
-            } else {
-                // diff as a field element = key_field[r] − key_field[r-1]
-                let cur = Challenge::from_u64(key_field(key_sorted_rows[r].key) as u64);
-                let prev = Challenge::from_u64(key_field(key_sorted_rows[r - 1].key) as u64);
-                (cur - prev).inverse()
-            };
-            private_inputs.push(inv);
-        }
-    }
-    // acc_active_inv: inverse of the per-segment active running sum (0 when the
-    // sum is 0), for the is-nonzero gadget that binds grouped.active.
-    {
-        use p3_field::Field;
-        let mut acc_a = 0u64;
-        for r in 0..total {
-            acc_a = if r > 0 && build.key_eq_tag[r] == 1 {
-                acc_a + key_sorted_rows[r].active as u64
-            } else {
-                key_sorted_rows[r].active as u64
-            };
-            let inv = if acc_a == 0 { Challenge::ZERO } else { Challenge::from_u64(acc_a).inverse() };
-            private_inputs.push(inv);
-        }
-    }
-    let _ = &build.seg_end; // segment ends are recomputed in-circuit from tags
-
-    // ─── Run + prove ────────────────────────────────────────────────────
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
-        runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
-        runner.run().expect("run ss_full circuit")
-    };
-    let __witness = __t_w.elapsed(); // witness_gen = trace generation only
-
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
-    let mut preprocessors = vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
+    let mut preprocessors = vec![
+        poseidon2_preprocessor::<Val>(),
+        recompose_preprocessor::<Val>(false),
+    ];
     preprocessors.push(permute_preprocessor::<Val>());
     preprocessors.push(range_preprocessor::<Val>());
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
@@ -983,7 +1001,8 @@ fn prove_ss_full_inner(
     let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
     let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
-    let circuit_prover_data = CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
+    let circuit_prover_data =
+        CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
 
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
@@ -993,25 +1012,190 @@ fn prove_ss_full_inner(
     if expose_boundary {
         prover.register_expose_table::<4>();
     }
-    let __t_p = std::time::Instant::now();
-    let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove_all_tables (ss_full)");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify ss_full leaf");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
-    });
+    let trace_rows: u64 = ext_degrees.iter().map(|&d| 1u64 << d).sum();
 
-    SsFullLeafProof {
-        output: RecursionOutput(proof, Rc::new(circuit_prover_data)),
-        initial: initial_commit,
-        final_: final_commit,
-        batch_commit,
+    SsFullLeafCircuit {
         params,
+        circuit,
+        prover,
+        circuit_prover_data: Rc::new(circuit_prover_data),
+        trace_rows,
     }
+}
+
+impl SsFullLeafCircuit {
+    /// Prove one epoch on the prebuilt circuit.
+    pub fn prove_epoch(
+        &mut self,
+        initial_state: SsFullState,
+        batch: Vec<SsFullUpdate>,
+    ) -> SsFullLeafProof {
+        let params = self.params;
+        assert_eq!(initial_state.params, params);
+        assert_eq!(batch.len(), params.batch);
+
+        let cap = params.capacity;
+        let m = params.batch;
+        let total = cap + m;
+
+        // ─── Native side ────────────────────────────────────────────────────
+        let (final_state, residual_rows) = apply_batch_ss_full(&initial_state, &batch);
+        let build = build_ss(&initial_state, &batch);
+        let initial_commit = commit_ss_state(&initial_state);
+        let final_commit = commit_ss_state(&final_state);
+        let batch_commit = commit_ss_batch(&batch);
+
+        // Sanity: mass conservation.
+        let init_mass = initial_state.total_mass();
+        let batch_mass: u64 = batch
+            .iter()
+            .filter(|u| u.active == 1)
+            .map(|u| u.value as u64)
+            .sum();
+        let final_mass = final_state.total_mass();
+        let residual_mass: u64 = residual_rows
+            .iter()
+            .filter(|r| r.active == 1)
+            .map(|r| r.count as u64)
+            .sum();
+        assert_eq!(final_mass + residual_mass, init_mass + batch_mass);
+
+        // Swap the real per-batch permutation hints into the prebuilt graph
+        // (op order: key-sort permute, then count-sort permute).
+        self.circuit
+            .update_permute_witnesses(&[build.sigma_key.clone(), build.sigma_count.clone()])
+            .expect("update permute witnesses (ss_full)");
+
+        // ─── Pack public + private ──────────────────────────────────────────
+        let init_commit_packed =
+            pack_commit_to_challenge(&crate::commitment::CountMinCommit(initial_commit.0));
+        let final_commit_packed =
+            pack_commit_to_challenge(&crate::commitment::CountMinCommit(final_commit.0));
+        let batch_commit_packed =
+            pack_commit_to_challenge(&crate::commitment::CountMinCommit(batch_commit.0));
+
+        let mut public_inputs: Vec<Challenge> = Vec::new();
+        public_inputs.extend_from_slice(&init_commit_packed);
+        public_inputs.extend_from_slice(&final_commit_packed);
+        public_inputs.extend_from_slice(&batch_commit_packed);
+
+        // MUST match alloc order.
+        let mut private_inputs: Vec<Challenge> = Vec::new();
+        private_inputs.extend_from_slice(&pack_state_to_challenge(&initial_state));
+        private_inputs.extend_from_slice(&pack_state_to_challenge(&final_state));
+        private_inputs.extend_from_slice(&pack_batch_to_challenge(&batch));
+        let key_sorted_rows: Vec<SsFullRow> =
+            build.sigma_key.iter().map(|&i| build.combined[i]).collect();
+        private_inputs.extend_from_slice(&pack_rows_to_challenge(&key_sorted_rows));
+        private_inputs.extend_from_slice(&pack_rows_to_challenge(&build.grouped));
+        #[allow(unused_mut)]
+        let mut g_sorted_vals = pack_rows_to_challenge(&build.g_sorted);
+        // [test-only] corrupt the post-retention table to confirm the
+        // count-sort PermuteAir + sortedness + compaction reject it.
+        #[cfg(test)]
+        if TAMPER_GSORTED.with(|c| c.get()) {
+            g_sorted_vals[0] += Challenge::ONE;
+        }
+        private_inputs.extend_from_slice(&g_sorted_vals);
+        private_inputs.extend_from_slice(&pack_rows_to_challenge(&residual_rows));
+        // key_eq_tag
+        for &t in &build.key_eq_tag {
+            private_inputs.push(if t == 1 {
+                Challenge::ONE
+            } else {
+                Challenge::ZERO
+            });
+        }
+        // key_inv_diff: inverse of (key_sorted[r] − key_sorted[r-1]) when
+        // distinct, else 0. r=0 unused (push 0).
+        {
+            use p3_field::Field;
+            private_inputs.push(Challenge::ZERO);
+            for r in 1..total {
+                let d = key_field(key_sorted_rows[r].key) as i128
+                    - key_field(key_sorted_rows[r - 1].key) as i128;
+                let inv = if d == 0 {
+                    Challenge::ZERO
+                } else {
+                    // diff as a field element = key_field[r] − key_field[r-1]
+                    let cur = Challenge::from_u64(key_field(key_sorted_rows[r].key) as u64);
+                    let prev = Challenge::from_u64(key_field(key_sorted_rows[r - 1].key) as u64);
+                    (cur - prev).inverse()
+                };
+                private_inputs.push(inv);
+            }
+        }
+        // acc_active_inv: inverse of the per-segment active running sum (0 when the
+        // sum is 0), for the is-nonzero gadget that binds grouped.active.
+        {
+            use p3_field::Field;
+            let mut acc_a = 0u64;
+            for r in 0..total {
+                acc_a = if r > 0 && build.key_eq_tag[r] == 1 {
+                    acc_a + key_sorted_rows[r].active as u64
+                } else {
+                    key_sorted_rows[r].active as u64
+                };
+                let inv = if acc_a == 0 {
+                    Challenge::ZERO
+                } else {
+                    Challenge::from_u64(acc_a).inverse()
+                };
+                private_inputs.push(inv);
+            }
+        }
+        let _ = &build.seg_end; // segment ends are recomputed in-circuit from tags
+
+        // ─── Run + prove ────────────────────────────────────────────────────
+        let __t_w = std::time::Instant::now();
+        let traces = {
+            let mut runner = self.circuit.runner();
+            runner
+                .set_public_inputs(&public_inputs)
+                .expect("set_public_inputs");
+            runner
+                .set_private_inputs(&private_inputs)
+                .expect("set_private_inputs");
+            runner.run().expect("run ss_full circuit")
+        };
+        let __witness = __t_w.elapsed(); // witness_gen = trace generation only
+
+        let __t_p = std::time::Instant::now();
+        let proof = self
+            .prover
+            .prove_all_tables(&traces, &self.circuit_prover_data)
+            .expect("prove_all_tables (ss_full)");
+        let __prove = __t_p.elapsed();
+        let __t_v = std::time::Instant::now();
+        self.prover
+            .verify_all_tables(&proof)
+            .expect("self-verify ss_full leaf");
+        crate::recursion::recursive::timing::record(
+            crate::recursion::recursive::timing::LeafTiming {
+                witness: __witness,
+                prove: __prove,
+                verify: __t_v.elapsed(),
+                trace_rows: self.trace_rows,
+            },
+        );
+
+        SsFullLeafProof {
+            output: RecursionOutput(proof, Rc::clone(&self.circuit_prover_data)),
+            initial: initial_commit,
+            final_: final_commit,
+            batch_commit,
+            params,
+        }
+    }
+}
+
+fn prove_ss_full_inner(
+    params: SsFullParams,
+    initial_state: SsFullState,
+    batch: Vec<SsFullUpdate>,
+    expose_boundary: bool,
+) -> SsFullLeafProof {
+    build_ss_full_leaf(params, expose_boundary).prove_epoch(initial_state, batch)
 }
 
 pub fn generate_proof(params: SsFullParams, updates: Vec<SsFullUpdate>) -> SsFullProof {
@@ -1047,10 +1231,15 @@ mod tests {
     }
 
     fn resolve_threads() -> (Option<usize>, String) {
-        let n: Option<usize> = std::env::var("V3_SWEEP_THREADS").ok().and_then(|s| s.parse().ok());
+        let n: Option<usize> = std::env::var("V3_SWEEP_THREADS")
+            .ok()
+            .and_then(|s| s.parse().ok());
         let label = match n {
             Some(k) => format!("V3_SWEEP_THREADS={k}"),
-            None => format!("Rayon default pool ({} threads)", rayon::current_num_threads()),
+            None => format!(
+                "Rayon default pool ({} threads)",
+                rayon::current_num_threads()
+            ),
         };
         (n, label)
     }
@@ -1069,10 +1258,16 @@ mod tests {
 
     #[test]
     fn ss_full_round_trip() {
-        let params = SsFullParams { capacity: 4, batch: 2 };
+        let params = SsFullParams {
+            capacity: 4,
+            batch: 2,
+        };
         let updates = vec![SsFullUpdate::real(7, 1), SsFullUpdate::real(11, 1)];
         let result = generate_proof(params, updates);
-        assert_eq!(commit_ss_state(&result.final_state).0, result.proof.final_.0);
+        assert_eq!(
+            commit_ss_state(&result.final_state).0,
+            result.proof.final_.0
+        );
         assert_eq!(result.final_state.total_mass(), 2);
     }
 
@@ -1080,11 +1275,22 @@ mod tests {
     /// candidate (count 2), and the proof certifies it.
     #[test]
     fn ss_full_in_circuit_grouping_sums_counts() {
-        let params = SsFullParams { capacity: 4, batch: 2 };
+        let params = SsFullParams {
+            capacity: 4,
+            batch: 2,
+        };
         let updates = vec![SsFullUpdate::real(42, 1), SsFullUpdate::real(42, 1)];
         let result = generate_proof(params, updates);
-        assert_eq!(commit_ss_state(&result.final_state).0, result.proof.final_.0);
-        let actives: Vec<_> = result.final_state.rows.iter().filter(|r| r.active == 1).collect();
+        assert_eq!(
+            commit_ss_state(&result.final_state).0,
+            result.proof.final_.0
+        );
+        let actives: Vec<_> = result
+            .final_state
+            .rows
+            .iter()
+            .filter(|r| r.active == 1)
+            .collect();
         assert_eq!(actives.len(), 1, "same key groups into one candidate");
         assert_eq!(actives[0].key, 42);
         assert_eq!(actives[0].count, 2, "grouped count = 1 + 1");
@@ -1096,7 +1302,10 @@ mod tests {
     /// lowest spill to the residual — and the leaf verifies.
     #[test]
     fn ss_full_top_s_retention() {
-        let params = SsFullParams { capacity: 2, batch: 4 };
+        let params = SsFullParams {
+            capacity: 2,
+            batch: 4,
+        };
         // weights 1,2,3,4 on distinct keys → top-2 are the weight-3 and
         // weight-4 keys.
         let updates = vec![
@@ -1114,13 +1323,24 @@ mod tests {
             c.sort_unstable();
             c
         };
-        assert_eq!(kept_counts, vec![3, 4], "the two largest counts are retained");
+        assert_eq!(
+            kept_counts,
+            vec![3, 4],
+            "the two largest counts are retained"
+        );
         // residual holds the lower candidates; mass is conserved.
-        let res_mass: u64 = residual.iter().filter(|r| r.active == 1).map(|r| r.count as u64).sum();
+        let res_mass: u64 = residual
+            .iter()
+            .filter(|r| r.active == 1)
+            .map(|r| r.count as u64)
+            .sum();
         assert_eq!(s_new.total_mass() + res_mass, 1 + 2 + 3 + 4);
 
         let result = generate_proof(params, updates);
-        assert_eq!(commit_ss_state(&result.final_state).0, result.proof.final_.0);
+        assert_eq!(
+            commit_ss_state(&result.final_state).0,
+            result.proof.final_.0
+        );
     }
 
     /// Soundness: a corrupted post-retention table (not the count-sort
@@ -1128,7 +1348,10 @@ mod tests {
     /// + sortedness + compaction constraints.
     #[test]
     fn ss_full_soundness_rejects_bad_table() {
-        let params = SsFullParams { capacity: 4, batch: 2 };
+        let params = SsFullParams {
+            capacity: 4,
+            batch: 2,
+        };
         let updates = vec![SsFullUpdate::real(7, 1), SsFullUpdate::real(11, 1)];
 
         TAMPER_GSORTED.with(|c| c.set(false));
@@ -1139,7 +1362,10 @@ mod tests {
             generate_proof(params, updates)
         }));
         TAMPER_GSORTED.with(|c| c.set(false));
-        assert!(bad.is_err(), "corrupted g_sorted accepted — top-s constraints unsound");
+        assert!(
+            bad.is_err(),
+            "corrupted g_sorted accepted — top-s constraints unsound"
+        );
     }
 
     #[test]
@@ -1147,7 +1373,10 @@ mod tests {
     fn ss_full_proving_time_with_different_active_counts() {
         use std::time::Instant;
         let (threads, threads_label) = resolve_threads();
-        let params = SsFullParams { capacity: 32, batch: 100 };
+        let params = SsFullParams {
+            capacity: 32,
+            batch: 100,
+        };
         println!();
         println!("ss_final_full — proving time vs. active-count density");
         println!("=====================================================");
@@ -1161,7 +1390,10 @@ mod tests {
                 let _ = generate_proof(params, updates);
                 t.elapsed()
             });
-            println!("  active={active:>3} (of {:>3})   prove {elapsed:>10.2?}", params.batch);
+            println!(
+                "  active={active:>3} (of {:>3})   prove {elapsed:>10.2?}",
+                params.batch
+            );
         }
     }
 
@@ -1170,7 +1402,10 @@ mod tests {
     fn ss_full_proving_time_merge_two_leaves() {
         use std::time::Instant;
         let (threads, threads_label) = resolve_threads();
-        let params = SsFullParams { capacity: 32, batch: 100 };
+        let params = SsFullParams {
+            capacity: 32,
+            batch: 100,
+        };
         println!();
         println!("ss_final_full — merge proving-time check");
         println!("==========================================");
@@ -1200,7 +1435,10 @@ mod tests {
         use std::path::PathBuf;
         use std::time::Instant;
         let (threads, threads_label) = resolve_threads();
-        let params = SsFullParams { capacity: 32, batch: 100 };
+        let params = SsFullParams {
+            capacity: 32,
+            batch: 100,
+        };
         let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/proofs");
         fs::create_dir_all(&out_dir).expect("mkdir");
         println!();
@@ -1247,7 +1485,10 @@ mod tests {
     /// (A evicted). The fix rejects it.
     #[test]
     fn fragmentation_rejected() {
-        let params = SsFullParams { capacity: 2, batch: 2 };
+        let params = SsFullParams {
+            capacity: 2,
+            batch: 2,
+        };
         // key_field(1) < key_field(2) < key_field(3); all non-zero (0 = dummy).
         let (ka, kb, kc) = (1u64, 2u64, 3u64);
         let initial = SsFullState {
@@ -1259,9 +1500,17 @@ mod tests {
         // Honest transition keeps the true top-2 {A:10, C:9}, evicts B — and its
         // proof self-verifies (key-sorted union passes the new constraint).
         let (honest_final, _) = apply_batch_ss_full(&initial, &batch);
-        assert_eq!(honest_final.frequency(ka), 10, "honest keeps A:10 (true heaviest)");
+        assert_eq!(
+            honest_final.frequency(ka),
+            10,
+            "honest keeps A:10 (true heaviest)"
+        );
         assert_eq!(honest_final.frequency(kc), 9, "honest keeps C:9");
-        assert_eq!(honest_final.frequency(kb), 0, "honest evicts B:8 (lightest)");
+        assert_eq!(
+            honest_final.frequency(kb),
+            0,
+            "honest evicts B:8 (lightest)"
+        );
         let _honest_proof = prove_ss_full(params, initial.clone(), batch.clone());
 
         // Attack: fragment A. Natively it WOULD certify a wrong state (A evicted)…
@@ -1271,8 +1520,16 @@ mod tests {
             prove_ss_full(params, initial.clone(), batch.clone())
         }));
         TAMPER_FRAGMENT.with(|f| f.set(false));
-        assert_eq!(mal_final.frequency(ka), 0, "the attack WOULD evict true top key A");
-        assert_eq!(mal_final.frequency(kb), 8, "the attack WOULD wrongly retain B:8");
+        assert_eq!(
+            mal_final.frequency(ka),
+            0,
+            "the attack WOULD evict true top key A"
+        );
+        assert_eq!(
+            mal_final.frequency(kb),
+            8,
+            "the attack WOULD wrongly retain B:8"
+        );
 
         // …but the circuit now REJECTS the fragmenting union (non-sorted keys
         // fail the key-sortedness range-check → witness/self-verify fails).
@@ -1295,7 +1552,10 @@ mod tests {
     /// rejects it.
     #[test]
     fn tie_break_rejected() {
-        let params = SsFullParams { capacity: 2, batch: 2 };
+        let params = SsFullParams {
+            capacity: 2,
+            batch: 2,
+        };
         let (ka, kb, kc) = (1u64, 2u64, 3u64);
         let initial = SsFullState {
             rows: vec![SsFullRow::real(ka, 5), SsFullRow::real(kb, 5)],
@@ -1308,7 +1568,11 @@ mod tests {
         let (honest_final, _) = apply_batch_ss_full(&initial, &batch);
         assert_eq!(honest_final.frequency(kb), 5);
         assert_eq!(honest_final.frequency(kc), 5);
-        assert_eq!(honest_final.frequency(ka), 0, "canonical order evicts smallest tied key A");
+        assert_eq!(
+            honest_final.frequency(ka),
+            0,
+            "canonical order evicts smallest tied key A"
+        );
         let _honest = prove_ss_full(params, initial.clone(), batch.clone());
 
         // Non-canonical (descending-key) reorder WOULD retain {A:5, B:5}, evicting C…
@@ -1318,8 +1582,16 @@ mod tests {
             prove_ss_full(params, initial.clone(), batch.clone())
         }));
         TAMPER_TIE.with(|f| f.set(false));
-        assert_eq!(mal_final.frequency(kc), 0, "the reorder WOULD evict a different tied key C");
-        assert_eq!(mal_final.frequency(ka), 5, "the reorder WOULD instead retain A");
+        assert_eq!(
+            mal_final.frequency(kc),
+            0,
+            "the reorder WOULD evict a different tied key C"
+        );
+        assert_eq!(
+            mal_final.frequency(ka),
+            5,
+            "the reorder WOULD instead retain A"
+        );
 
         // …but the key tie-break rejects the non-canonical order.
         assert!(
@@ -1342,7 +1614,10 @@ mod tests {
     /// The active binding rejects the demotion.
     #[test]
     fn count0_active_rejected() {
-        let params = SsFullParams { capacity: 2, batch: 2 };
+        let params = SsFullParams {
+            capacity: 2,
+            batch: 2,
+        };
         let (ka, kc, kd) = (1u64, 3u64, 4u64);
         let initial = SsFullState {
             rows: vec![SsFullRow::real(ka, 5), SsFullRow::dummy()],
@@ -1353,7 +1628,11 @@ mod tests {
         // Honest: A retained; the larger-key count-0 candidate D fills the
         // leftover slot; C is evicted — and it self-verifies.
         let (honest_final, _) = apply_batch_ss_full(&initial, &batch);
-        assert_eq!(honest_final.frequency(ka), 5, "A (the only weighted key) retained");
+        assert_eq!(
+            honest_final.frequency(ka),
+            5,
+            "A (the only weighted key) retained"
+        );
         let _honest = prove_ss_full(params, initial.clone(), batch.clone());
 
         // Demoting D's active bit WOULD retain {A, C} instead — a different set…
@@ -1378,7 +1657,10 @@ mod tests {
     /// bound is rejected. Honest small counts still verify.
     #[test]
     fn count_overflow_rejected() {
-        let params = SsFullParams { capacity: 2, batch: 2 };
+        let params = SsFullParams {
+            capacity: 2,
+            batch: 2,
+        };
         // Honest small-count batch verifies.
         let _ok = prove_ss_full(
             params,
@@ -1395,7 +1677,10 @@ mod tests {
                 vec![SsFullUpdate::real(1, over), SsFullUpdate::real(2, 1)],
             )
         }));
-        assert!(mal.is_err(), "a count ≥ 2^(COUNT_DIFF_BITS−1) must be rejected by the range-check");
+        assert!(
+            mal.is_err(),
+            "a count ≥ 2^(COUNT_DIFF_BITS−1) must be rejected by the range-check"
+        );
     }
 
     /// **Regression (canonicality parity with GK): a malformed S_old dummy
@@ -1405,7 +1690,10 @@ mod tests {
     /// outright, keeping SS in lockstep with the GK hardening.
     #[test]
     fn malformed_dummy_count_rejected() {
-        let params = SsFullParams { capacity: 2, batch: 2 };
+        let params = SsFullParams {
+            capacity: 2,
+            batch: 2,
+        };
         let batch = vec![SsFullUpdate::real(7, 1), SsFullUpdate::dummy()];
 
         // Honest all-zero-dummy S_old proves fine.
@@ -1415,7 +1703,11 @@ mod tests {
         let initial = SsFullState {
             rows: vec![
                 SsFullRow::real(5, 1),
-                SsFullRow { key: 3, count: 9, active: 0 },
+                SsFullRow {
+                    key: 3,
+                    count: 9,
+                    active: 0,
+                },
             ],
             params,
         };

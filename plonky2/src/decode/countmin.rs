@@ -20,7 +20,7 @@ use plonky2::hash::poseidon::PoseidonHash;
 use plonky2::iop::target::Target;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::circuit_data::CircuitData;
 
 use crate::config::{C, D, F};
 use crate::decode::{DecodeProof, ReleasePolicy};
@@ -59,7 +59,7 @@ pub fn build_cm_decode(params: CmDecodeParams) -> CmDecodeLeaf {
     let w_log2 = w.trailing_zeros() as usize;
     let num_cells = d * w;
 
-    let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut b = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
     let one = b.one();
     let zero = b.zero();
 

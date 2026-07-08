@@ -19,6 +19,13 @@ verify time, and proof size can be compared head-to-head:
 > one-time artifact is circuit preprocessing (the AIR/`StarkConfig` on plonky3, the
 > `CircuitData` on plonky2), built in code; nothing needs to be generated once and
 > reloaded.
+>
+> **Same security target.** Both backends are parameterized to a **124-bit
+> conjectured FRI security target** — plonky3 via `SECURITY_LEVEL = 124` in
+> `src/config.rs`, plonky2 via `circuit_config()` in `plonky2/src/config.rs`
+> (16 PoW bits + rate 3 × 36 query rounds; plonky2's stock
+> `standard_recursion_config` is 100-bit) — so cross-stack proof sizes and
+> verify times compare at parity.
 
 ---
 

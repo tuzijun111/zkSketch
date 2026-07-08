@@ -10,9 +10,13 @@
 [net]
 git-fetch-with-cli = true
 
-# NOTE: the local `[patch]` override to /home2/binbin/Plonky3_RangeAir has been
-# REMOVED. The `rebuild_common_data` addition it carried is now committed and
-# pushed to the fork (commit e08a370 on branch rebuild-common-data), and
-# Cargo.toml's rev is bumped to it — so the distributed-composition backend now
-# builds from GitHub with no local clone. To hack on the fork again, copy
-# `.cargo/config.toml.example` and add a `[patch]` block pointing at a clone.
+# Local `[patch]` override: the fork clone carries the in-progress
+# `update_permute_witnesses` addition (branch permute-witness-update, based on
+# e08a370) that lets a built circuit be reused across leaf proofs by swapping
+# the Permute ops' trace-generation hints. Once that branch is pushed and
+# Cargo.toml's rev is bumped to it, this block can be removed again.
+[patch."https://github.com/tuzijun111/Plonky3_RangeAir"]
+p3-recursion             = { path = "/home2/binbin/Plonky3_RangeAir/recursion" }
+p3-circuit               = { path = "/home2/binbin/Plonky3_RangeAir/circuit" }
+p3-circuit-prover        = { path = "/home2/binbin/Plonky3_RangeAir/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "/home2/binbin/Plonky3_RangeAir/poseidon2-circuit-air" }

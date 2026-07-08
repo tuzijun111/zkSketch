@@ -46,7 +46,7 @@ use plonky2::hash::poseidon::PoseidonHash;
 use plonky2::iop::target::{BoolTarget, Target};
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::circuit_data::CircuitData;
 use plonky2::plonk::config::Hasher;
 
 use crate::config::{C, D, F};
@@ -142,7 +142,7 @@ pub fn build_hll_omc_leaf(params: HllOmcParams) -> HllOmcLeaf {
     let batch = params.batch;
     let addr_bits = params.addr_bits();
 
-    let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut b = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
 
     // ---- Public inputs: (Com(S_{t-1}), Com(S_t), Com(B_t)) ----
     let init_commit = vhash(&mut b);

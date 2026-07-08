@@ -47,7 +47,7 @@ use plonky2::hash::hash_types::HashOutTarget;
 use plonky2::iop::target::Target;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::circuit_data::CircuitData;
 
 use crate::config::{C, D, F};
 use crate::decode::{DecodeProof, ReleasePolicy};
@@ -88,7 +88,7 @@ pub struct SsDecodeLeaf {
 pub fn build_ss_decode(params: SsDecodeParams) -> SsDecodeLeaf {
     let SsDecodeParams { capacity: cap, c: _c, release } = params;
     assert!(cap >= 1, "capacity must be positive");
-    let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut b = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
     let one = b.one();
     let zero = b.zero();
 

@@ -27,8 +27,8 @@
 
 use zksketch_snark::dataset::{aol, netflix, synthetic_stream, zipf_stream, Synthetic};
 use zksketch_snark::experiments::dist_compose::{
-    cross_family_pairs, maybe_run_child, measure_compose_dist, DistCell, ExeSnapshotGuard, Family,
-    FamShape, Mode,
+    cross_family_pairs, maybe_run_child, measure_compose_dist, validate_shape, DistCell,
+    ExeSnapshotGuard, Family, FamShape, Mode,
 };
 use zksketch_snark::metrics::{append_csv, results_dir, write_env_json};
 
@@ -118,6 +118,12 @@ fn main() -> anyhow::Result<()> {
         .collect();
     assert!(!families.is_empty() && !modes.is_empty(), "need families + modes");
     assert!(m >= 1 && n >= m, "need N >= m >= 1");
+    // Fail on any bad shape BEFORE the family loop — a family that fails
+    // validation mid-list would otherwise waste the hours already spent on the
+    // families before it.
+    for &family in &families {
+        validate_shape(family, &shape)?;
+    }
 
     let t = n / m;
     // Real dataset loading (parity with the plonky3 runner). `EXP_DATASET`

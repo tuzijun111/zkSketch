@@ -39,7 +39,12 @@ use crate::config::F;
 use crate::leaf::countmin_final::apply_update_prf;
 use crate::leaf::countmin_omc::{build_countmin_omc_leaf, CmOmcParams, CountMinOmcLeaf};
 use crate::leaf::greenwald_khanna::{build_gk_leaf, GkLeafParams, GreenwaldKhannaLeaf};
-use crate::leaf::hyperloglog::{build_hll_leaf, HllLeaf, HllLeafParams};
+// HLL likewise composes via its offline-memory-checking leaf (`hll_omc`,
+// Θ(m + batch)) — the variant the plonky3 runner deploys as `hll_omc` — NOT the
+// flat one-hot leaf (Θ(batch·m)), which blows the selector budget at large b
+// (e.g. batch=16384 × m=2^14). Same routing (`hash_register`) and commit
+// (Poseidon over the m registers), so `HllState` threads both variants.
+use crate::leaf::hll_omc::{build_hll_omc_leaf, HllOmcLeaf, HllOmcParams};
 use crate::leaf::spacesaving::{build_spacesaving_leaf, SpaceSavingLeaf, SsLeafParams};
 use crate::recursion::topology::{compose_chain, merge_cross_family, verify_cross_family};
 use crate::recursion::{merge, merge_wire, verify_node, MergeInput, Node};
@@ -186,7 +191,7 @@ impl FamState {
 
 enum FamLeaf {
     Cm(CountMinOmcLeaf),
-    Hll(HllLeaf),
+    Hll(HllOmcLeaf),
     Ss(SpaceSavingLeaf),
     Gk(GreenwaldKhannaLeaf),
 }
@@ -195,7 +200,7 @@ impl FamLeaf {
     fn build(family: Family, sh: &FamShape) -> Self {
         match family {
             Family::Cm => Self::Cm(build_countmin_omc_leaf(CmOmcParams { d: sh.d, w: sh.w, batch: sh.batch })),
-            Family::Hll => Self::Hll(build_hll_leaf(HllLeafParams { b: sh.b, batch: sh.batch })),
+            Family::Hll => Self::Hll(build_hll_omc_leaf(HllOmcParams { b: sh.b, batch: sh.batch })),
             Family::Ss => Self::Ss(build_spacesaving_leaf(SsLeafParams { capacity: sh.ss_cap, batch: sh.batch })),
             Family::Gk => Self::Gk(build_gk_leaf(GkLeafParams { capacity: sh.gk_cap, batch: sh.batch })),
         }
@@ -207,7 +212,8 @@ impl FamLeaf {
         let t0 = Instant::now();
         let node = match (self, state) {
             (Self::Cm(l), FamState::Cm(s)) => l.prove(s, &cm_updates(keys), index)?,
-            (Self::Hll(l), FamState::Hll(s)) => l.prove(s, &hll_updates(keys), index)?,
+            // omc takes raw keys (routes in-circuit) + the raw register array.
+            (Self::Hll(l), FamState::Hll(s)) => l.prove(&s.registers, keys, index)?,
             (Self::Ss(l), FamState::Ss(s)) => l.prove(s, &ss_updates(keys), index)?,
             (Self::Gk(l), FamState::Gk(s)) => l.prove(s, &gk_updates(keys), index)?,
             _ => anyhow::bail!("FamLeaf/FamState family mismatch"),
@@ -330,10 +336,10 @@ pub fn read_vmhwm_mb() -> f64 {
 /// Platform limits of the plonky2 leaf circuits (clean error before spawning
 /// workers / building a big circuit). The CM OMC leaf routes each row via one
 /// element of plonky2's 4-element Poseidon digest, so `d <= 4` (plonky3's
-/// width-16 Poseidon reaches `d <= 8`); HLL's flat leaf is dense over
-/// `2^b * batch`, so very large `b` is impractical (no OMC HLL leaf exists in
-/// this crate — `hll_merkle` is the sparse alternative, not yet wired here).
-fn validate_shape(family: Family, sh: &FamShape) -> Result<()> {
+/// width-16 Poseidon reaches `d <= 8`); the HLL OMC leaf is `Θ(m + batch)`
+/// (dense commit/decompose of the `m = 2^b` registers), so `b` is bounded only
+/// by the register-array cost, not by `batch·m` as the flat one-hot leaf was.
+pub fn validate_shape(family: Family, sh: &FamShape) -> Result<()> {
     match family {
         Family::Cm => ensure!(
             (1..=8).contains(&sh.d),
@@ -341,9 +347,8 @@ fn validate_shape(family: Family, sh: &FamShape) -> Result<()> {
              from two domain-separated Poseidon digests, 4 rows each). Set EXP_D<=8."
         ),
         Family::Hll => ensure!(
-            sh.b <= 12,
-            "plonky2 HyperLogLog: b={} is large for the flat leaf (dense over 2^b*batch); \
-             this crate has no OMC HLL leaf. Use a smaller b, or wire the sparse hll_merkle leaf.",
+            sh.b >= 2,
+            "plonky2 HyperLogLog: b={} but the OMC leaf needs b >= 2. Set EXP_HLL_B>=2.",
             sh.b
         ),
         _ => {}

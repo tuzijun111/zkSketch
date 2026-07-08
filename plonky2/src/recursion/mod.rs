@@ -22,7 +22,7 @@ use plonky2::hash::hash_types::HashOut;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::{
-    CircuitConfig, CircuitData, CommonCircuitData, VerifierCircuitData, VerifierOnlyCircuitData,
+    CircuitData, CommonCircuitData, VerifierCircuitData, VerifierOnlyCircuitData,
 };
 use plonky2::plonk::proof::ProofWithPublicInputs;
 use plonky2::util::serialization::DefaultGateSerializer;
@@ -106,7 +106,7 @@ fn merge_parts(left: ChildParts, right: ChildParts) -> Result<Node> {
         "boundary mismatch: left.final != right.initial"
     );
 
-    let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut b = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
 
     let lpt = b.add_virtual_proof_with_pis(left.common);
     let rpt = b.add_virtual_proof_with_pis(right.common);

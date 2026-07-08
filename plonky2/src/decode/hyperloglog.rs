@@ -47,7 +47,7 @@ use plonky2::hash::hash_types::HashOutTarget;
 use plonky2::iop::target::Target;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::circuit_data::CircuitData;
 
 use crate::config::{C, D, F};
 use crate::decode::{DecodeProof, ReleasePolicy};
@@ -142,7 +142,7 @@ pub fn fixed_res(m: usize, regs: &[u64]) -> u64 {
 pub fn build_hll_decode(params: HllDecodeParams) -> HllDecodeLeaf {
     let m = 1usize << params.b;
     let knum = k_num(m);
-    let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut b = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
     let one = b.one();
     let zero = b.zero();
 

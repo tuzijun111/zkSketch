@@ -34,7 +34,7 @@ use plonky2::hash::poseidon::PoseidonHash;
 use plonky2::iop::target::Target;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
+use plonky2::plonk::circuit_data::CircuitData;
 use plonky2::plonk::config::Hasher;
 use plonky2::plonk::proof::ProofWithPublicInputs;
 
@@ -147,7 +147,7 @@ pub fn build_countmin_memcheck_leaf(params: CmMemcheckParams) -> CountMinMemchec
     let w_log2 = w.trailing_zeros() as usize;
     let addr_bits = params.addr_bits();
 
-    let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut b = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
 
     // ---- Public inputs: (final sparse-patch commit, batch commit). Empty init. ----
     let final_commit = vhash(&mut b);
