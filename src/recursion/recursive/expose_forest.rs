@@ -30,16 +30,17 @@ use p3_circuit_prover::{
     common::get_airs_and_degrees_with_prep,
 };
 use p3_field::PrimeCharacteristicRing;
+use p3_recursion::pcs::MerkleCapTargets;
 use p3_recursion::{
     BatchOnly, PcsRecursionBackend, Poseidon2Config, ProveNextLayerParams, RecursionInput,
-    RecursionOutput, Target, VerifierCircuitResult, prove_aggregation_layer,
+    RecursionOutput, Recursive, Target, VerifierCircuitResult, prove_aggregation_layer,
 };
 use p3_uni_stark::StarkGenericConfig;
 
 use crate::commitment::countmin::CountMinCommit;
 use crate::config::{Challenge, LOG_BLOWUP, Val};
 use crate::recursion::recursive::backend::{Backend, make_backend};
-use crate::recursion::recursive::config::{ConfigWithFriParams, D as EXT_D};
+use crate::recursion::recursive::config::{ConfigWithFriParams, DIGEST_ELEMS, D as EXT_D};
 use crate::recursion::recursive::countmin_leaf::{make_leaf_config, pack_commit_to_challenge};
 
 const LOG_FINAL_POLY_LEN: usize = 6;
@@ -52,6 +53,25 @@ fn agg_params() -> ProveNextLayerParams {
         table_packing: TablePacking::new(2, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP),
         constraint_profile: ConstraintProfile::Standard,
     }
+}
+
+/// The observation-ordered field values of a bound proof's **preprocessed
+/// commitment** — its verification key (VK). The recursion backend bakes each
+/// child's VK into its parent merge's preprocessed trace as constants (so the
+/// merge's own VK depends on its children's); the auditor pins the *root*
+/// proof's VK to a trusted copy of these values (see [`verify_bound_stark_proof`]),
+/// which transitively anchors the whole tree. The VK is a deterministic,
+/// transparent function of the circuit *structure* alone — independent of the
+/// exposed boundary values — so it is a legitimate public parameter, not a
+/// trusted setup.
+pub fn vk_pin_values(proof: &BatchStarkProof<ConfigWithFriParams>) -> Vec<Challenge> {
+    let commitment = &proof
+        .stark_common
+        .preprocessed
+        .as_ref()
+        .expect("a boundary-bound proof carries a preprocessed commitment")
+        .commitment;
+    <MerkleCapTargets<Val, DIGEST_ELEMS> as Recursive<Challenge>>::get_values(commitment)
 }
 
 /// Build a `RecursionInput::BatchStark` that carries the proof's per-table
@@ -273,6 +293,16 @@ pub fn prove_hiding_merge_proofs(
     )
     .expect("verify right child");
 
+    // VK anchor: each verified child's preprocessed commitment (its VK) is baked
+    // into this merge's circuit as constants by the recursion backend
+    // (`Comm::new_const`, via `CommonDataTargets::new`), rather than left as a free
+    // public input. That makes this merge's own preprocessed trace — hence its VK —
+    // depend on its children's VKs, so the auditor's single trusted root-VK pin
+    // ([`verify_bound_stark_proof`]) transitively anchors every child in the tree.
+    // Without it a malicious prover could feed a forged child (e.g. an Expose table
+    // with `is_real = 0`, decoupling the surfaced boundary from any witness) and
+    // re-expose an arbitrary `(Com_before, Com_after)`.
+
     let lb = boundary_targets(&left_result); // [left.initial 0..8, left.final 8..16]
     let rb = boundary_targets(&right_result); // [right.initial 0..8, right.final 8..16]
 
@@ -325,13 +355,38 @@ pub fn prove_hiding_merge_proofs(
 /// Verify a boundary-bound proof's STARK tables (the boundary itself is read
 /// from the proof via [`read_exposed_boundary`] — it is bound in-circuit, not
 /// natively trusted).
+///
+/// In-process convenience for the honest producer: the trusted root VK is the
+/// honestly produced root's own VK. A cross-machine auditor instead calls
+/// [`verify_bound_stark_proof`] with a trusted VK it holds independently (from
+/// the declared public profile), which is what actually anchors the root.
 pub fn verify_bound_proof(output: &RecursionOutput<ConfigWithFriParams>) {
-    verify_bound_stark_proof(&output.0)
+    let expected = vk_pin_values(&output.0);
+    verify_bound_stark_proof(&output.0, &expected);
 }
 
-/// [`verify_bound_proof`] from a bare proof — the auditor path for a root that
-/// arrived as serialized bytes from another machine.
-pub fn verify_bound_stark_proof(proof: &BatchStarkProof<ConfigWithFriParams>) {
+/// Verify a boundary-bound proof against a **trusted root verification key**
+/// (`expected_root_vk`, in [`vk_pin_values`] order) — the auditor path for a
+/// root that arrived as serialized bytes from another machine.
+///
+/// The VK is a deterministic, transparent public-profile parameter the auditor
+/// holds independently; it is **not** read from the (untrusted) proof. This
+/// top-level pin, together with the in-circuit child-VK pins each merge applies
+/// ([`pin_child_vk`]), forces the whole proof tree to be structurally honest:
+/// the root VK transitively encodes every subtree's VK, so a forged leaf or
+/// merge (whose VK differs) cannot appear anywhere in the tree. Panics on a VK
+/// mismatch or a STARK-table failure.
+pub fn verify_bound_stark_proof(
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+    expected_root_vk: &[Challenge],
+) {
+    // (P2) Root VK anchor.
+    let got = vk_pin_values(proof);
+    assert!(
+        got == expected_root_vk,
+        "root VK mismatch: the proof's preprocessed commitment does not match the trusted \
+         verification key (a forged or wrong-shape root proof)"
+    );
     let config = make_leaf_config();
     let params = agg_params();
     let mut verifier =
@@ -411,6 +466,42 @@ mod tests {
     use super::*;
     use p3_recursion::{build_aggregation_layer_circuit, build_and_prove_aggregation_layer};
 
+    /// AUDIT EXPERIMENT: does a const VALUE land in the VK (preprocessed
+    /// commitment), or only in the main-trace commitment? Two structurally
+    /// identical exposing leaves that differ ONLY in their exposed (const)
+    /// values. If the VKs are equal while the trace commitments differ, then
+    /// const values are NOT part of the VK -> baking a child commitment as a
+    /// const does not make the child's commitment VALUE part of the parent VK.
+    #[test]
+    fn audit_const_value_independence_of_vk() {
+        use p3_field::PrimeCharacteristicRing;
+        let a = prove_exposing_leaf(&[
+            Challenge::from(Val::from_u32(0x1111_1111)),
+            Challenge::from(Val::from_u32(0x2222_2222)),
+        ]);
+        let b = prove_exposing_leaf(&[
+            Challenge::from(Val::from_u32(0x3333_3333)),
+            Challenge::from(Val::from_u32(0x4444_4444)),
+        ]);
+        let vk_a = vk_pin_values(&a.0);
+        let vk_b = vk_pin_values(&b.0);
+        let trace = |p: &BatchStarkProof<ConfigWithFriParams>| {
+            <MerkleCapTargets<Val, DIGEST_ELEMS> as Recursive<Challenge>>::get_values(
+                &p.proof.commitments.main,
+            )
+        };
+        let tr_a = trace(&a.0);
+        let tr_b = trace(&b.0);
+        println!("AUDIT VK_EQUAL={}", vk_a == vk_b);
+        println!("AUDIT TRACE_EQUAL={}", tr_a == tr_b);
+        assert_ne!(tr_a, tr_b, "sanity: different const values must change the main-trace commitment");
+        // The load-bearing observation for the audit:
+        assert_eq!(
+            vk_a, vk_b,
+            "AUDIT: const values do NOT affect the VK (preprocessed commitment)"
+        );
+    }
+
     /// VALIDATION GATE: a value exposed via the Expose NPO surfaces as the
     /// aggregation's public input (unlike a primitive `public_input`) AND the
     /// aggregation verifies. Confirms the `public_values → air_public_targets
@@ -481,6 +572,59 @@ mod tests {
         // l1 starts from commit(99), not commit(1) — non-contiguous.
         let l1 = prove_boundary_leaf(commit(99), commit(2));
         let _ = prove_hiding_merge(&l0, &l1);
+    }
+
+    /// VK ANCHOR (accept): the honest root verifies against its own trusted VK.
+    #[test]
+    fn root_vk_pin_accepts_correct_vk() {
+        let l0 = prove_boundary_leaf(commit(0), commit(1));
+        let l1 = prove_boundary_leaf(commit(1), commit(2));
+        let merged = prove_hiding_merge(&l0, &l1);
+        let root_vk = vk_pin_values(&merged.0);
+        verify_bound_stark_proof(&merged.0, &root_vk); // must not panic
+    }
+
+    /// VK ANCHOR (reject): the auditor's trusted root-VK pin rejects a proof
+    /// whose preprocessed commitment does not equal the expected verification
+    /// key — a forged or wrong-circuit root. A leaf's VK differs from a merge's,
+    /// so verifying a merge proof against a leaf VK must be rejected. This is the
+    /// single trusted check that, together with each merge baking its children's
+    /// VKs into its own preprocessed trace, transitively anchors the whole tree.
+    #[test]
+    #[should_panic(expected = "root VK mismatch")]
+    fn root_vk_pin_rejects_wrong_vk() {
+        let l0 = prove_boundary_leaf(commit(0), commit(1));
+        let l1 = prove_boundary_leaf(commit(1), commit(2));
+        let merged = prove_hiding_merge(&l0, &l1);
+        let leaf_vk = vk_pin_values(&l0.0); // a leaf VK != the merge (root) VK
+        verify_bound_stark_proof(&merged.0, &leaf_vk);
+    }
+
+    /// VK ANCHOR (distinctness): the verification keys of the distinct circuit
+    /// types in a forest are all different — a leaf, a one-level merge (over two
+    /// leaves), and a two-level merge (over two one-level merges). This is a
+    /// necessary property for the root-VK pin to distinguish circuits.
+    ///
+    /// The *baking* property itself — that a merge's VK now depends on its
+    /// children's VKs (via `Comm::new_const`, versus the pre-fix bug where child
+    /// VKs were free public inputs outside the parent's preprocessed) — was
+    /// confirmed empirically against the pre-fix commitments: the leaf VK is
+    /// unchanged (a leaf verifies no children) while every merge VK changed once
+    /// its children's commitments became preprocessed constants.
+    #[test]
+    fn merge_vk_depends_on_children() {
+        let l0 = prove_boundary_leaf(commit(0), commit(1));
+        let l1 = prove_boundary_leaf(commit(1), commit(2));
+        let l2 = prove_boundary_leaf(commit(2), commit(3));
+        let l3 = prove_boundary_leaf(commit(3), commit(4));
+        let leaf_vk = vk_pin_values(&l0.0);
+        let m01 = prove_hiding_merge(&l0, &l1); // level-1: children are leaves
+        let m23 = prove_hiding_merge(&l2, &l3);
+        let root = prove_hiding_merge(&m01, &m23); // level-2: children are merges
+        let m01_vk = vk_pin_values(&m01.0);
+        let root_vk = vk_pin_values(&root.0);
+        assert_ne!(leaf_vk, m01_vk, "leaf VK must differ from a merge VK");
+        assert_ne!(m01_vk, root_vk, "a level-2 merge VK must differ from level-1");
     }
 
     /// REAL Count-Min bound forest: two v9-exposed CM leaves (proving actual
@@ -676,4 +820,17 @@ mod tests {
         assert_eq!(initial, commit(0), "root initial = Com(S_0)");
         assert_eq!(final_, commit(4), "root final = Com(S_4)");
     }
+
+    /// AUDIT PROBE (bypass hunter): a leaf's VK (preprocessed commitment) is
+    /// INVARIANT to the `alloc_const` values it exposes.
+    #[test]
+    fn probe_leaf_vk_ignores_exposed_const_value() {
+        let a = prove_boundary_leaf(commit(0), commit(1));
+        let b = prove_boundary_leaf(commit(40), commit(41));
+        let vk_a = vk_pin_values(&a.0);
+        let vk_b = vk_pin_values(&b.0);
+        assert_ne!(read_exposed_boundary(&a), read_exposed_boundary(&b));
+        assert_eq!(vk_a, vk_b, "leaf VK must be independent of the exposed const values");
+    }
+
 }

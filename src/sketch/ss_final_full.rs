@@ -359,6 +359,12 @@ struct SsBuild {
     sigma_count: Vec<usize>,
     /// `g_sorted` = grouped re-sorted by (active asc, count asc, key asc).
     g_sorted: Vec<SsFullRow>,
+    /// The `(s+1)`-th largest grouped count, `τ = g_sorted[m-1].count` — the
+    /// mergeable Misra-Gries / Frequent compression threshold subtracted from
+    /// every retained counter (Agarwal et al., "Mergeable Summaries", 2012).
+    /// `0` whenever the summary is under-full (row `m-1` is a dummy), so the
+    /// subtraction is a no-op there.
+    tau: u32,
 }
 
 fn key_field(key: u64) -> u128 {
@@ -474,6 +480,11 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
     let sigma_count = idx2.clone();
     let g_sorted: Vec<SsFullRow> = idx2.iter().map(|&i| grouped[i]).collect();
 
+    // τ = the (s+1)-th largest grouped count = the largest residual count =
+    // `g_sorted[m-1].count` (count-ascending, the row just below the retention
+    // cut). NOT `g_sorted[m]` (smallest retained), which would over-delete.
+    let tau = g_sorted[m - 1].count;
+
     SsBuild {
         combined,
         sigma_key,
@@ -482,6 +493,7 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
         seg_end,
         sigma_count,
         g_sorted,
+        tau,
     }
 }
 
@@ -497,7 +509,27 @@ pub fn apply_batch_ss_full(
     assert_eq!(batch.len(), m);
     let b = build_ss(s_old, batch);
     let residual: Vec<SsFullRow> = b.g_sorted[..m].to_vec();
-    let s_new: Vec<SsFullRow> = b.g_sorted[m..m + cap].to_vec();
+    // Mergeable Misra-Gries / Frequent compression (Agarwal et al. 2012):
+    // subtract the (s+1)-th largest grouped count `τ` from every retained
+    // counter and clamp non-positive counters to dummies. This gives the
+    // cross-batch N/s heavy-hitter *surfacing* guarantee — retained counts are
+    // exact-or-under-estimates with per-key deficit ≤ N/s, so every key with
+    // true frequency > N/s stays active. Because `g_sorted[m..]` is
+    // count-ascending, each retained count ≥ `g_sorted[m] ≥ τ`, so the
+    // saturating subtraction never truncates a real survivor and the clamped
+    // (count-0) rows form the low-count prefix — final stays (active asc, count asc).
+    let tau = b.tau;
+    let s_new: Vec<SsFullRow> = (0..cap)
+        .map(|i| {
+            let src = b.g_sorted[m + i];
+            let c = src.count.saturating_sub(tau);
+            if src.active == 1 && c > 0 {
+                SsFullRow::real(src.key, c)
+            } else {
+                SsFullRow::dummy()
+            }
+        })
+        .collect();
     (
         SsFullState {
             rows: s_new,
@@ -607,7 +639,7 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
 
     // Private inputs (alloc order MUST match the packing below):
     //   init, final(=s_new), batch, key_sorted, grouped, g_sorted,
-    //   residual, key_eq_tag, key_inv_diff.
+    //   residual, key_eq_tag, key_inv_diff, acc_active_inv, c_new_inv.
     let init_packed: Vec<ExprId> = (0..cap)
         .map(|_| b.alloc_private_input("init_packed"))
         .collect();
@@ -639,6 +671,11 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     // that binds grouped.active = se·(acc_active≠0)).
     let acc_active_inv: Vec<ExprId> = (0..total)
         .map(|_| b.alloc_private_input("acc_active_inv"))
+        .collect();
+    // Inverse hint for the post-subtraction retained count (is-nonzero gadget
+    // that derives the compacted final active flag = [count−τ ≠ 0]).
+    let c_new_inv: Vec<ExprId> = (0..cap)
+        .map(|_| b.alloc_private_input("c_new_inv"))
         .collect();
 
     // ─── Stage 1: commit bindings ───────────────────────────────────────
@@ -930,21 +967,53 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
             .expect("key tie-break within count-equal run");
     }
 
-    // ─── Stage 8: compaction — residual ↔ g_sorted[..m], S_new ↔ g_sorted[m..] ─
+    // ─── Stage 8: compaction + Misra-Gries (s+1)-th-value subtraction ────
+    // residual ↔ g_sorted[..m] (ORIGINAL counts, needed for mass accounting).
     for i in 0..m {
         for k in 0..4 {
             b.connect(residual_fields[i][k], g_sorted_fields[i][k]);
         }
     }
+    // S_new ↔ mergeable Misra-Gries / Frequent compression of g_sorted[m..]:
+    // subtract τ = the (s+1)-th largest count = g_sorted[m-1].count from every
+    // retained counter and clamp non-positive to a dummy. τ is the already-pinned
+    // rank-(m-1) cell (range-checked in Stage 7, its rank fixed by the count-sort),
+    // so it is not a free witness. `final_fields` are decompositions of the
+    // committed final state, so binding count/active/key to the subtracted values
+    // forces the prover's committed S_new to be the compressed table.
+    let tau = g_sorted_fields[m - 1][2];
     for i in 0..cap {
-        for k in 0..4 {
-            b.connect(final_fields[i][k], g_sorted_fields[m + i][k]);
-        }
+        let src = m + i;
+        // c_new = g_sorted[src].count − τ ≥ 0 (count-ascending ⇒ src.count ≥ τ).
+        let c_new = b.sub(g_sorted_fields[src][2], tau);
+        // no-underflow: an out-of-domain descent wraps to ≈ p (≫ 2^BITS) and fails.
+        let _ = b
+            .add_range_bits::<Val>(c_new, COUNT_DIFF_BITS - 1)
+            .expect("c_new range-check");
+        // active = [c_new ≠ 0] via inverse hint; since c_new ≥ 0 this is [c_new > 0].
+        // nz = c_new·c_new_inv, with c_new·(1−nz)=0 forcing nz = [c_new ≠ 0] (boolean).
+        let nz = b.mul(c_new, c_new_inv[i]);
+        let one_minus_nz = b.sub(one, nz);
+        let must_zero = b.mul(c_new, one_minus_nz);
+        b.connect(must_zero, zero);
+        bool_check(&mut b, nz);
+        // Bind the committed final row: count = c_new, active = nz, key gated by nz
+        // (mirror Stage 5's key-gating) so a clamped slot cannot smuggle a live key.
+        b.connect(final_fields[i][2], c_new);
+        b.connect(final_fields[i][3], nz);
+        let want_key_lo = b.mul(g_sorted_fields[src][0], nz);
+        b.connect(final_fields[i][0], want_key_lo);
+        let want_key_hi = b.mul(g_sorted_fields[src][1], nz);
+        b.connect(final_fields[i][1], want_key_hi);
     }
 
     // ─── Stage 9: mass conservation ─────────────────────────────────────
     // Σ(init.count·active) + Σ(batch.value·active)
-    //   = Σ(final.count·active) + Σ(residual.count·active).
+    //   = Σ(final.count·active) + Σ(residual.count·active) + capacity·τ.
+    // The `capacity·τ` term is the mass the Misra-Gries subtraction deliberately
+    // discards (each of the `capacity` retained slots loses exactly τ; a clamped
+    // slot loses its whole count τ, a survivor loses τ of its count), so the
+    // identity stays an EXACT equality rather than a bound.
     let mut init_mass_e = b.mul(init_fields[0][2], init_fields[0][3]);
     for r in 1..cap {
         let t = b.mul(init_fields[r][2], init_fields[r][3]);
@@ -968,7 +1037,12 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         res_mass_e = b.add(res_mass_e, t);
     }
     let out_mass = b.add(final_mass_e, res_mass_e);
-    b.connect(in_mass, out_mass);
+    // Add back the deliberately-discarded Misra-Gries deficit capacity·τ. `cap·τ`
+    // and the mass sum stay < p (cap · 2^(COUNT_DIFF_BITS−1) < p).
+    let cap_const = b.alloc_const(Challenge::from_u64(cap as u64), "capacity");
+    let cap_tau = b.mul(tau, cap_const);
+    let out_mass2 = b.add(out_mass, cap_tau);
+    b.connect(in_mass, out_mass2);
 
     let circuit = b.build().expect("build ss_full circuit");
 
@@ -1058,7 +1132,12 @@ impl SsFullLeafCircuit {
             .filter(|r| r.active == 1)
             .map(|r| r.count as u64)
             .sum();
-        assert_eq!(final_mass + residual_mass, init_mass + batch_mass);
+        // Mass conservation after the Misra-Gries subtraction: the compression
+        // discards exactly capacity·τ (see Stage 9), so add it back.
+        assert_eq!(
+            final_mass + residual_mass + (cap as u64) * (build.tau as u64),
+            init_mass + batch_mass
+        );
 
         // Swap the real per-batch permutation hints into the prebuilt graph
         // (op order: key-sort permute, then count-sort permute).
@@ -1140,6 +1219,21 @@ impl SsFullLeafCircuit {
                     Challenge::ZERO
                 } else {
                     Challenge::from_u64(acc_a).inverse()
+                };
+                private_inputs.push(inv);
+            }
+        }
+        // c_new_inv: inverse of the post-subtraction retained count `count − τ`
+        // (0 when the counter clamps to a dummy), for the is-nonzero gadget that
+        // derives the compacted final active flag. Same order as the alloc.
+        {
+            use p3_field::Field;
+            for i in 0..cap {
+                let c = build.g_sorted[m + i].count.saturating_sub(build.tau);
+                let inv = if c == 0 {
+                    Challenge::ZERO
+                } else {
+                    Challenge::from_u64(c as u64).inverse()
                 };
                 private_inputs.push(inv);
             }
@@ -1318,6 +1412,15 @@ mod tests {
         let (s_new, residual) = apply_batch_ss_full(&s0, &updates);
         let kept: Vec<_> = s_new.rows.iter().filter(|r| r.active == 1).collect();
         assert_eq!(kept.len(), 2, "exactly capacity heavy hitters kept");
+        // Surfacing: the retained SET is the true top-2 keys (103, 104).
+        let kept_keys: Vec<u64> = {
+            let mut k: Vec<u64> = kept.iter().map(|r| r.key).collect();
+            k.sort_unstable();
+            k
+        };
+        assert_eq!(kept_keys, vec![103, 104], "the two heaviest keys are retained");
+        // Misra-Gries subtraction: τ = (s+1)-th largest count = 2, so the retained
+        // counts are their true counts minus τ (3−2=1, 4−2=2) — under-estimates.
         let kept_counts: Vec<u32> = {
             let mut c: Vec<u32> = kept.iter().map(|r| r.count).collect();
             c.sort_unstable();
@@ -1325,22 +1428,79 @@ mod tests {
         };
         assert_eq!(
             kept_counts,
-            vec![3, 4],
-            "the two largest counts are retained"
+            vec![1, 2],
+            "retained counts are the true counts minus τ=2"
         );
-        // residual holds the lower candidates; mass is conserved.
+        // Mass conservation now carries the discarded deficit capacity·τ.
         let res_mass: u64 = residual
             .iter()
             .filter(|r| r.active == 1)
             .map(|r| r.count as u64)
             .sum();
-        assert_eq!(s_new.total_mass() + res_mass, 1 + 2 + 3 + 4);
+        let tau = 2u64; // (s+1)-th largest grouped count for this fixture
+        assert_eq!(
+            s_new.total_mass() + res_mass + (params.capacity as u64) * tau,
+            1 + 2 + 3 + 4
+        );
 
         let result = generate_proof(params, updates);
         assert_eq!(
             commit_ss_state(&result.final_state).0,
             result.proof.final_.0
         );
+    }
+
+    /// **Cross-batch N/s surfacing (the Misra-Gries deficit guarantee).** A
+    /// genuinely heavy key that arrives thinly spread must still surface. Under
+    /// the previous keep-top-`s`-exact rule the padding keys hold their exact
+    /// high counts, so `H` never overtakes them and is dropped every epoch; the
+    /// (s+1)-th-value subtraction decays the padding keys so `H` accumulates and
+    /// surfaces, with a per-key deficit bounded by `N/s` (Agarwal et al.,
+    /// "Mergeable Summaries", 2012).
+    #[test]
+    fn cross_batch_ns_surfacing() {
+        let params = SsFullParams {
+            capacity: 2,
+            batch: 4,
+        };
+        let (w1, w2, h, f) = (10u64, 11u64, 12u64, 13u64);
+
+        // B1: two padding keys just above H. Old keep-top-s-exact would fix
+        // {W1:6, W2:6} EXACTLY and drop H every epoch; MG decays them to
+        // {W1:1, W2:1} (τ = the (s+1)-th largest count = H's 5).
+        let s0 = SsFullState::empty(params);
+        let b1 = vec![
+            SsFullUpdate::real(w1, 6),
+            SsFullUpdate::real(w2, 6),
+            SsFullUpdate::real(h, 5),
+            SsFullUpdate::dummy(),
+        ];
+        let (s1, _) = apply_batch_ss_full(&s0, &b1);
+        assert_eq!(s1.frequency(h), 0, "H below the padding keys is dropped at B1");
+        assert_eq!(s1.frequency(w1), 1, "padding key W1 decayed by τ=5");
+
+        // B2: H arrives again; now it overtakes the DECAYED padding keys and
+        // surfaces (under keep-top-s-exact the padding keys would still be 6 and
+        // H would be dropped a second time).
+        let b2 = vec![
+            SsFullUpdate::real(h, 5),
+            SsFullUpdate::real(f, 1),
+            SsFullUpdate::dummy(),
+            SsFullUpdate::dummy(),
+        ];
+        let (s2, _) = apply_batch_ss_full(&s1, &b2);
+        assert!(s2.frequency(h) > 0, "the heavy key H surfaces after MG decay");
+
+        // Under-estimate + N/s deficit bound. True H mass = 10; N so far = 23.
+        let true_h = 10u64;
+        let n = 23u64;
+        let s = params.capacity as u64;
+        let fhat = s2.frequency(h) as u64;
+        assert!(fhat <= true_h, "MG counters never over-estimate");
+        assert!(true_h - fhat <= n / s, "per-key deficit is bounded by N/s");
+
+        // The surfacing transition also self-verifies in-circuit.
+        let _ = prove_ss_full(params, s1, b2);
     }
 
     /// Soundness: a corrupted post-retention table (not the count-sort
@@ -1497,15 +1657,18 @@ mod tests {
         };
         let batch = vec![SsFullUpdate::real(ka, 4), SsFullUpdate::real(kb, 8)];
 
-        // Honest transition keeps the true top-2 {A:10, C:9}, evicts B — and its
-        // proof self-verifies (key-sorted union passes the new constraint).
+        // Honest transition keeps the true top-2 SET {A, C}, evicts B — and its
+        // proof self-verifies (key-sorted union passes the new constraint). The
+        // Misra-Gries subtraction (τ = largest-residual count = 8) leaves A and C
+        // as under-estimates (10−8=2, 9−8=1), the surfacing guarantee: the true
+        // heaviest keys stay active.
         let (honest_final, _) = apply_batch_ss_full(&initial, &batch);
         assert_eq!(
             honest_final.frequency(ka),
-            10,
-            "honest keeps A:10 (true heaviest)"
+            2,
+            "honest keeps A (true heaviest), under-estimated by τ=8"
         );
-        assert_eq!(honest_final.frequency(kc), 9, "honest keeps C:9");
+        assert_eq!(honest_final.frequency(kc), 1, "honest keeps C, under-estimated by τ=8");
         assert_eq!(
             honest_final.frequency(kb),
             0,
@@ -1525,10 +1688,9 @@ mod tests {
             0,
             "the attack WOULD evict true top key A"
         );
-        assert_eq!(
-            mal_final.frequency(kb),
-            8,
-            "the attack WOULD wrongly retain B:8"
+        assert!(
+            mal_final.frequency(kb) > 0,
+            "the attack WOULD wrongly retain B (under-estimated post-subtraction)"
         );
 
         // …but the circuit now REJECTS the fragmenting union (non-sorted keys
@@ -1539,17 +1701,22 @@ mod tests {
         );
     }
 
-    /// **Regression: count-tie straddle is rejected (canonical top-s).** When
-    /// several keys share a count across the top-`s` cut, the retained SET must
-    /// be canonical — the prover must not be able to pick which tied key is
-    /// evicted. Stage 7's key tie-break (keys non-decreasing within count-equal
-    /// runs, matching the native ascending sort) makes the cut deterministic.
+    /// **Regression: non-canonical count-equal ordering is rejected.** Within a
+    /// count-equal run the prover must not be free to choose the order (which
+    /// fixes the canonical top-`s` cut). Stage 7's key tie-break (keys
+    /// non-decreasing within count-equal runs, matching the native ascending
+    /// sort) makes the order deterministic and rejects any reorder.
     ///
-    /// Setup (capacity s=2): three equal-count candidates {A:5, B:5, C:5}. The
-    /// canonical (ascending-key) order retains {B:5, C:5} and evicts the
-    /// smallest-key tied candidate A. A descending-key reorder would instead
-    /// retain {A:5, B:5} and evict C — a different monitored set; the fix
-    /// rejects it.
+    /// Setup (capacity s=2): a tied retained pair {A:9, B:9} above a low decoy
+    /// {C:5}. The Misra-Gries subtraction uses τ = the (s+1)-th largest count =
+    /// the decoy's 5, so the tied pair survives as under-estimates {A:4, B:4}
+    /// (surfacing: both genuine heavy hitters stay active). A descending-key
+    /// reorder of the count-9 run keeps the same SET but violates the canonical
+    /// order; the tie-break range-check rejects it. (Note: under Misra-Gries a
+    /// tie that *straddles* the cut is additionally zeroed — τ equals the tied
+    /// count — so the classic "straddle picks a different monitored set" attack
+    /// is neutralized outright; this test therefore guards the canonical-order
+    /// constraint itself.)
     #[test]
     fn tie_break_rejected() {
         let params = SsFullParams {
@@ -1558,45 +1725,36 @@ mod tests {
         };
         let (ka, kb, kc) = (1u64, 2u64, 3u64);
         let initial = SsFullState {
-            rows: vec![SsFullRow::real(ka, 5), SsFullRow::real(kb, 5)],
+            rows: vec![SsFullRow::real(ka, 9), SsFullRow::real(kb, 9)],
             params,
         };
         let batch = vec![SsFullUpdate::real(kc, 5), SsFullUpdate::dummy()];
 
-        // Honest canonical order retains the larger-key tied pair {B:5, C:5},
-        // evicts A, and self-verifies.
+        // Honest canonical order retains the tied pair {A, B} (true top-2),
+        // under-estimated by τ=5 (the decoy count), evicts the decoy C, and
+        // self-verifies.
         let (honest_final, _) = apply_batch_ss_full(&initial, &batch);
-        assert_eq!(honest_final.frequency(kb), 5);
-        assert_eq!(honest_final.frequency(kc), 5);
+        assert_eq!(honest_final.frequency(ka), 4, "A retained, under-estimated by τ=5");
+        assert_eq!(honest_final.frequency(kb), 4, "B retained, under-estimated by τ=5");
         assert_eq!(
-            honest_final.frequency(ka),
+            honest_final.frequency(kc),
             0,
-            "canonical order evicts smallest tied key A"
+            "the low decoy C is evicted"
         );
         let _honest = prove_ss_full(params, initial.clone(), batch.clone());
 
-        // Non-canonical (descending-key) reorder WOULD retain {A:5, B:5}, evicting C…
+        // Non-canonical (descending-key) reorder of the count-9 run keeps the
+        // same surviving set but violates the canonical order…
         TAMPER_TIE.with(|f| f.set(true));
-        let (mal_final, _) = apply_batch_ss_full(&initial, &batch);
         let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_ss_full(params, initial.clone(), batch.clone())
         }));
         TAMPER_TIE.with(|f| f.set(false));
-        assert_eq!(
-            mal_final.frequency(kc),
-            0,
-            "the reorder WOULD evict a different tied key C"
-        );
-        assert_eq!(
-            mal_final.frequency(ka),
-            5,
-            "the reorder WOULD instead retain A"
-        );
 
-        // …but the key tie-break rejects the non-canonical order.
+        // …and the key tie-break rejects it.
         assert!(
             mal.is_err(),
-            "FIX REGRESSED: count-tie reorder must be rejected by the key tie-break",
+            "FIX REGRESSED: non-canonical count-equal order must be rejected by the key tie-break",
         );
     }
 

@@ -117,7 +117,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use zksketch::dataset::{aol, netflix, synthetic_stream, zipf_stream, Synthetic};
-use zksketch::experiments::dist_compose::{measure_compose_dist, DistCell};
+use zksketch::experiments::dist_compose::{measure_compose_dist, measure_compose_dist_gl, DistCell};
 use zksketch::experiments::metrics::write_env_json;
 use zksketch::experiments::results_dir;
 use zksketch::experiments::stream_compose::{
@@ -214,8 +214,10 @@ fn shape_str(family: StreamFamily, s: &StreamShape) -> String {
     match family {
         StreamFamily::CmOmc => format!("d{}_w{}", s.d, s.w),
         StreamFamily::HllOmc => format!("b{}", s.b),
-        StreamFamily::SsCertified => format!("cap{}", s.capacity),
-        StreamFamily::GkBandmerge2 => format!("cap{}_s{}", s.capacity, s.gk_s),
+        StreamFamily::SsCertified | StreamFamily::SsCertifiedGl => format!("cap{}", s.capacity),
+        StreamFamily::GkBandmerge2 | StreamFamily::GkBandmerge2Gl => {
+            format!("cap{}_s{}", s.capacity, s.gk_s)
+        }
     }
 }
 
@@ -266,6 +268,43 @@ fn dist_guarded(
     std::panic::set_hook(Box::new(|_| {}));
     let r = catch_unwind(AssertUnwindSafe(|| {
         measure_compose_dist(
+            family, shape, batches, mode, cores, machines, proof_dir, mbps, rtt_ms, query_at,
+            query_key_mode,
+        )
+    }));
+    std::panic::set_hook(prev);
+    match r {
+        Ok(res) => res,
+        Err(p) => Err(p
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".into())),
+    }
+}
+
+/// Goldilocks-field sibling of [`dist_guarded`]: routes the `_gl` families through
+/// `measure_compose_dist_gl` (Goldilocks recursion config). Returns the same
+/// config-agnostic [`DistCell`], so the row-building code at the call site is
+/// shared verbatim.
+#[allow(clippy::too_many_arguments)]
+fn dist_guarded_gl(
+    family: StreamFamily,
+    shape: StreamShape,
+    batches: &[Vec<u32>],
+    mode: StreamMode,
+    cores: usize,
+    machines: usize,
+    proof_dir: &std::path::Path,
+    mbps: f64,
+    rtt_ms: f64,
+    query_at: &[usize],
+    query_key_mode: QueryKeyMode,
+) -> Result<DistCell, String> {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        measure_compose_dist_gl(
             family, shape, batches, mode, cores, machines, proof_dir, mbps, rtt_ms, query_at,
             query_key_mode,
         )
@@ -422,7 +461,9 @@ fn main() {
         }),
         Err(_) => derive_gk_s(gk_cap, n),
     };
-    if families.contains(&StreamFamily::GkBandmerge2) {
+    if families.contains(&StreamFamily::GkBandmerge2)
+        || families.contains(&StreamFamily::GkBandmerge2Gl)
+    {
         println!(
             "gk: capacity={gk_cap}, s=1/ε={gk_s} ({})",
             if gk_explicit { "EXP_GK_S set" } else { "derived from cap (set EXP_GK_S to override)" }
@@ -501,7 +542,20 @@ fn main() {
         &dir,
         &[
             ("backend", "plonky3".into()),
-            ("field", "BabyBear".into()),
+            // Field is per-family: the `_gl` families run Goldilocks, the rest
+            // BabyBear. Reflect the actual sweep (the CSV `family` column also
+            // self-identifies each row, e.g. `ss_gl`/`gk_gl`).
+            (
+                "field",
+                if families.iter().all(|f| f.is_gl()) {
+                    "Goldilocks"
+                } else if families.iter().any(|f| f.is_gl()) {
+                    "mixed"
+                } else {
+                    "BabyBear"
+                }
+                .into(),
+            ),
             ("hash", "Poseidon2".into()),
             ("experiment", "stream_compose".into()),
             ("exec", if exec_procs { "procs" } else { "sim" }.into()),
@@ -562,8 +616,12 @@ fn main() {
             // Per-family shape (ss/gk capacities are independent knobs).
             let mut fshape = shape;
             match family {
-                StreamFamily::SsCertified => fshape.capacity = ss_cap,
-                StreamFamily::GkBandmerge2 => fshape.capacity = gk_cap,
+                StreamFamily::SsCertified | StreamFamily::SsCertifiedGl => {
+                    fshape.capacity = ss_cap
+                }
+                StreamFamily::GkBandmerge2 | StreamFamily::GkBandmerge2Gl => {
+                    fshape.capacity = gk_cap
+                }
                 _ => {}
             }
             for &m in &batches_m {
@@ -628,10 +686,22 @@ fn main() {
                             const N_EXT_AFTER_EXEC: usize = 16; // procs..comm_model_ms, merge_total_ms
 
                             if exec_procs {
-                                match dist_guarded(
-                                    family, fshape, &batches, mode, cores, machines, &cell_dir,
-                                    net_mbps, net_rtt_ms, &query_at, query_key_mode,
-                                ) {
+                                // The Goldilocks (`_gl`) families run the same
+                                // distributed engine on the Goldilocks recursion
+                                // config; both return a config-agnostic DistCell,
+                                // so the row-building below is shared.
+                                let dist_res = if family.is_gl() {
+                                    dist_guarded_gl(
+                                        family, fshape, &batches, mode, cores, machines, &cell_dir,
+                                        net_mbps, net_rtt_ms, &query_at, query_key_mode,
+                                    )
+                                } else {
+                                    dist_guarded(
+                                        family, fshape, &batches, mode, cores, machines, &cell_dir,
+                                        net_mbps, net_rtt_ms, &query_at, query_key_mode,
+                                    )
+                                };
+                                match dist_res {
                                     Ok(c) => {
                                         let rps = if c.total_time_ms > 0.0 {
                                             (n_upd as f64 * 1000.0 / c.total_time_ms).round()

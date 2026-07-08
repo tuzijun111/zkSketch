@@ -47,7 +47,7 @@ use crate::leaf::greenwald_khanna::{build_gk_leaf, GkLeafParams, GreenwaldKhanna
 use crate::leaf::hll_omc::{build_hll_omc_leaf, HllOmcLeaf, HllOmcParams};
 use crate::leaf::spacesaving::{build_spacesaving_leaf, SpaceSavingLeaf, SsLeafParams};
 use crate::recursion::topology::{compose_chain, merge_cross_family, verify_cross_family};
-use crate::recursion::{merge, merge_wire, verify_node, MergeInput, Node};
+use crate::recursion::{merge, merge_wire, shrink_wire, verify_node, MergeInput, Node};
 use crate::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
 use crate::sketch::greenwald_khanna::{
     apply_batch as gk_apply_batch, GkParams, GkState, GkUpdate,
@@ -1124,13 +1124,20 @@ pub fn measure_compose_dist(
                 }
             };
             let mi = MergeInput::from_wire_bytes(&wire)?;
+            // Normalize the published root to a fixed-shape wrapper so every
+            // family reports one size (Plonky2's merge is non-uniform — a heavy
+            // leaf like GK's yields a larger root; see recursion::shrink). Only
+            // the final auditor-facing root is wrapped; cross-machine wires are
+            // unchanged, so comm_bytes is unaffected.
+            let root = shrink_wire(&mi)?;
+            let root_wire = MergeInput::from_node(&root).to_wire_bytes()?;
             let v0 = Instant::now();
-            mi.verify()?;
+            verify_node(&root)?;
             let verify_ms = v0.elapsed().as_secs_f64() * 1000.0;
-            ensure!(mi.num_leaves() == t as u64, "root covers {} leaves, expected {t}", mi.num_leaves());
-            ensure!(mi.initial() == anchor, "root initial != native Com(S_0)");
-            ensure!(mi.final_() == final_commit, "root final != native Com(S_t)");
-            (wire.len() as u64, verify_ms)
+            ensure!(root.num_leaves() == t as u64, "root covers {} leaves, expected {t}", root.num_leaves());
+            ensure!(root.initial == anchor, "root initial != native Com(S_0)");
+            ensure!(root.final_ == final_commit, "root final != native Com(S_t)");
+            (root_wire.len() as u64, verify_ms)
         }
     };
     let merge_ms = mp0.elapsed().as_secs_f64() * 1000.0;

@@ -15,6 +15,7 @@ pub mod countmin_replay;
 pub mod countmin_v3;
 pub mod countmin_v9;
 pub mod gk_bandmerge;
+pub mod gk_bandmerge_gl;
 pub mod gk_final;
 pub mod gk_final_full;
 pub mod greenwald_khanna;
@@ -28,6 +29,7 @@ pub mod spacesaving;
 pub mod spacesaving_naive;
 pub mod ss_final;
 pub mod ss_final_full;
+pub mod ss_final_full_gl;
 
 /// One streaming sketch family. Matches the paper's `A_τ.Update(S, u)` style.
 pub trait Sketch {

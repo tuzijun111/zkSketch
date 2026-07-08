@@ -14,12 +14,16 @@
 //! well-tested path for non-trivial public inputs.
 
 pub mod backend;
+pub mod backend_gl;
 pub mod config;
+pub mod config_gl;
+pub mod leaf_gl;
 pub mod timing;
 pub mod countmin_chain;
 pub mod countmin_chain_v9;
 pub mod countmin_forest_v9;
 pub mod expose_forest;
+pub mod expose_forest_gl;
 pub mod countmin_leaf;
 pub mod countmin_leaf_v2;
 pub mod countmin_leaf_v3;

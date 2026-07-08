@@ -109,16 +109,25 @@ pub enum StreamFamily {
     SsCertified,
     /// Greenwald–Khanna, two-sided band-merge (`prove_gkb2_exposed`).
     GkBandmerge2,
+    /// SpaceSaving certified leaf on the **Goldilocks** field (D=2, `ss_final_full_gl`).
+    /// Parallel to [`Self::SsCertified`]; runs the Goldilocks recursion config.
+    SsCertifiedGl,
+    /// Greenwald–Khanna band-merge on the **Goldilocks** field (`gk_bandmerge_gl`).
+    GkBandmerge2Gl,
 }
 
 impl StreamFamily {
-    /// Parse a `family` token; the variant is fixed per family.
+    /// Parse a `family` token; the variant is fixed per family. The `_gl` tokens
+    /// select the Goldilocks-field leaves (BabyBear stays the default for the
+    /// non-suffixed tokens).
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "cm" | "cm_omc" | "countmin" => Some(Self::CmOmc),
             "hll" | "hll_omc" | "hyperloglog" => Some(Self::HllOmc),
             "ss" | "ss_certified" | "spacesaving" => Some(Self::SsCertified),
             "gk" | "gk_bandmerge2" | "bandmerge2" | "greenwald_khanna" => Some(Self::GkBandmerge2),
+            "ss_gl" | "ss_certified_gl" | "spacesaving_gl" => Some(Self::SsCertifiedGl),
+            "gk_gl" | "gk_bandmerge2_gl" | "bandmerge2_gl" => Some(Self::GkBandmerge2Gl),
             _ => None,
         }
     }
@@ -128,6 +137,8 @@ impl StreamFamily {
             Self::HllOmc => "hll_omc",
             Self::SsCertified => "ss_certified",
             Self::GkBandmerge2 => "gk_bandmerge2",
+            Self::SsCertifiedGl => "ss_certified_gl",
+            Self::GkBandmerge2Gl => "gk_bandmerge2_gl",
         }
     }
     pub fn family(self) -> &'static str {
@@ -136,6 +147,30 @@ impl StreamFamily {
             Self::HllOmc => "hll",
             Self::SsCertified => "ss",
             Self::GkBandmerge2 => "gk",
+            // Distinct family labels so the CSV self-identifies the Goldilocks rows
+            // (there is no per-run `field` column; downstream plots split on this).
+            Self::SsCertifiedGl => "ss_gl",
+            Self::GkBandmerge2Gl => "gk_gl",
+        }
+    }
+    /// The base field of this family's recursion config.
+    pub fn field(self) -> &'static str {
+        match self {
+            Self::SsCertifiedGl | Self::GkBandmerge2Gl => "Goldilocks",
+            _ => "BabyBear",
+        }
+    }
+    /// Whether this family runs the Goldilocks (`_gl`) recursion path.
+    pub fn is_gl(self) -> bool {
+        matches!(self, Self::SsCertifiedGl | Self::GkBandmerge2Gl)
+    }
+    /// The underlying (field-agnostic) sketch family, for sharing plaintext
+    /// state/record-mapping machinery between the BabyBear and Goldilocks paths.
+    pub fn base_family(self) -> Self {
+        match self {
+            Self::SsCertifiedGl => Self::SsCertified,
+            Self::GkBandmerge2Gl => Self::GkBandmerge2,
+            other => other,
         }
     }
 }
@@ -665,6 +700,12 @@ fn prove_queries_only(
                 }
             }
         }
+        StreamFamily::SsCertifiedGl | StreamFamily::GkBandmerge2Gl => {
+            // The Goldilocks (`_gl`) families run only the distributed forest
+            // path (`dist_compose::worker_main_gl`); per-batch query replay is
+            // BabyBear-only. Use the non-`_gl` token for query experiments.
+            panic!("query replay is not supported for the Goldilocks (_gl) families");
+        }
     }
     queries
 }
@@ -875,6 +916,16 @@ fn prove_leaves(
                 }
             }
             e
+        }
+        StreamFamily::SsCertifiedGl | StreamFamily::GkBandmerge2Gl => {
+            // The single-process `sim` engine is monomorphized to BabyBear. The
+            // Goldilocks families run through the distributed engine only
+            // (`dist_compose::measure_compose_dist_gl`), selected when machines >= 2
+            // or EXP_COMPOSE_EXEC=procs.
+            panic!(
+                "the Goldilocks (_gl) families require the distributed engine \
+                 (set EXP_COMPOSE_EXEC=procs or EXP_COMPOSE_MACHINES>=2)"
+            )
         }
     };
 

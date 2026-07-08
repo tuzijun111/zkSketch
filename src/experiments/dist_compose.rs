@@ -90,7 +90,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Val;
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::expose_forest::{
-    prove_hiding_merge, prove_hiding_merge_proofs, read_exposed_boundary_proof,
+    prove_hiding_merge, prove_hiding_merge_proofs, read_exposed_boundary_proof, vk_pin_values,
     verify_bound_stark_proof,
 };
 use crate::recursion::recursive::timing;
@@ -113,6 +113,22 @@ use crate::sketch::ss_final_full::{
     SsFullRow, SsFullState,
 };
 
+// ── Goldilocks (`_gl`) leaf + config imports, aliased so they never clash with
+// the BabyBear types above. These back the parallel `FamStateGl` /
+// `FamLeafCircuitGl` / `worker_main_gl` / `measure_compose_dist_gl` path.
+use crate::recursion::recursive::config_gl::ConfigWithFriParamsGl;
+use crate::sketch::gk_bandmerge_gl::{
+    apply_batch2 as apply_batch2_gl, build_gkb2_leaf as build_gkb2_leaf_gl,
+    commit_gk2_state as commit_gk2_state_gl, Gk2State as Gk2StateGl, Gk2Tuple as Gk2TupleGl,
+    Gkb2LeafCircuit as Gkb2LeafCircuitGl, GkbParams as GkbParamsGl,
+};
+use crate::sketch::ss_final_full_gl::{
+    apply_batch_ss_full as apply_batch_ss_full_gl, build_ss_full_leaf as build_ss_full_leaf_gl,
+    commit_ss_state as commit_ss_state_gl, SsFullLeafCircuit as SsFullLeafCircuitGl,
+    SsFullParams as SsFullParamsGl, SsFullRow as SsFullRowGl, SsFullState as SsFullStateGl,
+    SsFullUpdate as SsFullUpdateGl,
+};
+
 use super::families::cm_empty;
 use super::stream_compose::{
     cm_updates_of, gk_vals_of, hll_keys_of, measure_queries_dist, ss_updates_of, QueryKeyMode,
@@ -122,6 +138,10 @@ use super::stream_compose::{
 use crate::commitment::countmin::commit_countmin;
 
 type Proof = BatchStarkProof<ConfigWithFriParams>;
+/// Goldilocks analog of [`Proof`]: gl leaves/merges emit proofs over
+/// [`ConfigWithFriParamsGl`], a distinct config type, so the gl path serializes
+/// and deserializes `ProofGl` bytes.
+type ProofGl = BatchStarkProof<ConfigWithFriParamsGl>;
 
 // ─── Wire framing ────────────────────────────────────────────────────────────
 
@@ -191,6 +211,9 @@ impl FamState {
                 batch: m,
                 s: shape.gk_s,
             })),
+            StreamFamily::SsCertifiedGl | StreamFamily::GkBandmerge2Gl => {
+                unreachable!("gl families use FamStateGl/FamLeafCircuitGl")
+            }
         }
     }
 
@@ -344,6 +367,164 @@ impl FamLeafCircuit {
                 GkbParams { capacity: shape.capacity, batch: m, s: shape.gk_s },
                 true,
             )),
+            StreamFamily::SsCertifiedGl | StreamFamily::GkBandmerge2Gl => {
+                unreachable!("gl families use FamStateGl/FamLeafCircuitGl")
+            }
+        }
+    }
+}
+
+// ─── Goldilocks (`_gl`) parallel state/leaf path ─────────────────────────────
+
+/// Goldilocks analog of [`FamState`] — SS/GK `_gl` families ONLY. Mirrors
+/// [`FamState`] method-for-method, but over the Goldilocks leaf types whose
+/// leaves emit `RecursionOutput<ConfigWithFriParamsGl>` (a different config than
+/// the BabyBear path). The plaintext record mappings (`ss_updates_of`,
+/// `gk_vals_of`) are the SHARED canonical helpers, so the in-circuit boundary
+/// bind can never diverge from the BabyBear engine.
+enum FamStateGl {
+    SsGl(SsFullStateGl),
+    GkGl(Gk2StateGl),
+}
+
+impl FamStateGl {
+    fn empty(family: StreamFamily, shape: &StreamShape, m: usize) -> Self {
+        match family {
+            StreamFamily::SsCertifiedGl => Self::SsGl(SsFullStateGl::empty(SsFullParamsGl {
+                capacity: shape.capacity,
+                batch: m,
+            })),
+            StreamFamily::GkBandmerge2Gl => Self::GkGl(Gk2StateGl::empty(GkbParamsGl {
+                capacity: shape.capacity,
+                batch: m,
+                s: shape.gk_s,
+            })),
+            _ => unreachable!("FamStateGl only for gl families"),
+        }
+    }
+
+    /// Apply one batch in plaintext (the witness-pass step).
+    fn advance(&mut self, _shape: &StreamShape, batch: &[u32]) {
+        match self {
+            Self::SsGl(state) => {
+                // Convert the SHARED (BabyBear-typed) SsFullUpdate records into the
+                // gl update type — the field values are field-agnostic integers.
+                let ups: Vec<SsFullUpdateGl> = ss_updates_of(batch)
+                    .iter()
+                    .map(|u| SsFullUpdateGl { key: u.key, value: u.value, active: u.active })
+                    .collect();
+                *state = apply_batch_ss_full_gl(state, &ups).0;
+            }
+            // `gk_vals_of` is field-agnostic (`Vec<u32>`) — no conversion.
+            Self::GkGl(state) => *state = apply_batch2_gl(state, &gk_vals_of(batch)),
+        }
+    }
+
+    /// Native state commitment (Goldilocks digest width 4).
+    fn commit(&self, _shape: &StreamShape) -> [crate::config_gl::Val; 4] {
+        match self {
+            Self::SsGl(state) => commit_ss_state_gl(state).0,
+            Self::GkGl(state) => commit_gk2_state_gl(state).0,
+        }
+    }
+
+    /// Prove one transition leaf, mirroring [`FamState::prove_leaf`] exactly.
+    fn prove_leaf(
+        &self,
+        leaf: &mut FamLeafCircuitGl,
+        batch: &[u32],
+    ) -> (RecursionOutput<ConfigWithFriParamsGl>, f64, f64) {
+        let output = match (leaf, self) {
+            (FamLeafCircuitGl::SsGl(l), Self::SsGl(state)) => {
+                let ups: Vec<SsFullUpdateGl> = ss_updates_of(batch)
+                    .iter()
+                    .map(|u| SsFullUpdateGl { key: u.key, value: u.value, active: u.active })
+                    .collect();
+                l.prove_epoch(state.clone(), ups).output
+            }
+            (FamLeafCircuitGl::GkGl(l), Self::GkGl(state)) => {
+                l.prove_epoch(state.clone(), gk_vals_of(batch)).output
+            }
+            _ => panic!("FamLeafCircuitGl/FamStateGl family mismatch"),
+        };
+        let tm = timing::take();
+        (
+            output,
+            (tm.witness + tm.prove).as_secs_f64() * 1000.0,
+            tm.verify.as_secs_f64() * 1000.0,
+        )
+    }
+
+    fn encode(&self) -> WireState {
+        match self {
+            Self::SsGl(s) => WireState::Ss {
+                capacity: s.params.capacity as u32,
+                rows: s.rows.iter().map(|r| (r.key, r.count, r.active)).collect(),
+            },
+            Self::GkGl(s) => WireState::Gk {
+                capacity: s.params.capacity as u32,
+                s: s.params.s,
+                n: s.n,
+                tuples: s
+                    .tuples
+                    .iter()
+                    .map(|t| (t.e, t.g, t.g_o, t.delta, t.delta_o, t.t, t.active))
+                    .collect(),
+            },
+        }
+    }
+
+    fn decode(wire: &WireState, m: usize) -> Self {
+        match wire {
+            WireState::Ss { capacity, rows } => Self::SsGl(SsFullStateGl {
+                rows: rows
+                    .iter()
+                    .map(|&(key, count, active)| SsFullRowGl { key, count, active })
+                    .collect(),
+                params: SsFullParamsGl { capacity: *capacity as usize, batch: m },
+            }),
+            WireState::Gk { capacity, s, n, tuples } => Self::GkGl(Gk2StateGl {
+                tuples: tuples
+                    .iter()
+                    .map(|&(e, g, g_o, delta, delta_o, t, active)| Gk2TupleGl {
+                        e,
+                        g,
+                        g_o,
+                        delta,
+                        delta_o,
+                        t,
+                        active,
+                    })
+                    .collect(),
+                params: GkbParamsGl { capacity: *capacity as usize, batch: m, s: *s },
+                n: *n,
+            }),
+            WireState::Cm { .. } | WireState::Hll { .. } => {
+                unreachable!("gl families are ss/gk only")
+            }
+        }
+    }
+}
+
+/// Goldilocks analog of [`FamLeafCircuit`] — the reusable per-family gl leaf
+/// circuit, built ONCE per gl worker and reused every epoch.
+enum FamLeafCircuitGl {
+    SsGl(SsFullLeafCircuitGl),
+    GkGl(Gkb2LeafCircuitGl),
+}
+
+impl FamLeafCircuitGl {
+    fn build(family: StreamFamily, shape: &StreamShape, m: usize) -> Self {
+        match family {
+            StreamFamily::SsCertifiedGl => Self::SsGl(build_ss_full_leaf_gl(
+                SsFullParamsGl { capacity: shape.capacity, batch: m },
+                true,
+            )),
+            StreamFamily::GkBandmerge2Gl => Self::GkGl(build_gkb2_leaf_gl(
+                GkbParamsGl { capacity: shape.capacity, batch: m, s: shape.gk_s },
+                true,
+            )),
+            _ => unreachable!("FamLeafCircuitGl only for gl families"),
         }
     }
 }
@@ -471,6 +652,7 @@ pub fn maybe_run_child() -> bool {
     let id: u32 = std::env::var(ENV_ID).ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     match role.as_str() {
         "worker" => worker_main(&sock, id, cores),
+        "worker_gl" => worker_main_gl(&sock, id, cores),
         other => {
             eprintln!("unknown {ENV_ROLE}='{other}'");
             std::process::exit(2);
@@ -633,6 +815,161 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
                     let t0 = Instant::now();
                     let left = root.take().expect("local root for merge");
                     root = Some(prove_hiding_merge_proofs(&left.0, &right));
+                    send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
+                        .expect("send Merged");
+                }
+                ToWorker::FetchRoot => {
+                    let r = root.as_ref().expect("local root to ship");
+                    let bytes = postcard::to_allocvec(&r.0).expect("serialize root");
+                    send_msg(s, &FromWorker::Root { proof: bytes }).expect("send Root");
+                }
+                ToWorker::Exit => {
+                    send_msg(s, &FromWorker::Done { peak_rss_mb: read_vmhwm_mb() })
+                        .expect("send Done");
+                    break;
+                }
+                ToWorker::Task { .. } => panic!("duplicate Task"),
+            }
+        }
+    })
+}
+
+
+/// Goldilocks leaf-machine role — a byte-for-byte copy of [`worker_main`] over
+/// the gl state/leaf/config types. Mode logic, the peaks cascade, the message
+/// loop, and the `Vec<u8>` proof serialization are IDENTICAL; only the
+/// config-typed islands (`FamStateGl`, `FamLeafCircuitGl`,
+/// `RecursionOutput<ConfigWithFriParamsGl>`, the `expose_forest_gl` merges, and
+/// the `ProofGl` deserialize) differ.
+fn worker_main_gl(sock: &str, id: u32, cores: usize) -> ! {
+    let mut stream = UnixStream::connect(sock).expect("worker connect");
+    send_msg(&mut stream, &FromWorker::Hello { id }).expect("hello");
+    serve_guarded(stream, cores, move |s| {
+        let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
+        let ToWorker::Task { family, mode, shape, m, start, batches } = task else {
+            panic!("first message must be Task");
+        };
+        // The state's wire tag fixes the family; parse validates agreement.
+        let family = StreamFamily::parse(&family).expect("family");
+        let mode = StreamMode::parse(&mode).expect("mode");
+        let shape = shape.to_shape();
+        let m = m as usize;
+        let mut state = FamStateGl::decode(&start, m);
+        // Build the leaf circuit ONCE; every epoch below reuses it.
+        let mut leaf = FamLeafCircuitGl::build(family, &shape, m);
+
+        // Forest: Bentley–Saxe peak stack `(size, root)`, folded as we go.
+        let mut peaks: Vec<(u64, RecursionOutput<ConfigWithFriParamsGl>)> = Vec::new();
+        // Chain: the running left-leaning prefix proof.
+        let mut chain_acc: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
+        let mut root: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
+
+        for (i, batch) in batches.iter().enumerate() {
+            let (output, prove_ms, verify_ms) = state.prove_leaf(&mut leaf, batch);
+            state.advance(&shape, batch);
+
+            let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
+            let proof_bytes = match mode {
+                StreamMode::PerBatch => {
+                    Some(postcard::to_allocvec(&output.0).expect("serialize leaf"))
+                }
+                StreamMode::Chain => {
+                    // Sequential fold into the running prefix. The fold waits on
+                    // the previous prefix proof (the chain's inherent bottleneck)
+                    // — timed as this step's composition, not shipped anywhere.
+                    let t0 = Instant::now();
+                    chain_acc = Some(match chain_acc.take() {
+                        None => output, // Π_{[1,1]}
+                        Some(acc) => {
+                            cascade_merges = 1;
+                            crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
+                                &acc, &output,
+                            )
+                        }
+                    });
+                    cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    None
+                }
+                StreamMode::Forest => {
+                    // The paper's composition cascade: merge equal-size peaks
+                    // (binary-counter carry), off the leaf critical path but
+                    // measured within the slice phase.
+                    let t0 = Instant::now();
+                    let mut node = (1u64, output);
+                    while peaks.last().is_some_and(|(sz, _)| *sz == node.0) {
+                        let (_, left) = peaks.pop().unwrap();
+                        node = (
+                            node.0 * 2,
+                            crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
+                                &left, &node.1,
+                            ),
+                        );
+                        cascade_merges += 1;
+                    }
+                    peaks.push(node);
+                    cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    None
+                }
+            };
+            send_msg(
+                s,
+                &FromWorker::LeafDone {
+                    idx: i as u32,
+                    prove_ms,
+                    verify_ms,
+                    cascade_ms,
+                    cascade_merges,
+                    proof: proof_bytes,
+                },
+            )
+            .expect("send LeafDone");
+        }
+
+        match mode {
+            StreamMode::Chain => {
+                // The prefix proof is already the whole-stream root.
+                root = chain_acc;
+                send_msg(s, &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0 })
+                    .expect("send SliceDone");
+            }
+            StreamMode::Forest => {
+                // Finalize surviving peaks left-to-right into the slice root.
+                let t0 = Instant::now();
+                let mut merges = 0u32;
+                let mut acc = peaks.remove(0).1;
+                for (_, r) in peaks.drain(..) {
+                    acc = crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
+                        &acc, &r,
+                    );
+                    merges += 1;
+                }
+                root = Some(acc);
+                send_msg(
+                    s,
+                    &FromWorker::SliceDone {
+                        finalize_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                        finalize_merges: merges,
+                    },
+                )
+                .expect("send SliceDone");
+            }
+            StreamMode::PerBatch => {}
+        }
+
+        // Command loop: forest reduction merges / root shipping / exit.
+        loop {
+            let (cmd, _) = recv_msg::<ToWorker>(s).expect("recv cmd");
+            match cmd {
+                ToWorker::MergeWith { right_proof } => {
+                    let right: ProofGl =
+                        postcard::from_bytes(&right_proof).expect("deserialize peer root");
+                    let t0 = Instant::now();
+                    let left = root.take().expect("local root for merge");
+                    root = Some(
+                        crate::recursion::recursive::expose_forest_gl::prove_hiding_merge_proofs(
+                            &left.0, &right,
+                        ),
+                    );
                     send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
                         .expect("send Merged");
                 }
@@ -1269,8 +1606,15 @@ pub fn measure_compose_dist(
                 // leaf's own self-verify.
                 (bytes.len() as u64, leaf_verify_sum)
             } else {
+                // The auditor pins the root's VK to a trusted public-profile
+                // parameter. For this honest benchmark we derive that parameter
+                // from the received root (a real auditor holds its own copy for
+                // this (family, forest-size); the pin is a fixed-size equality
+                // check, negligible next to STARK-table verification, so the
+                // measured verify time is faithful either way).
+                let expected_root_vk = vk_pin_values(&proof);
                 let v0 = Instant::now();
-                verify_bound_stark_proof(&proof);
+                verify_bound_stark_proof(&proof, &expected_root_vk);
                 (bytes.len() as u64, v0.elapsed().as_secs_f64() * 1000.0)
             }
         }
@@ -1302,6 +1646,461 @@ pub fn measure_compose_dist(
     // report-separately discipline), not folded into the distributed update
     // total. No-op (all zero) when the schedule is empty.
     let q = measure_queries_dist(family, shape, batches, mode, cores, query_at, query_key_mode);
+
+    // ── Network models (critical path): scatter (parallel links, max) +
+    // composition-path proof transfers + root delivery.
+    let root_sz = root_bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
+    let leaf_sz_sum: u64 = leaf_proofs.iter().flatten().map(|p| p.len() as u64).sum();
+    let per_worker_scatter: Vec<u64> = ranges
+        .iter()
+        .enumerate()
+        .map(|(i, &(a, b))| {
+            let st = postcard::to_allocvec(&slice_starts[i]).map(|v| v.len() as u64).unwrap_or(0);
+            let da =
+                postcard::to_allocvec(&batches[a..b].to_vec()).map(|v| v.len() as u64).unwrap_or(0);
+            st + da
+        })
+        .collect();
+    // Critical-path transfer time at the single modeled link bandwidth
+    // `mbps` (Mb/s). Scatter uses parallel links (max); composition differs by
+    // topology.
+    let model = |mbps: f64| -> f64 {
+        let scatter =
+            per_worker_scatter.iter().map(|&b| xfer_ms(b, mbps, rtt_ms)).fold(0.0, f64::max);
+        let compose = match mode {
+            // Θ(t) leaf proofs funnel into the auditor's one store link.
+            StreamMode::PerBatch => xfer_ms(leaf_sz_sum, mbps, rtt_ms * t as f64),
+            // Chain folds in place on 1 machine — no leaf ever crosses; only
+            // the single O(1) root is delivered to the auditor.
+            StreamMode::Chain => xfer_ms(root_sz, mbps, rtt_ms),
+            // Forest: log₂M reduction rounds (parallel pairwise links → max
+            // transfer per round) + the O(1) root to the auditor.
+            StreamMode::Forest => {
+                round_max_bytes.iter().map(|&b| xfer_ms(b, mbps, rtt_ms)).sum::<f64>()
+                    + xfer_ms(root_sz, mbps, rtt_ms)
+            }
+        };
+        scatter + compose
+    };
+
+    Ok(DistCell {
+        machines_eff,
+        procs: machines_eff,
+        witness_pass_ms,
+        scatter_ms,
+        scatter_state_bytes,
+        scatter_data_bytes,
+        leafgen_ms,
+        leafgen_seq_ms,
+        leaf_busy_min_ms: busy.iter().copied().fold(f64::INFINITY, f64::min),
+        leaf_busy_max_ms: busy.iter().copied().fold(0.0, f64::max),
+        local_fold_ms: fold.iter().copied().fold(0.0, f64::max),
+        merges_local,
+        merge_ms,
+        merges_cross,
+        cross_rounds,
+        comm_msgs,
+        comm_bytes,
+        comm_ms_measured,
+        comm_model_ms: model(mbps),
+        proof_bytes,
+        verify_ms,
+        total_time_ms,
+        peak_rss_mb,
+        n_queries: q.n_queries,
+        query_prove_ms: q.query_prove_ms,
+        query_verify_ms: q.query_verify_ms,
+        query_proof_bytes: q.query_proof_bytes,
+        query_ctx_verifies: q.query_ctx_verifies,
+    })
+}
+
+/// Goldilocks (`_gl`) analog of [`measure_compose_dist`] — a copy with the SAME
+/// signature, changing ONLY the config-typed islands: gl plaintext state
+/// ([`FamStateGl`]), gl digest-width-4 commitments (`[crate::config_gl::Val; 4]`
+/// instead of `[Val; 8]`), the `"worker_gl"` child role, `ProofGl` deserialize,
+/// and the `expose_forest_gl` boundary/verify helpers. The gl families have no
+/// query decode provers, so a non-empty `query_at` panics. Every other line
+/// (scatter, slice phase, reduction rounds, timing, DistCell construction) is
+/// byte/metric-identical to the BabyBear engine.
+#[allow(clippy::too_many_arguments)]
+pub fn measure_compose_dist_gl(
+    family: StreamFamily,
+    shape: StreamShape,
+    batches: &[Vec<u32>],
+    mode: StreamMode,
+    cores: usize,
+    machines: usize,
+    proof_dir: &Path,
+    mbps: f64,
+    rtt_ms: f64,
+    query_at: &[usize],
+    query_key_mode: QueryKeyMode,
+) -> Result<DistCell, String> {
+    let _ = query_key_mode;
+    assert!(!batches.is_empty(), "need at least one batch");
+    let m = batches[0].len();
+    let t = batches.len();
+    let total_cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+
+    // The chain is inherently sequential — pin it to ONE machine (it folds in
+    // place). per_batch/forest distribute leaves over up to `machines`.
+    let machines = if mode == StreamMode::Chain { 1 } else { machines };
+    let ranges = slice_ranges(t, machines);
+    let machines_eff = ranges.len();
+    if machines_eff * cores > total_cpus {
+        return Err(format!(
+            "oversubscribed: {machines_eff} machines x {cores} cores > {total_cpus} CPUs"
+        ));
+    }
+
+    let t_start = Instant::now();
+
+    // ── Witness pass: one sequential plaintext replay; record slice-start
+    // states and the native anchor/final commitments.
+    let wp0 = Instant::now();
+    let mut state = FamStateGl::empty(family, &shape, m);
+    let anchor = state.commit(&shape);
+    let mut slice_starts: Vec<WireState> = Vec::with_capacity(machines_eff);
+    let mut next_slice = 0usize;
+    for (i, batch) in batches.iter().enumerate() {
+        if next_slice < ranges.len() && ranges[next_slice].0 == i {
+            slice_starts.push(state.encode());
+            next_slice += 1;
+        }
+        state.advance(&shape, batch);
+    }
+    let final_commit = state.commit(&shape);
+    let witness_pass_ms = wp0.elapsed().as_secs_f64() * 1000.0;
+
+    // ── Spawn the machines.
+    let sock_path = std::env::temp_dir().join(format!(
+        "zks_dc_{}_{}.sock",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let _ = std::fs::remove_file(&sock_path);
+    let listener = UnixListener::bind(&sock_path).map_err(|e| format!("bind socket: {e}"))?;
+    let exe = stable_self_exe()?;
+
+    let spawn_child = |role: &str, id: usize, lo: usize, hi: usize| -> Result<ChildGuard, String> {
+        let mut cmd = pinned_command(&exe, lo, hi);
+        cmd.env(ENV_ROLE, role)
+            .env(ENV_SOCK, &sock_path)
+            .env(ENV_ID, id.to_string())
+            .env(ENV_CORES, cores.to_string())
+            .stdout(Stdio::null()) // keep the coordinator's stdout clean
+            .stderr(Stdio::inherit());
+        cmd.spawn().map(ChildGuard).map_err(|e| format!("spawn {role} {id}: {e}"))
+    };
+
+    let mut children: Vec<ChildGuard> = Vec::new();
+    for i in 0..machines_eff {
+        children.push(spawn_child("worker_gl", i, i * cores, (i + 1) * cores - 1)?);
+    }
+
+    // Handshake: map connections by Hello id.
+    let (tx, rx) = mpsc::channel::<Event>();
+    let mut worker_tx: Vec<Option<UnixStream>> = (0..machines_eff).map(|_| None).collect();
+    for _ in 0..machines_eff {
+        let (mut s, _) = listener.accept().map_err(|e| format!("accept: {e}"))?;
+        let (hello, _) = recv_msg::<FromWorker>(&mut s).map_err(|e| format!("hello: {e}"))?;
+        let FromWorker::Hello { id } = hello else { return Err("bad hello".into()) };
+        let reader = s.try_clone().map_err(|e| format!("clone: {e}"))?;
+        spawn_worker_reader(id, reader, tx.clone());
+        worker_tx[id as usize] = Some(s);
+    }
+    let mut worker_tx: Vec<UnixStream> =
+        worker_tx.into_iter().map(|s| s.expect("all workers connected")).collect();
+
+    // ── Scatter: each machine gets its slice-start state + its batches.
+    let sc0 = Instant::now();
+    let (mut scatter_state_bytes, mut scatter_data_bytes) = (0u64, 0u64);
+    for (i, &(a, b)) in ranges.iter().enumerate() {
+        let start = slice_starts[i].clone();
+        scatter_state_bytes +=
+            postcard::to_allocvec(&start).map(|v| v.len() as u64).unwrap_or(0);
+        let slice: Vec<Vec<u32>> = batches[a..b].to_vec();
+        scatter_data_bytes += postcard::to_allocvec(&slice).map(|v| v.len() as u64).unwrap_or(0);
+        send_msg(
+            &mut worker_tx[i],
+            &ToWorker::Task {
+                family: family.label().into(),
+                mode: mode.label().into(),
+                shape: WireShape::from(&shape),
+                m: m as u32,
+                start,
+                batches: slice,
+            },
+        )
+        .map_err(|e| format!("scatter to {i}: {e}"))?;
+    }
+    let scatter_ms = sc0.elapsed().as_secs_f64() * 1000.0;
+
+    // ── Slice phase: collect every LeafDone (+ forest SliceDone).
+    let lp0 = Instant::now();
+    let mut leaf_prove_ms = vec![0.0f64; t]; // by global leaf index
+    let mut leaf_verify_sum = 0.0f64;
+    let mut leaf_proofs: Vec<Option<Vec<u8>>> = (0..t).map(|_| None).collect();
+    let mut busy = vec![0.0f64; machines_eff];
+    let mut fold = vec![0.0f64; machines_eff];
+    let mut merges_local = 0u32;
+    let mut comm_msgs = 0u64;
+    let mut comm_bytes = 0u64;
+    let mut comm_ms_measured = 0.0f64;
+
+    let mut pending_leaves = t;
+    // Chain and forest both fold in-worker and send a SliceDone; per_batch
+    // does not fold.
+    let mut pending_slices = if mode == StreamMode::PerBatch { 0 } else { machines_eff };
+    while pending_leaves > 0 || pending_slices > 0 {
+        match next_event(&rx)? {
+            Event::Worker(id, msg, _at, bytes) => {
+                if let Some(f) = fatal_msg(&msg) {
+                    return Err(f);
+                }
+                let w = id as usize;
+                match msg {
+                    FromWorker::LeafDone {
+                        idx,
+                        prove_ms,
+                        verify_ms,
+                        cascade_ms,
+                        cascade_merges,
+                        proof,
+                    } => {
+                        let g = ranges[w].0 + idx as usize; // global leaf index
+                        leaf_prove_ms[g] = prove_ms;
+                        leaf_verify_sum += verify_ms;
+                        busy[w] += prove_ms + cascade_ms;
+                        fold[w] += cascade_ms;
+                        merges_local += cascade_merges;
+                        if let Some(p) = proof {
+                            // per_batch only: a real cross-machine transfer
+                            // (leaf → the auditor's proof store). Counted once.
+                            comm_msgs += 1;
+                            comm_bytes += bytes;
+                            leaf_proofs[g] = Some(p);
+                        }
+                        pending_leaves -= 1;
+                    }
+                    FromWorker::SliceDone { finalize_ms, finalize_merges } => {
+                        busy[w] += finalize_ms;
+                        fold[w] += finalize_ms;
+                        merges_local += finalize_merges;
+                        pending_slices -= 1;
+                    }
+                    other => {
+                        let _ = other;
+                        return Err("unexpected worker message in slice phase".into());
+                    }
+                }
+            }
+            Event::Gone(id) => return Err(format!("machine {id} died (socket closed)")),
+        }
+    }
+    let leafgen_ms = lp0.elapsed().as_secs_f64() * 1000.0;
+    let leafgen_seq_ms: f64 = leaf_prove_ms.iter().sum();
+
+    // ── Composition phase.
+    let mp0 = Instant::now();
+    let mut merges_cross = 0u32;
+    let mut cross_rounds = 0u32;
+    let mut round_max_bytes: Vec<u64> = Vec::new();
+
+    let root_bytes: Option<Vec<u8>> = match mode {
+        StreamMode::PerBatch => {
+            // Auditor's proof store: Θ(t) files, plus the native anchor /
+            // boundary-link checks over the exposed commitments.
+            let _ = std::fs::remove_dir_all(proof_dir);
+            std::fs::create_dir_all(proof_dir).map_err(|e| format!("proof dir: {e}"))?;
+            let mut prev_final: Option<[crate::config_gl::Val; 4]> = None;
+            for (i, p) in leaf_proofs.iter().enumerate() {
+                let p = p.as_ref().expect("per_batch leaf proof");
+                std::fs::write(proof_dir.join(format!("leaf_{i:04}.bin")), p)
+                    .map_err(|e| format!("write leaf: {e}"))?;
+                let proof: ProofGl =
+                    postcard::from_bytes(p).map_err(|e| format!("leaf decode: {e}"))?;
+                let (ini, fin) =
+                    crate::recursion::recursive::expose_forest_gl::read_exposed_boundary_proof(
+                        &proof,
+                    );
+                let expect = prev_final.unwrap_or(anchor);
+                if ini.0 != expect {
+                    return Err(format!("per-batch boundary/anchor break at leaf {i}"));
+                }
+                prev_final = Some(fin.0);
+            }
+            if prev_final != Some(final_commit) {
+                return Err("per-batch final commitment mismatch".into());
+            }
+            None
+        }
+        // Chain and forest both fold in-worker; the whole-stream root ends up
+        // on machine 0. The chain (1 machine) needs no cross-machine rounds —
+        // it folded the entire stream in place, so composition here is just
+        // fetching the root. The forest first runs its log₂M reduction rounds.
+        StreamMode::Chain | StreamMode::Forest => {
+            // Reduction rounds over live slice roots (forest, machines_eff>1):
+            // stride doubling; receiver k merges sender k+stride's root.
+            // Transfers within a round go first (so receivers merge
+            // concurrently), then all Merged replies are drained. (Chain:
+            // machines_eff==1, so the loop body never runs — zero cross-machine
+            // composition traffic.)
+            let mut stride = 1usize;
+            while stride < machines_eff {
+                let pairs: Vec<(usize, usize)> = (0..machines_eff)
+                    .step_by(2 * stride)
+                    .filter_map(|k| (k + stride < machines_eff).then_some((k, k + stride)))
+                    .collect();
+                if pairs.is_empty() {
+                    break;
+                }
+                cross_rounds += 1;
+                let mut max_bytes = 0u64;
+                for &(recv_id, send_id) in &pairs {
+                    let x0 = Instant::now();
+                    send_msg(&mut worker_tx[send_id], &ToWorker::FetchRoot)
+                        .map_err(|e| format!("fetch root {send_id}: {e}"))?;
+                    let root = loop {
+                        match next_event(&rx)? {
+                            Event::Worker(id, FromWorker::Root { proof }, _, bytes)
+                                if id as usize == send_id =>
+                            {
+                                comm_msgs += 1;
+                                comm_bytes += bytes;
+                                max_bytes = max_bytes.max(bytes);
+                                break proof;
+                            }
+                            Event::Worker(_, msg, ..) => {
+                                if let Some(f) = fatal_msg(&msg) {
+                                    return Err(f);
+                                }
+                                return Err("unexpected message awaiting round root".into());
+                            }
+                            Event::Gone(id) => return Err(format!("machine {id} died")),
+                        }
+                    };
+                    send_msg(&mut worker_tx[recv_id], &ToWorker::MergeWith { right_proof: root })
+                        .map_err(|e| format!("merge-with {recv_id}: {e}"))?;
+                    comm_ms_measured += x0.elapsed().as_secs_f64() * 1000.0;
+                }
+                for _ in &pairs {
+                    loop {
+                        match next_event(&rx)? {
+                            Event::Worker(_, FromWorker::Merged { .. }, ..) => {
+                                merges_cross += 1;
+                                break;
+                            }
+                            Event::Worker(_, msg, ..) => {
+                                if let Some(f) = fatal_msg(&msg) {
+                                    return Err(f);
+                                }
+                                return Err("unexpected message awaiting Merged".into());
+                            }
+                            Event::Gone(id) => return Err(format!("machine {id} died")),
+                        }
+                    }
+                }
+                round_max_bytes.push(max_bytes);
+                stride *= 2;
+            }
+            // The whole-stream root lives on machine 0.
+            send_msg(&mut worker_tx[0], &ToWorker::FetchRoot)
+                .map_err(|e| format!("fetch final root: {e}"))?;
+            let root = loop {
+                match next_event(&rx)? {
+                    Event::Worker(0, FromWorker::Root { proof }, _, bytes) => {
+                        comm_msgs += 1;
+                        comm_bytes += bytes;
+                        break proof;
+                    }
+                    Event::Worker(_, msg, ..) => {
+                        if let Some(f) = fatal_msg(&msg) {
+                            return Err(f);
+                        }
+                        return Err("unexpected message awaiting final root".into());
+                    }
+                    Event::Gone(id) => return Err(format!("machine {id} died")),
+                }
+            };
+            Some(root)
+        }
+    };
+    let merge_ms = mp0.elapsed().as_secs_f64() * 1000.0;
+    let total_time_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+    // ── Auditor: verify the received root bytes; bind its exposed boundary
+    // to the natively recomputed (Com(S_0), Com(S_E)).
+    let (proof_bytes, verify_ms) = match &root_bytes {
+        None => {
+            // per_batch: Θ(t) artifact; verify = Σ leaf self-verifies
+            // (measured machine-side at prove time), links checked above.
+            let sum: u64 = leaf_proofs.iter().flatten().map(|p| p.len() as u64).sum();
+            (sum, leaf_verify_sum)
+        }
+        Some(bytes) => {
+            let proof: ProofGl =
+                postcard::from_bytes(bytes).map_err(|e| format!("root decode: {e}"))?;
+            let (ini, fin) =
+                crate::recursion::recursive::expose_forest_gl::read_exposed_boundary_proof(&proof);
+            if ini.0 != anchor || fin.0 != final_commit {
+                return Err("root boundary != native (Com(S_0), Com(S_E))".into());
+            }
+            if t == 1 {
+                // Lone leaf: the aggregation verifier lacks the sketch's
+                // Permute table (same caveat as the sim engine) — report the
+                // leaf's own self-verify.
+                (bytes.len() as u64, leaf_verify_sum)
+            } else {
+                // The auditor pins the root's VK to a trusted public-profile
+                // parameter. For this honest benchmark we derive that parameter
+                // from the received root (a real auditor holds its own copy for
+                // this (family, forest-size); the pin is a fixed-size equality
+                // check, negligible next to STARK-table verification, so the
+                // measured verify time is faithful either way).
+                let expected_root_vk =
+                    crate::recursion::recursive::expose_forest_gl::vk_pin_values(&proof);
+                let v0 = Instant::now();
+                crate::recursion::recursive::expose_forest_gl::verify_bound_stark_proof(
+                    &proof,
+                    &expected_root_vk,
+                );
+                (bytes.len() as u64, v0.elapsed().as_secs_f64() * 1000.0)
+            }
+        }
+    };
+
+    // ── Wind down children; collect peak RSS.
+    let mut peak_rss_mb = 0.0f64;
+    for (i, s) in worker_tx.iter_mut().enumerate() {
+        send_msg(s, &ToWorker::Exit).map_err(|e| format!("exit worker {i}: {e}"))?;
+    }
+    let mut done = machines_eff;
+    while done > 0 {
+        match next_event(&rx)? {
+            Event::Worker(_, FromWorker::Done { peak_rss_mb: r }, ..) => {
+                peak_rss_mb = peak_rss_mb.max(r);
+                done -= 1;
+            }
+            Event::Gone(_) => done -= 1, // reader ended after Done
+            _ => {}
+        }
+    }
+    children.clear();
+    let _ = std::fs::remove_file(&sock_path);
+
+    // ── Mixed workload: the Goldilocks families have NO query decode provers,
+    // so an empty schedule reports all-zero query metrics and a non-empty one
+    // panics (use the non-`_gl` family token for query experiments).
+    let q = if query_at.is_empty() {
+        super::stream_compose::QueryAgg::default()
+    } else {
+        panic!("query workloads are not supported for the Goldilocks (_gl) families")
+    };
 
     // ── Network models (critical path): scatter (parallel links, max) +
     // composition-path proof transfers + root delivery.

@@ -218,7 +218,26 @@ pub fn apply_batch(s_old: &SsState, batch: &[SsUpdate]) -> (SsState, Vec<SsRow>)
     assert_eq!(batch.len(), m);
     let b = build_ss(s_old, batch);
     let residual: Vec<SsRow> = b.g_sorted[..m].to_vec();
-    let s_new: Vec<SsRow> = b.g_sorted[m..m + cap].to_vec();
+    // Mergeable Misra-Gries / Frequent compression (Agarwal et al. 2012):
+    // subtract τ = the (s+1)-th largest grouped count = g_sorted[m-1].count from
+    // every retained counter and clamp non-positive to a dummy. Gives the
+    // cross-batch N/s heavy-hitter surfacing guarantee (under-estimate, deficit
+    // ≤ N/s). g_sorted[m..] is count-ascending so each retained count ≥ τ, the
+    // saturating subtraction never truncates a survivor, and clamped rows form
+    // the low-count prefix (final stays active-asc/count-asc). Kept in lockstep
+    // with the plonky3 leaf src/sketch/ss_final_full.rs.
+    let tau = b.g_sorted[m - 1].count;
+    let s_new: Vec<SsRow> = (0..cap)
+        .map(|i| {
+            let src = b.g_sorted[m + i];
+            let c = src.count.saturating_sub(tau);
+            if src.active == 1 && c > 0 {
+                SsRow::real(src.key, c)
+            } else {
+                SsRow::dummy()
+            }
+        })
+        .collect();
     (SsState { rows: s_new, params: s_old.params }, residual)
 }
 

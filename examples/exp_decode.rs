@@ -28,9 +28,7 @@ use zksketch::sketch::countmin::{CountMin, CountMinParams, CountMinUpdate};
 use zksketch::sketch::countmin_final::{apply_update_prf, hash_cell_prf};
 
 // ---- HLL (omc) ----
-use zksketch::decode::hyperloglog::{
-    BETA, HllDecodeParams, fixed_z, inv_z, k_num, prove_hll_decode_omc,
-};
+use zksketch::decode::hyperloglog::{BETA, HllDecodeParams, fixed_res, prove_hll_decode_omc};
 use zksketch::sketch::hll_omc::{hll_omc_advance, hll_omc_empty};
 
 // ---- SS (certified) ----
@@ -134,7 +132,7 @@ fn run_hll() -> Row {
     let mut regs = hll_omc_empty(b);
     hll_omc_advance(&mut regs, &keys, m);
     let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
-    let native_fp = k_num(m) * inv_z(fixed_z(&regs32)); // fixed-point cardinality
+    let native_fp = fixed_res(m, &regs32); // fixed-point cardinality (scale 2^β)
 
     let p = HllDecodeParams { b, release: ReleasePolicy::Identity };
     let proof = prove_hll_decode_omc(p, regs, 0);

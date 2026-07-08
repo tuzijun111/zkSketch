@@ -83,6 +83,8 @@ struct Tgt {
     gskey: Vec<Target>,
     gscount: Vec<Target>,
     gsactive: Vec<Target>,
+    // inverse for the post-(τ-subtraction) retained count is_nonzero (per slot)
+    surv_inv: Vec<Target>,
 }
 
 /// A built, reusable SpaceSaving leaf circuit.
@@ -125,6 +127,7 @@ pub fn build_spacesaving_leaf(params: SsLeafParams) -> SpaceSavingLeaf {
     let gskey = b.add_virtual_targets(total);
     let gscount = b.add_virtual_targets(total);
     let gsactive = b.add_virtual_targets(total);
+    let surv_inv = b.add_virtual_targets(cap);
 
     // ---- Stage A: commitment binding ----
     let mut init_pre = Vec::with_capacity(3 * cap);
@@ -141,12 +144,28 @@ pub fn build_spacesaving_leaf(params: SsLeafParams) -> SpaceSavingLeaf {
         batch_pre.push(ba[i]);
     }
     bind_commit(&mut b, batch_pre, &batch_commit);
-    // final cells = g_sorted[m..m+cap].
+    // final cells = mergeable Misra-Gries compression of g_sorted[m..]: subtract
+    // τ = the (s+1)-th largest count = gscount[m-1] from every retained counter
+    // and clamp non-positive to a dummy. τ is the pinned rank-(m-1) count (the
+    // count-sort + sortedness fix its rank), so it is not a free witness; binding
+    // count/active/key to the subtracted values forces the committed final state
+    // to be the compressed table. Kept in lockstep with the plonky3 leaf
+    // src/sketch/ss_final_full.rs. (Mass conservation is Stage H's grouped-sum
+    // identity Σ gscount = Σ old + Σ batch, over the pre-subtraction table, so it
+    // is unaffected.)
+    let tau = gscount[m - 1];
     let mut final_pre = Vec::with_capacity(3 * cap);
     for i in 0..cap {
-        final_pre.push(gskey[m + i]);
-        final_pre.push(gscount[m + i]);
-        final_pre.push(gsactive[m + i]);
+        // diff = gscount[m+i] − τ ≥ 0 (count-ascending ⇒ retained count ≥ τ).
+        let diff = b.sub(gscount[m + i], tau);
+        let _ = b.split_le(diff, COUNT_BITS); // no underflow (diff ≥ 0)
+        // surv = [diff ≠ 0]; since diff ≥ 0 this is [diff > 0].
+        let z = is_zero(&mut b, diff, surv_inv[i]);
+        let surv = b.sub(one, z);
+        let fk = b.mul(surv, gskey[m + i]); // key gated by survival
+        final_pre.push(fk);
+        final_pre.push(diff);
+        final_pre.push(surv);
     }
     bind_commit(&mut b, final_pre, &final_commit);
 
@@ -245,6 +264,7 @@ pub fn build_spacesaving_leaf(params: SsLeafParams) -> SpaceSavingLeaf {
         t: Tgt {
             init_commit, final_commit, batch_commit,
             ok, oc, oa, bk, bv, ba, ks, cs, az, key_inv, acc_active_inv, gskey, gscount, gsactive,
+            surv_inv,
         },
         params,
     }
@@ -324,6 +344,17 @@ impl SpaceSavingLeaf {
             pw.set_target(self.t.gsactive[r], F::from_canonical_u64(build.g_sorted[r].active))?;
         }
 
+        // surv_inv: inverse of the post-subtraction retained count `count − τ`
+        // (0 when the counter clamps to a dummy), for the is-nonzero gadget that
+        // derives the compacted final active flag.
+        let tau_native = build.g_sorted[m - 1].count;
+        for i in 0..cap {
+            let c = build.g_sorted[m + i].count.saturating_sub(tau_native);
+            let cf = F::from_canonical_u64(c);
+            let inv = if cf == F::ZERO { F::ZERO } else { cf.inverse() };
+            pw.set_target(self.t.surv_inv[i], inv)?;
+        }
+
         let witness = t_w.elapsed();
         let t_p = std::time::Instant::now();
         let proof = self.data.prove(pw)?;
@@ -375,6 +406,33 @@ mod tests {
         verify_node(&root)?;
         assert_eq!(root.num_leaves(), 2);
         Ok(())
+    }
+
+    /// Full-state parity: with the state saturated (τ > 0) the in-circuit
+    /// Misra-Gries `(s+1)`-th-value subtraction must agree with the native
+    /// `apply_batch`, and the transition self-verifies. old {A:9, B:9}, batch
+    /// {C:5}: τ = C's 5, so the tied retained pair survives under-estimated
+    /// {A:4, B:4} and the decoy C is evicted.
+    #[test]
+    fn spacesaving_full_state_subtraction() -> Result<()> {
+        let params = SsLeafParams { capacity: 2, batch: 2 };
+        let leaf = build_spacesaving_leaf(params);
+        let (a, bk, c) = (10u64, 11u64, 12u64);
+        use crate::sketch::spacesaving::SsRow;
+        let s0 = SsState {
+            rows: vec![SsRow::real(a, 9), SsRow::real(bk, 9)],
+            params: params.as_sketch(),
+        };
+        let batch = vec![SsUpdate::real(c, 5), SsUpdate::dummy()];
+        let (expected, _) = apply_batch(&s0, &batch);
+        // Native surfacing: tied pair retained as under-estimates, decoy evicted.
+        assert_eq!(expected.frequency(a), 4, "A under-estimated by τ=5");
+        assert_eq!(expected.frequency(bk), 4, "B under-estimated by τ=5");
+        assert_eq!(expected.frequency(c), 0, "decoy C evicted");
+        // In-circuit result matches native and self-verifies.
+        let node = leaf.prove(&s0, &batch, 1)?;
+        assert_eq!(node.final_, expected.commit());
+        verify_node(&node)
     }
 
     /// Soundness: a tampered final state (wrong committed result) must be

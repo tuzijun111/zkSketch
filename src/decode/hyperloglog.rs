@@ -1,4 +1,3 @@
-// see worktree file /home/binbin/zkSketch/.claude/worktrees/wf_0b93e877-7d4-3/src/decode/hyperloglog.rs (full contents below)
 //! HyperLogLog **cardinality** decode circuit (E3, plonky3/STARK), estimator mode.
 //!
 //! Implements the paper's HLL query relation (zk1.tex app:hll, "HLL estimator
@@ -8,43 +7,70 @@
 //!
 //! ```text
 //!   Z   = Σ_b Pow2Neg[S_t[b]]            (fixed-point harmonic sum, scale 2^β)
-//!   res = α_s · s² · Inv_β(Z)            (fixed-point cardinality, scale 2^β)
+//!   res = floor(K_num · 2^(2β) / Z)      (fixed-point cardinality, scale 2^β)
 //!   ans = release(res)
 //! ```
 //!
-//! where `Pow2Neg[x] = round(2^β / 2^x)` is a **public** fixed-point lookup table
-//! selected per register by a one-hot over the register value `0..=MU_MAX`, and
-//! `Inv_β(Z)` is a **witnessed** reciprocal `invZ` certified by the range-checked
-//! rounding residual `Z·invZ − T ∈ [0, Z)` with reciprocal target
-//! `T = 2^(2β)` (so `invZ ≈ 2^β / Z` retains β fractional bits — see the BETA
-//! note below). `res` is then the exact in-circuit product `K_num · invZ`, with
-//! `K_num = round(α_s · s²)` a public integer constant; `ans = release(res)`.
+//! where `Pow2Neg[x] = round(2^β / 2^x)` is a **public** fixed-point lookup
+//! table (identically 0 past `x = β + 1`) and `K_num = round(α_s · s²)` is a
+//! public integer constant. The division is certified by a **witnessed
+//! quotient**: `res` and the remainder `rem` are supplied in range-checked
+//! base-2^11 limbs and the integer identity `res·Z + rem = N`
+//! (`N = K_num·2^(2β)`, up to 44 bits at `b = 14`) is enforced digit-by-digit
+//! with range-checked carries, so every in-field term stays far below the
+//! BabyBear modulus (see the budget below).
 //!
 //! Reusing the `hll_final_full` commit layout and the `countmin` decode harness
 //! (Poseidon2 + Recompose, no Permute — decode does not sort).
 //!
 //! Stages:
 //! 1. Re-hash the `m` registers → bind to the committed digest (the `Θ(s)` cost).
-//! 2. Per register: a one-hot selector over `[0, MU_MAX]` picks `Pow2Neg[reg]`
-//!    and binds `idx_acc == reg` (selected index == register value).
+//! 2. Per register: a one-hot selector over `[0, SEL_MAX]` picks `Pow2Neg[reg]`,
+//!    with a boolean **catch-all** for `reg > SEL_MAX` (weight 0 — the exact
+//!    table value there); the selected index (or the catch-all's gated range
+//!    check) binds the selector to the register value.
 //! 3. Sum the picked fixed-point weights → `Z`.
-//! 4. Reciprocal: witness `invZ`, certify `Z·invZ − T ∈ [0, Z)` (range check),
-//!    then `res = K_num · invZ`.
+//! 4. Division certificate: witness `res`/`rem` in limbs, enforce
+//!    `res·Z + rem = N` over ℤ (base-2^11 digits + carries) and `rem ∈ [0, Z)`.
 //! 5. Apply the release policy and bind the released value to the public answer.
 //!
 //! There is no query-key public input for cardinality: the answer depends only
 //! on the committed state, so PIs are `(committed-state, answer)`.
 //!
-//! ### Field-size / soundness budget (BabyBear, p ≈ 2^30.9)
+//! ### Field-size / soundness budget (BabyBear, p ≈ 2^30.9), b ≤ 14
 //! Every range-checked value and every product fed to a range check must stay
-//! `< p`. With `BETA = 8` and `m = 2^b ≤ 256`:
-//! * `Z ≤ m·2^β ≤ 2^(8+8) = 2^16`;
-//! * reciprocal target `T = 2^(2β) = 2^16`, `invZ = ceil(T/Z) ≤ T/Pow2Neg[0] = 2^β = 2^8`;
-//! * `Z·invZ < T + Z ≤ 2^16 + 2^16 = 2^17`  (residual range check sound);
-//! * `res = K_num·invZ ≤ round(0.78·256²)·2^8 ≈ 2^15.6·2^8 ≈ 2^23.6 < p`.
+//! `< p`. With `BETA = 8` and `m = 2^b ≤ 2^14`:
+//! * `Z ≤ m·2^β ≤ 2^22` — by construction (one-hot/catch-all selected public
+//!   weights, each `≤ 2^β`), no range check needed;
+//! * `N = K_num·2^(2β) < 2^44` with `K_num = round(α_s·s²) < 2^28`;
+//! * `res < 2^RES_BITS = 2^29`, pinned by its three range-checked limbs
+//!   `(r0, r1) ∈ [0, 2^11)`, `r2 ∈ [0, 2^7)`;
+//! * `Z` is re-decomposed as `z1·2^11 + z0` (`z0 ∈ [0, 2^11)`,
+//!   `z1 ∈ [0, 2^12)` — covers `Z = 2^22` exactly), `rem = m1·2^11 + m0`
+//!   with `Z − 1 − rem` range-checked to `Z_BITS = 22` bits (⇒ `rem < Z`);
+//! * convolution digits `c_k = Σ_{i+j=k} r_i·z_j < 2^24` and digit equations
+//!   `c_k + rem_k + γ_{k-1} = n_k + γ_k·2^11` with carries `γ_k ∈ [0, 2^14)`:
+//!   every term `< 2^26 ≪ p`, so each field equation is an integer equation
+//!   and telescoping gives `res·Z + rem = N` over ℤ — with `rem ∈ [0, Z)`
+//!   this pins `res = floor(N/Z)` **uniquely** (all witnesses range-checked;
+//!   nothing relies on an implicitly-small witness);
+//! * release: `res < 2^29` (limb-pinned), threshold window
+//!   `DIFF_BITS = 29` is sound since `p − 2^29 > 2^29` (a wrapped "negative"
+//!   difference always lands above the window).
 //!
-//! So this is a **fully sound** in-circuit reciprocal at the prototype register
-//! scale — no witnessed-`res` fallback is needed on BabyBear at `BETA = 8`.
+//! The bounds above leave slack on purpose: `add_range_bits` with a
+//! non-byte-aligned width checks its shifted top byte, which admits values a
+//! factor `≤ (1 + 2^−r)` past `2^n_bits` (`r` = top-byte bits). Every budget
+//! line survives that looseness with room to spare (terms stay `< 2^26·1.13`,
+//! the digit equations remain integer equations, and `res·Z + rem = N` pins
+//! the same unique `res`).
+//!
+//! Completeness cap: `res < 2^29` ⇔ estimate `< 2^(29−β) = 2^21` — ample for
+//! the `n ≤ 2^20` experiment scale (asserted natively with a clear message).
+//! Registers may take any value `≤ MU_MAX = 63` (the update leaves produce
+//! `ρ = 1 + trailing_zeros ≤ 32`); values past `SEL_MAX = β + 1` carry weight
+//! 0 via the catch-all, so no register value reachable from the updates can
+//! make the decode unprovable.
 
 use std::rc::Rc;
 
@@ -77,19 +103,54 @@ use crate::sketch::hll_omc::commit_hll_omc;
 const LOG_FINAL_POLY_LEN: usize = 6;
 
 /// Fixed-point precision (mantissa bits) for the estimator. Public metadata.
-/// Kept at 8 so every product fits the BabyBear field (see the module budget).
+/// The answer is the estimate at scale `2^β` (`ans ≈ E·2^β`).
 pub const BETA: usize = 8;
 
-/// Max register value the `Pow2Neg` one-hot table covers (`0..=MU_MAX`). At the
-/// prototype stream scale registers stay tiny; entries past `BETA` round to 0
-/// (`Pow2Neg[x] = round(2^β / 2^x) = 0` for large `x`).
-pub const MU_MAX: usize = 24;
+/// Register-value bits. The omc form range-checks each opened register to
+/// `REG_BITS`; the full-state form bounds registers through the selector
+/// alone (one-hot pins `reg ≤ SEL_MAX`; the catch-all's gated check pins
+/// `reg ∈ [SEL_MAX+1, SEL_MAX+2^REG_BITS]`, where the weight is exactly 0
+/// either way). It also windows the gated catch-all check.
+const REG_BITS: usize = 6;
 
-/// Range-check window for the reciprocal rounding residual `Z·invZ − T`. The
-/// residual lies in `[0, Z)` with `Z ≤ 2^(b+β)`; this window must contain it and
-/// stay strictly below the field bit-width so a "negative" residual wraps and
-/// overflows the check (sound `≥ 0`).
-const DIFF_BITS: usize = 20;
+/// Max supported register value (`2^REG_BITS − 1`, native assert). The update
+/// leaves produce `ρ = 1 + trailing_zeros(digest) ≤ 32`, comfortably inside.
+pub const MU_MAX: usize = (1 << REG_BITS) - 1;
+
+/// Largest register value with its own one-hot lane. `Pow2Neg[x] = 0` for all
+/// `x > SEL_MAX` (`round(2^β/2^x)` underflows), so registers past `SEL_MAX`
+/// share a single catch-all selector with weight 0.
+pub const SEL_MAX: usize = BETA + 1;
+
+/// Max register bits: `Z ≤ m·2^β = 2^(b+β)` must fit `Z_BITS` (see budget).
+pub const MAX_B: usize = 14;
+
+/// Bits covering the harmonic sum: `Z ≤ 2^(MAX_B+BETA) = 2^22`.
+const Z_BITS: usize = MAX_B + BETA;
+
+/// Limb width for the division certificate (base-2^11 digits).
+const LIMB_BITS: usize = 11;
+
+/// Cap on the witnessed quotient: `res = floor(N/Z) < 2^RES_BITS`. Bounded by
+/// the threshold-compare window (`DIFF_BITS ≤ 29` on BabyBear); caps the
+/// provable estimate at `2^(RES_BITS−β) = 2^21`.
+const RES_BITS: usize = 29;
+
+/// Bits in the top `res` limb (`res = r2·2^22 + r1·2^11 + r0`).
+const RES_TOP_BITS: usize = RES_BITS - 2 * LIMB_BITS;
+
+/// Bits in the top `Z` limb (`Z = z1·2^11 + z0`); one extra bit so
+/// `Z = 2^22` (the all-zeros state) is representable.
+const Z_TOP_BITS: usize = Z_BITS - LIMB_BITS + 1;
+
+/// Range window for the division-certificate carries `γ_k` (honest carries
+/// stay `< 2^13 + 4`; see the module budget).
+const CARRY_BITS: usize = 14;
+
+/// Range-check window for the release-policy threshold compare. Must cover
+/// `res` and `θ` (both `< 2^29`) and stay sound against field wraparound:
+/// `p − 2^DIFF_BITS > 2^DIFF_BITS` holds for `DIFF_BITS = 29` on BabyBear.
+const DIFF_BITS: usize = 29;
 
 #[derive(Copy, Clone, Debug)]
 pub struct HllDecodeParams {
@@ -100,12 +161,19 @@ pub struct HllDecodeParams {
 
 impl HllDecodeParams {
     pub fn validate(&self) {
-        assert!(self.b >= 2 && self.b <= 8, "b in [2,8] (m = 2^b registers), got {}", self.b);
+        assert!(
+            self.b >= 2 && self.b <= MAX_B,
+            "b in [2,{MAX_B}] (m = 2^b registers), got {}",
+            self.b
+        );
+        if let ReleasePolicy::Threshold(t) = self.release {
+            assert!(t < 1u64 << DIFF_BITS, "threshold θ = {t} must be < 2^{DIFF_BITS}");
+        }
     }
 }
 
-/// Public fixed-point lookup table `Pow2Neg[x] = round(2^β / 2^x)` for
-/// `x ∈ {0,…,MU_MAX}` (round-half-up). Entry 0 is `2^β`; entries past `β`
+/// Public fixed-point lookup table `Pow2Neg[x] = round(2^β / 2^x)`
+/// (round-half-up). Entry 0 is `2^β`; entries past `SEL_MAX = β + 1`
 /// underflow to 0.
 pub fn pow2neg(x: usize) -> u64 {
     if x == 0 {
@@ -129,14 +197,25 @@ fn alpha(m: usize) -> f64 {
     }
 }
 
-/// Public integer constant `K_num = round(α_s · s²)` (`s = m`). `res = K_num·invZ`.
+/// Public integer constant `K_num = round(α_s · s²)` (`s = m`).
 pub fn k_num(m: usize) -> u64 {
     (alpha(m) * (m as f64) * (m as f64)).round() as u64
 }
 
-/// Reciprocal target `T = 2^(2β)`.
-const fn recip_target() -> u64 {
-    1u64 << (2 * BETA)
+/// Division numerator `N = K_num · 2^(2β)` (`res = floor(N/Z)`). Up to 44 bits
+/// at `b = 14` — a native constant only; in-circuit it appears via its
+/// base-2^11 digits in the limb certificate.
+fn big_n(m: usize) -> u64 {
+    let n = k_num(m) << (2 * BETA);
+    assert!(n < 1u64 << (4 * LIMB_BITS), "N must fit 4 base-2^11 digits");
+    n
+}
+
+/// Base-2^11 digits of `N` (little-endian, 4 digits).
+fn n_digits(m: usize) -> [u64; 4] {
+    let n = big_n(m);
+    let mask = (1u64 << LIMB_BITS) - 1;
+    std::array::from_fn(|k| (n >> (k * LIMB_BITS)) & mask)
 }
 
 /// Native fixed-point harmonic sum `Z = Σ_b Pow2Neg[reg_b]`.
@@ -144,16 +223,46 @@ pub fn fixed_z(regs: &[u32]) -> u64 {
     regs.iter().map(|&r| pow2neg(r as usize)).sum()
 }
 
-/// Native witnessed reciprocal `invZ = ceil(T / Z)` (so `Z·invZ − T ∈ [0, Z)`).
-pub fn inv_z(z: u64) -> u64 {
-    let t = recip_target();
-    (t + z - 1) / z
-}
-
-/// Native fixed-point cardinality `res = K_num · invZ` (scale `2^β`).
+/// Native fixed-point cardinality `res = floor(K_num·2^(2β) / Z)` (scale `2^β`).
 pub fn fixed_res(m: usize, regs: &[u32]) -> u64 {
     let z = fixed_z(regs);
-    k_num(m) * inv_z(z)
+    assert!(z > 0, "Z = 0: every register exceeds the Pow2Neg support");
+    big_n(m) / z
+}
+
+/// Witness limbs for the division certificate, in private-input order:
+/// `[r0, r1, r2, z0, z1, m0, m1, g0, g1, g2]` (quotient, Z, remainder limbs,
+/// then digit-equation carries). Panics (with a clear message) when the state
+/// falls outside the fixed-point budget — `Z = 0` or `res ≥ 2^RES_BITS`.
+fn div_limbs(m: usize, z: u64) -> [u64; 10] {
+    assert!(z > 0, "Z = 0: every register exceeds the Pow2Neg support");
+    let n = big_n(m);
+    let res = n / z;
+    let rem = n % z;
+    assert!(
+        res < 1u64 << RES_BITS,
+        "fixed-point cardinality {res} = floor(N/Z) exceeds 2^{RES_BITS} \
+         (estimate ≥ 2^{}): state too large for the BabyBear budget",
+        RES_BITS - BETA
+    );
+    let mask = (1u64 << LIMB_BITS) - 1;
+    let (r0, r1, r2) = (res & mask, (res >> LIMB_BITS) & mask, res >> (2 * LIMB_BITS));
+    let (z0, z1) = (z & mask, z >> LIMB_BITS);
+    let (m0, m1) = (rem & mask, rem >> LIMB_BITS);
+    let nd = n_digits(m);
+    // Base-2^11 long-multiplication digits and their canonical carries; each
+    // subtraction is exact and non-negative because res·Z + rem = N digit-by-digit.
+    let c0 = r0 * z0;
+    let g0 = (c0 + m0 - nd[0]) >> LIMB_BITS;
+    let c1 = r0 * z1 + r1 * z0;
+    let g1 = (c1 + m1 + g0 - nd[1]) >> LIMB_BITS;
+    let c2 = r1 * z1 + r2 * z0;
+    let g2 = (c2 + g1 - nd[2]) >> LIMB_BITS;
+    debug_assert_eq!(c0 + m0 - nd[0], g0 << LIMB_BITS, "digit 0 must close");
+    debug_assert_eq!(c1 + m1 + g0 - nd[1], g1 << LIMB_BITS, "digit 1 must close");
+    debug_assert_eq!(c2 + g1 - nd[2], g2 << LIMB_BITS, "digit 2 must close");
+    debug_assert_eq!(r2 * z1 + g2, nd[3], "digit 3 must close");
+    [r0, r1, r2, z0, z1, m0, m1, g0, g1, g2]
 }
 
 /// Pack an HLL state's registers into Challenge elements, reproducing
@@ -170,6 +279,242 @@ fn pack_cells(state: &HllFullState) -> Vec<Challenge> {
         .collect()
 }
 
+// ───────────────────────── shared estimator subcircuit ─────────────────────
+
+/// Private-witness wires of the estimator, allocated in the same order
+/// [`estimator_witness_values`] pushes values: per register the
+/// `SEL_MAX + 1` one-hot lanes then the catch-all flag, then the 10 division
+/// limbs.
+struct EstimatorWires {
+    /// `[m][SEL_MAX + 2]`: one-hot over `0..=SEL_MAX`, catch-all last.
+    sel: Vec<Vec<ExprId>>,
+    /// `[r0, r1, r2, z0, z1, m0, m1, g0, g1, g2]` (see [`div_limbs`]).
+    limbs: [ExprId; 10],
+}
+
+fn alloc_estimator_wires(b: &mut CircuitBuilder<Challenge>, m: usize) -> EstimatorWires {
+    let sel = (0..m)
+        .map(|_| (0..SEL_MAX + 2).map(|_| b.alloc_private_input("sel")).collect())
+        .collect();
+    let limbs = std::array::from_fn(|_| b.alloc_private_input("div_limb"));
+    EstimatorWires { sel, limbs }
+}
+
+/// Mirror of [`alloc_estimator_wires`]: the private-input values, in
+/// allocation order.
+fn estimator_witness_values(m: usize, regs: &[u32]) -> Vec<Challenge> {
+    assert_eq!(regs.len(), m);
+    let mut vals = Vec::with_capacity(m * (SEL_MAX + 2) + 10);
+    for &rv in regs {
+        let rv = rv as usize;
+        for j in 0..=SEL_MAX {
+            vals.push(if j == rv { Challenge::ONE } else { Challenge::ZERO });
+        }
+        vals.push(if rv > SEL_MAX { Challenge::ONE } else { Challenge::ZERO });
+    }
+    for l in div_limbs(m, fixed_z(regs)) {
+        vals.push(Challenge::from_u64(l));
+    }
+    vals
+}
+
+/// Constrain the fixed-point estimator over the opened register coeffs and
+/// return `res` (the certified `floor(N/Z)`); see the module budget for why
+/// every product/range-checked value stays below the field modulus.
+///
+/// Bus discipline: every private witness and every register coeff flows
+/// through an ALU op as the LHS (first operand) before being consumed by a
+/// `connect`/range check, so it gets a WitnessChecks bus creator (the harness
+/// panics at prove time otherwise).
+fn constrain_estimator(
+    b: &mut CircuitBuilder<Challenge>,
+    m: usize,
+    regs: &[ExprId],
+    wires: &EstimatorWires,
+    one: ExprId,
+    zero: ExprId,
+) -> ExprId {
+    assert_eq!(regs.len(), m);
+    // Public constants: Pow2Neg table, selector indices, catch-all cut,
+    // limb weights and the base-2^11 digits of N.
+    let pow: Vec<ExprId> = (0..=SEL_MAX)
+        .map(|j| b.alloc_const(Challenge::from_u64(pow2neg(j)), "pow2neg"))
+        .collect();
+    let idx: Vec<ExprId> =
+        (0..=SEL_MAX).map(|j| b.alloc_const(Challenge::from_u64(j as u64), "idx")).collect();
+    let sel_cut = b.alloc_const(Challenge::from_u64((SEL_MAX + 1) as u64), "sel_cut");
+    let p_limb = b.alloc_const(Challenge::from_u64(1u64 << LIMB_BITS), "2^11");
+    let p_limb2 = b.alloc_const(Challenge::from_u64(1u64 << (2 * LIMB_BITS)), "2^22");
+    let nd: Vec<ExprId> = n_digits(m)
+        .iter()
+        .map(|&d| b.alloc_const(Challenge::from_u64(d), "n_digit"))
+        .collect();
+
+    // ── per-register one-hot / catch-all Pow2Neg selector → Z ──
+    let mut z_expr = zero;
+    for r in 0..m {
+        let row = &wires.sel[r];
+        // The register coeff goes FIRST (lhs) so it gets a bus creator
+        // covering the `connect`/product consumes below.
+        let reg_lhs = b.mul(regs[r], one);
+        // Lane j = 0 seeds the accumulators (its idx term is idx[0]·sel = 0).
+        let mut sum = row[0];
+        let mut idx_acc = zero;
+        for j in 0..=SEL_MAX {
+            let sm1 = b.sub(row[j], one);
+            let bchk = b.mul(row[j], sm1);
+            b.connect(bchk, zero);
+            if j > 0 {
+                sum = b.add(sum, row[j]);
+                idx_acc = b.mul_add(row[j], idx[j], idx_acc);
+            }
+            // Selected weight accumulates straight into Z.
+            z_expr = b.mul_add(row[j], pow[j], z_expr);
+        }
+        let big = row[SEL_MAX + 1];
+        let bm1 = b.sub(big, one);
+        let bchk = b.mul(big, bm1);
+        b.connect(bchk, zero);
+        sum = b.add(sum, big);
+        b.connect(sum, one);
+        // Selector↔register binding: Σ j·sel_j + big·reg == reg, i.e.
+        // (1−big)·reg = Σ j·sel_j — with big = 0 the one-hot lane pins
+        // reg = j exactly; with big = 1 it is vacuous and the gated range
+        // check below pins reg ∈ [SEL_MAX+1, SEL_MAX+2^REG_BITS] instead
+        // (weight 0 = Pow2Neg[reg] on that whole range).
+        idx_acc = b.mul_add(big, reg_lhs, idx_acc);
+        b.connect(idx_acc, reg_lhs);
+        // Gated catch-all range check: big·(reg − (SEL_MAX+1)) ∈ [0, 2^REG_BITS).
+        let over = b.sub(reg_lhs, sel_cut);
+        let gated = b.mul(big, over);
+        let _ = b.add_range_bits::<Val>(gated, REG_BITS).expect("catch-all register range");
+    }
+
+    // ── division certificate: res·Z + rem = N over ℤ, rem ∈ [0, Z) ──
+    // Materialize each limb witness as an ALU output (bus creator) and
+    // range-check it.
+    let [r0, r1, r2, z0, z1, m0, m1, g0, g1, g2] = wires.limbs;
+    let mut mk = |b: &mut CircuitBuilder<Challenge>, w: ExprId, bits: usize| {
+        let v = b.mul(w, one);
+        let _ = b.add_range_bits::<Val>(v, bits).expect("limb range");
+        v
+    };
+    let r0v = mk(b, r0, LIMB_BITS);
+    let r1v = mk(b, r1, LIMB_BITS);
+    let r2v = mk(b, r2, RES_TOP_BITS);
+    let z0v = mk(b, z0, LIMB_BITS);
+    let z1v = mk(b, z1, Z_TOP_BITS);
+    let m0v = mk(b, m0, LIMB_BITS);
+    let m1v = mk(b, m1, LIMB_BITS);
+    let g0v = mk(b, g0, CARRY_BITS);
+    let g1v = mk(b, g1, CARRY_BITS);
+    let g2v = mk(b, g2, CARRY_BITS);
+
+    // Bind the Z limbs: z1·2^11 + z0 == Z (unique canonical digits).
+    let z1s = b.mul(z1v, p_limb);
+    let z_rec = b.add(z1s, z0v);
+    b.connect(z_rec, z_expr);
+
+    // rem = m1·2^11 + m0 with rem < Z: range-check Z − 1 − rem ≥ 0.
+    let m1s = b.mul(m1v, p_limb);
+    let rem = b.add(m1s, m0v);
+    let zm1 = b.sub(z_expr, one);
+    let upper = b.sub(zm1, rem);
+    let _ = b.add_range_bits::<Val>(upper, Z_BITS).expect("rem < Z");
+
+    // Convolution digits of res·Z in base 2^11 (all < 2^24, field-exact).
+    let c0 = b.mul(r0v, z0v);
+    let t01 = b.mul(r0v, z1v);
+    let t10 = b.mul(r1v, z0v);
+    let c1 = b.add(t01, t10);
+    let t11 = b.mul(r1v, z1v);
+    let t20 = b.mul(r2v, z0v);
+    let c2 = b.add(t11, t20);
+    let c3 = b.mul(r2v, z1v);
+
+    // Digit equations with carries: telescoping yields res·Z + rem = N over ℤ.
+    //   c0 + m0      = n0 + γ0·2^11
+    //   c1 + m1 + γ0 = n1 + γ1·2^11
+    //   c2      + γ1 = n2 + γ2·2^11
+    //   c3      + γ2 = n3
+    let l0 = b.add(c0, m0v);
+    let g0s = b.mul(g0v, p_limb);
+    let r0d = b.add(nd[0], g0s);
+    b.connect(l0, r0d);
+    let l1a = b.add(c1, m1v);
+    let l1 = b.add(l1a, g0v);
+    let g1s = b.mul(g1v, p_limb);
+    let r1d = b.add(nd[1], g1s);
+    b.connect(l1, r1d);
+    let l2 = b.add(c2, g1v);
+    let g2s = b.mul(g2v, p_limb);
+    let r2d = b.add(nd[2], g2s);
+    b.connect(l2, r2d);
+    let l3 = b.add(c3, g2v);
+    b.connect(l3, nd[3]);
+
+    // res = r2·2^22 + r1·2^11 + r0 (< 2^29, limb-pinned).
+    let r1s = b.mul(r1v, p_limb);
+    let r2s = b.mul(r2v, p_limb2);
+    let res_lo = b.add(r0v, r1s);
+    b.add(res_lo, r2s)
+}
+
+/// Allocate the release policy's private witness (the threshold comparison
+/// flag; nothing for Identity). Mirrored by [`release_flag_value`].
+fn alloc_release_flag(
+    b: &mut CircuitBuilder<Challenge>,
+    release: ReleasePolicy,
+) -> Option<ExprId> {
+    matches!(release, ReleasePolicy::Threshold(_)).then(|| b.alloc_private_input("flag"))
+}
+
+/// Mirror of [`alloc_release_flag`]: the flag value `[res ≥ θ]` for the
+/// threshold policy, nothing for Identity.
+fn release_flag_value(release: ReleasePolicy, res: u64) -> Option<Challenge> {
+    match release {
+        ReleasePolicy::Identity => None,
+        ReleasePolicy::Threshold(t) => {
+            Some(if res >= t { Challenge::ONE } else { Challenge::ZERO })
+        }
+    }
+}
+
+/// Constrain `answer_pi == release(res)` (shared release-policy tail).
+fn constrain_release(
+    b: &mut CircuitBuilder<Challenge>,
+    release: ReleasePolicy,
+    res_expr: ExprId,
+    answer_pi: ExprId,
+    flag: Option<ExprId>,
+    one: ExprId,
+    zero: ExprId,
+) {
+    match release {
+        ReleasePolicy::Identity => {
+            b.connect(res_expr, answer_pi);
+        }
+        ReleasePolicy::Threshold(t) => {
+            let theta = b.alloc_const(Challenge::from_u64(t), "theta");
+            let fl = flag.expect("threshold flag");
+            let fm1 = b.sub(fl, one);
+            let bchk = b.mul(fl, fm1);
+            b.connect(bchk, zero);
+            // chosen = fl·(res−θ) + (1−fl)·(θ−res−1) ≥ 0  ⇔  fl = [res ≥ θ].
+            let res_minus_t = b.sub(res_expr, theta);
+            let tm = b.sub(theta, res_expr);
+            let t_minus_res_m1 = b.sub(tm, one);
+            let nf = b.sub(one, fl);
+            let a = b.mul(fl, res_minus_t);
+            let nft = b.mul(nf, t_minus_res_m1);
+            let chosen = b.add(a, nft);
+            let _ = b.add_range_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
+            let released = b.mul(fl, res_expr);
+            b.connect(released, answer_pi);
+        }
+    }
+}
+
 /// Prove a HyperLogLog cardinality (fixed-point estimator) decode. Returns a
 /// [`DecodeProof`]; the prover self-verifies and records the
 /// witness/prove/verify split via [`crate::recursion::recursive::timing`].
@@ -183,15 +528,12 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     assert_eq!(state.registers.len(), m, "state shape must match params (m = 2^b)");
     assert!(
         state.registers.iter().all(|&r| (r as usize) <= MU_MAX),
-        "register exceeds MU_MAX; raise MU_MAX"
+        "register exceeds MU_MAX = {MU_MAX}"
     );
 
     // ─── Native decode ───────────────────────────────────────────────────
     let commit = commit_hll_state(&state);
-    let z = fixed_z(&state.registers);
-    let invz = inv_z(z);
-    let knum = k_num(m);
-    let res = knum * invz;
+    let res = fixed_res(m, &state.registers);
     let answer = release.apply(res);
 
     // ─── Build circuit ───────────────────────────────────────────────────
@@ -211,27 +553,12 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
 
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
-    // Fixed-point Pow2Neg weights and index constants j, for j in 0..=MU_MAX.
-    let pow: Vec<ExprId> = (0..=MU_MAX)
-        .map(|j| b.alloc_const(Challenge::from_u64(pow2neg(j)), "pow2neg"))
-        .collect();
-    let idx: Vec<ExprId> =
-        (0..=MU_MAX).map(|j| b.alloc_const(Challenge::from_u64(j as u64), "idx")).collect();
-    let target = b.alloc_const(Challenge::from_u64(recip_target()), "recip_target");
-    let knum_c = b.alloc_const(Challenge::from_u64(knum), "k_num");
 
     // Private witnesses.
     let cells_packed: Vec<ExprId> =
         (0..m).map(|_| b.alloc_private_input("cell_packed")).collect();
-    let sel: Vec<Vec<ExprId>> = (0..m)
-        .map(|_| (0..=MU_MAX).map(|_| b.alloc_private_input("sel")).collect())
-        .collect();
-    let invz_w = b.alloc_private_input("invz");
-    let flag = if matches!(release, ReleasePolicy::Threshold(_)) {
-        Some(b.alloc_private_input("flag"))
-    } else {
-        None
-    };
+    let wires = alloc_estimator_wires(&mut b, m);
+    let flag = alloc_release_flag(&mut b, release);
 
     // ── Stage 1: open the committed state ──
     let digest = b
@@ -262,72 +589,11 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
         })
         .collect();
 
-    // ── Stage 2 + 3: per-register one-hot Pow2Neg selector → Z ──
-    let mut z_expr = zero;
-    for r in 0..m {
-        let row = &sel[r];
-        let mut sum = zero;
-        let mut idx_acc = zero;
-        let mut term = zero;
-        for j in 0..=MU_MAX {
-            let sm1 = b.sub(row[j], one);
-            let bchk = b.mul(row[j], sm1);
-            b.connect(bchk, zero);
-            sum = b.add(sum, row[j]);
-            // idx[j]·sel[j] and sel[j]·pow[j].
-            let it = b.mul(idx[j], row[j]);
-            idx_acc = b.add(idx_acc, it);
-            let pt = b.mul(row[j], pow[j]);
-            term = b.add(term, pt);
-        }
-        b.connect(sum, one);
-        // Selected exponent index == register value. The register coeff goes
-        // FIRST (lhs) so it gets a bus creator covering this `connect` consume.
-        let reg_lhs = b.mul(regs[r], one);
-        b.connect(idx_acc, reg_lhs);
-        z_expr = b.add(z_expr, term);
-    }
-
-    // ── Stage 4: witnessed reciprocal invZ, residual range check, res = K·invZ ──
-    // Certify Z·invZ − T ∈ [0, Z): the rounding residual of invZ = ceil(T/Z).
-    //   residual := Z·invZ − T            (≥ 0  ⇔  invZ ≥ T/Z, i.e. invZ ≥ ceil)
-    //   Z − 1 − residual                  (≥ 0  ⇔  residual ≤ Z−1, i.e. residual < Z)
-    // Both range-checked ≥ 0 pin invZ = ceil(T/Z) uniquely. `invz_w` goes FIRST
-    // (lhs) in `z·invZ` so it gets a bus creator.
-    let z_invz = b.mul(invz_w, z_expr);
-    let residual = b.sub(z_invz, target);
-    let _ = b.add_range_bits::<Val>(residual, DIFF_BITS).expect("Z·invZ − T >= 0");
-    let zm1 = b.sub(z_expr, one);
-    let upper = b.sub(zm1, residual);
-    let _ = b.add_range_bits::<Val>(upper, DIFF_BITS).expect("residual < Z");
-    // res = K_num · invZ (fixed-point cardinality, scale 2^β). invZ already has a
-    // bus creator from `z_invz` above; using it as rhs here is fine.
-    let res_expr = b.mul(knum_c, invz_w);
+    // ── Stages 2–4: estimator (one-hot/catch-all → Z → division certificate) ──
+    let res_expr = constrain_estimator(&mut b, m, &regs, &wires, one, zero);
 
     // ── Stage 5: release policy → answer ──
-    match release {
-        ReleasePolicy::Identity => {
-            b.connect(res_expr, answer_pi);
-        }
-        ReleasePolicy::Threshold(t) => {
-            let theta = b.alloc_const(Challenge::from_u64(t), "theta");
-            let fl = flag.unwrap();
-            let fm1 = b.sub(fl, one);
-            let bchk = b.mul(fl, fm1);
-            b.connect(bchk, zero);
-            // chosen = fl·(res−θ) + (1−fl)·(θ−res−1) ≥ 0  ⇔  fl = [res ≥ θ].
-            let res_minus_t = b.sub(res_expr, theta);
-            let tm = b.sub(theta, res_expr);
-            let t_minus_res_m1 = b.sub(tm, one);
-            let nf = b.sub(one, fl);
-            let a = b.mul(fl, res_minus_t);
-            let nft = b.mul(nf, t_minus_res_m1);
-            let chosen = b.add(a, nft);
-            let _ = b.add_range_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
-            let released = b.mul(fl, res_expr);
-            b.connect(released, answer_pi);
-        }
-    }
+    constrain_release(&mut b, release, res_expr, answer_pi, flag, one, zero);
 
     let circuit = b.build().expect("build hll decode circuit");
 
@@ -339,20 +605,8 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     public_inputs.push(Challenge::from_u64(answer));
 
     let mut private_inputs: Vec<Challenge> = pack_cells(&state);
-    // sel[r][j]: one-hot at j == reg_r.
-    for r in 0..m {
-        let rv = state.registers[r] as usize;
-        for j in 0..=MU_MAX {
-            private_inputs.push(if j == rv { Challenge::ONE } else { Challenge::ZERO });
-        }
-    }
-    // invZ
-    private_inputs.push(Challenge::from_u64(invz));
-    // flag (threshold only).
-    if flag.is_some() {
-        let t = if let ReleasePolicy::Threshold(t) = release { t } else { 0 };
-        private_inputs.push(if res >= t { Challenge::ONE } else { Challenge::ZERO });
-    }
+    private_inputs.extend(estimator_witness_values(m, &state.registers));
+    private_inputs.extend(release_flag_value(release, res));
 
     // ─── Run + prove ─────────────────────────────────────────────────────
     let __t_w = std::time::Instant::now();
@@ -406,9 +660,6 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     DecodeProof { output: RecursionOutput(proof, Rc::new(circuit_prover_data)), answer }
 }
 
-/// Register-value range for the omc-form decode (`reg ≤ MU_MAX`, one-hot-indexed).
-const REG_BITS: usize = 6;
-
 /// HyperLogLog cardinality decode against the **omc** committed state: the `m`
 /// registers as a `d=1, w=m` array committed via [`commit_hll_omc`] (=
 /// `commit_countmin`, one Val per register, 4 registers per Challenge) — the
@@ -422,15 +673,12 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
     let m = 1usize << blog2;
     assert_eq!(regs.len(), m, "state shape must match params (m = 2^b)");
     assert_eq!(m % 4, 0, "m = 2^b must be a multiple of 4 (b >= 2)");
-    assert!(regs.iter().all(|&r| (r as usize) <= MU_MAX), "register exceeds MU_MAX; raise MU_MAX");
+    assert!(regs.iter().all(|&r| (r as usize) <= MU_MAX), "register exceeds MU_MAX = {MU_MAX}");
 
     // ─── Native decode ───────────────────────────────────────────────────
     let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
     let commit = commit_hll_omc(&regs, blog2);
-    let z = fixed_z(&regs32);
-    let invz = inv_z(z);
-    let knum = k_num(m);
-    let res = knum * invz;
+    let res = fixed_res(m, &regs32);
     let answer = release.apply(res);
 
     let mut b = CircuitBuilder::<Challenge>::new();
@@ -448,27 +696,13 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
 
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
-    let pow: Vec<ExprId> = (0..=MU_MAX)
-        .map(|j| b.alloc_const(Challenge::from_u64(pow2neg(j)), "pow2neg"))
-        .collect();
-    let idx: Vec<ExprId> =
-        (0..=MU_MAX).map(|j| b.alloc_const(Challenge::from_u64(j as u64), "idx")).collect();
-    let knum_c = b.alloc_const(Challenge::from_u64(knum), "k_num");
-    let target = b.alloc_const(Challenge::from_u64(recip_target()), "recip_target");
 
     // Private witnesses: m/4 packed challenges (4 registers each).
     let n_cells = m / 4;
     let cells_packed: Vec<ExprId> =
         (0..n_cells).map(|_| b.alloc_private_input("cell_packed")).collect();
-    let sel: Vec<Vec<ExprId>> = (0..m)
-        .map(|_| (0..=MU_MAX).map(|_| b.alloc_private_input("sel")).collect())
-        .collect();
-    let invz_w = b.alloc_private_input("invz");
-    let flag = if matches!(release, ReleasePolicy::Threshold(_)) {
-        Some(b.alloc_private_input("flag"))
-    } else {
-        None
-    };
+    let wires = alloc_estimator_wires(&mut b, m);
+    let flag = alloc_release_flag(&mut b, release);
 
     // ── Stage 1: open the committed omc register state ──
     let digest = b
@@ -488,61 +722,11 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
         }
     }
 
-    // ── Stage 2 + 3: per-register one-hot Pow2Neg selector → Z ──
-    let mut z_expr = zero;
-    for r in 0..m {
-        let row = &sel[r];
-        let mut sum = zero;
-        let mut idx_acc = zero;
-        let mut term = zero;
-        for j in 0..=MU_MAX {
-            let sm1 = b.sub(row[j], one);
-            let bchk = b.mul(row[j], sm1);
-            b.connect(bchk, zero);
-            sum = b.add(sum, row[j]);
-            let it = b.mul(idx[j], row[j]);
-            idx_acc = b.add(idx_acc, it);
-            let pt = b.mul(row[j], pow[j]);
-            term = b.add(term, pt);
-        }
-        b.connect(sum, one);
-        let reg_lhs = b.mul(regs_expr[r], one);
-        b.connect(idx_acc, reg_lhs);
-        z_expr = b.add(z_expr, term);
-    }
-
-    // ── Stage 4: witnessed reciprocal invZ, residual range-check, res = K·invZ ──
-    let z_invz = b.mul(invz_w, z_expr);
-    let residual = b.sub(z_invz, target);
-    let _ = b.add_range_bits::<Val>(residual, DIFF_BITS).expect("Z·invZ − T >= 0");
-    let zm1 = b.sub(z_expr, one);
-    let upper = b.sub(zm1, residual);
-    let _ = b.add_range_bits::<Val>(upper, DIFF_BITS).expect("residual < Z");
-    let res_expr = b.mul(knum_c, invz_w);
+    // ── Stages 2–4: estimator (one-hot/catch-all → Z → division certificate) ──
+    let res_expr = constrain_estimator(&mut b, m, &regs_expr, &wires, one, zero);
 
     // ── Stage 5: release policy → answer ──
-    match release {
-        ReleasePolicy::Identity => {
-            b.connect(res_expr, answer_pi);
-        }
-        ReleasePolicy::Threshold(t) => {
-            let theta = b.alloc_const(Challenge::from_u64(t), "theta");
-            let fl = flag.unwrap();
-            let fm1 = b.sub(fl, one);
-            let bchk = b.mul(fl, fm1);
-            b.connect(bchk, zero);
-            let res_minus_t = b.sub(res_expr, theta);
-            let tm = b.sub(theta, res_expr);
-            let t_minus_res_m1 = b.sub(tm, one);
-            let nf = b.sub(one, fl);
-            let a = b.mul(fl, res_minus_t);
-            let nft = b.mul(nf, t_minus_res_m1);
-            let chosen = b.add(a, nft);
-            let _ = b.add_range_bits::<Val>(chosen, DIFF_BITS).expect("chosen >= 0");
-            let released = b.mul(fl, res_expr);
-            b.connect(released, answer_pi);
-        }
-    }
+    constrain_release(&mut b, release, res_expr, answer_pi, flag, one, zero);
 
     let circuit = b.build().expect("build hll omc decode circuit");
 
@@ -559,17 +743,8 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
             Challenge::from_basis_coefficients_slice(&coeffs).expect("4 base coeffs")
         })
         .collect();
-    for r in 0..m {
-        let rv = regs[r] as usize;
-        for j in 0..=MU_MAX {
-            private_inputs.push(if j == rv { Challenge::ONE } else { Challenge::ZERO });
-        }
-    }
-    private_inputs.push(Challenge::from_u64(invz));
-    if flag.is_some() {
-        let t = if let ReleasePolicy::Threshold(t) = release { t } else { 0 };
-        private_inputs.push(if res >= t { Challenge::ONE } else { Challenge::ZERO });
-    }
+    private_inputs.extend(estimator_witness_values(m, &regs32));
+    private_inputs.extend(release_flag_value(release, res));
 
     let __t_w = std::time::Instant::now();
     let traces = {
@@ -644,7 +819,7 @@ mod tests {
         let blog2 = 2usize; // m = 4
         let regs: Vec<u64> = vec![3, 1, 4, 2];
         let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
-        let expected = k_num(1 << blog2) * inv_z(fixed_z(&regs32));
+        let expected = fixed_res(1 << blog2, &regs32);
         // Identity release.
         let p = HllDecodeParams { b: blog2, release: ReleasePolicy::Identity };
         let proof = prove_hll_decode_omc(p, regs.clone(), 0);
@@ -656,23 +831,55 @@ mod tests {
         assert_eq!(prove_hll_decode_omc(p_lo, regs, 0).answer, expected);
     }
 
+    /// Registers past `SEL_MAX` (the update produces ρ up to 32) take the
+    /// catch-all selector with weight 0 and still prove/verify.
+    #[test]
+    fn hll_omc_decode_catchall_registers() {
+        let blog2 = 2usize; // m = 4
+        let regs: Vec<u64> = vec![12, 0, 4, 32]; // 12 and 32 are past SEL_MAX = 9
+        let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
+        assert_eq!(pow2neg(12), 0);
+        assert_eq!(pow2neg(32), 0);
+        let expected = fixed_res(1 << blog2, &regs32);
+        let p = HllDecodeParams { b: blog2, release: ReleasePolicy::Identity };
+        let proof = prove_hll_decode_omc(p, regs, 0);
+        assert_eq!(proof.answer, expected, "catch-all decode must match native cardinality");
+    }
+
     #[test]
     fn pow2neg_table() {
         assert_eq!(pow2neg(0), 1 << BETA);
         assert_eq!(pow2neg(1), 1 << (BETA - 1));
         assert_eq!(pow2neg(BETA), 1);
-        // far past β underflows to 0.
+        // x = β+1 rounds half-up to 1; everything past SEL_MAX underflows to 0.
+        assert_eq!(pow2neg(SEL_MAX), 1);
+        assert_eq!(pow2neg(SEL_MAX + 1), 0);
         assert_eq!(pow2neg(MU_MAX), 0);
     }
 
+    /// The native division witness closes the limb certificate exactly:
+    /// `res·Z + rem = N` with `rem ∈ [0, Z)` (the in-circuit relation).
     #[test]
-    fn reciprocal_residual_in_range() {
-        let s = state();
-        let z = fixed_z(&s.registers);
-        let invz = inv_z(z);
-        let t = recip_target();
-        let resid = z * invz - t;
-        assert!(resid < z, "Z·invZ − T must lie in [0, Z); got resid={resid}, Z={z}");
+    fn division_certificate_closes() {
+        for (m, regs) in [
+            (16usize, state().registers.clone()),
+            (4, vec![3u32, 1, 4, 2]),
+            (4, vec![12, 0, 4, 32]),
+            // b = 14 shapes: all-empty (Z = 2^22, the z1-top-limb edge) and a
+            // realistic mixed fill.
+            (1 << 14, vec![0u32; 1 << 14]),
+            (1 << 14, (0..1u32 << 14).map(|i| [7, 6, 8, 7, 5, 9, 7, 25][i as usize % 8]).collect()),
+        ] {
+            let z = fixed_z(&regs);
+            let n = big_n(m);
+            let res = fixed_res(m, &regs);
+            let limbs = div_limbs(m, z); // debug-asserts the digit equations
+            let rem = n - res * z;
+            assert!(rem < z, "rem in [0, Z)");
+            assert_eq!(limbs[0] + (limbs[1] << LIMB_BITS) + (limbs[2] << (2 * LIMB_BITS)), res);
+            assert_eq!(limbs[3] + (limbs[4] << LIMB_BITS), z);
+            assert_eq!(limbs[5] + (limbs[6] << LIMB_BITS), rem);
+        }
     }
 
     #[test]
@@ -714,5 +921,34 @@ mod tests {
         let p = HllDecodeParams { b: 4, release: ReleasePolicy::Threshold(theta) };
         let proof = prove_hll_decode(p, s, 0);
         assert_eq!(proof.answer, 0, "res < θ ⇒ released 0");
+    }
+
+    /// Full b = 14 prove+verify against the omc commit — the deployed
+    /// update-leaf scale (m = 2^14 registers). Large circuit; run explicitly:
+    /// `cargo test --release hll_decode_b14 -- --ignored`.
+    #[test]
+    #[ignore = "large: m = 2^14 registers"]
+    fn hll_decode_b14_prove_verify() {
+        let blog2 = 14usize;
+        let m = 1usize << blog2;
+        // Realistic n ≈ 2^20 uniform fill (avg register ≈ 6-7) with empty and
+        // past-SEL_MAX registers mixed in (the update produces ρ ≤ 32).
+        let regs: Vec<u64> = (0..m)
+            .map(|i| match i % 331 {
+                0 => 0,             // empty register
+                1 => 25,            // catch-all territory
+                2 => 32,            // update's max ρ
+                k => 5 + ((k * 2654435761) >> 7) as u64 % 5, // 5..=9
+            })
+            .collect();
+        let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
+        let expected = fixed_res(m, &regs32);
+        // The estimate must be in the b = 14 budget (res < 2^29) and at a
+        // realistic ~n = 2^20 magnitude.
+        assert!(expected < 1u64 << RES_BITS);
+        assert!(expected >> BETA > 1 << 19, "estimate should be ~2^20 scale");
+        let p = HllDecodeParams { b: blog2, release: ReleasePolicy::Identity };
+        let proof = prove_hll_decode_omc(p, regs, 0);
+        assert_eq!(proof.answer, expected, "b=14 decode must match native cardinality");
     }
 }

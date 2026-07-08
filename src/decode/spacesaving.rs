@@ -10,7 +10,13 @@
 //! `ss_final_full` update circuit recommits). Its rows are kept in
 //! `(active asc, count asc)` order (dummies first, then actives by **ascending**
 //! count), so the **top heavy hitters** (highest counts) are the *last* active
-//! rows. Each row packs into one `Challenge` as the 4 base coefficients
+//! rows. This decode is unchanged by the update circuit's Misra-Gries
+//! `(s+1)`-th-value subtraction: subtracting a constant `τ` from every retained
+//! count preserves the count order and the dummies-first layout. The counts it
+//! returns (and any released top-`c` mass) are therefore the summary's
+//! Misra-Gries **under-estimates** (per-key deficit `≤ N/s`), not exact grouped
+//! sums; a `Threshold(θ)` release is evaluated against that under-estimated mass.
+//! Each row packs into one `Challenge` as the 4 base coefficients
 //! `[key_lo, key_hi, count, active]`, and `commit_ss_state` is the flat
 //! Poseidon2 over those rows; `pack_cells` here reproduces that exact
 //! flattening so the in-circuit `add_hash_slice` binds the opened cells to the

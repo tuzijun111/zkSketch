@@ -364,6 +364,70 @@ pub fn flat_verify(nodes: &[Node]) -> Result<HashOut<F>> {
     Ok(acc)
 }
 
+/// Fixed wrapper degree for [`shrink`].  Plonky2's merge circuit is non-uniform:
+/// a heavier leaf (e.g. GK's fusion-round circuit) makes its merges land in a
+/// higher power-of-two degree bin than the lighter families, so its root proof
+/// and circuit data are larger.  Padding every wrapper to this one degree — set
+/// strictly above the heaviest family's natural wrapper degree so *all* families
+/// are padded (identical gate set) — makes every wrapped root the SAME size.
+/// Tuned empirically (see `shrink_normalizes_size`); revisit if a heavier family
+/// or a wider deployed shape is added.
+pub const SHRINK_DEGREE_BITS: usize = 14;
+
+/// Normalize a node's proof to a fixed-shape "wrapper" proof: verify the child's
+/// proof in-circuit, re-expose its 8 boundary public inputs unchanged, and pad
+/// the wrapper to [`SHRINK_DEGREE_BITS`] so the output proof + circuit data are
+/// the same size for every sketch family.  The wrapped node carries the same
+/// boundary/digest/interval and verifies exactly like any other [`Node`].
+fn shrink_parts(child: ChildParts) -> Result<Node> {
+    use plonky2::gates::noop::NoopGate;
+
+    let mut b = CircuitBuilder::<F, D>::new(crate::config::circuit_config());
+    let pt = b.add_virtual_proof_with_pis(child.common);
+    let vd = b.add_virtual_verifier_data(child.common.config.fri_config.cap_height);
+    b.verify_proof::<C>(&pt, &vd, child.common);
+    // Re-expose the same 8 boundary public inputs (initial[0..4] ++ final[4..8]).
+    for i in 0..8 {
+        let t = pt.public_inputs[i];
+        b.register_public_input(t);
+    }
+    // Pad to the fixed degree so every family's wrapper is one size.
+    while b.num_gates() < (1usize << (SHRINK_DEGREE_BITS - 1)) {
+        b.add_gate(NoopGate, vec![]);
+    }
+    let data = b.build::<C>();
+    ensure!(
+        data.common.degree_bits() == SHRINK_DEGREE_BITS,
+        "shrink wrapper degree {} != target {SHRINK_DEGREE_BITS}; retune SHRINK_DEGREE_BITS",
+        data.common.degree_bits()
+    );
+
+    let mut pw = PartialWitness::<F>::new();
+    pw.set_proof_with_pis_target(&pt, child.proof)?;
+    pw.set_verifier_data_target(&vd, child.verifier_only)?;
+    let proof = data.prove(pw)?;
+
+    Ok(Node {
+        proof,
+        data: Arc::new(data),
+        initial: child.initial,
+        final_: child.final_,
+        digest: child.digest,
+        interval: child.interval,
+    })
+}
+
+/// [`shrink_parts`] on a local [`Node`] (the forest root before it is measured).
+pub fn shrink(node: &Node) -> Result<Node> {
+    shrink_parts(node.as_child())
+}
+
+/// [`shrink_parts`] on a wire-received root (the coordinator wraps the final
+/// fetched root before reporting proof size / verify time).
+pub fn shrink_wire(mi: &MergeInput) -> Result<Node> {
+    shrink_parts(mi.as_child())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +466,46 @@ mod tests {
         // Flat baseline yields the identical root digest.
         let flat_digest = flat_verify(&nodes)?;
         assert_eq!(root.digest, flat_digest);
+        Ok(())
+    }
+
+    /// [`shrink`] produces a valid, boundary-preserving wrapped root at the
+    /// fixed [`SHRINK_DEGREE_BITS`], and re-shrinking a DIFFERENT-native-size root
+    /// yields the SAME wire size (the uniformity the fix exists for).  Prints the
+    /// natural wrapper degree to guide tuning of the constant.
+    #[test]
+    fn shrink_normalizes_size() -> Result<()> {
+        let two = prove_epochs(&[b(7, 3, 11, 5), b(7, 1, 13, 9)])?;
+        let root2 = merge(&two[0], &two[1])?;
+        let four = prove_epochs(&[b(7, 3, 11, 5), b(7, 1, 13, 9), b(2, 4, 9, 6), b(5, 2, 3, 8)])?;
+        let root4 = merge(&merge(&four[0], &four[1])?, &merge(&four[2], &four[3])?)?;
+
+        let raw2 = MergeInput::from_node(&root2).to_wire_bytes()?.len();
+        let raw4 = MergeInput::from_node(&root4).to_wire_bytes()?.len();
+
+        let w2 = shrink(&root2)?;
+        let w4 = shrink(&root4)?;
+        verify_node(&w2)?;
+        verify_node(&w4)?;
+        // Boundary / digest / interval preserved through the wrapper.
+        assert_eq!(w2.initial, root2.initial);
+        assert_eq!(w2.final_, root2.final_);
+        assert_eq!(w2.digest, root2.digest);
+        assert_eq!(w2.num_leaves(), 2);
+        assert_eq!(w4.num_leaves(), 4);
+
+        // Structural ZK artifact (proof + circuit common); the full wire adds a
+        // few varint bytes of digest/interval metadata that vary by value.
+        let gs = DefaultGateSerializer;
+        let art = |n: &Node| -> usize {
+            n.proof.to_bytes().len() + n.data.common.to_bytes(&gs).unwrap().len()
+        };
+        let (a2, a4) = (art(&w2), art(&w4));
+        println!(
+            "shrink: raw {raw2} B / {raw4} B  ->  wrapped artifact {a2} B / {a4} B  (degree {})",
+            w2.data.common.degree_bits()
+        );
+        assert_eq!(a2, a4, "wrapped proof+common must be byte-uniform");
         Ok(())
     }
 
