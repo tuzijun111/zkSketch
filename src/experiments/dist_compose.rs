@@ -11,12 +11,16 @@
 //!   example itself) re-executes its own binary in a `worker` role per
 //!   machine, so "machine" = process: disjoint address spaces, no shared
 //!   heap, no accidental data sharing. (The chain uses a single such worker.)
-//! - **Disjoint physical-core pinning.** Machine `i` is pinned (via
-//!   `numactl --physcpubind` when available, falling back to `taskset -c`)
-//!   to CPUs `[i·cores, (i+1)·cores)` and NUMA-membound to the socket that
-//!   owns them. On a 2×64-core EPYC, 4 machines × 32 cores occupy exactly
-//!   the 128 physical cores with every SMT sibling left idle — machines do
-//!   not contend for execution units, caches, or (with membind) DRAM.
+//! - **NUMA-aware physical-core pinning.** Each machine is pinned (via
+//!   `numactl --physcpubind` when available, falling back to `taskset -c`) to a
+//!   disjoint `cores`-wide block of physical cores and NUMA-membound to that
+//!   block's node. Machines are spread round-robin across NUMA nodes
+//!   (`machine_core_range`), so when the machine count does not exceed the node
+//!   count each machine sits on its own node and DRAM controller — e.g. on a
+//!   2-node EPYC, 2 machines × 32 cores land one per socket rather than both on
+//!   node 0. Heavier counts pack an equal share onto each node. SMT siblings
+//!   stay idle, so machines never contend for execution units or caches, and
+//!   contend for DRAM bandwidth only when a node count forces node sharing.
 //!   Containers add nothing on top of this: Docker's CPU isolation is the
 //!   same cpuset/cgroup mechanism.
 //! - **All inter-machine data crosses a real serialized channel.** States,
@@ -1024,6 +1028,59 @@ fn numa_node_of(lo: usize, hi: usize) -> Option<usize> {
     None
 }
 
+/// Physical-core block `[lo, hi]` of each NUMA node, read from
+/// `/sys/devices/system/node/node*/cpulist`. The first comma-separated range of
+/// a cpulist is the node's physical cores (any later ranges are SMT siblings),
+/// e.g. `0-63,128-191` -> `(0, 63)`. Returned sorted by node id.
+fn numa_phys_blocks() -> Vec<(usize, usize)> {
+    let Ok(dir) = std::fs::read_dir("/sys/devices/system/node") else {
+        return Vec::new();
+    };
+    let mut nodes: Vec<(usize, usize, usize)> = Vec::new();
+    for e in dir.flatten() {
+        let Ok(name) = e.file_name().into_string() else { continue };
+        let Some(idx) = name.strip_prefix("node").and_then(|n| n.parse::<usize>().ok()) else {
+            continue;
+        };
+        let Ok(list) = std::fs::read_to_string(e.path().join("cpulist")) else { continue };
+        let first = list.trim().split(',').next().unwrap_or("");
+        let range = match first.split_once('-') {
+            Some((a, b)) => a.parse::<usize>().ok().zip(b.parse::<usize>().ok()),
+            None => first.parse::<usize>().ok().map(|v| (v, v)),
+        };
+        if let Some((lo, hi)) = range {
+            nodes.push((idx, lo, hi));
+        }
+    }
+    nodes.sort_by_key(|&(id, _, _)| id);
+    nodes.into_iter().map(|(_, lo, hi)| (lo, hi)).collect()
+}
+
+/// Physical-core range `[lo, hi]` for machine `i` of `machines`, spreading the
+/// machines round-robin across NUMA nodes so that — whenever `machines` does not
+/// exceed the node count — each machine gets its own node (hence its own memory
+/// controller), instead of packing contiguous `[i·cores, ·)` blocks that would
+/// stack the first machines onto node 0 (2 machines / 32 cores would both land
+/// on a 64-core node 0, sharing its DRAM controller while node 1 sits idle).
+/// Falls back to the contiguous block when NUMA topology is unavailable or the
+/// round-robin layout would overflow a node.
+fn machine_core_range(i: usize, cores: usize, machines: usize) -> (usize, usize) {
+    let contiguous = (i * cores, (i + 1) * cores - 1);
+    let nodes = numa_phys_blocks();
+    if nodes.is_empty() {
+        return contiguous;
+    }
+    let n = nodes.len();
+    let block = |j: usize| -> (usize, usize) {
+        let (lo, _) = nodes[j % n];
+        let base = lo + (j / n) * cores;
+        (base, base + cores - 1)
+    };
+    // Adopt the round-robin layout only if every machine's block fits its node.
+    let fits = (0..machines).all(|j| block(j).1 <= nodes[j % n].1);
+    if fits { block(i) } else { contiguous }
+}
+
 fn have_cmd(cmd: &str) -> bool {
     Command::new(cmd)
         .arg("--version")
@@ -1353,7 +1410,8 @@ pub fn measure_compose_dist(
 
     let mut children: Vec<ChildGuard> = Vec::new();
     for i in 0..machines_eff {
-        children.push(spawn_child("worker", i, i * cores, (i + 1) * cores - 1)?);
+        let (lo, hi) = machine_core_range(i, cores, machines_eff);
+        children.push(spawn_child("worker", i, lo, hi)?);
     }
 
     // Handshake: map connections by Hello id.
@@ -1799,7 +1857,8 @@ pub fn measure_compose_dist_gl(
 
     let mut children: Vec<ChildGuard> = Vec::new();
     for i in 0..machines_eff {
-        children.push(spawn_child("worker_gl", i, i * cores, (i + 1) * cores - 1)?);
+        let (lo, hi) = machine_core_range(i, cores, machines_eff);
+        children.push(spawn_child("worker_gl", i, lo, hi)?);
     }
 
     // Handshake: map connections by Hello id.
