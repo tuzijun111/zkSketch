@@ -75,7 +75,7 @@ scripts/run_experiments.sh e1
   plonky2`). It is fully decoupled from the root build.
 - **Network on first build:** dependencies are pinned to exact GitHub revisions
   (no crates.io release). Plonky3 core is pinned to one rev; the recursion crates
-  come from a fork (`tuzijun111/Plonky3_RangeAir`) that adds the extension-degree-
+  come from a fork (`July620/Plonky3_RangeAir`) that adds the extension-degree-
   `D>1` `PermuteAir`, `ExposeAir`, and byte-table `RangeAir` support this project
   needs. Both that fork and Plonky3 core are **public** — no GitHub credentials
   or authentication are required to build.

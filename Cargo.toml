@@ -34,10 +34,10 @@ p3-util        = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1
 # necessary for this project's PermuteAir + Recompose + Poseidon2 combined
 # circuits at extension degree D = 4. Upstream Plonky3-recursion at the
 # parent commit (524665d) only exercises D = 1 and panics for D > 1.
-p3-recursion             = { git = "https://github.com/tuzijun111/Plonky3_RangeAir", rev = "e08a370e9e6bdcc873157c2edb12a6c50d413701" }
-p3-circuit               = { git = "https://github.com/tuzijun111/Plonky3_RangeAir", rev = "e08a370e9e6bdcc873157c2edb12a6c50d413701" }
-p3-circuit-prover        = { git = "https://github.com/tuzijun111/Plonky3_RangeAir", rev = "e08a370e9e6bdcc873157c2edb12a6c50d413701", features = ["parallel"] }
-p3-poseidon2-circuit-air = { git = "https://github.com/tuzijun111/Plonky3_RangeAir", rev = "e08a370e9e6bdcc873157c2edb12a6c50d413701", features = ["parallel"] }
+p3-recursion             = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "e08a370e9e6bdcc873157c2edb12a6c50d413701" }
+p3-circuit               = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "e08a370e9e6bdcc873157c2edb12a6c50d413701" }
+p3-circuit-prover        = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "e08a370e9e6bdcc873157c2edb12a6c50d413701", features = ["parallel"] }
+p3-poseidon2-circuit-air = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "e08a370e9e6bdcc873157c2edb12a6c50d413701", features = ["parallel"] }
 
 postcard           = { version = "1.1", features = ["alloc"] }
 rand               = "0.10"
@@ -52,7 +52,7 @@ lto = "thin"
 codegen-units = 1
 
 # NOTE: The four Plonky3-recursion crates above are pulled from a GitHub fork
-# (https://github.com/tuzijun111/Plonky3_RangeAir) that adds D > 1 PermuteAir,
+# (https://github.com/July620/Plonky3_RangeAir) that adds D > 1 PermuteAir,
 # ExposeAir, and RangeAir support — no local clone needed for a fresh checkout.
 # If you want to edit the fork against this project (faster iteration), copy
 # `.cargo/config.toml.example` to `.cargo/config.toml` and adjust the paths to
