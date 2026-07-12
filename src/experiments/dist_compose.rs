@@ -126,6 +126,16 @@ use crate::sketch::gk_bandmerge_gl::{
     commit_gk2_state as commit_gk2_state_gl, Gk2State as Gk2StateGl, Gk2Tuple as Gk2TupleGl,
     Gkb2LeafCircuit as Gkb2LeafCircuitGl, GkbParams as GkbParamsGl,
 };
+use crate::sketch::countmin_omc_gl::{
+    CmOmcLeafCircuit as CmOmcLeafCircuitGl, CmOmcParams as CmOmcParamsGl,
+    apply_update_prf as apply_update_prf_gl, build_countmin_omc_leaf as build_countmin_omc_leaf_gl,
+    cm_gl_empty, commit_countmin as commit_countmin_gl,
+};
+use crate::sketch::hll_omc_gl::{
+    build_hll_omc_leaf as build_hll_omc_leaf_gl, commit_hll_omc as commit_hll_omc_gl,
+    hll_omc_advance as hll_omc_advance_gl, hll_omc_empty as hll_omc_empty_gl,
+    HllOmcLeafCircuit as HllOmcLeafCircuitGl, HllOmcParams as HllOmcParamsGl,
+};
 use crate::sketch::ss_final_full_gl::{
     apply_batch_ss_full as apply_batch_ss_full_gl, build_ss_full_leaf as build_ss_full_leaf_gl,
     commit_ss_state as commit_ss_state_gl, SsFullLeafCircuit as SsFullLeafCircuitGl,
@@ -215,7 +225,10 @@ impl FamState {
                 batch: m,
                 s: shape.gk_s,
             })),
-            StreamFamily::SsCertifiedGl | StreamFamily::GkBandmerge2Gl => {
+            StreamFamily::SsCertifiedGl
+            | StreamFamily::GkBandmerge2Gl
+            | StreamFamily::HllOmcGl
+            | StreamFamily::CmOmcGl => {
                 unreachable!("gl families use FamStateGl/FamLeafCircuitGl")
             }
         }
@@ -371,7 +384,10 @@ impl FamLeafCircuit {
                 GkbParams { capacity: shape.capacity, batch: m, s: shape.gk_s },
                 true,
             )),
-            StreamFamily::SsCertifiedGl | StreamFamily::GkBandmerge2Gl => {
+            StreamFamily::SsCertifiedGl
+            | StreamFamily::GkBandmerge2Gl
+            | StreamFamily::HllOmcGl
+            | StreamFamily::CmOmcGl => {
                 unreachable!("gl families use FamStateGl/FamLeafCircuitGl")
             }
         }
@@ -380,15 +396,20 @@ impl FamLeafCircuit {
 
 // ─── Goldilocks (`_gl`) parallel state/leaf path ─────────────────────────────
 
-/// Goldilocks analog of [`FamState`] — SS/GK `_gl` families ONLY. Mirrors
-/// [`FamState`] method-for-method, but over the Goldilocks leaf types whose
-/// leaves emit `RecursionOutput<ConfigWithFriParamsGl>` (a different config than
-/// the BabyBear path). The plaintext record mappings (`ss_updates_of`,
-/// `gk_vals_of`) are the SHARED canonical helpers, so the in-circuit boundary
-/// bind can never diverge from the BabyBear engine.
+/// Goldilocks analog of [`FamState`] — `_gl` families ONLY (all four:
+/// CM/SS/GK/HLL). Mirrors [`FamState`] method-for-method, but over the
+/// Goldilocks leaf types whose leaves emit
+/// `RecursionOutput<ConfigWithFriParamsGl>` (a different config than the
+/// BabyBear path). The plaintext record mappings (`cm_updates_of`,
+/// `ss_updates_of`, `gk_vals_of`, `hll_keys_of`) are the SHARED canonical
+/// helpers, so the in-circuit boundary bind can never diverge from the
+/// BabyBear engine. (CM and HLL route with the GOLDILOCKS hash natively —
+/// distinct sketch instances from their BabyBear namesakes.)
 enum FamStateGl {
+    CmGl(CountMinState),
     SsGl(SsFullStateGl),
     GkGl(Gk2StateGl),
+    HllGl(Vec<u64>),
 }
 
 impl FamStateGl {
@@ -403,13 +424,22 @@ impl FamStateGl {
                 batch: m,
                 s: shape.gk_s,
             })),
+            StreamFamily::HllOmcGl => Self::HllGl(hll_omc_empty_gl(shape.b)),
+            StreamFamily::CmOmcGl => Self::CmGl(cm_gl_empty(shape.d, shape.w)),
             _ => unreachable!("FamStateGl only for gl families"),
         }
     }
 
     /// Apply one batch in plaintext (the witness-pass step).
-    fn advance(&mut self, _shape: &StreamShape, batch: &[u32]) {
+    fn advance(&mut self, shape: &StreamShape, batch: &[u32]) {
         match self {
+            // NOTE: routes with the GOLDILOCKS PRF — a distinct Count-Min
+            // instance from the BabyBear path (statistically equivalent).
+            Self::CmGl(state) => {
+                for u in &cm_updates_of(batch) {
+                    apply_update_prf_gl(state, u);
+                }
+            }
             Self::SsGl(state) => {
                 // Convert the SHARED (BabyBear-typed) SsFullUpdate records into the
                 // gl update type — the field values are field-agnostic integers.
@@ -421,14 +451,21 @@ impl FamStateGl {
             }
             // `gk_vals_of` is field-agnostic (`Vec<u32>`) — no conversion.
             Self::GkGl(state) => *state = apply_batch2_gl(state, &gk_vals_of(batch)),
+            // NOTE: routes with the GOLDILOCKS hash — a distinct HLL instance
+            // from the BabyBear path (statistically equivalent).
+            Self::HllGl(regs) => {
+                hll_omc_advance_gl(regs, &hll_keys_of(batch), 1usize << shape.b)
+            }
         }
     }
 
     /// Native state commitment (Goldilocks digest width 4).
-    fn commit(&self, _shape: &StreamShape) -> [crate::config_gl::Val; 4] {
+    fn commit(&self, shape: &StreamShape) -> [crate::config_gl::Val; 4] {
         match self {
+            Self::CmGl(state) => commit_countmin_gl(state).0,
             Self::SsGl(state) => commit_ss_state_gl(state).0,
             Self::GkGl(state) => commit_gk2_state_gl(state).0,
+            Self::HllGl(regs) => commit_hll_omc_gl(regs, shape.b),
         }
     }
 
@@ -439,6 +476,9 @@ impl FamStateGl {
         batch: &[u32],
     ) -> (RecursionOutput<ConfigWithFriParamsGl>, f64, f64) {
         let output = match (leaf, self) {
+            (FamLeafCircuitGl::CmGl(l), Self::CmGl(state)) => {
+                l.prove_epoch(state.clone(), cm_updates_of(batch)).output
+            }
             (FamLeafCircuitGl::SsGl(l), Self::SsGl(state)) => {
                 let ups: Vec<SsFullUpdateGl> = ss_updates_of(batch)
                     .iter()
@@ -448,6 +488,9 @@ impl FamStateGl {
             }
             (FamLeafCircuitGl::GkGl(l), Self::GkGl(state)) => {
                 l.prove_epoch(state.clone(), gk_vals_of(batch)).output
+            }
+            (FamLeafCircuitGl::HllGl(l), Self::HllGl(regs)) => {
+                l.prove_epoch(regs.clone(), hll_keys_of(batch)).output
             }
             _ => panic!("FamLeafCircuitGl/FamStateGl family mismatch"),
         };
@@ -461,6 +504,11 @@ impl FamStateGl {
 
     fn encode(&self) -> WireState {
         match self {
+            Self::CmGl(s) => WireState::Cm {
+                d: s.params.d as u32,
+                w: s.params.w as u32,
+                counters: s.counters.iter().flatten().copied().collect(),
+            },
             Self::SsGl(s) => WireState::Ss {
                 capacity: s.params.capacity as u32,
                 rows: s.rows.iter().map(|r| (r.key, r.count, r.active)).collect(),
@@ -475,6 +523,7 @@ impl FamStateGl {
                     .map(|t| (t.e, t.g, t.g_o, t.delta, t.delta_o, t.t, t.active))
                     .collect(),
             },
+            Self::HllGl(regs) => WireState::Hll { b: 0, regs: regs.clone() }, // b re-derived from shape
         }
     }
 
@@ -503,8 +552,14 @@ impl FamStateGl {
                 params: GkbParamsGl { capacity: *capacity as usize, batch: m, s: *s },
                 n: *n,
             }),
-            WireState::Cm { .. } | WireState::Hll { .. } => {
-                unreachable!("gl families are ss/gk only")
+            WireState::Hll { regs, .. } => Self::HllGl(regs.clone()),
+            WireState::Cm { d, w, counters } => {
+                let (d, w) = (*d as usize, *w as usize);
+                assert_eq!(counters.len(), d * w, "cm wire state size");
+                Self::CmGl(CountMinState {
+                    counters: counters.chunks(w).map(|c| c.to_vec()).collect(),
+                    params: CountMinParams { d, w },
+                })
             }
         }
     }
@@ -513,8 +568,10 @@ impl FamStateGl {
 /// Goldilocks analog of [`FamLeafCircuit`] — the reusable per-family gl leaf
 /// circuit, built ONCE per gl worker and reused every epoch.
 enum FamLeafCircuitGl {
+    CmGl(CmOmcLeafCircuitGl),
     SsGl(SsFullLeafCircuitGl),
     GkGl(Gkb2LeafCircuitGl),
+    HllGl(HllOmcLeafCircuitGl),
 }
 
 impl FamLeafCircuitGl {
@@ -526,6 +583,14 @@ impl FamLeafCircuitGl {
             )),
             StreamFamily::GkBandmerge2Gl => Self::GkGl(build_gkb2_leaf_gl(
                 GkbParamsGl { capacity: shape.capacity, batch: m, s: shape.gk_s },
+                true,
+            )),
+            StreamFamily::HllOmcGl => Self::HllGl(build_hll_omc_leaf_gl(
+                HllOmcParamsGl { b: shape.b, batch: m },
+                true,
+            )),
+            StreamFamily::CmOmcGl => Self::CmGl(build_countmin_omc_leaf_gl(
+                CmOmcParamsGl { d: shape.d, w: shape.w, batch: m },
                 true,
             )),
             _ => unreachable!("FamLeafCircuitGl only for gl families"),

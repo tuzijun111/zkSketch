@@ -233,6 +233,48 @@ fn prove_max(b: &mut CircuitBuilder<Challenge>, mx: ExprId, a: ExprId, bb: ExprI
     b.connect(prod, zero);
 }
 
+/// Assert the LSB-first boolean `bits` (length `Val::bits()`) encode a
+/// CANONICAL field value (`< p`), rejecting the alternate `x + p`
+/// decomposition that `decompose_to_bits` otherwise admits — without which a
+/// malicious prover could pick a non-canonical routing and misroute a record.
+/// Both supported fields have the form `p = 2^n − 2^m + 1`, so `V ≥ p` iff the
+/// top `n−m` bits are all 1 AND the low `m` bits are nonzero; assert the
+/// negation as `(∏_{i≥m} bit_i) · (Σ_{i<m} bit_i·2^i) == 0`.
+/// `pow2_lo[i] = 2^i` for `i < m` (`m == pow2_lo.len()`).
+fn assert_canonical_bits(
+    b: &mut CircuitBuilder<Challenge>,
+    bits: &[ExprId],
+    pow2_lo: &[ExprId],
+    one: ExprId,
+    zero: ExprId,
+) {
+    let m = pow2_lo.len();
+    let n = bits.len();
+    let mut hi_and = one;
+    for &bit in &bits[m..n] {
+        hi_and = b.mul(hi_and, bit);
+    }
+    let mut lo = zero;
+    for i in 0..m {
+        lo = b.mul_add(bits[i], pow2_lo[i], lo);
+    }
+    let prod = b.mul(hi_and, lo);
+    b.connect(prod, zero);
+}
+
+/// Low-bit count `m` of the canonical gadget: `p = 2^n − 2^m + 1`.
+fn canon_low_bits() -> usize {
+    let pm1 = <Val as PrimeField64>::as_canonical_u64(&(Val::ZERO - Val::ONE));
+    let m = pm1.trailing_zeros() as usize;
+    let n = val_bits();
+    let expected = ((1u64 << (n - m)) - 1) << m;
+    assert_eq!(
+        pm1, expected,
+        "canonical gadget requires the field modulus to have the form p = 2^n − 2^m + 1"
+    );
+    m
+}
+
 /// Prove one HLL epoch from an arbitrary committed `initial` register array
 /// via the `M_old ⊎ W = M_new ⊎ R` multiset rebind with a max update.
 /// `initial` is the `m` register values; `keys` is `params.batch` record keys.
@@ -309,6 +351,11 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
     let shift_val_const = b.alloc_const(Challenge::from_u64(SHIFT_VAL), "shift_val");
     let pow2_consts: Vec<ExprId> = (0..addr_bits)
         .map(|j| b.alloc_const(Challenge::from_u64(1u64 << j), "2^j"))
+        .collect();
+    // Canonicity gadget: `2^i` consts for the low `m` bits of `p = 2^n − 2^m + 1`.
+    let canon_m = canon_low_bits();
+    let canon_pow2: Vec<ExprId> = (0..canon_m)
+        .map(|i| b.alloc_const(Challenge::from_u64(1u64 << i), "canon2^i"))
         .collect();
     let cell_idx_consts: Vec<ExprId> = (0..num_cells)
         .map(|idx| b.alloc_const(Challenge::from_u64(idx as u64), "cell_idx"))
@@ -405,6 +452,9 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
         let idx_bits = b
             .decompose_to_bits::<Val>(c0[0], val_bits())
             .expect("bits digest0");
+        // Canonicity: without this a prover could witness the bits of `c0[0]+p`
+        // (when `c0[0] < 2^n − p`) and shift `idx` to misroute the record.
+        assert_canonical_bits(&mut b, &idx_bits, &canon_pow2, one, zero);
         let mut idx = zero;
         for j in 0..addr_bits {
             idx = b.mul_add(idx_bits[j], pow2_consts[j], idx);
@@ -413,6 +463,9 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
         let dbits = b
             .decompose_to_bits::<Val>(c0[1], val_bits())
             .expect("bits digest1");
+        // Canonicity: a non-canonical `c0[1]+p` decomposition flips the parity
+        // (p is odd) and changes trailing_zeros, hence ρ — pin it to canonical.
+        assert_canonical_bits(&mut b, &dbits, &canon_pow2, one, zero);
         let mut acc_zero = b.sub(one, dbits[0]);
         let mut tz = acc_zero;
         for k2 in 1..val_bits() {
@@ -876,6 +929,36 @@ fn prove_hll_omc_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Canonical gadget logic** — mirrors `assert_canonical_bits`' arithmetic
+    /// in plain integers for the BabyBear modulus and confirms it flags EXACTLY
+    /// the non-canonical (`x + p`) decompositions. Soundness check for the
+    /// routing-canonicity fix.
+    #[test]
+    fn canonical_gadget_logic() {
+        let n = val_bits();
+        let pm1 = <Val as PrimeField64>::as_canonical_u64(&(Val::ZERO - Val::ONE));
+        let m = canon_low_bits(); // also asserts p = 2^n − 2^m + 1 (BabyBear)
+        let p = pm1 as u128 + 1;
+        let rejected = |v: u128| -> bool {
+            let hi_mask = (1u128 << (n - m)) - 1;
+            let hi_all = ((v >> m) & hi_mask) == hi_mask;
+            let lo_nonzero = (v & ((1u128 << m) - 1)) != 0;
+            hi_all && lo_nonzero
+        };
+        for &x in &[0u64, 1, 7, 255, pm1 - 1, pm1] {
+            assert!(!rejected(x as u128), "canonical {x} wrongly rejected");
+        }
+        let cprime = (1u128 << n) - p; // == 2^m − 1
+        for x in 0u64..6 {
+            if (x as u128) < cprime {
+                let v = x as u128 + p;
+                assert!(v < (1u128 << n), "x+p must fit n bits");
+                assert!(rejected(v), "non-canonical {v} (= {x}+p) not rejected");
+            }
+        }
+        assert!(rejected(p), "the value p must be rejected as non-canonical");
+    }
 
     /// Native max-fold reference for the final register array.
     fn native_final(b: usize, initial: &[u64], keys: &[u64]) -> Vec<u32> {

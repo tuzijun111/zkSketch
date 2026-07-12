@@ -212,8 +212,8 @@ fn batches_from(base: &[u32], m: usize, t: usize) -> Vec<Vec<u32>> {
 /// A short shape string for the CSV (only the family's relevant fields).
 fn shape_str(family: StreamFamily, s: &StreamShape) -> String {
     match family {
-        StreamFamily::CmOmc => format!("d{}_w{}", s.d, s.w),
-        StreamFamily::HllOmc => format!("b{}", s.b),
+        StreamFamily::CmOmc | StreamFamily::CmOmcGl => format!("d{}_w{}", s.d, s.w),
+        StreamFamily::HllOmc | StreamFamily::HllOmcGl => format!("b{}", s.b),
         StreamFamily::SsCertified | StreamFamily::SsCertifiedGl => format!("cap{}", s.capacity),
         StreamFamily::GkBandmerge2 | StreamFamily::GkBandmerge2Gl => {
             format!("cap{}_s{}", s.capacity, s.gk_s)

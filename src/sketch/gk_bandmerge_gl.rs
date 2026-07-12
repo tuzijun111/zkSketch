@@ -235,8 +235,30 @@ use crate::recursion::recursive::leaf_gl::{
 // `unpack_gk_table` still assembles the exact BabyBear-shaped `f`
 // (`f[2r]=[e,g₁,g₂,Δ₁]`, `f[2r+1]=[Δ₂,t,0,0]`), so the whole body is reused
 // byte-for-byte; only the CELL-level counts (alloc, permute, `expand_sigma`) go
-// 2→3 per tuple. The two trailing `0`s of `f[2r+1]` are the shared `zero` const
-// (the packing has no spare coord to abuse — cell2's two coords are both fields).
+// 2→3 per tuple.
+//
+// ┌─────────────────────────────────────────────────────────────────────────┐
+// │ CELL RE-PAIRING — FIXED (was: confirmed exploitable; see `atoms_of`).      │
+// │                                                                           │
+// │ `add_permute` proves a multiset equality over INDIVIDUAL cells, and σ is  │
+// │ a prover-supplied witness. The old 3-cell RAW split kept each tuple        │
+// │ together only under the HONEST σ: a malicious σ could re-pair             │
+// │ `cell1=[g₂,Δ₁]` across tuples (only `cell0=[e,g₁]` was pinned by           │
+// │ e-sortedness), swapping two active reps' right-masses `g₂` while every     │
+// │ check still passed → verifying proof for a wrong state.                    │
+// │                                                                           │
+// │ FIX: the permutes no longer move raw cells. `atoms_of` derives 2 ATOMIC    │
+// │ cells/tuple — `atom_lo=[e+g₁·2^24, g₂+Δ₁·2^24]` binds (e,g₁,g₂,Δ₁) into    │
+// │ ONE challenge (BabyBear parity), `atom_hi=[Δ₂,t]` — and BOTH the union     │
+// │ (Stage 3) and round-resort (Stage 6) permutes operate on those atoms       │
+// │ (`expand_sigma` now 2/tuple). Packed fields are range-checked on both      │
+// │ sides so the atoms are injective. The raw cells / commitment / body are    │
+// │ unchanged. `atom_hi=[e+Δ₂·2^24, t]` ALSO carries `e`, so the hi cell is    │
+// │ bound to the same tuple as `atom_lo` via the multiset — closing the        │
+// │ (Δ₂,t) re-pairing surface too (STRICTLY stronger than BabyBear, whose hi   │
+// │ cell is separable). Only equal-`e` tuples share an atom_hi coord0, and     │
+// │ those are pinned by the (e,t) tiebreak.                                    │
+// └─────────────────────────────────────────────────────────────────────────┘
 
 const LOG_FINAL_POLY_LEN: usize = 6;
 /// Rank-mass / uncertainty / timestamp range (`g, Δ, t < 2^24`), so the merge
@@ -1159,14 +1181,13 @@ pub fn commit_gk2_batch(vals: &[u32], m: usize, n_prev: u64) -> Gk2BatchCommit {
     Gk2BatchCommit(hasher.hash_iter(flat_tuples2(&fresh_tuples2(vals, m, n_prev))))
 }
 
-/// Expand a tuple-permutation to the challenge-permutation that moves each
-/// tuple's two challenges together.
+/// Expand a tuple-permutation to the atom-cell permutation that moves each
+/// tuple's TWO atomic cells (`atom_lo`, `atom_hi`) together.
 fn expand_sigma(sigma: &[usize]) -> Vec<usize> {
-    let mut out = Vec::with_capacity(sigma.len() * 3);
+    let mut out = Vec::with_capacity(sigma.len() * 2);
     for &s in sigma {
-        out.push(3 * s);
-        out.push(3 * s + 1);
-        out.push(3 * s + 2);
+        out.push(2 * s);
+        out.push(2 * s + 1);
     }
     out
 }
@@ -1184,6 +1205,42 @@ fn fld6(f: &[Vec<ExprId>], r: usize) -> [ExprId; 6] {
         f[2 * r + 1][0],
         f[2 * r + 1][1],
     ]
+}
+
+/// The TWO atomic permute cells for tuple `r` of an unpacked `f`-table. To
+/// close the cell re-pairing hole (a malicious `add_permute` σ separating
+/// `[g₂,Δ₁]`/`[Δ₂,t]` from their `[e,g₁]`), the re-pairable fields are packed
+/// into single challenges permuted as atomic units:
+///   `atom_lo = [e + g₁·2^24, g₂ + Δ₁·2^24]`   `atom_hi = [Δ₂, t]`
+/// This is BabyBear parity: BabyBear's D=4 lo cell holds `(e,g₁,g₂,Δ₁)` atomic;
+/// its hi cell `(Δ₂,t)` is separable in both variants. Every packed field is
+/// range-checked `< 2^MASS_BITS`, so each coord `< 2^48 ≪ p` and the packing is
+/// injective (unique split) — the multiset argument then binds `(e,g₁,g₂,Δ₁)`
+/// together per tuple. Callers MUST range-check the packed fields on BOTH the
+/// input and output sides of the permute (else an out-of-range field aliases).
+fn atoms_of(
+    b: &mut CircuitBuilder<Challenge>,
+    f: &[Vec<ExprId>],
+    r: usize,
+    shift24: ExprId,
+) -> [ExprId; 2] {
+    let ff = fld6(f, r); // [e, g₁, g₂, Δ₁, Δ₂, t]
+    let lo0 = b.mul_add(ff[1], shift24, ff[0]); // e + g₁·2^24
+    let lo1 = b.mul_add(ff[3], shift24, ff[2]); // g₂ + Δ₁·2^24
+    let atom_lo = b
+        .recompose_base_coeffs_to_ext_via_alu::<Val>(&[lo0, lo1])
+        .expect("atom_lo");
+    // `atom_hi` ALSO carries `e` (`e + Δ₂·2^24`): this binds (Δ₂,t) to the same
+    // `e` as atom_lo through the multiset, so a malicious σ cannot re-pair the
+    // hi cell to a different tuple (a swap to a different-`e` tuple has no
+    // matching combined atom_hi). This closes the residual (Δ₂,t) surface —
+    // gk_gl is thus STRICTLY stronger than BabyBear here, whose hi cell is
+    // separable. Injective: e<2^22 in bits[0,22), Δ₂<2^24 in bits[24,48).
+    let hi0 = b.mul_add(ff[4], shift24, ff[0]); // e + Δ₂·2^24
+    let atom_hi = b
+        .recompose_base_coeffs_to_ext_via_alu::<Val>(&[hi0, ff[5]])
+        .expect("atom_hi");
+    [atom_lo, atom_hi]
 }
 
 /// Unpack a flat table of Goldilocks cells (3 per tuple) into the exact
@@ -1316,6 +1373,9 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
 
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
+    // Shift for the atomic-permute packing (`atoms_of`): every packed field is
+    // range-checked `< 2^MASS_BITS`, so `e + g₁·2^24 < 2^48 ≪ p` splits uniquely.
+    let shift24 = b.alloc_const(Challenge::from_u64(1u64 << MASS_BITS), "shift24");
     let e_max = b.alloc_const(Challenge::from_u64(E_MAX as u64), "e_max");
 
     // Private inputs — 3 challenges per tuple. Alloc order == packing order.
@@ -1426,7 +1486,7 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
     }
 
     // ── Stage 2: decompose (Goldilocks: unpack 2-cell packing → BabyBear shape) ──
-    let _init_f: Vec<Vec<ExprId>> = unpack_gk_table(&mut b, &init_packed, zero);
+    let init_f: Vec<Vec<ExprId>> = unpack_gk_table(&mut b, &init_packed, zero);
     let final_f: Vec<Vec<ExprId>> = unpack_gk_table(&mut b, &final_packed, zero);
     let batch_f: Vec<Vec<ExprId>> = unpack_gk_table(&mut b, &batch_packed, zero);
     let uraw_f: Vec<Vec<ExprId>> = unpack_gk_table(&mut b, &union_raw_packed, zero);
@@ -1446,15 +1506,49 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
         b.connect(batch_f[2 * j + 1][2], zero); // pad
         b.connect(batch_f[2 * j + 1][3], zero); // pad
     }
-    let mut combined: Vec<ExprId> = init_packed.clone();
-    combined.extend(batch_packed.iter().copied());
-    // Placeholder identity permutations — `prove_epoch` swaps in the real
-    // per-batch sigmas via `update_permute_witnesses` before each run.
+    // Atomic-cell union permute (closes the cell re-pairing hole). Permuting the
+    // 3 raw cells lets a malicious σ re-pair `[g₂,Δ₁]`/`[Δ₂,t]` across tuples (the
+    // confirmed exploit swaps two active reps' `[g₂,Δ₁]` → wrong right-masses).
+    // Instead permute 2 DERIVED atoms/tuple (`atoms_of`), binding (e,g₁,g₂,Δ₁)
+    // into one challenge. Range-check the packed fields on the INPUT side too so
+    // the atoms are injective (`uraw_f` is range-checked in Stage 4 below).
+    for r in 0..cap {
+        let f = fld6(&init_f, r);
+        let _ = b.add_range_bits::<Val>(f[0], E_BITS).expect("init e range");
+        let _ = b.add_range_bits::<Val>(f[1], MASS_BITS).expect("init g₁ range");
+        let _ = b.add_range_bits::<Val>(f[2], MASS_BITS).expect("init g₂ range");
+        let _ = b.add_range_bits::<Val>(f[3], MASS_BITS).expect("init Δ₁ range");
+    }
+    for j in 0..m {
+        // batch g₁=g₂=Δ₁=0 (Stage 3 well-formedness above); only e needs bounding.
+        let _ = b
+            .add_range_bits::<Val>(batch_f[2 * j][0], E_BITS)
+            .expect("batch e range");
+    }
+    let mut combined_atoms: Vec<ExprId> = Vec::with_capacity(2 * total);
+    for r in 0..cap {
+        let a = atoms_of(&mut b, &init_f, r, shift24);
+        combined_atoms.push(a[0]);
+        combined_atoms.push(a[1]);
+    }
+    for j in 0..m {
+        let a = atoms_of(&mut b, &batch_f, j, shift24);
+        combined_atoms.push(a[0]);
+        combined_atoms.push(a[1]);
+    }
+    let mut union_atoms: Vec<ExprId> = Vec::with_capacity(2 * total);
+    for r in 0..total {
+        let a = atoms_of(&mut b, &uraw_f, r, shift24);
+        union_atoms.push(a[0]);
+        union_atoms.push(a[1]);
+    }
+    // Placeholder identity permutation — `prove_epoch` swaps in the real
+    // per-batch σ (2 atoms/tuple via `expand_sigma`) before each run.
     let union_perm = b
-        .add_permute(&combined, (0..combined.len()).collect::<Vec<_>>())
+        .add_permute(&combined_atoms, (0..2 * total).collect::<Vec<_>>())
         .expect("permute union");
-    for i in 0..3 * total {
-        b.connect(union_perm[i], union_raw_packed[i]);
+    for i in 0..2 * total {
+        b.connect(union_perm[i], union_atoms[i]);
     }
 
     // ── Stage 4: union_raw range-checks + value sortedness + padding ──
@@ -1636,15 +1730,33 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
             b.connect(fused_f[2 * p_hi + 1][2], zero);
             b.connect(fused_f[2 * p_hi + 1][3], zero);
         }
-        // resort
+        // resort — atomic-cell permute (same fix as the union permute).
+        // Range-check the packed INPUT fields so the derived atoms are injective
+        // (resort_f is range-checked just below).
+        for r in 0..total {
+            let f = fld6(&fused_f, r);
+            let _ = b.add_range_bits::<Val>(f[0], E_BITS).expect("fused e range");
+            let _ = b.add_range_bits::<Val>(f[1], MASS_BITS).expect("fused g₁ range");
+            let _ = b.add_range_bits::<Val>(f[2], MASS_BITS).expect("fused g₂ range");
+            let _ = b.add_range_bits::<Val>(f[3], MASS_BITS).expect("fused Δ₁ range");
+        }
+        let mut fused_atoms: Vec<ExprId> = Vec::with_capacity(2 * total);
+        for r in 0..total {
+            let a = atoms_of(&mut b, &fused_f, r, shift24);
+            fused_atoms.push(a[0]);
+            fused_atoms.push(a[1]);
+        }
+        let mut resort_atoms: Vec<ExprId> = Vec::with_capacity(2 * total);
+        for r in 0..total {
+            let a = atoms_of(&mut b, &resort_f[round], r, shift24);
+            resort_atoms.push(a[0]);
+            resort_atoms.push(a[1]);
+        }
         let perm = b
-            .add_permute(
-                &fused_packed[round],
-                (0..fused_packed[round].len()).collect::<Vec<_>>(),
-            )
+            .add_permute(&fused_atoms, (0..2 * total).collect::<Vec<_>>())
             .expect("permute resort");
-        for i in 0..3 * total {
-            b.connect(perm[i], resorted_packed[round][i]);
+        for i in 0..2 * total {
+            b.connect(perm[i], resort_atoms[i]);
         }
         for r in 0..total {
             let f = fld6(&resort_f[round], r);

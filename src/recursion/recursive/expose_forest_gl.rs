@@ -529,4 +529,81 @@ mod tests {
         assert_eq!(initial.0, commit_ss_state(&s0).0, "root initial = Com(S_0)");
         assert_eq!(final_.0, commit_ss_state(&s2).0, "root final = Com(S_2)");
     }
+
+    /// REAL Goldilocks HyperLogLog (omc) bound forest: two `hll_omc_gl` exposed
+    /// leaves chained through a real intermediate register array — the `hll_gl`
+    /// experiment token's forest path.
+    #[test]
+    fn real_hll_gl_bound_forest() {
+        use crate::sketch::hll_omc_gl::{
+            HllOmcParams, commit_hll_omc, hll_omc_advance, hll_omc_empty, prove_hll_omc_exposed,
+        };
+        let params = HllOmcParams { b: 3, batch: 4 };
+        let m = params.m();
+        let s0 = hll_omc_empty(params.b);
+        let b1: Vec<u64> = vec![7, 11, 13, 17];
+        let leaf1 = prove_hll_omc_exposed(params, s0.clone(), b1.clone());
+        let mut s1 = s0.clone();
+        hll_omc_advance(&mut s1, &b1, m);
+        let b2: Vec<u64> = vec![19, 7, 23, 29];
+        let leaf2 = prove_hll_omc_exposed(params, s1.clone(), b2.clone());
+        let mut s2 = s1.clone();
+        hll_omc_advance(&mut s2, &b2, m);
+
+        let root = prove_forest_over(vec![leaf1.output, leaf2.output]);
+        verify_bound_proof(&root);
+        let (initial, final_) = read_exposed_boundary(&root);
+        assert_eq!(
+            initial.0,
+            commit_hll_omc(&s0, params.b),
+            "root initial = Com(S_0)"
+        );
+        assert_eq!(
+            final_.0,
+            commit_hll_omc(&s2, params.b),
+            "root final = Com(S_2)"
+        );
+    }
+
+    /// REAL Goldilocks Count-Min (omc) bound forest: two `countmin_omc_gl`
+    /// exposed leaves chained through a real intermediate state — the `cm_gl`
+    /// experiment token's forest path.
+    #[test]
+    fn real_cm_gl_bound_forest() {
+        use crate::sketch::countmin::CountMinUpdate;
+        use crate::sketch::countmin_omc_gl::{
+            CmOmcParams, apply_update_prf, cm_gl_empty, commit_countmin,
+            prove_countmin_omc_exposed,
+        };
+        let params = CmOmcParams {
+            d: 2,
+            w: 4,
+            batch: 2,
+        };
+        let s0 = cm_gl_empty(2, 4);
+        let b1 = vec![
+            CountMinUpdate { key: 7, value: 3 },
+            CountMinUpdate { key: 11, value: 5 },
+        ];
+        let leaf1 = prove_countmin_omc_exposed(params, s0.clone(), b1.clone());
+        let mut s1 = s0.clone();
+        for u in &b1 {
+            apply_update_prf(&mut s1, u);
+        }
+        let b2 = vec![
+            CountMinUpdate { key: 13, value: 2 },
+            CountMinUpdate { key: 7, value: 1 },
+        ];
+        let leaf2 = prove_countmin_omc_exposed(params, s1.clone(), b2.clone());
+        let mut s2 = s1.clone();
+        for u in &b2 {
+            apply_update_prf(&mut s2, u);
+        }
+
+        let root = prove_forest_over(vec![leaf1.output, leaf2.output]);
+        verify_bound_proof(&root);
+        let (initial, final_) = read_exposed_boundary(&root);
+        assert_eq!(initial.0, commit_countmin(&s0).0, "root initial = Com(S_0)");
+        assert_eq!(final_.0, commit_countmin(&s2).0, "root final = Com(S_2)");
+    }
 }

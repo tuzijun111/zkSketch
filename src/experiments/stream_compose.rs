@@ -114,6 +114,15 @@ pub enum StreamFamily {
     SsCertifiedGl,
     /// Greenwald–Khanna band-merge on the **Goldilocks** field (`gk_bandmerge_gl`).
     GkBandmerge2Gl,
+    /// HyperLogLog omc leaf on the **Goldilocks** field (D=2, `hll_omc_gl`).
+    /// Parallel to [`Self::HllOmc`]; runs the Goldilocks recursion config.
+    /// NOTE: the Goldilocks routing hash differs from BabyBear's, so `hll_gl`
+    /// register arrays are a distinct (statistically equivalent) HLL instance.
+    HllOmcGl,
+    /// Count-Min omc leaf on the **Goldilocks** field (D=2, `countmin_omc_gl`).
+    /// Parallel to [`Self::CmOmc`]; same field caveat as [`Self::HllOmcGl`]
+    /// (the Goldilocks PRF row hash is a distinct Count-Min instance).
+    CmOmcGl,
 }
 
 impl StreamFamily {
@@ -128,6 +137,8 @@ impl StreamFamily {
             "gk" | "gk_bandmerge2" | "bandmerge2" | "greenwald_khanna" => Some(Self::GkBandmerge2),
             "ss_gl" | "ss_certified_gl" | "spacesaving_gl" => Some(Self::SsCertifiedGl),
             "gk_gl" | "gk_bandmerge2_gl" | "bandmerge2_gl" => Some(Self::GkBandmerge2Gl),
+            "hll_gl" | "hll_omc_gl" | "hyperloglog_gl" => Some(Self::HllOmcGl),
+            "cm_gl" | "cm_omc_gl" | "countmin_gl" => Some(Self::CmOmcGl),
             _ => None,
         }
     }
@@ -139,6 +150,8 @@ impl StreamFamily {
             Self::GkBandmerge2 => "gk_bandmerge2",
             Self::SsCertifiedGl => "ss_certified_gl",
             Self::GkBandmerge2Gl => "gk_bandmerge2_gl",
+            Self::HllOmcGl => "hll_omc_gl",
+            Self::CmOmcGl => "cm_omc_gl",
         }
     }
     pub fn family(self) -> &'static str {
@@ -151,18 +164,25 @@ impl StreamFamily {
             // (there is no per-run `field` column; downstream plots split on this).
             Self::SsCertifiedGl => "ss_gl",
             Self::GkBandmerge2Gl => "gk_gl",
+            Self::HllOmcGl => "hll_gl",
+            Self::CmOmcGl => "cm_gl",
         }
     }
     /// The base field of this family's recursion config.
     pub fn field(self) -> &'static str {
         match self {
-            Self::SsCertifiedGl | Self::GkBandmerge2Gl => "Goldilocks",
+            Self::SsCertifiedGl | Self::GkBandmerge2Gl | Self::HllOmcGl | Self::CmOmcGl => {
+                "Goldilocks"
+            }
             _ => "BabyBear",
         }
     }
     /// Whether this family runs the Goldilocks (`_gl`) recursion path.
     pub fn is_gl(self) -> bool {
-        matches!(self, Self::SsCertifiedGl | Self::GkBandmerge2Gl)
+        matches!(
+            self,
+            Self::SsCertifiedGl | Self::GkBandmerge2Gl | Self::HllOmcGl | Self::CmOmcGl
+        )
     }
     /// The underlying (field-agnostic) sketch family, for sharing plaintext
     /// state/record-mapping machinery between the BabyBear and Goldilocks paths.
@@ -170,6 +190,8 @@ impl StreamFamily {
         match self {
             Self::SsCertifiedGl => Self::SsCertified,
             Self::GkBandmerge2Gl => Self::GkBandmerge2,
+            Self::HllOmcGl => Self::HllOmc,
+            Self::CmOmcGl => Self::CmOmc,
             other => other,
         }
     }
@@ -507,7 +529,7 @@ pub fn build_query_schedule_batches(
             // HLL pads repeat the batch's first (real) key — `max` idempotence
             // makes a repeat a provable no-op; the others carry the sentinel.
             let pad_val =
-                if family == StreamFamily::HllOmc { cur[0] } else { PAD_KEY };
+                if family.base_family() == StreamFamily::HllOmc { cur[0] } else { PAD_KEY };
             cur.resize(m, pad_val);
             *pad_records += pads;
             *split_leaves += 1;
@@ -700,7 +722,10 @@ fn prove_queries_only(
                 }
             }
         }
-        StreamFamily::SsCertifiedGl | StreamFamily::GkBandmerge2Gl => {
+        StreamFamily::SsCertifiedGl
+        | StreamFamily::GkBandmerge2Gl
+        | StreamFamily::HllOmcGl
+        | StreamFamily::CmOmcGl => {
             // The Goldilocks (`_gl`) families run only the distributed forest
             // path (`dist_compose::worker_main_gl`); per-batch query replay is
             // BabyBear-only. Use the non-`_gl` token for query experiments.
@@ -917,7 +942,10 @@ fn prove_leaves(
             }
             e
         }
-        StreamFamily::SsCertifiedGl | StreamFamily::GkBandmerge2Gl => {
+        StreamFamily::SsCertifiedGl
+        | StreamFamily::GkBandmerge2Gl
+        | StreamFamily::HllOmcGl
+        | StreamFamily::CmOmcGl => {
             // The single-process `sim` engine is monomorphized to BabyBear. The
             // Goldilocks families run through the distributed engine only
             // (`dist_compose::measure_compose_dist_gl`), selected when machines >= 2

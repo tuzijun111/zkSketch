@@ -750,6 +750,16 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     }
     for j in 0..m {
         bool_check(&mut b, batch_fields[j][2]);
+        // Well-formedness of the committed batch: an INACTIVE batch row must
+        // carry value 0 (`active=0 ⇒ value=0`), mirroring the init check above.
+        // Without it, the D=2 encoding (which splits `active` into its own
+        // permutable `[active,0]` cell) admits a malformed inactive-but-valued
+        // "mass reservoir": a re-paired active cell switches it ON while
+        // switching a genuine heavy hitter OFF, keeping the mass-conservation
+        // identity balanced and certifying a wrong top-s (see the ss_gl
+        // cell-re-pairing audit / tests::inactive_valued_batch_rejected).
+        let v_gated = b.mul(batch_fields[j][1], batch_fields[j][2]);
+        b.connect(batch_fields[j][1], v_gated);
     }
     for r in 0..total {
         bool_check(&mut b, key_sorted_fields[r][2]);
@@ -1916,6 +1926,48 @@ mod tests {
         assert!(
             mal.is_err(),
             "FIX REGRESSED: flipping a count-0 segment's active bit must be rejected",
+        );
+    }
+
+    /// **Regression (cell-re-pairing / mass-reservoir defense).** In the D=2
+    /// encoding the `active` flag lives in its own permutable `[active,0]` cell,
+    /// so a malicious `σ_key` can swap active flags between rows. The attack
+    /// needs a malformed inactive-but-valued batch row `(key, value>0, active=0)`
+    /// as a "mass reservoir" (switch it ON, a real hitter OFF, mass stays
+    /// balanced). The batch `active=0 ⇒ value=0` well-formedness check rejects
+    /// the reservoir at commit time, closing the attack.
+    #[test]
+    fn inactive_valued_batch_rejected() {
+        let params = SsFullParams {
+            capacity: 2,
+            batch: 2,
+        };
+        let initial = SsFullState {
+            rows: vec![SsFullRow::real(100, 50), SsFullRow::dummy()],
+            params,
+        };
+        // Malformed: an inactive row carrying value 50 (the reservoir).
+        let batch = vec![
+            SsFullUpdate {
+                key: 200,
+                value: 50,
+                active: 0,
+            },
+            SsFullUpdate {
+                key: 0,
+                value: 0,
+                active: 0,
+            },
+        ];
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let mal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_ss_full(params, initial.clone(), batch.clone())
+        }));
+        std::panic::set_hook(prev);
+        assert!(
+            mal.is_err(),
+            "malformed inactive-but-valued batch row must be rejected (active=0 ⇒ value=0)"
         );
     }
 
