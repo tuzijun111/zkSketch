@@ -629,6 +629,14 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
         )
         .expect("get_airs_and_degrees_with_prep (hll_omc)");
     let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
+    if std::env::var("ZKS_DUMP_SHAPES").is_ok() {
+        for (i, (air, deg)) in airs.iter().zip(degrees.iter()).enumerate() {
+            eprintln!(
+                "[hll_bb] table {i}: log2_h={deg} main_width={}",
+                <_ as p3_air::BaseAir<Val>>::width(air)
+            );
+        }
+    }
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
     let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
     let circuit_prover_data =

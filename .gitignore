@@ -43,3 +43,4 @@ Thumbs.db
 # rayon / tracing …) so a fresh clone builds against the exact validated versions.
 # (plonky2/Cargo.lock is likewise tracked.)
 
+/paper
