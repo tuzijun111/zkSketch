@@ -52,15 +52,15 @@ use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
 use p3_circuit::ops::{
     Poseidon2Config, generate_expose_trace, generate_permute_trace, generate_poseidon2_trace,
-    generate_recompose_trace,
+    generate_range_trace, generate_recompose_trace,
 };
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         expose_air_builders, expose_preprocessor, permute_air_builders, permute_preprocessor,
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        poseidon2_air_builders_d4, poseidon2_preprocessor, range_air_builders, range_preprocessor,
+        recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -222,13 +222,9 @@ fn pack_cells_to_challenge(state: &CountMinState) -> Vec<Challenge> {
 /// to `RANK_BITS` bits, so the values must be `< 2^RANK_BITS`.
 fn prove_max(b: &mut CircuitBuilder<Challenge>, mx: ExprId, a: ExprId, bb: ExprId, zero: ExprId) {
     let da = b.sub(mx, a);
-    let _ = b
-        .decompose_to_bits::<Val>(da, RANK_BITS)
-        .expect("max: mx>=a");
+    b.add_range_bits::<Val>(da, RANK_BITS).expect("max: mx>=a");
     let dbb = b.sub(mx, bb);
-    let _ = b
-        .decompose_to_bits::<Val>(dbb, RANK_BITS)
-        .expect("max: mx>=bb");
+    b.add_range_bits::<Val>(dbb, RANK_BITS).expect("max: mx>=bb");
     let prod = b.mul(da, dbb);
     b.connect(prod, zero);
 }
@@ -326,6 +322,7 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
     if expose_boundary {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
@@ -474,17 +471,17 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
             tz = b.add(tz, acc_zero);
         }
         let rho = b.add(tz, one);
-        // Consume the remaining decompose coeffs (every coeff must flow through
-        // an ALU lhs — decompose_to_bits does).
+        // Consume the remaining (unused) decompose coeffs: only c0[0]=idx and
+        // c0[1]=ρ carry routing; c0[2..4], c1[0..4] are already pinned by the
+        // recompose table, so each just needs to flow through one ALU lhs.
+        // A self-mul is the cheapest such read (`add(x, 0)` would const-fold
+        // away and leave the coeff unconstrained); the old full-width
+        // `decompose_to_bits` here was pure waste (RangeAir refactor).
         for idx2 in 2..4 {
-            let _ = b
-                .decompose_to_bits::<Val>(c0[idx2], val_bits())
-                .expect("consume c0");
+            let _ = b.mul(c0[idx2], c0[idx2]);
         }
         for idx2 in 0..4 {
-            let _ = b
-                .decompose_to_bits::<Val>(c1[idx2], val_bits())
-                .expect("consume c1");
+            let _ = b.mul(c1[idx2], c1[idx2]);
         }
         let packed = b.mul(idx, shift_val_const);
         payload.push(b.add(packed, rho));
@@ -498,8 +495,7 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
         .expect("permute reg");
     for r in 0..m_batch {
         // Range-check ρ_sorted < 2^RANK_BITS so idx·2^SHIFT + ρ inverts uniquely.
-        let _ = b
-            .decompose_to_bits::<Val>(rho_sorted_w[r], RANK_BITS)
+        b.add_range_bits::<Val>(rho_sorted_w[r], RANK_BITS)
             .expect("rho range");
         let packed = b.mul(idx_sorted_w[r], shift_val_const);
         let rec = b.add(packed, rho_sorted_w[r]);
@@ -523,14 +519,11 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
         let omdi = b.sub(one, di);
         let l2 = b.mul(omt, omdi);
         b.connect(l2, zero);
-        // sortedness: gap = idx_sorted[r] − idx_sorted[r-1] ∈ [0, 2^addr_bits).
+        // sortedness: gap = idx_sorted[r] − idx_sorted[r-1] ∈ [0, 2^addr_bits),
+        // via the byte-table range check. Canonical because addr_bits ≪ field
+        // width (a wrapped gap ≈ p would not reconstruct from addr_bits bits).
         let gap = b.sub(idx_sorted_w[r], idx_sorted_w[r - 1]);
-        let gb = b
-            .decompose_to_bits::<Val>(gap, val_bits())
-            .expect("gap bits");
-        for &bit in gb.iter().skip(addr_bits) {
-            b.connect(bit, zero);
-        }
+        b.add_range_bits::<Val>(gap, addr_bits).expect("gap range");
         // Running max: acc[r] = max(eq_tag[r]·acc[r-1], ρ_sorted[r]).
         let carried = b.mul(eq_tag[r], acc[r - 1]);
         prove_max(&mut b, acc[r], carried, rho_sorted_w[r], zero);
@@ -549,14 +542,10 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
     // committed cell ≈ p−k) could otherwise wrap a difference into [0,2^RANK_BITS)
     // and certify a decrease.
     for r in 0..m_batch {
-        let _ = b
-            .decompose_to_bits::<Val>(op_old[r], RANK_BITS)
+        b.add_range_bits::<Val>(op_old[r], RANK_BITS)
             .expect("op_old range");
-        let _ = b
-            .decompose_to_bits::<Val>(acc[r], RANK_BITS)
-            .expect("acc range");
-        let _ = b
-            .decompose_to_bits::<Val>(op_new[r], RANK_BITS)
+        b.add_range_bits::<Val>(acc[r], RANK_BITS).expect("acc range");
+        b.add_range_bits::<Val>(op_new[r], RANK_BITS)
             .expect("op_new range");
     }
     // Touched new value: op_new[r] = max(op_old[r], acc[r]).
@@ -611,9 +600,11 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
         recompose_preprocessor::<Val>(false),
     ];
     preprocessors.push(permute_preprocessor::<Val>());
+    preprocessors.push(range_preprocessor::<Val>());
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
     if expose_boundary {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
@@ -629,14 +620,6 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
         )
         .expect("get_airs_and_degrees_with_prep (hll_omc)");
     let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
-    if std::env::var("ZKS_DUMP_SHAPES").is_ok() {
-        for (i, (air, deg)) in airs.iter().zip(degrees.iter()).enumerate() {
-            eprintln!(
-                "[hll_bb] table {i}: log2_h={deg} main_width={}",
-                <_ as p3_air::BaseAir<Val>>::width(air)
-            );
-        }
-    }
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
     let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
     let circuit_prover_data =
@@ -646,6 +629,7 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
+    prover.register_range_table::<4>();
     if expose_boundary {
         prover.register_expose_table::<4>();
     }
