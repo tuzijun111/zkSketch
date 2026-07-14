@@ -20,12 +20,17 @@ verify time, and proof size can be compared head-to-head:
 > `CircuitData` on plonky2), built in code; nothing needs to be generated once and
 > reloaded.
 >
-> **Same security target.** Both backends are parameterized to a **124-bit
-> conjectured FRI security target** — plonky3 via `SECURITY_LEVEL = 124` in
-> `src/config.rs`, plonky2 via `circuit_config()` in `plonky2/src/config.rs`
-> (16 PoW bits + rate 3 × 36 query rounds; plonky2's stock
-> `standard_recursion_config` is 100-bit) — so cross-stack proof sizes and
-> verify times compare at parity.
+> **Same security target.** Both backends are parameterized to the same
+> **124-bit conjectured FRI security target**, so cross-stack proof sizes and
+> verify times compare at parity. plonky3 sets `SECURITY_LEVEL = 124` in
+> `src/config.rs`, which derives the query count from the target: at rate `1/4`
+> with 15 PoW bits it takes `(124−15)/2 = 54` queries, i.e. `2×54 + 15 = 123`
+> conjectured bits (the integer division floors one bit off the target).
+> plonky2 is configured by `circuit_config()` in `plonky2/src/config.rs`, which
+> **raises** plonky2's stock `standard_recursion_config` from its default
+> **100** bits (rate `1/8`, 28 queries, 16 PoW: `3×28 + 16`) to **124** by
+> taking the query rounds to 36 (`3×36 + 16`). The stock 100-bit config is
+> never used here.
 
 ---
 
@@ -530,18 +535,3 @@ boundaries) accompany every honest path.
 
 ---
 
-## Documentation
-
-| Doc | Contents |
-| --- | --- |
-| [`docs/REPRODUCE.md`](docs/REPRODUCE.md) | End-to-end reproduction recipe: every live experiment's command, config, expected output, partial-vs-whole dataset — plus the archived-experiments mapping. |
-| [`docs/EVALUATION.md`](docs/EVALUATION.md) | **Historical**: the original RQ1–RQ4 figure track and the old E1–E10 status table. |
-| [`docs/datasets.md`](docs/datasets.md) | Dataset recipe (S³-matched), reproducibility model, materialization. |
-| [`docs/framework.md`](docs/framework.md) | The §4 composition framework (chain / merge atom / streaming forest). |
-| [`docs/countmin.md`](docs/countmin.md) | Count-Min circuit variants (v1 → v9h) and the §5.2 design. |
-| [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) | Phase-by-phase build log with measured numbers and gotchas. |
-
-`latex/EVAL_SPEC.md` is the original evaluation spec (metrics, trial counts,
-E1–E10 definitions); the paper's §Evaluation (`latex/zk1.tex`) has since
-reorganized it around the four live surfaces above, and the spec is kept as a
-historical reference.
