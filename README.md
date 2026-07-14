@@ -91,9 +91,26 @@ scripts/run_experiments.sh e1
   `p3-{recursion,circuit,circuit-prover,poseidon2-circuit-air}` crates at a local
   clone. This file is git-ignored; without it, a fresh clone builds the fork
   straight from GitHub.
-- **Python (experiments plots):** `python3` + `matplotlib` for
+- **Python (experiment plots):** `python3` + `matplotlib` for
+  `scripts/plot_eval.py` (the paper's batch-sweep figure) and
   `scripts/plot_experiments.py`; stdlib only for `fetch_datasets.py` /
   `cost_model_e10.py`.
+- **Hardware for the paper's runs.** The smoke-test defaults run anywhere, but
+  the deployed configuration is memory-hungry and the distributed study needs a
+  multi-socket box:
+  - **RAM:** peak prover RSS at `m=2^14` is ~17–81 GiB per machine depending on
+    the family (Greenwald–Khanna is the worst); an `M=4` forest run needs that
+    much *per live machine*. The paper's testbed is a 64-core AMD EPYC 9555
+    (4 NUMA nodes, ~2.2 TiB).
+  - **`numactl`** (optional but recommended): the `procs` engine pins each
+    machine with `numactl --physcpubind --membind`, falling back to `taskset`,
+    then to unpinned. Without it the multi-machine timings are noisier.
+  - **`EXP_COMPOSE_NODES=0,2`** names NUMA nodes by index; on a machine without
+    a node 2 it silently falls back to round-robin placement, so the
+    one-machine-per-socket property the paper relies on is lost. Pick indices
+    from your own `numactl --hardware`.
+  - The `procs` engine refuses to oversubscribe: `machines × cores` must be
+    `≤` the CPU count (for staged runs, `wave_size × cores`).
 
 ---
 
@@ -307,7 +324,7 @@ EXP_DATASET=aol EXP_FAMILY=gk EXP_GK_CAP=2048 EXP_GK_VARIANT=bandmerge2 \
   EXP_M=16,32,64,128,256,512,1024,2048,4096,8192,16384 EXP_CORES=32 BACKENDS=plonky3 \
   EXP_OUT=gk_batch_certified.csv scripts/run_experiments.sh e1
 
-python3 latex/pics/plot_eval.py     # -> latex/pics/zkSketch_eval_batch.pdf
+python3 scripts/plot_eval.py        # -> results/zkSketch_eval_batch.pdf
 ```
 
 **The deployed reference run** — one command feeds five artifacts: the forest
@@ -440,7 +457,7 @@ amortized per-element `= (total_time_ms + query_prove_ms)/N`.
 
 | Paper artifact | `results/` file(s) |
 | --- | --- |
-| `fig:eval-batch` | `{cm,hll}_batch_{one_hot,merkle,omc}.csv`, `{ss,gk}_batch_{naive,certified}.csv` |
+| `fig:eval-batch` | `{cm,hll}_batch_{one_hot,merkle,omc}.csv`, `{ss,gk}_batch_{naive,certified}.csv` (plotted by `scripts/plot_eval.py`) |
 | `tab:compose-schedules` | `frame_out_1machine_plonky3_perbatch.csv` (per-batch) + `frame_out_1machine_plonky3.csv` (forest) |
 | `tab:compose-scale` | `frame_out_1machine_plonky3.csv` (M=1) + `frame_out_staged_m234_plonky3.csv` (M=2,3,4) |
 | `tab:stream-scale` | `forest_plonky{3,2}_1machine_verify_2e{16..19}.csv` + `frame_out_1machine_plonky{3,2}.csv` (the `2^20` row) |
@@ -506,8 +523,7 @@ boundaries) accompany every honest path.
 | `examples/` | Experiment runners (`exp_*`), the dataset generator (`gen_synthetic`), and comparison demos. |
 | `tests/` | §4 chain/merge integration suites (Count-Min + HLL). |
 | `plonky2/` | The SNARK backend: `src/sketch/`, `src/leaf/` (in-circuit leaves + `countmin_merkle`), `src/decode/` (query circuits, E3), `src/recursion/`, `src/metrics.rs`, its own `examples/`. |
-| `scripts/` | `run_experiments.sh` (e1/e2/e5/e8 driver), `run_compose.sh` (both backends), `run_stream.sh`, `run_decode.sh`, `fetch_datasets.py`; legacy: `plot_experiments.py` (RQ figures), `cost_model_e10.py`. |
-| `latex/pics/plot_eval.py` | Generates the paper's batch-sweep figure (`zkSketch_eval_batch.pdf`) from the `results/*_batch_*.csv` files. |
+| `scripts/` | `run_experiments.sh` (e1/e2/e5/e8 driver), `run_compose.sh` (both backends), `run_stream.sh`, `run_decode.sh`, `plot_eval.py` (the paper's batch-sweep figure), `fetch_datasets.py`; legacy: `plot_experiments.py` (RQ figures), `cost_model_e10.py`. |
 | `data/` | Key streams: synthetic (`gaussian/uniform/zipf.keys` + manifest) and real (`aol/netflix.keys`). |
 | `docs/` | Documentation (see below). |
 | `paper/`, `latex/` | Paper PDF + `zk1.tex` source and `EVAL_SPEC.md`. |
