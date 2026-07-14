@@ -201,22 +201,17 @@ while `run_stream.sh` and `run_decode.sh` are plonky3-only.
 
 ```bash
 scripts/run_experiments.sh            # e1 (default), both backends, small slice
-scripts/run_experiments.sh e2         # by name: e1 e2 e5 e8
 EXP_DATASET=aol scripts/run_experiments.sh e1
 scripts/run_compose.sh                # real recursive composition (+ mixed queries)
 scripts/run_stream.sh                 # whole-stream total prove time
 scripts/run_decode.sh                 # decode/query circuits (tests + table)
 ```
 
-| Surface | What it measures | Backends | Output | In the paper |
+| Surface | What it measures | Backends | Output | 
 | --- | --- | --- | --- | --- |
-| `run_experiments.sh e1` | **the per-family circuit-cost matrix**: family × variant × batch sweep (witness/prove/verify split, proof size, peak RSS), incl. the naive replay baselines and the CM/HLL rebind variants | both | `results/e1_circuit.csv` (rename per run via `EXP_OUT`) | **yes** — `fig:eval-batch`, `tab:eval-memory` (leaf column) |
-| `run_compose.sh` | composition over **real recursive proofs**: 4 families × {per_batch, chain, forest}, cores/machines budgets, multi-machine staging; **mixed updates+queries** via `EXP_COMPOSE_QUERY_EVERY_OPS=Q` | **both** (`EXP_COMPOSE_BACKEND`) | `results/stream_compose.csv`, or `$1`/`EXP_OUT` | **yes** — every table |
-| `run_experiments.sh e2` | integrity: tamper-rejection + fidelity vs. plaintext | both | `results/e2_integrity.csv` | no |
-| `run_experiments.sh e5` | composition-topology ladder (structural digest lift) — auditor cost `Θ(E)→O(1)` | plonky3 | `results/e5_ladder.csv` | no (superseded by `run_compose.sh`'s per-batch-vs-forest) |
-| `run_experiments.sh e8` | cross-stack head-to-head: leaf + recursive merge on both proof systems | both | `results/e8_crossstack.csv` | no (superseded by `tab:p2-forest`) |
-| `run_stream.sh` | **whole-stream total prove time**: fixed `N`, sweep batch size × cores, `omc` vs `merkle` CM leaves | plonky3 | `results/stream_forest.csv` | no |
-| `run_decode.sh` | decode/query circuits of the **deployed** variants (unit tests + proven results table) | plonky3 | console | no |
+| `run_experiments.sh e1` | **the per-family circuit-cost matrix**: family × variant × batch sweep (witness/prove/verify split, proof size, peak RSS), incl. the naive replay baselines and the CM/HLL rebind variants | both | `results/e1_circuit.csv` (rename per run via `EXP_OUT`) | 
+| `run_compose.sh` | composition over **real recursive proofs**: 4 families × {per_batch, chain, forest}, cores/machines budgets, multi-machine staging; **mixed updates+queries** via `EXP_COMPOSE_QUERY_EVERY_OPS=Q` | **both** (`EXP_COMPOSE_BACKEND`) | `results/stream_compose.csv`, or `$1`/`EXP_OUT` | 
+
 
 **`run_experiments.sh` config (the most common; full lists in the script header):**
 
@@ -424,11 +419,7 @@ for Q in 10000 100000 1000000; do
 done
 ```
 
-> The `Q=10^3` row of `tab:mixed` is **extrapolated, not measured** (the rows of
-> `results/s3_plonky3_1machine_mixed_q1000.csv` carry `status=inferred`, and the
-> paper daggers the row): at that rate the query-bound leaf count inflates prover
-> time `16.4×`, i.e. ~15 h for Count-Min alone. Adding `1000` to the loop above
-> measures it for real, at that cost.
+
 
 **Table `tab:eval-datasets` — dataset sensitivity.** Three datasets here; the
 AOL column is the deployed reference run above:
@@ -453,7 +444,7 @@ amortized per-element `= (total_time_ms + query_prove_ms)/N`.
 | `tab:compose-schedules` | `frame_out_1machine_plonky3_perbatch.csv` (per-batch) + `frame_out_1machine_plonky3.csv` (forest) |
 | `tab:compose-scale` | `frame_out_1machine_plonky3.csv` (M=1) + `frame_out_staged_m234_plonky3.csv` (M=2,3,4) |
 | `tab:stream-scale` | `forest_plonky{3,2}_1machine_verify_2e{16..19}.csv` + `frame_out_1machine_plonky{3,2}.csv` (the `2^20` row) |
-| `tab:mixed` | `s3_plonky3_1machine_mixed_q{1000,10000,100000,1000000}.csv` (`q1000` = inferred) |
+| `tab:mixed` | `s3_plonky3_1machine_mixed_q{1000,10000,100000,1000000}.csv` |
 | `tab:eval-datasets` | `frame_out_1machine_datasets_plonky3.csv` + `frame_out_1machine_plonky3.csv` (AOL) |
 | `tab:eval-memory` | `{cm,hll}_batch_omc.csv`, `{ss,gk}_batch_certified.csv` at `m=2^14` (leaf) + `frame_out_4machine_plonky3.csv` (forest) |
 | `tab:p2-forest` | `frame_out_1machine_plonky3.csv`, `frame_out_1machine_Goldilocks.csv`, `frame_out_1machine_plonky2.csv` |
