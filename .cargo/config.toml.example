@@ -1,23 +1,39 @@
-# Template for `.cargo/config.toml` (which is gitignored).
+# Template for the (gitignored) `.cargo/config.toml`.
 #
-# By default, `Cargo.toml` pulls the four Plonky3-recursion crates from the
-# GitHub fork at https://github.com/July620/Plonky3_RangeAir (pinned to a
-# specific commit). A fresh `git clone` of this project + `cargo build` works
-# without any local fork setup.
+# A fresh `git clone` of this project + `cargo build` works WITHOUT this file:
+# `Cargo.toml` already pins the four Plonky3-recursion crates to a specific
+# commit of the public fork https://github.com/July620/Plonky3_RangeAir.
 #
-# This template exists for the *development* workflow: if you want to edit the
-# fork's source against this project (live iteration without a push round-trip),
-# point Cargo at a local clone of the fork.
+# Copy this file to `.cargo/config.toml` only if you want one of the options
+# below. `.cargo/config.toml` is gitignored, so any local absolute paths you
+# put in it are never committed.
 #
-# To enable the local override on your machine:
+#   cp .cargo/config.toml.example .cargo/config.toml
+
+# ---------------------------------------------------------------------------
+# Option 1 (recommended for everyone): route cargo's git fetches through the
+# system `git` CLI instead of the built-in libgit2 client. libgit2's anonymous
+# fetch of the PUBLIC fork intermittently fails with a spurious
+# "failed to authenticate" (a transient GitHub 401 / rate-limit that libgit2
+# misreports as an auth error). The system git CLI fetches the same public repo
+# reliably, so cargo's own error message recommends exactly this setting:
+#   https://doc.rust-lang.org/cargo/reference/config.html#netgit-fetch-with-cli
+[net]
+git-fetch-with-cli = true
+
+# ---------------------------------------------------------------------------
+# Option 2 (development only): edit the fork's source against this project (live
+# iteration without a push round-trip) by pointing Cargo at a LOCAL clone of the
+# fork. Uncomment the block below and set the path.
 #
 #   1. git clone https://github.com/July620/Plonky3_RangeAir /path/to/Plonky3_RangeAir
-#   2. cp .cargo/config.toml.example .cargo/config.toml
-#   3. Replace `/path/to/Plonky3_RangeAir` below with the absolute path to step-1's clone.
-#   4. cargo build --release  → now compiles the four crates from your local path.
-
-[patch."https://github.com/July620/Plonky3_RangeAir"]
-p3-recursion             = { path = "/path/to/Plonky3_RangeAir/recursion" }
-p3-circuit               = { path = "/path/to/Plonky3_RangeAir/circuit" }
-p3-circuit-prover        = { path = "/path/to/Plonky3_RangeAir/circuit-prover" }
-p3-poseidon2-circuit-air = { path = "/path/to/Plonky3_RangeAir/poseidon2-circuit-air" }
+#   2. Replace `/path/to/Plonky3_RangeAir` below with the absolute path to that clone.
+#   3. cargo build --release  -> now compiles the four crates from your local path.
+#
+# Leave this commented out unless you are actively iterating on the fork; an
+# override pointing at a non-existent path will make `cargo build` fail.
+#[patch."https://github.com/July620/Plonky3_RangeAir"]
+#p3-recursion             = { path = "/path/to/Plonky3_RangeAir/recursion" }
+#p3-circuit               = { path = "/path/to/Plonky3_RangeAir/circuit" }
+#p3-circuit-prover        = { path = "/path/to/Plonky3_RangeAir/circuit-prover" }
+#p3-poseidon2-circuit-air = { path = "/path/to/Plonky3_RangeAir/poseidon2-circuit-air" }

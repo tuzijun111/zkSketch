@@ -2,8 +2,10 @@
 /target/
 **/*.rs.bk
 
-# Local Cargo overrides (Phase 7+ fork patch). The .example template is committed.
-# /.cargo/config.toml
+# Local Cargo overrides (Phase 7+ fork patch). Only the .example template is
+# committed; the real config.toml is per-developer (it may hold an absolute
+# local path) and must never be tracked.
+/.cargo/config.toml
 
 # OS cruft
 .DS_Store
