@@ -33,7 +33,7 @@ use crate::recursion::recursive::config::{ConfigWithFriParams, D as EXT_D};
 use crate::recursion::recursive::countmin_leaf::make_leaf_config;
 use crate::recursion::recursive::countmin_leaf_v9::CountMinLeafProofV9;
 use crate::recursion::recursive::countmin_merge_v9::{
-    agg_params, merge_two_countmin_v9, v9_leaf_digest_bound, CountMinChainProofV9,
+    agg_params, merge_two_countmin_v9, CountMinChainProofV9,
     CountMinMergeErrorV9,
 };
 
@@ -91,9 +91,11 @@ impl CountMinChainStateV9 {
         let prev_e = self.root.num_leaves() as u64;
         let new_e = prev_e + 1;
         let new_leaf_dig = leaf_digest(
-            &v9_leaf_digest_bound(&new_leaf.initial),
-            &v9_leaf_digest_bound(&new_leaf.final_),
             new_e,
+            new_e,
+            &new_leaf.batch_commit.0,
+            &new_leaf.initial.0,
+            &new_leaf.final_.0,
         );
         let new_digest = combine_digest(1, prev_e, new_e, &self.root.digest, &new_leaf_dig);
 

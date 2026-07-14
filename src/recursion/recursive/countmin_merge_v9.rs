@@ -119,14 +119,6 @@ pub(crate) fn agg_params() -> ProveNextLayerParams {
     }
 }
 
-/// Fold a `CountMinCommit` down to the 2-element boundary id the digest
-/// hash takes. Same scheme as `countmin_merge.rs::cm_leaf_digest`: the
-/// commit is itself a Poseidon2 digest, so the first two elements retain
-/// ~62 bits of entropy — enough for binding. `pub(crate)` so the linear
-/// chain extends the digest with the identical leaf-boundary encoding.
-pub(crate) fn v9_leaf_digest_bound(c: &CountMinCommit) -> [crate::config::Val; 2] {
-    [c.0[0], c.0[1]]
-}
 
 /// Merge two v9 leaves into one aggregated batch-STARK that certifies
 /// both epochs.
@@ -157,12 +149,8 @@ pub fn merge_two_countmin_v9(
     >(&left_input, &right_input, &config, &backend, &params, None)
     .map_err(|e| CountMinMergeErrorV9::AggregationFailed(format!("{e:?}")))?;
 
-    let lp = v9_leaf_digest_bound(&left.initial);
-    let lf = v9_leaf_digest_bound(&left.final_);
-    let rp = v9_leaf_digest_bound(&right.initial);
-    let rf = v9_leaf_digest_bound(&right.final_);
-    let dl = leaf_digest(&lp, &lf, 1);
-    let dr = leaf_digest(&rp, &rf, 2);
+    let dl = leaf_digest(1, 1, &left.batch_commit.0, &left.initial.0, &left.final_.0);
+    let dr = leaf_digest(2, 2, &right.batch_commit.0, &right.initial.0, &right.final_.0);
     let digest = combine_digest(1, 1, 2, &dl, &dr);
 
     Ok(CountMinChainProofV9 {
@@ -202,16 +190,14 @@ pub fn verify_chain_countmin_v9(
         return Err(CountMinMergeErrorV9::MiddleBoundaryMismatch);
     }
 
-    let mut acc = leaf_digest(
-        &v9_leaf_digest_bound(&c.boundary(0)),
-        &v9_leaf_digest_bound(&c.boundary(1)),
-        1,
-    );
+    let mut acc = leaf_digest(1, 1, &c.batch_commits[0].0, &c.boundary(0).0, &c.boundary(1).0);
     for k in 2..=e {
         let dr = leaf_digest(
-            &v9_leaf_digest_bound(&c.boundary(k - 1)),
-            &v9_leaf_digest_bound(&c.boundary(k)),
             k as u64,
+            k as u64,
+            &c.batch_commits[k - 1].0,
+            &c.boundary(k - 1).0,
+            &c.boundary(k).0,
         );
         acc = combine_digest(1, (k - 1) as u64, k as u64, &acc, &dr);
     }

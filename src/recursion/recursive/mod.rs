@@ -50,7 +50,7 @@ use p3_recursion::{
 
 use crate::config::LOG_BLOWUP;
 use crate::prover::Boundary;
-use crate::recursion::digest::{ChainDigest, combine_digest, leaf_digest};
+use crate::recursion::digest::{ChainDigest, boundary_leaf_digest, combine_digest, pad_boundary2};
 use crate::recursion::recursive::backend::{Backend, make_backend};
 use crate::recursion::recursive::config::{ConfigWithFriParams, D, make_recursion_config};
 use crate::recursion::recursive::leaf::{RecursiveLeafProof, prove_recursive_leaf};
@@ -159,14 +159,14 @@ pub fn merge_two(
     >(&left_input, &right_input, &config, &backend, &params, None)
     .map_err(|e| MergeError::AggregationFailed(format!("{e:?}")))?;
 
-    let dl = leaf_digest(
-        &[left.initial.a, left.initial.b],
-        &[left.final_.a, left.final_.b],
+    let dl = boundary_leaf_digest(
+        &pad_boundary2(left.initial.a, left.initial.b),
+        &pad_boundary2(left.final_.a, left.final_.b),
         1,
     );
-    let dr = leaf_digest(
-        &[right.initial.a, right.initial.b],
-        &[right.final_.a, right.final_.b],
+    let dr = boundary_leaf_digest(
+        &pad_boundary2(right.initial.a, right.initial.b),
+        &pad_boundary2(right.final_.a, right.final_.b),
         2,
     );
     let digest = combine_digest(1, 1, 2, &dl, &dr);
@@ -199,8 +199,16 @@ pub fn verify_chain(c: &ChainProof) -> Result<(), MergeError> {
         .map_err(|e| MergeError::BatchVerifyFailed(format!("{e:?}")))?;
 
     // Digest check binds boundaries to what the proof certifies.
-    let dl = leaf_digest(&[c.initial.a, c.initial.b], &[c.middle.a, c.middle.b], 1);
-    let dr = leaf_digest(&[c.middle.a, c.middle.b], &[c.final_.a, c.final_.b], 2);
+    let dl = boundary_leaf_digest(
+        &pad_boundary2(c.initial.a, c.initial.b),
+        &pad_boundary2(c.middle.a, c.middle.b),
+        1,
+    );
+    let dr = boundary_leaf_digest(
+        &pad_boundary2(c.middle.a, c.middle.b),
+        &pad_boundary2(c.final_.a, c.final_.b),
+        2,
+    );
     let expected = combine_digest(1, 1, 2, &dl, &dr);
     if expected != c.digest {
         return Err(MergeError::DigestMismatch);

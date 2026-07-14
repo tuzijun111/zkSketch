@@ -66,12 +66,6 @@ fn agg_params() -> ProveNextLayerParams {
     }
 }
 
-/// Fold a `CountMinCommit` to the 2-element boundary id the digest hash
-/// takes (same scheme as `countmin_merge_v9::v9_leaf_digest_bound`).
-fn v9_leaf_digest_bound(c: &CountMinCommit) -> [crate::config::Val; 2] {
-    [c.0[0], c.0[1]]
-}
-
 /// The aggregated root proof over a streaming forest of `E ≥ 2` v9 epochs.
 ///
 /// Structurally a [`countmin_merge_v9::CountMinChainProofV9`], but the digest
@@ -312,9 +306,11 @@ pub fn prove_countmin_forest_v9(
         .enumerate()
         .map(|(i, l)| {
             leaf_digest(
-                &v9_leaf_digest_bound(&l.initial),
-                &v9_leaf_digest_bound(&l.final_),
                 (i + 1) as u64,
+                (i + 1) as u64,
+                &l.batch_commit.0,
+                &l.initial.0,
+                &l.final_.0,
             )
         })
         .collect();
@@ -362,9 +358,11 @@ pub fn verify_forest_countmin_v9(
     let leaf_digs: Vec<ChainDigest> = (1..=e)
         .map(|i| {
             leaf_digest(
-                &v9_leaf_digest_bound(&root.boundary(i - 1)),
-                &v9_leaf_digest_bound(&root.boundary(i)),
                 i as u64,
+                i as u64,
+                &root.batch_commits[i - 1].0,
+                &root.boundary(i - 1).0,
+                &root.boundary(i).0,
             )
         })
         .collect();

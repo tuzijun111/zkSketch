@@ -10,12 +10,12 @@ use core::fmt;
 
 use p3_recursion::{BatchOnly, build_and_prove_aggregation_layer};
 
-use crate::recursion::digest::{combine_digest, leaf_digest};
+use crate::recursion::digest::{boundary_leaf_digest, combine_digest};
 use crate::recursion::recursive::backend::{Backend, make_backend};
 use crate::recursion::recursive::config::{ConfigWithFriParams, D as EXT_D};
 use crate::recursion::recursive::hll_leaf::{HllLeafProof, make_leaf_config};
 use crate::recursion::recursive::hll_merge::{
-    HllChainProof, HllMergeError, agg_params, hll_leaf_digest, merge_two_hll,
+    HllChainProof, HllMergeError, agg_params, merge_two_hll,
 };
 
 /// Accumulating chain state. The current `root` certifies leaves `1..=E`
@@ -70,11 +70,8 @@ impl HllChainState {
 
         let prev_e = self.root.num_leaves() as u64;
         let new_e = prev_e + 1;
-        let new_leaf_dig = leaf_digest(
-            &hll_leaf_digest(&new_leaf.initial),
-            &hll_leaf_digest(&new_leaf.final_),
-            new_e,
-        );
+        let new_leaf_dig =
+            boundary_leaf_digest(&new_leaf.initial.0, &new_leaf.final_.0, new_e);
         let new_digest = combine_digest(1, prev_e, new_e, &self.root.digest, &new_leaf_dig);
 
         let prev_final = self.root.final_;

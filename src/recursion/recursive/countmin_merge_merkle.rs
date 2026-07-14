@@ -106,12 +106,6 @@ fn agg_params() -> ProveNextLayerParams {
     }
 }
 
-/// Fold a (combined) `CountMinCommit` to the 2-element boundary id the digest
-/// hash takes — same scheme as `countmin_merge_v9::v9_leaf_digest_bound`.
-fn bound(c: &CountMinCommit) -> [Val; 2] {
-    [c.0[0], c.0[1]]
-}
-
 /// Merge two sparse-Merkle leaves into one aggregated batch-STARK certifying
 /// both epochs. The boundary `left.final_roots == right.initial_roots` is
 /// checked natively (exact, over the full root tuple) before the recursive
@@ -147,8 +141,8 @@ pub fn merge_two_countmin_merkle(
     let lf = combined_commit(&left.final_roots);
     let ri = combined_commit(&right.initial_roots);
     let rf = combined_commit(&right.final_roots);
-    let dl = leaf_digest(&bound(&li), &bound(&lf), 1);
-    let dr = leaf_digest(&bound(&ri), &bound(&rf), 2);
+    let dl = leaf_digest(1, 1, &left.batch_commit.0, &li.0, &lf.0);
+    let dr = leaf_digest(2, 2, &right.batch_commit.0, &ri.0, &rf.0);
     let digest = combine_digest(1, 1, 2, &dl, &dr);
 
     Ok(CountMinMerkleChainProof {
@@ -189,9 +183,15 @@ pub fn verify_chain_countmin_merkle(
         return Err(CountMinMerkleMergeError::StructureMismatch);
     }
 
-    let mut acc = leaf_digest(&bound(&c.boundary(0)), &bound(&c.boundary(1)), 1);
+    let mut acc = leaf_digest(1, 1, &c.batch_commits[0].0, &c.boundary(0).0, &c.boundary(1).0);
     for k in 2..=e {
-        let dr = leaf_digest(&bound(&c.boundary(k - 1)), &bound(&c.boundary(k)), k as u64);
+        let dr = leaf_digest(
+            k as u64,
+            k as u64,
+            &c.batch_commits[k - 1].0,
+            &c.boundary(k - 1).0,
+            &c.boundary(k).0,
+        );
         acc = combine_digest(1, (k - 1) as u64, k as u64, &acc, &dr);
     }
     if acc != c.digest {

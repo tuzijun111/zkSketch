@@ -15,12 +15,12 @@ use core::fmt;
 
 use p3_recursion::{BatchOnly, build_and_prove_aggregation_layer};
 
-use crate::recursion::digest::{combine_digest, leaf_digest};
+use crate::recursion::digest::{boundary_leaf_digest, combine_digest};
 use crate::recursion::recursive::backend::{Backend, make_backend};
 use crate::recursion::recursive::config::{ConfigWithFriParams, D as EXT_D};
 use crate::recursion::recursive::countmin_leaf::{CountMinLeafProof, make_leaf_config};
 use crate::recursion::recursive::countmin_merge::{
-    CountMinChainProof, CountMinMergeError, agg_params, cm_leaf_digest, merge_two_countmin,
+    CountMinChainProof, CountMinMergeError, agg_params, merge_two_countmin,
 };
 
 /// Accumulating chain state. The current `root` certifies leaves `1..=E`
@@ -84,11 +84,8 @@ impl CountMinChainState {
         // Extend the digest: H_{[1, E+1]} = combine(1, E, E+1, H_{[1, E]}, leaf_digest_new).
         let prev_e = self.root.num_leaves() as u64;
         let new_e = prev_e + 1;
-        let new_leaf_dig = leaf_digest(
-            &cm_leaf_digest(&new_leaf.initial),
-            &cm_leaf_digest(&new_leaf.final_),
-            new_e,
-        );
+        let new_leaf_dig =
+            boundary_leaf_digest(&new_leaf.initial.0, &new_leaf.final_.0, new_e);
         let new_digest = combine_digest(1, prev_e, new_e, &self.root.digest, &new_leaf_dig);
 
         // Splice the new boundary / batch into the proof.

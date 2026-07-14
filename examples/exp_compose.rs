@@ -396,6 +396,15 @@ fn main() {
     // legacy single-process run whose machines column is a work-partition
     // makespan projection. Default: procs whenever a multi-machine sweep is
     // requested, since that is the claim being defended.
+    fn exec_label(mode: StreamMode, machines_eff: usize) -> &'static str {
+        // Mirrors the dispatch guard in dist_compose::measure_compose_dist:
+        // staged-wave execution applies to the forest when the wave is
+        // smaller than the machine count.
+        match std::env::var("EXP_COMPOSE_WAVE_SIZE").ok().and_then(|v| v.parse::<usize>().ok()) {
+            Some(ws) if mode == StreamMode::Forest && ws >= 1 && ws < machines_eff => "staged",
+            _ => "procs",
+        }
+    }
     let exec_procs = match std::env::var("EXP_COMPOSE_EXEC").ok().as_deref() {
         Some("procs") => true,
         Some("sim") => false,
@@ -732,7 +741,7 @@ fn main() {
                                             format!("{:.3}", q_avg(c.query_ctx_verifies as f64, c.n_queries)),
                                             split_leaves.to_string(),
                                             pad_records.to_string(),
-                                            "procs".into(),
+                                            exec_label(mode, c.machines_eff).into(),
                                             c.procs.to_string(),
                                             format!("{:.3}", c.witness_pass_ms),
                                             format!("{:.3}", c.scatter_ms),

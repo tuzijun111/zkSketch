@@ -16,7 +16,7 @@ use core::fmt;
 
 use crate::prover::leaf::LeafVerifyError;
 use crate::prover::{Boundary, LeafProof, verify_fib_leaf};
-use crate::recursion::digest::{ChainDigest, combine_digest, leaf_digest};
+use crate::recursion::digest::{ChainDigest, boundary_leaf_digest, combine_digest, pad_boundary2};
 
 /// Aggregated proof over an interval `[i, j]` of leaf proofs.
 ///
@@ -93,14 +93,14 @@ pub fn merge_two(left: LeafProof, right: LeafProof) -> Result<ChainProof, MergeE
     let m = 1u64;
     let j = 2u64;
 
-    let dl = leaf_digest(
-        &[left.initial.a, left.initial.b],
-        &[left.final_.a, left.final_.b],
+    let dl = boundary_leaf_digest(
+        &pad_boundary2(left.initial.a, left.initial.b),
+        &pad_boundary2(left.final_.a, left.final_.b),
         i,
     );
-    let dr = leaf_digest(
-        &[right.initial.a, right.initial.b],
-        &[right.final_.a, right.final_.b],
+    let dr = boundary_leaf_digest(
+        &pad_boundary2(right.initial.a, right.initial.b),
+        &pad_boundary2(right.final_.a, right.final_.b),
         j,
     );
     let digest = combine_digest(i, m, j, &dl, &dr);
@@ -151,14 +151,14 @@ pub fn verify_chain(c: &ChainProof) -> Result<(), MergeError> {
     // means folding through the binary tree (§4.2) or the streaming forest
     // (§4.3); both are out of scope here.
     assert_eq!(c.leaves.len(), 2, "Phase 1 supports two-leaf chains only");
-    let dl = leaf_digest(
-        &[c.leaves[0].initial.a, c.leaves[0].initial.b],
-        &[c.leaves[0].final_.a, c.leaves[0].final_.b],
+    let dl = boundary_leaf_digest(
+        &pad_boundary2(c.leaves[0].initial.a, c.leaves[0].initial.b),
+        &pad_boundary2(c.leaves[0].final_.a, c.leaves[0].final_.b),
         i,
     );
-    let dr = leaf_digest(
-        &[c.leaves[1].initial.a, c.leaves[1].initial.b],
-        &[c.leaves[1].final_.a, c.leaves[1].final_.b],
+    let dr = boundary_leaf_digest(
+        &pad_boundary2(c.leaves[1].initial.a, c.leaves[1].initial.b),
+        &pad_boundary2(c.leaves[1].final_.a, c.leaves[1].final_.b),
         j,
     );
     let m = i; // for E=2, m = i

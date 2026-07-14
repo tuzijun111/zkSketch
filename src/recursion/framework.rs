@@ -125,20 +125,17 @@ pub enum FrameworkError {
 /// `H[j,j] = H(j, D_j, C_{b_j}, Com(S_{j-1}), Com(S_j))` — the leaf
 /// interval digest. Binds the epoch index, descriptor, batch commitment,
 /// and both boundary commitments, so no two distinct epochs (or a
-/// reordered one) share a digest.
+/// reordered one) share a digest. Delegates to the canonical
+/// `digest::leaf_digest` (identical input layout, so digest values are
+/// unchanged).
 pub fn epoch_leaf_digest(leaf: &EpochLeaf) -> ChainDigest {
-    let hasher = MyHash::new(make_perm());
-    let mut input: Vec<Val> = Vec::with_capacity(2 + 8 * 3);
-    input.push(Val::from_u64(0x4C45_4146)); // 'LEAF' tag
-    input.push(Val::from_u64(leaf.index));
-    input.push(Val::from_u64(leaf.descriptor));
-    input.extend_from_slice(&leaf.batch_commit);
-    input.extend_from_slice(&leaf.com_before);
-    input.extend_from_slice(&leaf.com_after);
-    let full: [Val; 8] = hasher.hash_iter(input);
-    let mut out = [Val::ZERO; DIGEST_WIDTH];
-    out.copy_from_slice(&full[..DIGEST_WIDTH]);
-    out
+    crate::recursion::digest::leaf_digest(
+        leaf.index,
+        leaf.descriptor,
+        &leaf.batch_commit,
+        &leaf.com_before,
+        &leaf.com_after,
+    )
 }
 
 /// Lift a per-epoch leaf to a single-epoch interval proof `Π[j,j]` (§4.2).

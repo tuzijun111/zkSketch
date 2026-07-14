@@ -17,10 +17,9 @@ use p3_recursion::Poseidon2Config;
 
 use crate::commitment::HyperLogLogCommit;
 use crate::config::LOG_BLOWUP;
-use crate::recursion::digest::{ChainDigest, combine_digest, leaf_digest};
+use crate::recursion::digest::{ChainDigest, boundary_leaf_digest, combine_digest};
 use crate::recursion::recursive::config::D as EXT_D;
 use crate::recursion::recursive::hll_leaf::{HllLeafProof, make_leaf_config};
-use crate::recursion::recursive::hll_merge::hll_leaf_digest;
 use crate::sketch::hyperloglog::HyperLogLogUpdate;
 
 /// Same `log_final_poly_len` as the recursive leaf / merge — keeps the
@@ -89,16 +88,8 @@ pub fn flat_merge_two_hll(
         });
     }
 
-    let dl = leaf_digest(
-        &hll_leaf_digest(&left.initial),
-        &hll_leaf_digest(&left.final_),
-        1,
-    );
-    let dr = leaf_digest(
-        &hll_leaf_digest(&right.initial),
-        &hll_leaf_digest(&right.final_),
-        2,
-    );
+    let dl = boundary_leaf_digest(&left.initial.0, &left.final_.0, 1);
+    let dr = boundary_leaf_digest(&right.initial.0, &right.final_.0, 2);
     let digest = combine_digest(1, 1, 2, &dl, &dr);
 
     let initial = left.initial;
@@ -147,16 +138,8 @@ pub fn verify_chain_flat_hll(c: &HllFlatChainProof) -> Result<(), HllFlatError> 
     assert_eq!(c.leaves.first().unwrap().initial, c.initial);
     assert_eq!(c.leaves.last().unwrap().final_, c.final_);
 
-    let dl = leaf_digest(
-        &hll_leaf_digest(&c.leaves[0].initial),
-        &hll_leaf_digest(&c.leaves[0].final_),
-        1,
-    );
-    let dr = leaf_digest(
-        &hll_leaf_digest(&c.leaves[1].initial),
-        &hll_leaf_digest(&c.leaves[1].final_),
-        2,
-    );
+    let dl = boundary_leaf_digest(&c.leaves[0].initial.0, &c.leaves[0].final_.0, 1);
+    let dr = boundary_leaf_digest(&c.leaves[1].initial.0, &c.leaves[1].final_.0, 2);
     let expected = combine_digest(1, 1, 2, &dl, &dr);
     if expected != c.digest {
         return Err(HllFlatError::DigestMismatch);

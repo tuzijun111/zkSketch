@@ -20,7 +20,7 @@ use p3_recursion::{
 
 use crate::commitment::HyperLogLogCommit;
 use crate::config::LOG_BLOWUP;
-use crate::recursion::digest::{ChainDigest, combine_digest, leaf_digest};
+use crate::recursion::digest::{ChainDigest, boundary_leaf_digest, combine_digest};
 use crate::recursion::recursive::backend::{Backend, make_backend};
 use crate::recursion::recursive::config::{ConfigWithFriParams, D as EXT_D};
 use crate::recursion::recursive::hll_leaf::{HllLeafProof, make_leaf_config};
@@ -111,14 +111,6 @@ pub(crate) fn agg_params() -> ProveNextLayerParams {
     }
 }
 
-/// Fold an 8-element HyperLogLog commit into the 2-element boundary the
-/// chain digest functions take. Same shortcut Count-Min uses: the first 2
-/// of the 8 Poseidon2 digest elements retain enough entropy because the
-/// digest is already collision-resistant.
-pub(crate) fn hll_leaf_digest(c: &HyperLogLogCommit) -> [crate::config::Val; 2] {
-    [c.0[0], c.0[1]]
-}
-
 /// Merge two HyperLogLog leaf proofs into one aggregated batch-STARK that
 /// certifies both epochs.
 pub fn merge_two_hll(
@@ -148,12 +140,10 @@ pub fn merge_two_hll(
     >(&left_input, &right_input, &config, &backend, &params, None)
     .map_err(|e| HllMergeError::AggregationFailed(format!("{e:?}")))?;
 
-    let lp = hll_leaf_digest(&left.initial);
-    let lf = hll_leaf_digest(&left.final_);
-    let rp = hll_leaf_digest(&right.initial);
-    let rf = hll_leaf_digest(&right.final_);
-    let dl = leaf_digest(&lp, &lf, 1);
-    let dr = leaf_digest(&rp, &rf, 2);
+    // Replay-ablation path: the leaf statement carries no batch commitment,
+    // so the digest binds the full boundary commitments only.
+    let dl = boundary_leaf_digest(&left.initial.0, &left.final_.0, 1);
+    let dr = boundary_leaf_digest(&right.initial.0, &right.final_.0, 2);
     let digest = combine_digest(1, 1, 2, &dl, &dr);
 
     Ok(HllChainProof {
@@ -188,17 +178,9 @@ pub fn verify_chain_hll(c: &HllChainProof) -> Result<(), HllMergeError> {
         return Err(HllMergeError::MiddleBoundaryMismatch);
     }
 
-    let mut acc = leaf_digest(
-        &hll_leaf_digest(&c.boundary(0)),
-        &hll_leaf_digest(&c.boundary(1)),
-        1,
-    );
+    let mut acc = boundary_leaf_digest(&c.boundary(0).0, &c.boundary(1).0, 1);
     for k in 2..=e {
-        let dr = leaf_digest(
-            &hll_leaf_digest(&c.boundary(k - 1)),
-            &hll_leaf_digest(&c.boundary(k)),
-            k as u64,
-        );
+        let dr = boundary_leaf_digest(&c.boundary(k - 1).0, &c.boundary(k).0, k as u64);
         acc = combine_digest(1, (k - 1) as u64, k as u64, &acc, &dr);
     }
     if acc != c.digest {

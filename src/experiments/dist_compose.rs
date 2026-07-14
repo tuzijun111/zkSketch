@@ -1129,20 +1129,48 @@ fn numa_phys_blocks() -> Vec<(usize, usize)> {
 /// on a 64-core node 0, sharing its DRAM controller while node 1 sits idle).
 /// Falls back to the contiguous block when NUMA topology is unavailable or the
 /// round-robin layout would overflow a node.
+///
+/// `EXP_COMPOSE_NODE_OFFSET=k` rotates the node assignment (machine `i` →
+/// node `i+k mod n`), letting a second, concurrent harness instance occupy a
+/// different node — e.g. a background-load replica on the sibling node that
+/// keeps each socket's package environment uniform across machine counts.
 fn machine_core_range(i: usize, cores: usize, machines: usize) -> (usize, usize) {
     let contiguous = (i * cores, (i + 1) * cores - 1);
     let nodes = numa_phys_blocks();
+    // `EXP_COMPOSE_NODES=a,b,...` pins machine `i` to the base of listed node
+    // `i mod len` EXACTLY (successive machines wrap onto the same nodes — the
+    // reuse is intentional for staged waves, where wave w+1 takes over the
+    // cores wave w released). Falls through on any parse/topology mismatch.
+    if let Ok(list) = std::env::var("EXP_COMPOSE_NODES") {
+        let ids: Vec<usize> = list.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        // Wrapping onto already-used nodes is only safe when staged waves
+        // serialize the reuse; concurrently it would stack two live machines
+        // on the same cores, so without a wave size the list must cover every
+        // machine (else fall through to the default layout).
+        let wrap_ok = staged_wave_size().is_some() || i < ids.len();
+        if !ids.is_empty() && wrap_ok {
+            if let Some(&(lo, hi)) = ids.get(i % ids.len()).and_then(|&id| nodes.get(id)) {
+                if lo + cores - 1 <= hi {
+                    return (lo, lo + cores - 1);
+                }
+            }
+        }
+    }
     if nodes.is_empty() {
         return contiguous;
     }
     let n = nodes.len();
+    let offset = std::env::var("EXP_COMPOSE_NODE_OFFSET")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
     let block = |j: usize| -> (usize, usize) {
-        let (lo, _) = nodes[j % n];
-        let base = lo + (j / n) * cores;
+        let (lo, _) = nodes[(j + offset) % n];
+        let base = lo + ((j + offset) / n) * cores;
         (base, base + cores - 1)
     };
     // Adopt the round-robin layout only if every machine's block fits its node.
-    let fits = (0..machines).all(|j| block(j).1 <= nodes[j % n].1);
+    let fits = (0..machines).all(|j| block(j).1 <= nodes[(j + offset) % n].1);
     if fits { block(i) } else { contiguous }
 }
 
@@ -1414,6 +1442,21 @@ pub fn measure_compose_dist(
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
 ) -> Result<DistCell, String> {
+    // Staged-wave mode (forest only): machines execute in gated waves so each
+    // gets a full NUMA node with no co-resident sibling from this experiment;
+    // the makespan is composed from measured per-wave walls. See
+    // [`measure_compose_dist_staged`].
+    if mode == StreamMode::Forest {
+        if let Some(ws) = staged_wave_size() {
+            let eff = slice_ranges(batches.len(), machines).len();
+            if ws >= 1 && ws < eff {
+                return measure_compose_dist_staged(
+                    family, shape, batches, cores, machines, proof_dir, mbps, rtt_ms, query_at,
+                    query_key_mode, ws,
+                );
+            }
+        }
+    }
     assert!(!batches.is_empty(), "need at least one batch");
     let m = batches[0].len();
     let t = batches.len();
@@ -1803,6 +1846,452 @@ pub fn measure_compose_dist(
                     + xfer_ms(root_sz, mbps, rtt_ms)
             }
         };
+        scatter + compose
+    };
+
+    Ok(DistCell {
+        machines_eff,
+        procs: machines_eff,
+        witness_pass_ms,
+        scatter_ms,
+        scatter_state_bytes,
+        scatter_data_bytes,
+        leafgen_ms,
+        leafgen_seq_ms,
+        leaf_busy_min_ms: busy.iter().copied().fold(f64::INFINITY, f64::min),
+        leaf_busy_max_ms: busy.iter().copied().fold(0.0, f64::max),
+        local_fold_ms: fold.iter().copied().fold(0.0, f64::max),
+        merges_local,
+        merge_ms,
+        merges_cross,
+        cross_rounds,
+        comm_msgs,
+        comm_bytes,
+        comm_ms_measured,
+        comm_model_ms: model(mbps),
+        proof_bytes,
+        verify_ms,
+        total_time_ms,
+        peak_rss_mb,
+        n_queries: q.n_queries,
+        query_prove_ms: q.query_prove_ms,
+        query_verify_ms: q.query_verify_ms,
+        query_proof_bytes: q.query_proof_bytes,
+        query_ctx_verifies: q.query_ctx_verifies,
+    })
+}
+
+/// `EXP_COMPOSE_WAVE_SIZE=k` — number of machines that compute CONCURRENTLY in
+/// staged-wave mode (must be a power of two; typically the NUMA-node count of
+/// one "clean" placement, e.g. `2` with `EXP_COMPOSE_NODES=0,2`).
+fn staged_wave_size() -> Option<usize> {
+    std::env::var("EXP_COMPOSE_WAVE_SIZE").ok().and_then(|v| v.parse::<usize>().ok())
+}
+
+/// One reduction round's pair transfers + Merged drain (star relay through the
+/// coordinator, identical accounting to the concurrent engine): per pair
+/// `(recv, send)` — FetchRoot→send, Root→coordinator (counted once),
+/// MergeWith→recv; then one `Merged` drained per pair. Returns the round's
+/// largest transfer for the network model.
+#[allow(clippy::too_many_arguments)]
+fn run_round_pairs(
+    pairs: &[(usize, usize)],
+    worker_tx: &mut [UnixStream],
+    rx: &mpsc::Receiver<Event>,
+    comm_msgs: &mut u64,
+    comm_bytes: &mut u64,
+    comm_ms_measured: &mut f64,
+    merges_cross: &mut u32,
+) -> Result<u64, String> {
+    let mut max_bytes = 0u64;
+    for &(recv_id, send_id) in pairs {
+        let x0 = Instant::now();
+        send_msg(&mut worker_tx[send_id], &ToWorker::FetchRoot)
+            .map_err(|e| format!("fetch root {send_id}: {e}"))?;
+        let root = loop {
+            match next_event(rx)? {
+                Event::Worker(id, FromWorker::Root { proof }, _, bytes)
+                    if id as usize == send_id =>
+                {
+                    *comm_msgs += 1;
+                    *comm_bytes += bytes;
+                    max_bytes = max_bytes.max(bytes);
+                    break proof;
+                }
+                Event::Worker(_, msg, ..) => {
+                    if let Some(f) = fatal_msg(&msg) {
+                        return Err(f);
+                    }
+                    return Err("unexpected message awaiting round root".into());
+                }
+                Event::Gone(id) => return Err(format!("machine {id} died")),
+            }
+        };
+        send_msg(&mut worker_tx[recv_id], &ToWorker::MergeWith { right_proof: root })
+            .map_err(|e| format!("merge-with {recv_id}: {e}"))?;
+        *comm_ms_measured += x0.elapsed().as_secs_f64() * 1000.0;
+    }
+    for _ in pairs {
+        loop {
+            match next_event(rx)? {
+                Event::Worker(_, FromWorker::Merged { .. }, ..) => {
+                    *merges_cross += 1;
+                    break;
+                }
+                Event::Worker(_, msg, ..) => {
+                    if let Some(f) = fatal_msg(&msg) {
+                        return Err(f);
+                    }
+                    return Err("unexpected message awaiting Merged".into());
+                }
+                Event::Gone(id) => return Err(format!("machine {id} died")),
+            }
+        }
+    }
+    Ok(max_bytes)
+}
+
+/// Staged-wave variant of [`measure_compose_dist`] (FOREST only, BabyBear
+/// only), dispatched when `EXP_COMPOSE_WAVE_SIZE=k < machines_eff`. Machine
+/// `i` belongs to wave `i/k`; waves execute one after another, gated by
+/// delaying each wave's `Task` scatter (workers block in [`worker_main`]
+/// until their Task arrives), so with `EXP_COMPOSE_NODES=0,2` every emulated
+/// machine computes on a full NUMA node with no co-resident sibling from this
+/// experiment — the placement M physically separate servers would have.
+///
+/// Everything is REAL: leaf proofs, local cascades, intra-wave reduction
+/// folds run inside each wave on live workers; cross-wave rounds and the
+/// final root fetch run after the last wave on the same still-alive workers
+/// (idle workers block on `recv` and consume no cycles). The root is fetched
+/// and auditor-verified exactly as in the concurrent engine. Only the
+/// SCHEDULE is time-shifted; the reported times are the makespan COMPOSED
+/// over the merge DAG from measured spans:
+///   `total = pre (witness+spawn+handshake) + max_w(wave_wall_w) + cross_wall`
+/// which is what M concurrent machines would give, because waves have no
+/// cross-wave dependency before the cross rounds (contiguous slices are
+/// independent until their subtree roots meet). `wave_size` must be a power
+/// of two so strides `< wave_size` are exactly the intra-wave rounds. The
+/// serialized wall-clock is printed to stderr for transparency; the CSV
+/// `exec` column records `staged`.
+#[allow(clippy::too_many_arguments)]
+fn measure_compose_dist_staged(
+    family: StreamFamily,
+    shape: StreamShape,
+    batches: &[Vec<u32>],
+    cores: usize,
+    machines: usize,
+    proof_dir: &Path,
+    mbps: f64,
+    rtt_ms: f64,
+    query_at: &[usize],
+    query_key_mode: QueryKeyMode,
+    wave_size: usize,
+) -> Result<DistCell, String> {
+    assert!(!batches.is_empty(), "need at least one batch");
+    assert!(wave_size.is_power_of_two(), "EXP_COMPOSE_WAVE_SIZE must be a power of two");
+    let mode = StreamMode::Forest;
+    let m = batches[0].len();
+    let t = batches.len();
+    let total_cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+
+    let ranges = slice_ranges(t, machines);
+    let machines_eff = ranges.len();
+    // Only one wave computes at a time — the concurrency budget is the wave.
+    if wave_size * cores > total_cpus {
+        return Err(format!(
+            "oversubscribed: wave of {wave_size} machines x {cores} cores > {total_cpus} CPUs"
+        ));
+    }
+
+    let t_start = Instant::now();
+
+    // ── Witness pass (identical to the concurrent engine).
+    let wp0 = Instant::now();
+    let mut state = FamState::empty(family, &shape, m);
+    let anchor = state.commit(&shape);
+    let mut slice_starts: Vec<WireState> = Vec::with_capacity(machines_eff);
+    let mut next_slice = 0usize;
+    for (i, batch) in batches.iter().enumerate() {
+        if next_slice < ranges.len() && ranges[next_slice].0 == i {
+            slice_starts.push(state.encode());
+            next_slice += 1;
+        }
+        state.advance(&shape, batch);
+    }
+    let final_commit = state.commit(&shape);
+    let witness_pass_ms = wp0.elapsed().as_secs_f64() * 1000.0;
+
+    // ── Spawn ALL machines up front; they block awaiting their Task.
+    let sock_path = std::env::temp_dir().join(format!(
+        "zks_dc_{}_{}.sock",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let _ = std::fs::remove_file(&sock_path);
+    let listener = UnixListener::bind(&sock_path).map_err(|e| format!("bind socket: {e}"))?;
+    let exe = stable_self_exe()?;
+    let spawn_child = |role: &str, id: usize, lo: usize, hi: usize| -> Result<ChildGuard, String> {
+        let mut cmd = pinned_command(&exe, lo, hi);
+        cmd.env(ENV_ROLE, role)
+            .env(ENV_SOCK, &sock_path)
+            .env(ENV_ID, id.to_string())
+            .env(ENV_CORES, cores.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+        cmd.spawn().map(ChildGuard).map_err(|e| format!("spawn {role} {id}: {e}"))
+    };
+    let mut children: Vec<ChildGuard> = Vec::new();
+    for i in 0..machines_eff {
+        let (lo, hi) = machine_core_range(i, cores, machines_eff);
+        children.push(spawn_child("worker", i, lo, hi)?);
+    }
+    let (tx, rx) = mpsc::channel::<Event>();
+    let mut worker_tx: Vec<Option<UnixStream>> = (0..machines_eff).map(|_| None).collect();
+    for _ in 0..machines_eff {
+        let (mut s, _) = listener.accept().map_err(|e| format!("accept: {e}"))?;
+        let (hello, _) = recv_msg::<FromWorker>(&mut s).map_err(|e| format!("hello: {e}"))?;
+        let FromWorker::Hello { id } = hello else { return Err("bad hello".into()) };
+        let reader = s.try_clone().map_err(|e| format!("clone: {e}"))?;
+        spawn_worker_reader(id, reader, tx.clone());
+        worker_tx[id as usize] = Some(s);
+    }
+    let mut worker_tx: Vec<UnixStream> =
+        worker_tx.into_iter().map(|s| s.expect("all workers connected")).collect();
+
+    // Everything before the first wave would also precede concurrent leaves.
+    let pre_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+    // ── Waves: scatter → collect → intra-wave reduction, one wave at a time.
+    let mut scatter_ms = 0.0f64;
+    let (mut scatter_state_bytes, mut scatter_data_bytes) = (0u64, 0u64);
+    let mut leaf_prove_ms = vec![0.0f64; t];
+    let mut leaf_verify_sum = 0.0f64;
+    let mut busy = vec![0.0f64; machines_eff];
+    let mut fold = vec![0.0f64; machines_eff];
+    let mut merges_local = 0u32;
+    let (mut comm_msgs, mut comm_bytes) = (0u64, 0u64);
+    let mut comm_ms_measured = 0.0f64;
+    let mut merges_cross = 0u32;
+    let mut stride_max: std::collections::BTreeMap<usize, u64> = std::collections::BTreeMap::new();
+    let mut wave_leaf_walls: Vec<f64> = Vec::new();
+    let mut wave_walls: Vec<f64> = Vec::new();
+
+    let waves = machines_eff.div_ceil(wave_size);
+    for wv in 0..waves {
+        let wave_lo = wv * wave_size;
+        let wave_hi = ((wv + 1) * wave_size).min(machines_eff);
+        let wave_t0 = Instant::now();
+
+        let sc0 = Instant::now();
+        for i in wave_lo..wave_hi {
+            let (a, b) = ranges[i];
+            let start = slice_starts[i].clone();
+            scatter_state_bytes +=
+                postcard::to_allocvec(&start).map(|v| v.len() as u64).unwrap_or(0);
+            let slice: Vec<Vec<u32>> = batches[a..b].to_vec();
+            scatter_data_bytes +=
+                postcard::to_allocvec(&slice).map(|v| v.len() as u64).unwrap_or(0);
+            send_msg(
+                &mut worker_tx[i],
+                &ToWorker::Task {
+                    family: family.label().into(),
+                    mode: mode.label().into(),
+                    shape: WireShape::from(&shape),
+                    m: m as u32,
+                    start,
+                    batches: slice,
+                },
+            )
+            .map_err(|e| format!("scatter to {i}: {e}"))?;
+        }
+        scatter_ms += sc0.elapsed().as_secs_f64() * 1000.0;
+
+        let mut pending_leaves: usize = (wave_lo..wave_hi).map(|i| ranges[i].1 - ranges[i].0).sum();
+        let mut pending_slices = wave_hi - wave_lo;
+        while pending_leaves > 0 || pending_slices > 0 {
+            match next_event(&rx)? {
+                Event::Worker(id, msg, _at, _bytes) => {
+                    if let Some(f) = fatal_msg(&msg) {
+                        return Err(f);
+                    }
+                    let w = id as usize;
+                    match msg {
+                        FromWorker::LeafDone {
+                            idx, prove_ms, verify_ms, cascade_ms, cascade_merges, ..
+                        } => {
+                            let g = ranges[w].0 + idx as usize;
+                            leaf_prove_ms[g] = prove_ms;
+                            leaf_verify_sum += verify_ms;
+                            busy[w] += prove_ms + cascade_ms;
+                            fold[w] += cascade_ms;
+                            merges_local += cascade_merges;
+                            pending_leaves -= 1;
+                        }
+                        FromWorker::SliceDone { finalize_ms, finalize_merges } => {
+                            busy[w] += finalize_ms;
+                            fold[w] += finalize_ms;
+                            merges_local += finalize_merges;
+                            pending_slices -= 1;
+                        }
+                        _ => return Err("unexpected worker message in staged slice phase".into()),
+                    }
+                }
+                Event::Gone(id) => return Err(format!("machine {id} died (socket closed)")),
+            }
+        }
+        wave_leaf_walls.push(wave_t0.elapsed().as_secs_f64() * 1000.0);
+
+        // Intra-wave reduction rounds: strides < wave_size stay inside an
+        // aligned power-of-two wave block.
+        let mut stride = 1usize;
+        while stride < wave_size {
+            let pairs: Vec<(usize, usize)> = (wave_lo..wave_hi)
+                .step_by(2 * stride)
+                .filter_map(|k| (k + stride < wave_hi).then_some((k, k + stride)))
+                .collect();
+            if !pairs.is_empty() {
+                let mb = run_round_pairs(
+                    &pairs,
+                    &mut worker_tx,
+                    &rx,
+                    &mut comm_msgs,
+                    &mut comm_bytes,
+                    &mut comm_ms_measured,
+                    &mut merges_cross,
+                )?;
+                let e = stride_max.entry(stride).or_insert(0);
+                *e = (*e).max(mb);
+            }
+            stride *= 2;
+        }
+        wave_walls.push(wave_t0.elapsed().as_secs_f64() * 1000.0);
+    }
+    let leafgen_seq_ms: f64 = leaf_prove_ms.iter().sum();
+
+    // ── Cross-wave rounds + final root fetch (workers still alive and idle;
+    // the machines that fold here have released their cores' compute).
+    let cx0 = Instant::now();
+    let mut stride = wave_size;
+    while stride < machines_eff {
+        let pairs: Vec<(usize, usize)> = (0..machines_eff)
+            .step_by(2 * stride)
+            .filter_map(|k| (k + stride < machines_eff).then_some((k, k + stride)))
+            .collect();
+        if !pairs.is_empty() {
+            let mb = run_round_pairs(
+                &pairs,
+                &mut worker_tx,
+                &rx,
+                &mut comm_msgs,
+                &mut comm_bytes,
+                &mut comm_ms_measured,
+                &mut merges_cross,
+            )?;
+            let e = stride_max.entry(stride).or_insert(0);
+            *e = (*e).max(mb);
+        }
+        stride *= 2;
+    }
+    send_msg(&mut worker_tx[0], &ToWorker::FetchRoot)
+        .map_err(|e| format!("fetch final root: {e}"))?;
+    let root = loop {
+        match next_event(&rx)? {
+            Event::Worker(0, FromWorker::Root { proof }, _, bytes) => {
+                comm_msgs += 1;
+                comm_bytes += bytes;
+                break proof;
+            }
+            Event::Worker(_, msg, ..) => {
+                if let Some(f) = fatal_msg(&msg) {
+                    return Err(f);
+                }
+                return Err("unexpected message awaiting final root".into());
+            }
+            Event::Gone(id) => return Err(format!("machine {id} died")),
+        }
+    };
+    let cross_ms = cx0.elapsed().as_secs_f64() * 1000.0;
+    let root_bytes: Option<Vec<u8>> = Some(root);
+
+    // ── Composed makespan: waves are independent until the cross rounds, so
+    // concurrently they'd finish at max(wave walls).
+    let max_wave_wall = wave_walls.iter().copied().fold(0.0, f64::max);
+    let leafgen_ms = wave_leaf_walls.iter().copied().fold(0.0, f64::max);
+    let intra_merge_max = wave_walls
+        .iter()
+        .zip(&wave_leaf_walls)
+        .map(|(w, l)| w - l)
+        .fold(0.0, f64::max);
+    let merge_ms = intra_merge_max + cross_ms;
+    let total_time_ms = pre_ms + max_wave_wall + cross_ms;
+    let cross_rounds = stride_max.len() as u32;
+    let round_max_bytes: Vec<u64> = stride_max.values().copied().collect();
+    eprintln!(
+        "    staged: {waves} waves x {wave_size} | wave walls {:?}s | composed total {:.1}s (serialized wall {:.1}s)",
+        wave_walls.iter().map(|w| (w / 1000.0 * 10.0).round() / 10.0).collect::<Vec<_>>(),
+        total_time_ms / 1000.0,
+        t_start.elapsed().as_secs_f64(),
+    );
+
+    // ── Auditor verify (identical to the concurrent engine, forest root path).
+    let (proof_bytes, verify_ms) = {
+        let bytes = root_bytes.as_ref().expect("forest root");
+        let proof: Proof = postcard::from_bytes(bytes).map_err(|e| format!("root decode: {e}"))?;
+        let (ini, fin) = read_exposed_boundary_proof(&proof);
+        if ini.0 != anchor || fin.0 != final_commit {
+            return Err("root boundary != native (Com(S_0), Com(S_E))".into());
+        }
+        if t == 1 {
+            (bytes.len() as u64, leaf_verify_sum)
+        } else {
+            let expected_root_vk = vk_pin_values(&proof);
+            let v0 = Instant::now();
+            verify_bound_stark_proof(&proof, &expected_root_vk);
+            (bytes.len() as u64, v0.elapsed().as_secs_f64() * 1000.0)
+        }
+    };
+
+    // ── Wind down; collect peak RSS.
+    let mut peak_rss_mb = 0.0f64;
+    for (i, s) in worker_tx.iter_mut().enumerate() {
+        send_msg(s, &ToWorker::Exit).map_err(|e| format!("exit worker {i}: {e}"))?;
+    }
+    let mut done = machines_eff;
+    while done > 0 {
+        match next_event(&rx)? {
+            Event::Worker(_, FromWorker::Done { peak_rss_mb: r }, ..) => {
+                peak_rss_mb = peak_rss_mb.max(r);
+                done -= 1;
+            }
+            Event::Gone(_) => done -= 1,
+            _ => {}
+        }
+    }
+    children.clear();
+    let _ = std::fs::remove_file(&sock_path);
+
+    let q = measure_queries_dist(family, shape, batches, mode, cores, query_at, query_key_mode);
+
+    // ── Network model (forest path only).
+    let root_sz = root_bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
+    let per_worker_scatter: Vec<u64> = ranges
+        .iter()
+        .enumerate()
+        .map(|(i, &(a, b))| {
+            let st = postcard::to_allocvec(&slice_starts[i]).map(|v| v.len() as u64).unwrap_or(0);
+            let da =
+                postcard::to_allocvec(&batches[a..b].to_vec()).map(|v| v.len() as u64).unwrap_or(0);
+            st + da
+        })
+        .collect();
+    let model = |mbps: f64| -> f64 {
+        let scatter =
+            per_worker_scatter.iter().map(|&b| xfer_ms(b, mbps, rtt_ms)).fold(0.0, f64::max);
+        let compose = round_max_bytes.iter().map(|&b| xfer_ms(b, mbps, rtt_ms)).sum::<f64>()
+            + xfer_ms(root_sz, mbps, rtt_ms);
         scatter + compose
     };
 

@@ -17,7 +17,7 @@ use p3_recursion::{
 
 use crate::commitment::CountMinCommit;
 use crate::config::LOG_BLOWUP;
-use crate::recursion::digest::{ChainDigest, combine_digest, leaf_digest};
+use crate::recursion::digest::{ChainDigest, boundary_leaf_digest, combine_digest};
 use crate::recursion::recursive::backend::{Backend, make_backend};
 use crate::recursion::recursive::config::{ConfigWithFriParams, D as EXT_D};
 use crate::recursion::recursive::countmin_leaf::{CountMinLeafProof, make_leaf_config};
@@ -112,17 +112,6 @@ pub(crate) fn agg_params() -> ProveNextLayerParams {
     }
 }
 
-pub(crate) fn cm_leaf_digest(c: &CountMinCommit) -> [crate::config::Val; 2] {
-    // The chain digest functions in `recursion::digest` take a 2-element
-    // boundary. The Count-Min commit is 8 elements, so we fold it down by
-    // summing-with-Poseidon-already-applied data: we use the first two
-    // elements as the "boundary id" passed into the leaf-digest hash, which
-    // is sufficient for binding because the full 8 elements are themselves
-    // a Poseidon2 digest (collision-resistant), so the first 2 retain
-    // 62-ish bits of entropy.
-    [c.0[0], c.0[1]]
-}
-
 /// Merge two Count-Min leaf proofs into one aggregated batch-STARK that
 /// certifies both epochs.
 pub fn merge_two_countmin(
@@ -152,12 +141,10 @@ pub fn merge_two_countmin(
     >(&left_input, &right_input, &config, &backend, &params, None)
     .map_err(|e| CountMinMergeError::AggregationFailed(format!("{e:?}")))?;
 
-    let lp = cm_leaf_digest(&left.initial);
-    let lf = cm_leaf_digest(&left.final_);
-    let rp = cm_leaf_digest(&right.initial);
-    let rf = cm_leaf_digest(&right.final_);
-    let dl = leaf_digest(&lp, &lf, 1);
-    let dr = leaf_digest(&rp, &rf, 2);
+    // Replay-ablation path: the leaf statement carries no batch commitment,
+    // so the digest binds the full boundary commitments only.
+    let dl = boundary_leaf_digest(&left.initial.0, &left.final_.0, 1);
+    let dr = boundary_leaf_digest(&right.initial.0, &right.final_.0, 2);
     let digest = combine_digest(1, 1, 2, &dl, &dr);
 
     Ok(CountMinChainProof {
@@ -201,17 +188,9 @@ pub fn verify_chain_countmin(c: &CountMinChainProof) -> Result<(), CountMinMerge
     }
 
     // Digest re-derivation (left-deep accumulation).
-    let mut acc = leaf_digest(
-        &cm_leaf_digest(&c.boundary(0)),
-        &cm_leaf_digest(&c.boundary(1)),
-        1,
-    );
+    let mut acc = boundary_leaf_digest(&c.boundary(0).0, &c.boundary(1).0, 1);
     for k in 2..=e {
-        let dr = leaf_digest(
-            &cm_leaf_digest(&c.boundary(k - 1)),
-            &cm_leaf_digest(&c.boundary(k)),
-            k as u64,
-        );
+        let dr = boundary_leaf_digest(&c.boundary(k - 1).0, &c.boundary(k).0, k as u64);
         acc = combine_digest(1, (k - 1) as u64, k as u64, &acc, &dr);
     }
     if acc != c.digest {

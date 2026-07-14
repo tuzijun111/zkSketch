@@ -23,11 +23,11 @@ use p3_recursion::{BatchOnly, Poseidon2Config, RecursionOutput, build_and_prove_
 
 use crate::commitment::{CountMinCommit, HyperLogLogCommit};
 use crate::config::Val;
-use crate::recursion::digest::{ChainDigest, combine_digest, leaf_digest};
+use crate::recursion::digest::{ChainDigest, boundary_leaf_digest, combine_digest};
 use crate::recursion::recursive::backend::{Backend, make_backend};
 use crate::recursion::recursive::config::{ConfigWithFriParams, D as EXT_D};
 use crate::recursion::recursive::countmin_leaf::{CountMinLeafProof, make_leaf_config};
-use crate::recursion::recursive::countmin_merge::{CountMinMergeError, agg_params, cm_leaf_digest};
+use crate::recursion::recursive::countmin_merge::{CountMinMergeError, agg_params};
 use crate::recursion::recursive::hll_leaf::HllLeafProof;
 
 /// A recursive proof that one Count-Min epoch AND one HyperLogLog epoch are both
@@ -42,21 +42,16 @@ pub struct CrossFamilyMergeProof {
     pub digest: ChainDigest,
 }
 
-/// Fold a `HyperLogLogCommit` (`[Val; 8]`) to the 2-element boundary id the
-/// chain-digest helpers consume — the same reduction `cm_leaf_digest` uses
-/// (the full 8 elements are themselves a collision-resistant Poseidon2 digest).
-fn hll_leaf_digest(c: &HyperLogLogCommit) -> [Val; 2] {
-    [c.0[0], c.0[1]]
-}
-
 fn combined_digest(
     cm_initial: &CountMinCommit,
     cm_final: &CountMinCommit,
     hll_initial: &HyperLogLogCommit,
     hll_final: &HyperLogLogCommit,
 ) -> ChainDigest {
-    let dl = leaf_digest(&cm_leaf_digest(cm_initial), &cm_leaf_digest(cm_final), 1);
-    let dr = leaf_digest(&hll_leaf_digest(hll_initial), &hll_leaf_digest(hll_final), 2);
+    // Cross-family demo over replay leaves (no batch commitments in the
+    // leaf statements): boundary-only digests at full commitment width.
+    let dl = boundary_leaf_digest(&cm_initial.0, &cm_final.0, 1);
+    let dr = boundary_leaf_digest(&hll_initial.0, &hll_final.0, 2);
     combine_digest(1, 1, 2, &dl, &dr)
 }
 
