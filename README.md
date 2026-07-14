@@ -36,6 +36,7 @@ verify time, and proof size can be compared head-to-head:
 - [What's implemented](#whats-implemented)
 - [Datasets](#datasets)
 - [Running the experiments](#running-the-experiments)  ← the evaluation suite + scripts
+  - [Reproducing the paper's results](#reproducing-the-papers-results)  ← every paper command
 - [Tests](#tests)
 - [Repository layout](#repository-layout)
 - [Documentation](#documentation)
@@ -189,11 +190,14 @@ not bigger proofs. Both crates read the same `data/` directory.
 
 ## Running the experiments
 
-The current evaluation (`latex/zk1.tex` §Evaluation) runs through **four script
-surfaces**. `run_experiments.sh` runs the relevant backend(s), merges rows into
-a combined `results/<exp>.csv` with a `backend` column, and writes per-backend
-`env.json` (CPU/RAM/OS/rustc + config); the other three scripts are
-plonky3-only drivers with their own CSVs.
+The paper's evaluation (`latex/zk1.tex` §Evaluation) is produced by exactly
+**two** of the surfaces below: `run_experiments.sh e1` (the batch-sweep figure)
+and `run_compose.sh` (every table). The others remain live and supported, but no
+current paper result depends on them. `run_experiments.sh` runs the relevant
+backend(s), merges rows into a combined `results/<exp>.csv` with a `backend`
+column, and writes per-backend `env.json` (CPU/RAM/OS/rustc + config);
+`run_compose.sh` is **dual-backend** (`EXP_COMPOSE_BACKEND=plonky3|plonky2`),
+while `run_stream.sh` and `run_decode.sh` are plonky3-only.
 
 ```bash
 scripts/run_experiments.sh            # e1 (default), both backends, small slice
@@ -204,35 +208,259 @@ scripts/run_stream.sh                 # whole-stream total prove time
 scripts/run_decode.sh                 # decode/query circuits (tests + table)
 ```
 
-| Surface | What it measures | Backends | Output |
-| --- | --- | --- | --- |
-| `run_experiments.sh e1` | **the per-family circuit-cost matrix**: family × variant × batch sweep (witness/prove/verify split, proof size, peak RSS), incl. the naive replay baselines (`EXP_SS_VARIANT=naive`, `EXP_GK_VARIANT=naive`) and the CM/HLL rebind variants | both | `results/e1_circuit.csv` (rename per run via `EXP_OUT`) |
-| `run_experiments.sh e2` | integrity: tamper-rejection + fidelity vs. plaintext | both | `results/e2_integrity.csv` |
-| `run_experiments.sh e5` | composition-topology ladder (structural digest lift) — auditor cost `Θ(E)→O(1)` | plonky3 | `results/e5_ladder.csv` |
-| `run_experiments.sh e8` | cross-stack head-to-head: leaf + recursive merge on both proof systems | both | `results/e8_crossstack.csv` |
-| `run_compose.sh` | composition over **real recursive proofs**: 4 families × {per_batch, chain, forest}, cores/machines budgets; **mixed updates+queries** via `EXP_COMPOSE_QUERY_EVERY=k` | plonky3 | `results/stream_compose.csv` |
-| `run_stream.sh` | **whole-stream total prove time**: fixed `N`, sweep batch size × cores, `omc` vs `merkle` CM leaves | plonky3 | `results/stream_forest.csv` |
-| `run_decode.sh` | decode/query circuits of the **deployed** variants (unit tests + proven results table) | plonky3 | console |
+| Surface | What it measures | Backends | Output | In the paper |
+| --- | --- | --- | --- | --- |
+| `run_experiments.sh e1` | **the per-family circuit-cost matrix**: family × variant × batch sweep (witness/prove/verify split, proof size, peak RSS), incl. the naive replay baselines and the CM/HLL rebind variants | both | `results/e1_circuit.csv` (rename per run via `EXP_OUT`) | **yes** — `fig:eval-batch`, `tab:eval-memory` (leaf column) |
+| `run_compose.sh` | composition over **real recursive proofs**: 4 families × {per_batch, chain, forest}, cores/machines budgets, multi-machine staging; **mixed updates+queries** via `EXP_COMPOSE_QUERY_EVERY_OPS=Q` | **both** (`EXP_COMPOSE_BACKEND`) | `results/stream_compose.csv`, or `$1`/`EXP_OUT` | **yes** — every table |
+| `run_experiments.sh e2` | integrity: tamper-rejection + fidelity vs. plaintext | both | `results/e2_integrity.csv` | no |
+| `run_experiments.sh e5` | composition-topology ladder (structural digest lift) — auditor cost `Θ(E)→O(1)` | plonky3 | `results/e5_ladder.csv` | no (superseded by `run_compose.sh`'s per-batch-vs-forest) |
+| `run_experiments.sh e8` | cross-stack head-to-head: leaf + recursive merge on both proof systems | both | `results/e8_crossstack.csv` | no (superseded by `tab:p2-forest`) |
+| `run_stream.sh` | **whole-stream total prove time**: fixed `N`, sweep batch size × cores, `omc` vs `merkle` CM leaves | plonky3 | `results/stream_forest.csv` | no |
+| `run_decode.sh` | decode/query circuits of the **deployed** variants (unit tests + proven results table) | plonky3 | console | no |
 
-**Config (env vars — the most common; full lists in the script headers):**
+**`run_experiments.sh` config (the most common; full lists in the script header):**
 
 | Var | Meaning | Default |
 | --- | --- | --- |
 | `EXP_DATASET` | `uniform` \| `gaussian` \| `zipf` \| `aol` \| `netflix` | `uniform` |
-| `EXP_M` | e1 batch sizes (comma list only, e.g. `4,8,16,32`); e2 single batch | `4,8,16,32` / `16` |
+| `EXP_M` | e1 batch sizes. **Comma list only** — unparseable entries (`...`, `16..64`) are dropped *silently*, yielding a short sweep with exit 0 | `4,8,16,32` |
 | `EXP_FAMILY` | e1: `all` or comma-list of `cm,gk,hll,ss` | `all` |
-| `EXP_{CM,HLL}_VARIANT` | e1 rebind variant sweeps (`one_hot`/`merkle`/…/`omc`) | `one_hot` |
-| `EXP_{SS,GK}_VARIANT` | e1: `certified` \| `naive` (replay baseline) \| `both` | `certified` |
+| `EXP_{CM,HLL}_VARIANT` | e1 rebind variant: `one_hot` \| `merkle` \| `omc` (+ CM `merkle_fast`/`merkle_gb`/`memcheck`) | `one_hot` |
+| `EXP_SS_VARIANT` | e1: `certified` \| `naive` \| `both` | `certified` |
+| `EXP_GK_VARIANT` | e1: `bandmerge2` (the **deployed** circuit) \| `bandmerge2_naive` (its replay baseline) \| `certified` \| `naive` \| `bandmerge` \| `both` | `certified` |
+| `EXP_D`, `EXP_W` | CM depth `d` / width `w` | `4` / `8` |
+| `EXP_HLL_B`, `EXP_SS_CAP`, `EXP_GK_CAP` | HLL precision `b` (registers `2^b`) / SS capacity / GK capacity | `4` / — / — |
 | `EXP_OUT` | rename the output CSV so successive runs don't overwrite | per-exp name |
 | `EXP_CORES` | e1/plonky3: cores-per-proof pin (distributed-setting knob) | all cores |
 | `BACKENDS` | `plonky3` \| `plonky2` \| `both` | `both` |
 
-Earlier modes of the E1–E10 ladder (**e3, e4, e6, e7, e9, e10, inputfold,
+**`run_compose.sh` config (the surface behind every paper table):**
+
+| Var | Meaning | Default |
+| --- | --- | --- |
+| `EXP_COMPOSE_BACKEND` | `plonky3` \| `plonky2`. plonky2 takes **single** values for machines/cores and ignores `EXP_COMPOSE_EXEC` | `plonky3` |
+| `EXP_COMPOSE_N` | total stream records — integer or `2^k` | `32` |
+| `EXP_COMPOSE_BATCHES` | batch sizes `m`, comma-list | `8` |
+| `EXP_COMPOSE_FAMILY` | comma-list of `cm,hll,ss,gk`, and the Goldilocks ports `cm_gl,hll_gl,ss_gl,gk_gl` | `cm,hll,ss,gk` |
+| `EXP_COMPOSE_MODE` | `per_batch` \| `chain` \| `forest`, comma-list | all three |
+| `EXP_COMPOSE_MACHINES` / `_CORES` | machine count / cores per machine, comma-list on plonky3 | `1` / all |
+| `EXP_COMPOSE_EXEC` | `procs` (real pinned processes + socket IPC) \| `sim` (projection). **Defaults to `procs` only when machines > 1** — pass it explicitly at `MACHINES=1` to get real process measurements | `procs` iff machines > 1 |
+| `EXP_COMPOSE_NODES` | explicit NUMA-node assignment, e.g. `0,2` (one machine per socket) | round-robin |
+| `EXP_COMPOSE_WAVE_SIZE` | staged-wave execution: run machines in time-shifted waves of this size (see the paper's staged-wave methodology) | off |
+| `EXP_NET_MBPS`, `EXP_NET_RTT_MS` | modeled link for the `comm_model_ms` column (bytes are **measured**) | `200` / `0.2` |
+| `EXP_COMPOSE_QUERY_EVERY_OPS` | **mixed operation stream** (the paper's model): every `Q`-th stream *position* is a query | `0` (off) |
+| `EXP_COMPOSE_QUERY_EVERY` | mixed *per-batch* variant: one query after every `k`-th batch. Mutually exclusive with `_OPS` | `0` (off) |
+| `EXP_QUERY_KEY_MODE` | probe key for keyed queries: `first` \| `uniform_stream` \| `hot` \| `absent` | `first` |
+| `EXP_OUT` / `$1` | output name; `results/<name>.csv` (the `.csv` suffix is optional) | `stream_compose.csv` |
+
+Earlier modes of the E1–E10 ladder (**e3, e4, e5real, e6, e7, e9, e10, inputfold,
 casestudy**) and the RQ1–RQ4 figure track are **retired from the driver** —
-each was superseded by one of the four surfaces above. Their runners stay in
+each was superseded by one of the surfaces above. Their runners stay in
 `examples/` and remain directly runnable; the mapping (what replaced what, and
 the direct commands) is in
 [`docs/REPRODUCE.md` §Archived experiments](docs/REPRODUCE.md#archived-experiments).
+
+### Reproducing the paper's results
+
+The exact commands behind each figure/table, at the deployed configuration
+(Count-Min `d=7, w=2^14`; HyperLogLog `b=14`; SpaceSaving `s=2^14`;
+Greenwald–Khanna `s'=2^11`; `N=2^20` AOL records in `t=64` batches of `m=2^14`;
+32 cores/machine). These are **long** runs — the full set is on the order of
+days of prover time on a 64-core server.
+
+**Figure `fig:eval-batch` — batch-size sweep** (`results/{cm,hll,ss,gk}_batch_*.csv`,
+plotted by `latex/pics/plot_eval.py`). Baselines stop where the padded trace
+exceeds the backend's `2^27` FRI domain; those points are recorded as
+`status=too_large` and drawn as the infeasibility ✗:
+
+```bash
+# Count-Min: one-hot replay / Merkle sparse-opening / deployed memory-checked
+EXP_DATASET=aol EXP_FAMILY=cm EXP_D=7 EXP_W=16384 EXP_CM_VARIANT=one_hot \
+  EXP_M=16,32,64 EXP_CORES=32 BACKENDS=plonky3 \
+  EXP_OUT=cm_batch_one_hot.csv scripts/run_experiments.sh e1
+EXP_DATASET=aol EXP_FAMILY=cm EXP_D=7 EXP_W=16384 EXP_CM_VARIANT=merkle \
+  EXP_M=16,32,64,128,256,512,1024,2048 EXP_CORES=32 BACKENDS=plonky3 \
+  EXP_OUT=cm_batch_merkle.csv scripts/run_experiments.sh e1
+EXP_DATASET=aol EXP_FAMILY=cm EXP_D=7 EXP_W=16384 EXP_CM_VARIANT=omc \
+  EXP_M=16,32,64,128,256,512,1024,2048,4096,8192,16384 EXP_CORES=32 BACKENDS=plonky3 \
+  EXP_OUT=cm_batch_omc.csv scripts/run_experiments.sh e1
+
+# HyperLogLog
+EXP_DATASET=aol EXP_FAMILY=hll EXP_HLL_B=14 EXP_HLL_VARIANT=one_hot \
+  EXP_M=16,32,64,128,256,512,1024,2048 EXP_CORES=32 BACKENDS=plonky3 \
+  EXP_OUT=hll_batch_one_hot.csv scripts/run_experiments.sh e1
+EXP_DATASET=aol EXP_FAMILY=hll EXP_HLL_B=14 EXP_HLL_VARIANT=merkle \
+  EXP_M=16,32,64,128,256,512,1024,2048,4096 EXP_CORES=32 BACKENDS=plonky3 \
+  EXP_OUT=hll_batch_merkle.csv scripts/run_experiments.sh e1
+EXP_DATASET=aol EXP_FAMILY=hll EXP_HLL_B=14 EXP_HLL_VARIANT=omc \
+  EXP_M=16,32,64,128,256,512,1024,2048,4096,8192,16384 EXP_CORES=32 BACKENDS=plonky3 \
+  EXP_OUT=hll_batch_omc.csv scripts/run_experiments.sh e1
+
+# SpaceSaving: per-record replay baseline / deployed certified leaf
+EXP_DATASET=aol EXP_FAMILY=ss EXP_SS_CAP=16384 EXP_SS_VARIANT=naive \
+  EXP_M=16,32,64,128 EXP_CORES=32 BACKENDS=plonky3 \
+  EXP_OUT=ss_batch_naive.csv scripts/run_experiments.sh e1
+EXP_DATASET=aol EXP_FAMILY=ss EXP_SS_CAP=16384 EXP_SS_VARIANT=certified \
+  EXP_M=16,32,64,128,256,512,1024,2048,4096,8192,16384 EXP_CORES=32 BACKENDS=plonky3 \
+  EXP_OUT=ss_batch_certified.csv scripts/run_experiments.sh e1
+
+# Greenwald–Khanna: replay baseline / deployed band-merge leaf
+EXP_DATASET=aol EXP_FAMILY=gk EXP_GK_CAP=2048 EXP_GK_VARIANT=bandmerge2_naive \
+  EXP_M=16,32,64,128,256 EXP_CORES=32 BACKENDS=plonky3 \
+  EXP_OUT=gk_batch_naive.csv scripts/run_experiments.sh e1
+EXP_DATASET=aol EXP_FAMILY=gk EXP_GK_CAP=2048 EXP_GK_VARIANT=bandmerge2 \
+  EXP_M=16,32,64,128,256,512,1024,2048,4096,8192,16384 EXP_CORES=32 BACKENDS=plonky3 \
+  EXP_OUT=gk_batch_certified.csv scripts/run_experiments.sh e1
+
+python3 latex/pics/plot_eval.py     # -> latex/pics/zkSketch_eval_batch.pdf
+```
+
+**The deployed reference run** — one command feeds five artifacts: the forest
+column of `tab:compose-schedules`, the `M=1` column of `tab:compose-scale`, the
+`2^20` Plonky3 row of `tab:stream-scale`, the AOL column of `tab:eval-datasets`,
+and the Plonky3 (BabyBear) rows of `tab:p2-forest`. Run it first:
+
+```bash
+EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
+EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest \
+EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 \
+EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
+EXP_COMPOSE_BACKEND=plonky3 \
+scripts/run_compose.sh frame_out_1machine_plonky3.csv
+```
+
+**Tables `tab:compose-schedules`, `tab:compose-scale` — composition schedules.**
+The per-batch chain (the verifier-cost baseline), and the multi-machine forest.
+`EXP_COMPOSE_NODES=0,2` puts one machine per socket; `EXP_COMPOSE_WAVE_SIZE=2`
+runs `M≥3` in time-shifted waves of two so every machine owns a full socket
+(`exec=staged` in the CSV; `M=2` runs concurrently as `exec=procs`):
+
+```bash
+# per-batch chain (same 64 leaves, no folds)
+EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
+EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=per_batch \
+EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 \
+EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
+EXP_COMPOSE_BACKEND=plonky3 \
+scripts/run_compose.sh frame_out_1machine_plonky3_perbatch.csv
+
+# forest on M = 2, 3, 4 machines (staged waves)
+EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
+EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest \
+EXP_COMPOSE_MACHINES=2,3,4 EXP_COMPOSE_CORES=32 \
+EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
+EXP_COMPOSE_BACKEND=plonky3 \
+EXP_COMPOSE_NODES=0,2 EXP_COMPOSE_WAVE_SIZE=2 \
+scripts/run_compose.sh frame_out_staged_m234_plonky3.csv
+```
+
+`frame_out_staged_m234_plonky3.csv` holds all 12 rows (4 families × 3 machine
+counts); `results/frame_out_{2,3,4}machine_plonky3.csv` are that file split by
+machine count. `tab:eval-memory`'s forest column reads the `M=4` rows.
+
+**Table `tab:stream-scale` — stream scaling on both backends.** `k=16..19` only:
+the `2^20` row is the deployed reference run above (Plonky3) and the
+`frame_out_1machine_plonky2.csv` run below (Plonky2), not a `k=20` sweep point.
+
+```bash
+for k in 16 17 18 19; do
+  EXP_DATASET=aol \
+  EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+  EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest \
+  EXP_COMPOSE_N=2^$k EXP_COMPOSE_BATCHES=16384 \
+  EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 \
+  EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
+  EXP_COMPOSE_BACKEND=plonky3 \
+  scripts/run_compose.sh forest_plonky3_1machine_verify_2e$k.csv
+done
+
+for k in 16 17 18 19; do
+  EXP_DATASET=aol \
+  EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+  EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest \
+  EXP_COMPOSE_N=2^$k EXP_COMPOSE_BATCHES=16384 \
+  EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 \
+  EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
+  EXP_COMPOSE_BACKEND=plonky2 \
+  scripts/run_compose.sh forest_plonky2_1machine_verify_2e$k.csv
+done
+```
+
+**Table `tab:p2-forest` — cross-backend at stream scale.** The Plonky3
+(BabyBear) rows are the reference run above; add the Goldilocks port and Plonky2:
+
+```bash
+# Plonky3 over Goldilocks (the *_gl family ports)
+EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
+EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+EXP_COMPOSE_FAMILY=cm_gl,hll_gl,ss_gl,gk_gl EXP_COMPOSE_MODE=forest \
+EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs \
+scripts/run_compose.sh frame_out_1machine_Goldilocks.csv
+
+# Plonky2 (Goldilocks)
+EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
+EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest \
+EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 \
+EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
+EXP_COMPOSE_BACKEND=plonky2 \
+scripts/run_compose.sh frame_out_1machine_plonky2.csv
+```
+
+**Table `tab:mixed` — query-rate sweep.** One query every `Q` stream positions:
+
+```bash
+for Q in 10000 100000 1000000; do
+  EXP_DATASET=uniform EXP_COMPOSE_N=2^20 EXP_COMPOSE_BATCHES=16384 \
+  EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+  EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest \
+  EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 \
+  EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
+  EXP_COMPOSE_QUERY_EVERY_OPS="$Q" EXP_QUERY_KEY_MODE=uniform_stream \
+  scripts/run_compose.sh s3_plonky3_1machine_mixed_q$Q.csv
+done
+```
+
+> The `Q=10^3` row of `tab:mixed` is **extrapolated, not measured** (the rows of
+> `results/s3_plonky3_1machine_mixed_q1000.csv` carry `status=inferred`, and the
+> paper daggers the row): at that rate the query-bound leaf count inflates prover
+> time `16.4×`, i.e. ~15 h for Count-Min alone. Adding `1000` to the loop above
+> measures it for real, at that cost.
+
+**Table `tab:eval-datasets` — dataset sensitivity.** Three datasets here; the
+AOL column is the deployed reference run above:
+
+```bash
+EXP_DATASET=uniform,gaussian,netflix EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
+EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest \
+EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 \
+EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
+scripts/run_compose.sh frame_out_1machine_datasets_plonky3.csv
+```
+
+**Where each result lives.** Derivations: `prove = leaf_busy_max_ms`,
+`setup = total_time_ms − leaf_busy_max_ms` (Plonky3);
+`prove = leafgen_seq_ms + merge_total_ms`, `setup = total − prove` (Plonky2);
+amortized per-element `= (total_time_ms + query_prove_ms)/N`.
+
+| Paper artifact | `results/` file(s) |
+| --- | --- |
+| `fig:eval-batch` | `{cm,hll}_batch_{one_hot,merkle,omc}.csv`, `{ss,gk}_batch_{naive,certified}.csv` |
+| `tab:compose-schedules` | `frame_out_1machine_plonky3_perbatch.csv` (per-batch) + `frame_out_1machine_plonky3.csv` (forest) |
+| `tab:compose-scale` | `frame_out_1machine_plonky3.csv` (M=1) + `frame_out_staged_m234_plonky3.csv` (M=2,3,4) |
+| `tab:stream-scale` | `forest_plonky{3,2}_1machine_verify_2e{16..19}.csv` + `frame_out_1machine_plonky{3,2}.csv` (the `2^20` row) |
+| `tab:mixed` | `s3_plonky3_1machine_mixed_q{1000,10000,100000,1000000}.csv` (`q1000` = inferred) |
+| `tab:eval-datasets` | `frame_out_1machine_datasets_plonky3.csv` + `frame_out_1machine_plonky3.csv` (AOL) |
+| `tab:eval-memory` | `{cm,hll}_batch_omc.csv`, `{ss,gk}_batch_certified.csv` at `m=2^14` (leaf) + `frame_out_4machine_plonky3.csv` (forest) |
+| `tab:p2-forest` | `frame_out_1machine_plonky3.csv`, `frame_out_1machine_Goldilocks.csv`, `frame_out_1machine_plonky2.csv` |
+
+> Files carrying `_old`, `_new`, `_coresident`, or `_busysib` suffixes, and
+> `forest_plonky3_1machine_verify_2e20.csv`, are **superseded** earlier runs kept
+> for provenance — no current table reads them.
 
 ### Standalone comparison demos
 
@@ -287,7 +515,8 @@ boundaries) accompany every honest path.
 | `examples/` | Experiment runners (`exp_*`), the dataset generator (`gen_synthetic`), and comparison demos. |
 | `tests/` | §4 chain/merge integration suites (Count-Min + HLL). |
 | `plonky2/` | The SNARK backend: `src/sketch/`, `src/leaf/` (in-circuit leaves + `countmin_merkle`), `src/decode/` (query circuits, E3), `src/recursion/`, `src/metrics.rs`, its own `examples/`. |
-| `scripts/` | `run_experiments.sh` (e1/e2/e5/e8 driver), `run_compose.sh`, `run_stream.sh`, `run_decode.sh`, `fetch_datasets.py`; legacy: `plot_experiments.py` (RQ figures), `cost_model_e10.py`. |
+| `scripts/` | `run_experiments.sh` (e1/e2/e5/e8 driver), `run_compose.sh` (both backends), `run_stream.sh`, `run_decode.sh`, `fetch_datasets.py`; legacy: `plot_experiments.py` (RQ figures), `cost_model_e10.py`. |
+| `latex/pics/plot_eval.py` | Generates the paper's batch-sweep figure (`zkSketch_eval_batch.pdf`) from the `results/*_batch_*.csv` files. |
 | `data/` | Key streams: synthetic (`gaussian/uniform/zipf.keys` + manifest) and real (`aol/netflix.keys`). |
 | `docs/` | Documentation (see below). |
 | `paper/`, `latex/` | Paper PDF + `zk1.tex` source and `EVAL_SPEC.md`. |
