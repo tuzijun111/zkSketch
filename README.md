@@ -1,9 +1,8 @@
 # zkSketch
 
 Research prototype for the paper **"zkSketch: Verifiable and Privacy-Preserving
-Sketch-Based Analytics via NIZKs"** (`paper/zkSketch.pdf`, `latex/zk1.tex`):
-non-interactive, verifiable, privacy-preserving sketch maintenance built on
-recursive proofs.
+Sketch-Based Analytics via NIZKs"**: non-interactive, verifiable,
+privacy-preserving sketch maintenance built on recursive proofs.
 
 Four sketch families (Count-Min, HyperLogLog, SpaceSaving, Greenwald–Khanna) are
 implemented end-to-end on **two interchangeable proof backends**, so prove time,
@@ -44,7 +43,6 @@ verify time, and proof size can be compared head-to-head:
   - [Reproducing the paper's results](#reproducing-the-papers-results)  ← every paper command
 - [Tests](#tests)
 - [Repository layout](#repository-layout)
-- [Documentation](#documentation)
 
 ---
 
@@ -110,10 +108,15 @@ scripts/run_experiments.sh e1
   - **`numactl`** (optional but recommended): the `procs` engine pins each
     machine with `numactl --physcpubind --membind`, falling back to `taskset`,
     then to unpinned. Without it the multi-machine timings are noisier.
-  - **`EXP_COMPOSE_NODES=0,2`** names NUMA nodes by index; on a machine without
-    a node 2 it silently falls back to round-robin placement, so the
-    one-machine-per-socket property the paper relies on is lost. Pick indices
-    from your own `numactl --hardware`.
+  - **`EXP_COMPOSE_NODES=0,2`** names NUMA nodes **by index**, and those indices
+    are specific to the paper's testbed: it has four nodes across two sockets,
+    so `0,2` is one node per socket. The default placement (machine `i` → node
+    `i mod n`) spreads machines across nodes but is **socket-unaware** — on that
+    same testbed it would put machines 0 and 1 on nodes 0 and 1, i.e. both on
+    socket 0, which is the co-residency this knob exists to avoid. An index that
+    does not exist on your machine is silently ignored *for that machine*, which
+    then takes the default. Read your own `numactl --hardware` and pick one node
+    per socket.
   - The `procs` engine refuses to oversubscribe: `machines × cores` must be
     `≤` the CPU count (for staged runs, `wave_size × cores`).
 
@@ -129,24 +132,33 @@ takes `(Com(S_{t-1}), Com(B_t), Com(S_t))` as public inputs and, in-circuit,
 update, and **commits** the new state — so the prover cannot tamper with the
 records or the state transition.
 
-| Family | Pattern | plonky3 (complete circuit) | plonky2 (in-circuit leaf) |
-| --- | --- | --- | --- |
-| **Count-Min** | A (sparse patch) | `src/sketch/countmin_final.rs` (§5.2 database-style: group-by → counter-derive → counter-group → sparse patch) | `plonky2/src/leaf/countmin_final.rs` (+ `countmin_merkle.rs`, Merkle sparse rebind) |
-| **HyperLogLog** | A (register max) | `src/sketch/hll_final_full.rs` | `plonky2/src/leaf/hyperloglog.rs` |
-| **SpaceSaving** | B (bounded top-`s`) | `src/sketch/ss_final_full.rs` (§G union → sort+seg-group → top-s → replace) | `plonky2/src/leaf/spacesaving.rs` |
-| **Greenwald–Khanna** | B (fusion) | `src/sketch/gk_final_full.rs` (§5.4 union → sort → L-round fusion → compaction → threshold) | `plonky2/src/leaf/greenwald_khanna.rs` |
+The **deployed** leaf per family — the one the composition layer instantiates
+and the paper measures — is `omc` / `omc` / `certified` / `bandmerge2`:
 
-Count-Min has several side-by-side leaf variants kept as baselines (see
-[`docs/countmin.md`](docs/countmin.md)): `countmin_leaf` (§5.1 strawman replay),
-`_v2` (§5.4-shaped seam), `_v3` (PermuteAir group-by), `_v9` (private-batch +
+| Family | Pattern | plonky3 (deployed circuit) | plonky2 (in-circuit leaf) |
+| --- | --- | --- | --- |
+| **Count-Min** | A (sparse patch) | `src/sketch/countmin_omc.rs` (offline memory checking: `M_old ⊎ W = M_new ⊎ R`) | `plonky2/src/leaf/countmin_final.rs` (+ `countmin_merkle.rs`, Merkle sparse rebind) |
+| **HyperLogLog** | A (register max) | `src/sketch/hll_omc.rs` (offline-memory-checked max-update rebind) | `plonky2/src/leaf/hyperloglog.rs` |
+| **SpaceSaving** | B (bounded top-`s`) | `src/sketch/ss_final_full.rs` (§G union → sort+seg-group → top-s → replace) | `plonky2/src/leaf/spacesaving.rs` |
+| **Greenwald–Khanna** | B (fusion) | `src/sketch/gk_bandmerge.rs` (§5.4 two-sided band-merge: union → value-sort → neighbor-init → threshold → band-merge rounds → compaction) | `plonky2/src/leaf/greenwald_khanna.rs` |
+
+The **baselines** plotted against them in the batch sweep live alongside:
+`countmin_final.rs` / `hll_final_full.rs` are the dense `one_hot` replays;
+`countmin_merkle.rs` / `hll_merkle.rs` are the Merkle sparse-opening leaves;
+`gk_final_full.rs` collapses equal values only (an exact per-value aggregation,
+not an approximate-quantile sketch) and is kept as a baseline. Count-Min also
+carries side-by-side variants: `countmin_leaf` (§5.1 strawman replay), `_v2`
+(§5.4-shaped seam), `_v3` (PermuteAir group-by), `_v9` (private-batch +
 in-circuit aggregation), `_v9h` (compact-`G` table that realizes the §5.2
 hash-work savings for high-duplicate batches).
 
-> **Prototype commitment caveat.** The state commitment is a *flat* Poseidon2
-> hash over all cells, so both states live in the witness. The paper's
-> sublinear-in-`s` cost needs a sparse-opening commitment (Merkle / homomorphic
-> vector commit) — the plonky2 `countmin_merkle` leaf demonstrates that path;
-> the variant seams (`_v2`/`_v9h`) are where it drops in on plonky3.
+> **Prototype commitment caveat.** The deployed leaves commit state as a *flat*
+> Poseidon2 hash over all cells, so both states live in the witness and each
+> batch pays the `Θ(|S|)` recommit floor the paper accounts for. The
+> sublinear-in-`s` path needs a sparse-opening commitment (Merkle / homomorphic
+> vector commit); plonky3 already realizes it in `src/sketch/countmin_merkle.rs`
+> and `hll_merkle.rs` (the `merkle` variant in the batch sweep), and plonky2 in
+> its `countmin_merkle` leaf.
 
 ### The §4 composition layer (plonky3)
 
@@ -212,7 +224,7 @@ not bigger proofs. Both crates read the same `data/` directory.
 
 ## Running the experiments
 
-The paper's evaluation (`latex/zk1.tex` §Evaluation) is produced by exactly
+The paper's evaluation is produced by exactly
 **two** of the surfaces below: `run_experiments.sh e1` (the batch-sweep figure)
 and `run_compose.sh` (every table). The others remain live and supported, but no
 current paper result depends on them. `run_experiments.sh` runs the relevant
@@ -229,8 +241,8 @@ scripts/run_stream.sh                 # whole-stream total prove time
 scripts/run_decode.sh                 # decode/query circuits (tests + table)
 ```
 
-| Surface | What it measures | Backends | Output | 
-| --- | --- | --- | --- | --- |
+| Surface | What it measures | Backends | Output |
+| --- | --- | --- | --- |
 | `run_experiments.sh e1` | **the per-family circuit-cost matrix**: family × variant × batch sweep (witness/prove/verify split, proof size, peak RSS), incl. the naive replay baselines and the CM/HLL rebind variants | both | `results/e1_circuit.csv` (rename per run via `EXP_OUT`) | 
 | `run_compose.sh` | composition over **real recursive proofs**: 4 families × {per_batch, chain, forest}, cores/machines budgets, multi-machine staging; **mixed updates+queries** via `EXP_COMPOSE_QUERY_EVERY_OPS=Q` | **both** (`EXP_COMPOSE_BACKEND`) | `results/stream_compose.csv`, or `$1`/`EXP_OUT` | 
 
@@ -246,7 +258,7 @@ scripts/run_decode.sh                 # decode/query circuits (tests + table)
 | `EXP_SS_VARIANT` | e1: `certified` \| `naive` \| `both` | `certified` |
 | `EXP_GK_VARIANT` | e1: `bandmerge2` (the **deployed** circuit) \| `bandmerge2_naive` (its replay baseline) \| `certified` \| `naive` \| `bandmerge` \| `both` | `certified` |
 | `EXP_D`, `EXP_W` | CM depth `d` / width `w` | `4` / `8` |
-| `EXP_HLL_B`, `EXP_SS_CAP`, `EXP_GK_CAP` | HLL precision `b` (registers `2^b`) / SS capacity / GK capacity | `4` / — / — |
+| `EXP_HLL_B`, `EXP_SS_CAP`, `EXP_GK_CAP` | HLL precision `b` (registers `2^b`) / SS capacity / GK capacity. Comma-lists. (The `run_compose.sh` surface defaults `EXP_GK_CAP` to `64` instead.) | `4` / `8` / `8` |
 | `EXP_OUT` | rename the output CSV so successive runs don't overwrite | per-exp name |
 | `EXP_CORES` | e1/plonky3: cores-per-proof pin (distributed-setting knob) | all cores |
 | `BACKENDS` | `plonky3` \| `plonky2` \| `both` | `both` |
@@ -255,7 +267,7 @@ scripts/run_decode.sh                 # decode/query circuits (tests + table)
 
 | Var | Meaning | Default |
 | --- | --- | --- |
-| `EXP_COMPOSE_BACKEND` | `plonky3` \| `plonky2`. plonky2 takes **single** values for machines/cores and ignores `EXP_COMPOSE_EXEC` | `plonky3` |
+| `EXP_COMPOSE_BACKEND` | `plonky3` \| `plonky2`. plonky2 takes **single** values for machines/cores, and silently ignores `EXP_COMPOSE_EXEC`, `EXP_COMPOSE_NODES`, `EXP_COMPOSE_WAVE_SIZE`, `EXP_GK_S`, and all three mixed-query knobs | `plonky3` |
 | `EXP_COMPOSE_N` | total stream records — integer or `2^k` | `32` |
 | `EXP_COMPOSE_BATCHES` | batch sizes `m`, comma-list | `8` |
 | `EXP_COMPOSE_FAMILY` | comma-list of `cm,hll,ss,gk`, and the Goldilocks ports `cm_gl,hll_gl,ss_gl,gk_gl` | `cm,hll,ss,gk` |
@@ -263,19 +275,18 @@ scripts/run_decode.sh                 # decode/query circuits (tests + table)
 | `EXP_COMPOSE_MACHINES` / `_CORES` | machine count / cores per machine, comma-list on plonky3 | `1` / all |
 | `EXP_COMPOSE_EXEC` | `procs` (real pinned processes + socket IPC) \| `sim` (projection). **Defaults to `procs` only when machines > 1** — pass it explicitly at `MACHINES=1` to get real process measurements | `procs` iff machines > 1 |
 | `EXP_COMPOSE_NODES` | explicit NUMA-node assignment, e.g. `0,2` (one machine per socket) | round-robin |
-| `EXP_COMPOSE_WAVE_SIZE` | staged-wave execution: run machines in time-shifted waves of this size (see the paper's staged-wave methodology) | off |
+| `EXP_COMPOSE_WAVE_SIZE` | staged-wave execution: run machines in time-shifted waves of this size (see the paper's staged-wave methodology). **plonky3 BabyBear + `forest` only**, and needs `wave_size < machines`; ignored otherwise | off |
 | `EXP_NET_MBPS`, `EXP_NET_RTT_MS` | modeled link for the `comm_model_ms` column (bytes are **measured**) | `200` / `0.2` |
-| `EXP_COMPOSE_QUERY_EVERY_OPS` | **mixed operation stream** (the paper's model): every `Q`-th stream *position* is a query | `0` (off) |
-| `EXP_COMPOSE_QUERY_EVERY` | mixed *per-batch* variant: one query after every `k`-th batch. Mutually exclusive with `_OPS` | `0` (off) |
-| `EXP_QUERY_KEY_MODE` | probe key for keyed queries: `first` \| `uniform_stream` \| `hot` \| `absent` | `first` |
-| `EXP_OUT` / `$1` | output name; `results/<name>.csv` (the `.csv` suffix is optional) | `stream_compose.csv` |
+| `EXP_COMPOSE_QUERY_EVERY_OPS` | **mixed operation stream** (the paper's model): every `Q`-th stream *position* is a query. plonky3 only | `0` (off) |
+| `EXP_COMPOSE_QUERY_EVERY` | mixed *per-batch* variant: one query after every `k`-th batch. Mutually exclusive with `_OPS`; plonky3 only | `0` (off) |
+| `EXP_QUERY_KEY_MODE` | probe key for keyed queries: `first` \| `uniform_stream` \| `hot` \| `absent`. plonky3 only | `first` |
+| `EXP_OUT` / `$1` | output name; `results/<name>.csv` (the `.csv` suffix is optional) | `stream_compose.csv` (plonky3) / `stream_compose_p2.csv` (plonky2) |
 
 Earlier modes of the E1–E10 ladder (**e3, e4, e5real, e6, e7, e9, e10, inputfold,
 casestudy**) and the RQ1–RQ4 figure track are **retired from the driver** —
 each was superseded by one of the surfaces above. Their runners stay in
-`examples/` and remain directly runnable; the mapping (what replaced what, and
-the direct commands) is in
-[`docs/REPRODUCE.md` §Archived experiments](docs/REPRODUCE.md#archived-experiments).
+`examples/` and remain directly runnable via `cargo run --release --example
+exp_<name>`.
 
 ### Reproducing the paper's results
 
@@ -283,10 +294,10 @@ The exact commands behind each figure/table, at the deployed configuration
 (Count-Min `d=7, w=2^14`; HyperLogLog `b=14`; SpaceSaving `s=2^14`;
 Greenwald–Khanna `s'=2^11`; `N=2^20` AOL records in `t=64` batches of `m=2^14`;
 32 cores/machine). These are **long** runs — the full set is on the order of
-days of prover time on a 64-core server.
+days of prover time on the 128-core testbed.
 
 **Figure `fig:eval-batch` — batch-size sweep** (`results/{cm,hll,ss,gk}_batch_*.csv`,
-plotted by `latex/pics/plot_eval.py`). Baselines stop where the padded trace
+plotted by `scripts/plot_eval.py`). Baselines stop where the padded trace
 exceeds the backend's `2^27` FRI domain; those points are recorded as
 `status=too_large` and drawn as the infeasibility ✗:
 
@@ -455,10 +466,14 @@ EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
 scripts/run_compose.sh frame_out_1machine_datasets_plonky3.csv
 ```
 
-**Where each result lives.** Derivations: `prove = leaf_busy_max_ms`,
-`setup = total_time_ms − leaf_busy_max_ms` (Plonky3);
-`prove = leafgen_seq_ms + merge_total_ms`, `setup = total − prove` (Plonky2);
-amortized per-element `= (total_time_ms + query_prove_ms)/N`.
+**Where each result lives.** Most tables read `total_time_ms` directly as the
+prover time (with leaf-gen `= leafgen_ms` and the fold total `= merge_total_ms`).
+Two artifacts derive their columns: `tab:stream-scale` is the only one that
+splits wall-clock into setup `+` prove, using
+`prove = leaf_busy_max_ms`, `setup = total_time_ms − leaf_busy_max_ms` on
+Plonky3 and `prove = leafgen_seq_ms + merge_total_ms`, `setup = total − prove`
+on Plonky2; and `tab:mixed`'s amortized per-element cost is
+`(total_time_ms + query_prove_ms)/N`.
 
 | Paper artifact | `results/` file(s) |
 | --- | --- |
@@ -471,9 +486,16 @@ amortized per-element `= (total_time_ms + query_prove_ms)/N`.
 | `tab:eval-memory` | `{cm,hll}_batch_omc.csv`, `{ss,gk}_batch_certified.csv` at `m=2^14` (leaf) + `frame_out_4machine_plonky3.csv` (forest) |
 | `tab:p2-forest` | `frame_out_1machine_plonky3.csv`, `frame_out_1machine_Goldilocks.csv`, `frame_out_1machine_plonky2.csv` |
 
-> Files carrying `_old`, `_new`, `_coresident`, or `_busysib` suffixes, and
-> `forest_plonky3_1machine_verify_2e20.csv`, are **superseded** earlier runs kept
-> for provenance — no current table reads them.
+> **Superseded** (kept for provenance; no current table reads them): the `_old`
+> and `_new` suffixes, `forest_plonky3_1machine_verify_2e20.csv`, and the
+> pre-rename / M=4-era leftovers `frame_out_1machine.csv`,
+> `frame_out_4machine.csv`, `frame_out_4machine_{datasets_plonky3,plonky2,ssgk_Goldilocks}.csv`,
+> `s3_mixed_q*.csv` and `s3_plonky3_mixed_q100000.csv`.
+>
+> **Still live**, despite looking like leftovers: `frame_out_{2,3,4}machine_plonky3_coresident.csv`
+> and `frame_out_1machine_plonky3_busysib.csv` are the co-residency controls
+> behind the appendix's staged-wave fidelity argument (the ~6% package-sharing
+> penalty), produced by `scripts/run_m1_busy_sibling.sh`.
 
 ### Standalone comparison demos
 
@@ -486,15 +508,12 @@ cargo run --release --example countmin_v1_vs_v2    # §5.1 strawman vs §5.4-sha
 cargo run --release --example hll_chain_n          # HLL chain sweep
 ```
 
-Full per-experiment details, expected output, and the partial-vs-whole-dataset
-guidance live in [`docs/REPRODUCE.md`](docs/REPRODUCE.md).
-
 ---
 
 ## Tests
 
 ```bash
-cargo test --release                       # plonky3: ~290 lib unit tests + tests/ integration
+cargo test --release                       # plonky3: 379 lib unit tests (41 #[ignore]d) + tests/ integration
 cargo test --release --lib dataset::       # one module
 cargo test --release --test two_leaf_hll   # one integration suite
 (cd plonky2 && cargo test --release)       # plonky2 backend (nightly auto)
@@ -507,8 +526,9 @@ cargo test --release --lib v9h_duplicate_key_compact_sweep -- --ignored --nocapt
 ```
 
 The `tests/` directory holds the §4 chain/merge end-to-end suites (flat +
-recursive, Count-Min + HLL). Negative tests (tampered proofs, mismatched
-boundaries) accompany every honest path.
+recursive, Count-Min + HLL), where each honest two-leaf path is paired with a
+mismatched-boundary rejection test. Tamper-rejection (mutated proofs and
+public inputs) is covered by the unit tests in `src/`, not by `tests/`.
 
 ---
 
@@ -517,7 +537,7 @@ boundaries) accompany every honest path.
 | Path | What's in it |
 | --- | --- |
 | `src/config.rs` | BabyBear + Poseidon2 + two-adic FRI `StarkConfig`; `make_perm` = canonical `default_babybear_poseidon2_16`. |
-| `src/sketch/` | Plaintext sketches + **complete circuits**: `countmin_final`, `hll_final_full`, `ss_final_full`, `gk_final_full` (+ `*_v3/_v9` Count-Min variants). |
+| `src/sketch/` | Plaintext sketches + **complete circuits**. Deployed leaves: `countmin_omc`, `hll_omc`, `ss_final_full`, `gk_bandmerge`. Baselines: `countmin_final`, `hll_final_full`, `gk_final_full`, the `*_merkle` sparse-opening leaves, and the `*_v3/_v9` Count-Min variants. |
 | `src/commitment/` | Poseidon2 state commitments per family. |
 | `src/recursion/framework.rs` | §4 generic composition (epoch leaves, merge atom, streaming forest, `R(t)`). |
 | `src/recursion/recursive/` | §4.2 in-circuit merge + §4.3 chains; leaf circuits (`countmin_leaf{,_v2,_v3,_v9,_v9h}`, `hll_leaf{,_v2}`) + merges. |
@@ -530,8 +550,7 @@ boundaries) accompany every honest path.
 | `plonky2/` | The SNARK backend: `src/sketch/`, `src/leaf/` (in-circuit leaves + `countmin_merkle`), `src/decode/` (query circuits, E3), `src/recursion/`, `src/metrics.rs`, its own `examples/`. |
 | `scripts/` | `run_experiments.sh` (e1/e2/e5/e8 driver), `run_compose.sh` (both backends), `run_stream.sh`, `run_decode.sh`, `plot_eval.py` (the paper's batch-sweep figure), `fetch_datasets.py`; legacy: `plot_experiments.py` (RQ figures), `cost_model_e10.py`. |
 | `data/` | Key streams: synthetic (`gaussian/uniform/zipf.keys` + manifest) and real (`aol/netflix.keys`). |
-| `docs/` | Documentation. |
-| `paper/`, `latex/` | Paper PDF + `zk1.tex` source and `EVAL_SPEC.md`. |
+| `docs/` | [`datasets.md`](docs/datasets.md): the dataset recipe, reproducibility model, and materialization. |
 
 ---
 
