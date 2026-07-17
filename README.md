@@ -105,7 +105,7 @@ scripts/run_experiments.sh e1
   multi-socket box:
   - **RAM:** peak prover RSS at `m=2^14` is ~17–81 GiB per machine depending on
     the family (Greenwald–Khanna is the worst); an `M=4` forest run needs that
-    much *per live machine*. The paper's testbed is a 64-core AMD EPYC 9555
+    much *per live machine*. The paper's testbed is a 128-core AMD EPYC 9555
     (4 NUMA nodes, ~2.2 TiB).
   - **`numactl`** (optional but recommended): the `procs` engine pins each
     machine with `numactl --physcpubind --membind`, falling back to `taskset`,
