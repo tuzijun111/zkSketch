@@ -441,7 +441,7 @@ scripts/run_compose.sh frame_out_1machine_plonky2.csv
 **Table `tab:mixed` — query-rate sweep.** One query every `Q` stream positions:
 
 ```bash
-for Q in 10000 100000 1000000; do
+for Q in 1000 10000 100000 1000000; do
   EXP_DATASET=uniform EXP_COMPOSE_N=2^20 EXP_COMPOSE_BATCHES=16384 \
   EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
   EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest \
