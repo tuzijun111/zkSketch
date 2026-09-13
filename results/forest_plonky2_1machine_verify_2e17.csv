@@ -1,5 +1,0 @@
-backend,dataset,family,mode,shape,n,m,t,cores,machines,procs,total_time_ms,witness_pass_ms,scatter_ms,leafgen_ms,leafgen_seq_ms,merge_ms,local_fold_ms,merges_local,merges_cross,cross_rounds,verify_ms,proof_bytes,records_per_sec,peak_rss_mb,comm_msgs,comm_bytes,comm_model_ms,merge_total_ms,status
-plonky2,aol,cm,forest,d7_w16384,131072,16384,8,32,1,1,648100.268,939.230,2.575,645900.914,403726.274,1252.221,9500.722,7,0,0,4.811,188089,202,75310.9,1,188093,38.402,10752.943,ok
-plonky2,aol,hll,forest,b14,131072,16384,8,32,1,1,281352.401,134.193,2.095,280056.397,192901.779,1152.594,8383.717,7,0,0,4.765,188088,466,37735.5,1,188092,34.469,9536.311,ok
-plonky2,aol,ss,forest,cap16384,131072,16384,8,32,1,1,136948.051,24.392,2.166,135803.619,91709.944,1112.215,8404.214,7,0,0,4.813,188089,957,18830.0,1,188093,35.780,9516.429,ok
-plonky2,aol,gk,forest,cap2048,131072,16384,8,32,1,1,645296.794,41.745,1.603,644090.847,410671.510,1156.592,11145.581,7,0,0,4.789,188086,203,74473.8,1,188090,34.142,12302.173,ok

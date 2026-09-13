@@ -1,4 +1,0 @@
-dataset,variant,d,w,n,m,t,k,cores_per_leaf,merge_mode,total_time_ms,leafgen_ms,merge_ms,records_per_sec,speedup,peak_rss_mb,status
-aol,one_hot,4,8,8,2,4,1,64,recursive_bound,3416.053,325.094,3090.959,2,1.00,1195.4,ok
-aol,lookup,4,8,8,2,4,1,64,recursive_bound,3413.136,290.640,3122.495,2,1.00,1245.5,ok
-aol,merkle,4,8,8,2,4,1,64,recursive_bound,3406.307,331.727,3074.580,2,1.00,1260.3,ok

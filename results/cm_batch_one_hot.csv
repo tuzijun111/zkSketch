@@ -1,4 +1,0 @@
-backend,dataset,family,variant,m,d,w,s,cores,trace_rows,num_columns,constraint_count,witness_gen_ms,prove_ms,prove_total_ms,verify_ms,proof_size_bytes,peak_rss_mb,status
-plonky3,aol,cm,one_hot,16,7,16384,114688,32,33784832,1,33784832,6284.426,107281.056,113565.482,23.762,789652,144376.9,ok
-plonky3,aol,cm,one_hot,32,7,16384,114688,32,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,too_large
-plonky3,aol,cm,one_hot,64,7,16384,114688,32,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,too_large
