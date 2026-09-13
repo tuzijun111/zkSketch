@@ -1,0 +1,26 @@
+// field-typed one-hot decoder CM update: prover supplies column index as bits.
+const u32 N = 16;
+const u32 D = 3;
+const u32 LOGW = 6;
+const u32 W = 64;
+
+def main(private bool[N][D][LOGW] cb, field[D][W] table_in) -> field[D][W] {
+    field[D][W] mut t = table_in;
+    for u32 i in 0..N {
+        for u32 r in 0..D {
+            field[W] mut oh = [0; W];
+            oh[0] = 1;
+            for u32 l in 0..LOGW {
+                u32 sz = 1 << l;
+                for u32 jj in 0..sz {
+                    u32 j = sz - 1 - jj;
+                    field hi = oh[j] * (cb[i][r][l] ? 1 : 0);
+                    oh[2*j+1] = hi;
+                    oh[2*j] = oh[j] - hi;
+                }
+            }
+            for u32 c in 0..W { t[r][c] = t[r][c] + oh[c]; }
+        }
+    }
+    return t;
+}
