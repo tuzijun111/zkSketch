@@ -1,0 +1,15 @@
+[workspace]
+[package]
+name = "ourcm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zksketch = { path = "../../../.." }   # the zkSketch checkout this directory lives in
+
+[[bin]]
+name = "acc_ours"
+path = "src/bin/acc_ours.rs"
+
+[profile.release]
+opt-level = 3

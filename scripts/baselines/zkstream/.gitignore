@@ -1,0 +1,18 @@
+# ZoKrates artifacts belong under $BASELINE_DIR/build/zkstream (common.sh). These
+# rules only catch a run pointed at this directory by hand: a proving key or a
+# compiled .out is tens of MB to GB.
+*.out
+*.r1cs
+*.wtns
+*.wit
+*.pk
+*.vk
+*.key
+proof*.json
+*.abi.json
+build/
+__pycache__/
+*.tmp
+*.tmp.zok
+# The repo ignores *.log, but these are the raw console record behind results/*.csv.
+!results/*.log

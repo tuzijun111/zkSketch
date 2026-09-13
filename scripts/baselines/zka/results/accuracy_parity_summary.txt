@@ -1,0 +1,43 @@
+dist         K system            eps*N      mean     max    p90    p99  exact%  >eps*N%  mean/epsN
+uniform    256 zk-analytics      43.49     0.609      76    0.0   28.4   98.99    1.009     0.0140
+uniform    256 zksketch          43.49     0.619     108    0.0   27.1   98.94    1.058     0.0142
+uniform   1024 zk-analytics      43.49     3.952      66   15.5   28.0   74.23    0.041     0.0909
+uniform   1024 zksketch          43.49     3.852      49   15.4   27.7   74.75    0.016     0.0886
+uniform   4096 zk-analytics      43.49     8.782      40   16.0   22.6    5.80    0.000     0.2019
+uniform   4096 zksketch          43.49     8.785      39   16.0   22.5    5.81    0.000     0.2020
+zipf       256 zk-analytics      43.49     0.083      19    0.0    3.4   99.01    0.000     0.0019
+zipf       256 zksketch          43.49     0.092      41    0.0    2.7   98.94    0.000     0.0021
+zipf      1024 zk-analytics      43.49     0.515      36    2.0    7.5   80.55    0.000     0.0118
+zipf      1024 zksketch          43.49     0.496     125    1.8    6.8   80.77    0.010     0.0114
+zipf      4096 zk-analytics      43.49     1.146     114    3.0    7.6   46.04    0.005     0.0264
+zipf      4096 zksketch          43.49     1.154      88    3.0    7.6   46.11    0.005     0.0265
+
+eps = e/w = 2.71828/1024 = 2.6546e-3 ; eps*N with N = n_records.
+delta = e^-d = e^-3 = 4.979e-2  -> at most 4.979% of keys may exceed eps*N.
+
+CAVEAT (both systems, not a difference between them):
+  The classical Count-Min eps/delta guarantee is over the RANDOM CHOICE OF
+  HASH FUNCTIONS, and requires the hashes to be independent of the input.
+  Neither system has that. zk-Analytics fixes CM_SEEDS as three public
+  compile-time constants (aggregator/core/src/lib.rs:40); zkSketch fixes a
+  public Poseidon2 instance (sketch/countmin_final.rs:147). When the curator
+  is also the prover, it knows the addressing before choosing what to
+  ingest, so a chosen-key adversary can drive the estimate far past eps*N
+  in EITHER system and the proof still verifies -- a proof of correct
+  sketching is not a proof of accurate sketching. The numbers above are
+  therefore an AVERAGE-CASE law measured by re-drawing the key set per
+  seed, not a worst-case bound. Poseidon2 makes finding such keys
+  harder to search for than splitmix64, but NOT by a security margin at
+  this geometry: driving one key's estimate up needs a collision in all
+  d=3 rows, i.e. ~w^d = 2^30 offline trial keys either way. For them each
+  trial is one splitmix64 finalizer (~ns) and their key encoding
+  (FNV-1a, lib.rs:342) is itself invertible, so a single row is matched in
+  closed form; for us each trial is a Poseidon2 sponge (~us). That is a
+  ~10^3 work factor, not a cryptographic separation. Raising d or w is the
+  only real defence, and it is equally available to both systems.
+
+NOT REPORTED BY CONSTRUCTION: per-key agreement between the two estimates.
+  The two systems use different hash families over different key encodings
+  (their 15-byte key_id -> FNV-1a -> splitmix64 -> mod 1024 vs our u64 ->
+  Poseidon2 sponge -> digest[row] mod w), so their bucket assignments are
+  unrelated. Only the ERROR LAWS are comparable.

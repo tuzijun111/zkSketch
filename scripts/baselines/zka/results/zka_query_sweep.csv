@@ -1,0 +1,17 @@
+system,mode,query,epochs,num_sources,sources_per_epoch,keys_per_source,keys_total,events_per_key,topk_slots,cycles,segments,host_gen_s,prove_s,verify_ms,receipt_bytes,journal_bincode_bytes,pubout_raw_bytes,state_commits,query_receipts,agg_receipts_implied,total_receipts,estimate,suppressed,driver_rss_mb,r0vm_peak_rss_mb,wall_s
+zka,exec,cm/estimate,1,1,1,1,1,1,100,1187600,2,0.000,NaN,NaN,0,420,412,1,1,1,2,7317,false,8.0,0.0,0.046
+zka,exec,cm/estimate,2,1,1,1,1,1,100,2360619,3,0.000,NaN,NaN,0,548,540,2,1,2,3,13811,false,8.2,0.0,0.061
+zka,exec,cm/estimate,4,1,1,1,1,1,100,4706657,5,0.000,NaN,NaN,0,804,796,4,1,4,5,26117,false,8.4,0.0,0.097
+zka,exec,cm/estimate,8,1,1,1,1,1,100,9398733,10,0.000,NaN,NaN,0,1316,1308,8,1,8,9,46727,false,8.5,0.0,0.166
+zka,exec,cm/estimate,16,1,1,1,1,1,100,18782885,20,0.000,NaN,NaN,0,2340,2332,16,1,16,17,101185,false,9.4,50.4,0.297
+zka,exec,cm/estimate,32,1,1,1,1,1,100,37551189,39,0.001,NaN,NaN,0,4388,4380,32,1,32,33,188080,false,10.1,63.9,0.536
+zka,exec,cm/estimate,64,1,1,1,1,1,100,75087797,77,0.001,NaN,NaN,0,8484,8476,64,1,64,65,342419,false,11.9,64.1,1.017
+zka,exec,cm/topk,1,1,1,100,100,1,100,1409793,2,0.000,NaN,NaN,0,496,488,1,1,1,2,9884,false,8.3,0.0,0.046
+zka,exec,cm/topk,2,1,1,100,100,1,100,2840177,3,0.000,NaN,NaN,0,624,616,2,1,2,3,18970,false,8.2,0.0,0.065
+zka,exec,cm/topk,4,1,1,100,100,1,100,5796810,6,0.000,NaN,NaN,0,880,872,4,1,4,5,36386,false,8.3,0.0,0.112
+zka,exec,cm/topk,8,1,1,100,100,1,100,11704948,12,0.000,NaN,NaN,0,1392,1384,8,1,8,9,64650,false,8.3,0.0,0.185
+zka,exec,cm/topk,16,1,1,100,100,1,100,23576667,25,0.000,NaN,NaN,0,2416,2408,16,1,16,17,112841,false,9.4,63.8,0.332
+zka,exec,cm/topk,32,1,1,100,100,1,100,47038726,48,0.001,NaN,NaN,0,4464,4456,32,1,32,33,193932,false,10.2,63.8,0.622
+zka,exec,cm/topk,64,1,1,100,100,1,100,92979076,95,0.001,NaN,NaN,0,8560,8552,64,1,64,65,366833,false,12.0,65.2,1.217
+zka,prove,cm/estimate,4,1,1,1,1,1,100,4706657,5,0.000,151.281,9.738,224818,804,796,4,1,4,5,26117,false,9.6,9388.4,151.419
+zka,prove,cm/estimate,16,1,1,1,1,1,100,18782885,20,0.000,594.589,9.698,227890,2340,2332,16,1,16,17,101185,false,10.4,9401.4,594.924

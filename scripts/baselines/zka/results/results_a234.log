@@ -1,0 +1,9 @@
+[19:16:48] === env ===
+ 19:16:48 up 7 days,  7:02, 14 users,  load average: 1.48, 1.36, 1.72
+100 %, 31176 MiB
+[19:16:48] === A2 anchor proofs (CM_TOPK_SLOTS=100, as shipped) ===
+    Finished `release` profile [optimized] target(s) in 4.56s
+[19:16:53] A2 proving n=512 ...
+n=512 keys=1024 cbs=8 total_cycles=20520698 cycles_per_record=40079.5 exec_s=0.25
+PROVE opts=succinct prove_s=661.3 khz=31.0 rec_per_s=0.774 receipt_bytes=225834
+[19:27:54] A2 proving n=1024 ...

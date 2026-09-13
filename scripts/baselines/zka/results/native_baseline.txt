@@ -1,0 +1,148 @@
+# zk-Analytics native_baseline (zka/native_baseline/src/main.rs), rev d4a5a9a9
+# host: SPRL6201019991  cores: 64  2026-09-12T23:15:55+08:00
+# CM geometry is hard-coded 3x1024 (aggregator/core/src/lib.rs:39-40);
+# CM_TOPK_SLOTS is a BUILD-TIME env knob (aggregator/core/build.rs:13).
+
+=== task=aggregation mode=cm CM_TOPK_SLOTS=1 series=1024 sps=16 ===
+task=aggregation
+mode=cm
+series=1024
+samples_per_series=16
+batch=8
+epochs=1
+events_per_epoch=16384
+total_events=16384
+threads=1
+reps=9
+native_single_thread_ms=1.9808
+native_max_core_ms=2.0082
+native_per_epoch_single_ms=1.9808
+peak_rss_kb=6332
+checksum=294912
+
+=== task=aggregation mode=cm CM_TOPK_SLOTS=8 series=1024 sps=16 ===
+task=aggregation
+mode=cm
+series=1024
+samples_per_series=16
+batch=8
+epochs=1
+events_per_epoch=16384
+total_events=16384
+threads=1
+reps=9
+native_single_thread_ms=2.0830
+native_max_core_ms=2.0972
+native_per_epoch_single_ms=2.0830
+peak_rss_kb=6336
+checksum=294912
+
+=== task=aggregation mode=cm CM_TOPK_SLOTS=100 series=1024 sps=16 ===
+task=aggregation
+mode=cm
+series=1024
+samples_per_series=16
+batch=8
+epochs=1
+events_per_epoch=16384
+total_events=16384
+threads=1
+reps=9
+native_single_thread_ms=3.5822
+native_max_core_ms=3.3809
+native_per_epoch_single_ms=3.5822
+peak_rss_kb=6404
+checksum=294912
+
+=== task=query epoch_type=cm query=cm_estimate num_epochs=1 ===
+task=query
+epoch_type=cm
+query=cm_estimate
+series=1024
+samples_per_series=1
+events_per_epoch=1024
+num_epochs=1
+reps=9
+native_query_ms=0.009053
+peak_rss_kb=3896
+
+=== task=query epoch_type=cm query=cm_estimate num_epochs=2 ===
+task=query
+epoch_type=cm
+query=cm_estimate
+series=1024
+samples_per_series=1
+events_per_epoch=1024
+num_epochs=2
+reps=9
+native_query_ms=0.017978
+peak_rss_kb=4000
+
+=== task=query epoch_type=cm query=cm_estimate num_epochs=4 ===
+task=query
+epoch_type=cm
+query=cm_estimate
+series=1024
+samples_per_series=1
+events_per_epoch=1024
+num_epochs=4
+reps=9
+native_query_ms=0.035894
+peak_rss_kb=4196
+
+=== task=query epoch_type=cm query=cm_estimate num_epochs=8 ===
+task=query
+epoch_type=cm
+query=cm_estimate
+series=1024
+samples_per_series=1
+events_per_epoch=1024
+num_epochs=8
+reps=9
+native_query_ms=0.071919
+peak_rss_kb=4780
+
+=== task=query epoch_type=cm query=cm_estimate num_epochs=16 ===
+task=query
+epoch_type=cm
+query=cm_estimate
+series=1024
+samples_per_series=1
+events_per_epoch=1024
+num_epochs=16
+reps=9
+native_query_ms=0.134174
+peak_rss_kb=5776
+
+=== task=query epoch_type=cm query=cm_estimate num_epochs=32 ===
+task=query
+epoch_type=cm
+query=cm_estimate
+series=1024
+samples_per_series=1
+events_per_epoch=1024
+num_epochs=32
+reps=9
+native_query_ms=0.267016
+peak_rss_kb=7464
+
+=== zkSketch native (ours): countmin_final::apply_update_prf, d=3 w=1024 ===
+zksketch_native_single_thread_ms=36.2610
+zksketch_native_records=16384
+zksketch_native_d=3 zksketch_native_w=1024
+zksketch_native_peak_rss_kb=3124
+
+=== plain-vs-ZK ratios (ZK terms are quoted MEASURED anchors) ===
+n_records=16384
+zka_native_ms_topk1=1.9808  zka_native_rec_per_s=8,271,405
+zka_zk_prove_s=3202.012  zka_zk_rec_per_s=5.1168
+zka_zk_over_plain_time=1,616,524.6x
+zka_native_ms_topk100=3.5822   (shipped default; no matching proof measured -- M1)
+zka_native_topk100_over_topk1=1.808x
+ours_native_ms=36.2610  ours_native_rec_per_s=451,835
+ours_zk_prove_s=23.7458  ours_zk_rec_per_s=689.97
+ours_zk_over_own_plain_time=654.9x
+ours_zk_over_THEIR_plain_time=11,988.0x   (common plaintext reference)
+plain_cost_ours_over_theirs=18.31x   (Poseidon2 PRF addressing vs splitmix64)
+zka_zk_over_plain_rss=1,477x (native peak ~6.4 MB)
+ours_zk_over_plain_rss=11,335x (native peak ~3.0 MB)

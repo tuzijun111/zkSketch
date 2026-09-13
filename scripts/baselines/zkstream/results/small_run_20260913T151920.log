@@ -1,0 +1,107 @@
+### ZoKrates Count-Min operator chain (our circuit, zkStream design)
+ 15:19:20 up 8 days,  3:05, 14 users,  load average: 1.50, 1.37, 1.26
+run=20260913T151920 load1=1.50 pin=0-31 d=3 w=1024 k=[16, 64, 256] chunks=4 -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_small.csv
+  k=16    chunk=    compile_op       constraints=80596 wall_s=42.3290 peak_rss_mb=3684.6094 bytes=96033526
+  k=16    chunk=    compile_helper   constraints=80980 wall_s=42.2116 peak_rss_mb=3686.3281 bytes=96409356
+  k=16    chunk=    setup            constraints=80596 wall_s=0.9146 peak_rss_mb=381.6367 bytes=34298608 note=vk_bytes=1917
+  k=16    chunk=0   witness_helper   wall_s=0.3942 peak_rss_mb=54.7500 note=driver stand-in for native state update
+  k=16    chunk=0   witness_op       constraints=80596 wall_s=0.3812 peak_rss_mb=53.3594 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=16    chunk=0   prove            constraints=80596 wall_s=0.9565 peak_rss_mb=425.4297 bytes=997 note=JSON proof
+  k=16    chunk=0   verify           wall_s=0.0074 peak_rss_mb=21.3906 ok=1 note=CLI, includes process start
+  k=16    chunk=1   witness_helper   wall_s=0.3640 peak_rss_mb=57.0586 note=driver stand-in for native state update
+  k=16    chunk=1   witness_op       constraints=80596 wall_s=0.3727 peak_rss_mb=54.3086 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=16    chunk=1   prove            constraints=80596 wall_s=0.9777 peak_rss_mb=426.1445 bytes=997 note=JSON proof
+  k=16    chunk=1   verify           wall_s=0.0082 peak_rss_mb=21.9922 ok=1 note=CLI, includes process start
+  k=16    chunk=2   witness_helper   wall_s=0.3808 peak_rss_mb=55.1094 note=driver stand-in for native state update
+  k=16    chunk=2   witness_op       constraints=80596 wall_s=0.3748 peak_rss_mb=53.3984 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=16    chunk=2   prove            constraints=80596 wall_s=0.9900 peak_rss_mb=425.8359 bytes=997 note=JSON proof
+  k=16    chunk=2   verify           wall_s=0.0071 peak_rss_mb=21.5547 ok=1 note=CLI, includes process start
+  k=16    chunk=3   witness_helper   wall_s=0.3707 peak_rss_mb=55.7500 note=driver stand-in for native state update
+  k=16    chunk=3   witness_op       constraints=80596 wall_s=0.3692 peak_rss_mb=54.0391 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=16    chunk=3   prove            constraints=80596 wall_s=0.9452 peak_rss_mb=424.9180 bytes=997 note=JSON proof
+  k=16    chunk=3   verify           wall_s=0.0071 peak_rss_mb=21.4688 ok=1 note=CLI, includes process start
+  k=16    chunk=0   tamper_com_in_plus1 wall_s=0.1436 ok=1 note=rejected
+  k=16    chunk=0   tamper_batch_com_plus1 wall_s=0.1439 ok=1 note=rejected
+  k=16    chunk=0   tamper_salt_in_plus1 wall_s=0.1309 ok=1 note=rejected
+  k=16    chunk=0   tamper_stale_table_cell wall_s=0.1337 ok=1 note=rejected
+  k=16    chunk=0   tamper_key_not_in_digest wall_s=0.1394 ok=1 note=rejected
+  k=64    chunk=    compile_op       constraints=156559 wall_s=58.6045 peak_rss_mb=4546.9961 bytes=141730906
+  k=64    chunk=    compile_helper   constraints=156943 wall_s=58.4363 peak_rss_mb=4547.3477 bytes=142918128
+  k=64    chunk=    setup            constraints=156559 wall_s=1.4634 peak_rss_mb=582.4297 bytes=66980016 note=vk_bytes=1917
+  k=64    chunk=0   witness_helper   wall_s=0.5905 peak_rss_mb=76.0039 note=driver stand-in for native state update
+  k=64    chunk=0   witness_op       constraints=156559 wall_s=0.5746 peak_rss_mb=75.4609 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=64    chunk=0   prove            constraints=156559 wall_s=1.4823 peak_rss_mb=668.1523 bytes=997 note=JSON proof
+  k=64    chunk=0   verify           wall_s=0.0069 peak_rss_mb=21.4219 ok=1 note=CLI, includes process start
+  k=64    chunk=1   witness_helper   wall_s=0.5811 peak_rss_mb=77.4492 note=driver stand-in for native state update
+  k=64    chunk=1   witness_op       constraints=156559 wall_s=0.5754 peak_rss_mb=74.9219 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=64    chunk=1   prove            constraints=156559 wall_s=1.5280 peak_rss_mb=669.8672 bytes=997 note=JSON proof
+  k=64    chunk=1   verify           wall_s=0.0072 peak_rss_mb=21.1016 ok=1 note=CLI, includes process start
+  k=64    chunk=2   witness_helper   wall_s=0.6015 peak_rss_mb=75.6406 note=driver stand-in for native state update
+  k=64    chunk=2   witness_op       constraints=156559 wall_s=0.5815 peak_rss_mb=74.6484 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=64    chunk=2   prove            constraints=156559 wall_s=1.4813 peak_rss_mb=667.8789 bytes=997 note=JSON proof
+  k=64    chunk=2   verify           wall_s=0.0077 peak_rss_mb=22.0938 ok=1 note=CLI, includes process start
+  k=64    chunk=3   witness_helper   wall_s=0.5841 peak_rss_mb=76.7422 note=driver stand-in for native state update
+  k=64    chunk=3   witness_op       constraints=156559 wall_s=0.5752 peak_rss_mb=75.1211 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=64    chunk=3   prove            constraints=156559 wall_s=1.5684 peak_rss_mb=669.5391 bytes=997 note=JSON proof
+  k=64    chunk=3   verify           wall_s=0.0081 peak_rss_mb=21.3438 ok=1 note=CLI, includes process start
+  k=256   chunk=    compile_op       constraints=461428 wall_s=184.6782 peak_rss_mb=8128.6719 bytes=326046706
+  k=256   chunk=    compile_helper   constraints=461812 wall_s=186.9506 peak_rss_mb=8129.4023 bytes=330478344
+  k=256   chunk=    setup            constraints=461428 wall_s=3.6242 peak_rss_mb=1372.9492 bytes=181253872 note=vk_bytes=1917
+  k=256   chunk=0   witness_helper   wall_s=1.4902 peak_rss_mb=160.7422 note=driver stand-in for native state update
+  k=256   chunk=0   witness_op       constraints=461428 wall_s=1.4405 peak_rss_mb=160.4453 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=256   chunk=0   prove            constraints=461428 wall_s=3.6024 peak_rss_mb=1578.2656 bytes=997 note=JSON proof
+  k=256   chunk=0   verify           wall_s=0.0078 peak_rss_mb=21.1016 ok=1 note=CLI, includes process start
+  k=256   chunk=1   witness_helper   wall_s=1.4728 peak_rss_mb=161.5547 note=driver stand-in for native state update
+  k=256   chunk=1   witness_op       constraints=461428 wall_s=1.4509 peak_rss_mb=159.2969 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=256   chunk=1   prove            constraints=461428 wall_s=3.5833 peak_rss_mb=1579.3125 bytes=997 note=JSON proof
+  k=256   chunk=1   verify           wall_s=0.0074 peak_rss_mb=21.5781 ok=1 note=CLI, includes process start
+  k=256   chunk=2   witness_helper   wall_s=1.4718 peak_rss_mb=159.9141 note=driver stand-in for native state update
+  k=256   chunk=2   witness_op       constraints=461428 wall_s=1.4389 peak_rss_mb=159.3008 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=256   chunk=2   prove            constraints=461428 wall_s=3.5659 peak_rss_mb=1578.9023 bytes=997 note=JSON proof
+  k=256   chunk=2   verify           wall_s=0.0079 peak_rss_mb=21.4805 ok=1 note=CLI, includes process start
+  k=256   chunk=3   witness_helper   wall_s=1.4632 peak_rss_mb=161.1562 note=driver stand-in for native state update
+  k=256   chunk=3   witness_op       constraints=461428 wall_s=1.4844 peak_rss_mb=159.6250 ok=1 note=out==helper.com_out and com_in==prev.com_out
+  k=256   chunk=3   prove            constraints=461428 wall_s=3.6940 peak_rss_mb=1576.7109 bytes=997 note=JSON proof
+  k=256   chunk=3   verify           wall_s=0.0077 peak_rss_mb=20.7266 ok=1 note=CLI, includes process start
+done -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_small.csv
+### zkSketch leaf, same batch sizes
+    Finished `release` profile [optimized] target(s) in 0.06s
+load1=3.20 pin=0-31 d=3 w=1024 m=[16 64 256] reps=3 -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zks_small.csv
+  m=16    rep=1 total_ms=143.639 verify_ms=13.245 proof_B=463075 rss_MB=107.1
+  m=16    rep=2 total_ms=142.518 verify_ms=12.636 proof_B=462857 rss_MB=107.4
+  m=16    rep=3 total_ms=147.666 verify_ms=13.538 proof_B=463124 rss_MB=107.6
+  m=64    rep=1 total_ms=194.994 verify_ms=14.277 proof_B=504250 rss_MB=181.9
+  m=64    rep=2 total_ms=228.319 verify_ms=13.695 proof_B=504250 rss_MB=183.2
+  m=64    rep=3 total_ms=220.538 verify_ms=13.910 proof_B=504312 rss_MB=182.6
+  m=256   rep=1 total_ms=566.232 verify_ms=13.981 proof_B=535552 rss_MB=590.4
+  m=256   rep=2 total_ms=561.078 verify_ms=14.941 proof_B=535552 rss_MB=587.9
+  m=256   rep=3 total_ms=563.096 verify_ms=15.248 proof_B=535859 rss_MB=593.2
+done -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zks_small.csv
+### fit
+ZoKrates run 20260913T151920   (d=3, w=1024)
+
+soundness: 5 forged inputs rejected; every chained witness and verify ok
+
+ZoKrates operator, per chunk                                            (MEASURED)
+    k  constraints      model   compile    setup  witness    prove   verify  prove RSS
+   16       80,596      exact     42.3s    0.91s    0.37s    0.97s    0.01s      426MB
+   64      156,559         +9     58.6s    1.46s    0.58s    1.51s    0.01s      670MB
+  256      461,428      exact    184.7s    3.62s    1.45s    3.59s    0.01s     1579MB
+
+Groth16 (ark) prove rate: 83,338, 104,016, 128,430 constraints/s at k=[16, 64, 256]   (MEASURED)
+fit, witness+prove per chunk = 1.094 s + 15.407 ms/record                (MODELED)
+
+zkSketch leaf, t=1                                                     (MEASURED, median of reps)
+    m  reps     prove    verify       proof       RSS
+   16     3     0.14s   13.24ms    463,075B     107MB
+   64     3     0.22s   13.91ms    504,250B     183MB
+  256     3     0.56s   14.94ms    535,552B     590MB
+
+fit, leaf prove = 0.112 s + 1.758 ms/record                          (MODELED)
+check: fit predicts 28.92 s at m=2^14; MEASURED 23.75 s (+21.8%)
+
+INITIAL CONCLUSION (small scale; extrapolations are MODELED, not run)
+  2^20 records as  65536 chained Groth16 chunks of k=16  :   24.41 h (MODELED)  vs zkSketch forest 1,573 s (MEASURED) ->   55.9x
+  2^20 records as  16384 chained Groth16 chunks of k=64  :    9.47 h (MODELED)  vs zkSketch forest 1,573 s (MEASURED) ->   21.7x
+  2^20 records as   4096 chained Groth16 chunks of k=256 :    5.73 h (MODELED)  vs zkSketch forest 1,573 s (MEASURED) ->   13.1x
+  Name the ZoKrates side 'a Count-Min operator following zkStream's design (our circuit)', never 'zkStream'.

@@ -1,0 +1,76 @@
+[19:42:55] === environment ===
+ 19:42:55 up 7 days,  7:28, 16 users,  load average: 18.10, 71.90, 64.03
+98 %, 31176 MiB
+
+[19:42:55] === S1 zkSketch, d=3 w=1024, single batch m=2^14 (t=1) ===
+    |     ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `dir` is never read
+    --> src/sketch/gk_bandmerge.rs:1421:5
+     |
+1409 | struct Naive2Step {
+     |        ---------- field in this struct
+...
+1421 |     dir: u8,
+     |     ^^^
+
+warning: `zksketch` (lib) generated 19 warnings (run `cargo fix --lib -p zksketch` to apply 12 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.03s
+     Running `target/release/examples/exp_compose`
+Stream compose (plonky3) — N=16384 datasets=["aol"] families=["cm_omc"] modes=["forest"] m=[16384] cores=[32] machines=[1] exec=sim (avail=64)
+-- dataset=aol (1048576 keys) --
+  cm_omc        d3_w1024   m=16384 t=1   [forest   ] cores=32 mach=1 total=23.75s (leafgen=23.75s merge=0.00s) verify=0.019s proof=745.7KB rss=34006MB
+results -> /home/binbin/zkSketch/results/zks_matched_t1.csv
+[19:43:47] S1 DONE
+[19:43:47] === S2-forest zkSketch, d=3 w=1024, N=2^20, t=64 ===
+    |     ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `dir` is never read
+    --> src/sketch/gk_bandmerge.rs:1421:5
+     |
+1409 | struct Naive2Step {
+     |        ---------- field in this struct
+...
+1421 |     dir: u8,
+     |     ^^^
+
+warning: `zksketch` (lib) generated 19 warnings (run `cargo fix --lib -p zksketch` to apply 12 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.03s
+     Running `target/release/examples/exp_compose`
+Stream compose (plonky3) — N=1048576 datasets=["aol"] families=["cm_omc"] modes=["forest"] m=[16384] cores=[32] machines=[1] exec=sim (avail=64)
+-- dataset=aol (1048576 keys) --
+  cm_omc        d3_w1024   m=16384 t=64  [forest   ] cores=32 mach=1 total=1572.75s (leafgen=1477.61s merge=95.15s) verify=0.013s proof=499.3KB rss=468738MB
+results -> /home/binbin/zkSketch/results/zks_matched_t64_forest.csv
+[20:37:55] S2-forest DONE
+[20:37:55] === S2-chain zkSketch, d=3 w=1024, N=2^20, t=64 ===
+    |     ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `dir` is never read
+    --> src/sketch/gk_bandmerge.rs:1421:5
+     |
+1409 | struct Naive2Step {
+     |        ---------- field in this struct
+...
+1421 |     dir: u8,
+     |     ^^^
+
+warning: `zksketch` (lib) generated 19 warnings (run `cargo fix --lib -p zksketch` to apply 12 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.10s
+     Running `target/release/examples/exp_compose`
+Stream compose (plonky3) — N=1048576 datasets=["aol"] families=["cm_omc"] modes=["chain"] m=[16384] cores=[32] machines=[1] exec=sim (avail=64)
+-- dataset=aol (1048576 keys) --
+  cm_omc        d3_w1024   m=16384 t=64  [chain    ] cores=32 mach=1 total=1587.10s (leafgen=1481.97s merge=105.13s) verify=0.014s proof=536.3KB rss=468731MB
+results -> /home/binbin/zkSketch/results/zks_matched_t64_chain.csv
+[21:32:13] S2-chain DONE
+[21:32:15] === Z-1 zk-Analytics CM guest, n=16384, CM_TOPK_SLOTS=1 ===
+    Finished `release` profile [optimized] target(s) in 4.64s
+n=16384 keys=1024 cycles=100695728 cycles_per_record=6146.0 prove_s=3202.012 khz=31.45 rec_per_s=5.1168 verify_ms=9.712 receipt_bytes=225834 peak_rss_mb=14.9  r0vm_peak_rss_mb=9453.5
+[22:25:43] Z-1 DONE
+[22:25:45] === Z-100 zk-Analytics CM guest, n=16384, CM_TOPK_SLOTS=100 ===
+    Finished `release` profile [optimized] target(s) in 4.66s

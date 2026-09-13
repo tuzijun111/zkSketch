@@ -1,0 +1,11 @@
+# ZoKrates 0.8.8 compiles, Threadripper PRO 9975WX, 2026-09-13, /usr/bin/time -v. Sources in probes/ (cmw_d* = cmw.zok with D rewritten).
+circuit,N_or_M,D,W,constraints,compile_s,peak_rss_kb,note
+cmw_selector_u32,32,3,1024,408672,155.69,1409660,closed form 68DW+mD(2W+33) predicts 408672 exactly
+cmw_selector_u32,16,1,64,6928,,,D-axis check; predicted 6928
+cmw_selector_u32,16,2,64,13856,,,D-axis check; predicted 13856
+cmw_selector_u32,16,4,64,27712,,,D-axis check; predicted 27712
+state_commit_poseidon6_chain_mutflatten,1,3,64,14095,9.26,932332,615-call chain scaled to 39 calls
+state_commit_poseidon6_chain_mutflatten,1,3,1024,217999,166.31,13557000,~70.8 constraints/cell; compile RSS ~4.4 MB/cell
+state_commit_poseidon6_chain_spread,1,3,1024,217999,154.01,13540964,same with non-mutable spread flatten: RSS intrinsic
+keycol_poseidon2_strictunpack254,1,3,1024,2247,0.52,80632,per record at d=3 (240 Poseidon + ~509 unpack per row)
+keycol_poseidon2_strictunpack254,2,3,1024,4494,0.74,96456,exactly linear

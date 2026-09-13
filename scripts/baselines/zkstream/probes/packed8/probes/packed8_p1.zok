@@ -1,0 +1,39 @@
+// Update body only (no state commitment, no batch digest): packed-lane Count-Min,
+// in-circuit key->column hash, for measuring per-record cost at the paper geometry.
+// Returns a linear fold of the whole table so no cell is dead code.
+import "hashes/poseidon/poseidon" as poseidon;
+import "utils/pack/bool/unpack" as unpack;
+const u32 N = 1;
+const u32 D = 7;
+const u32 S = 2048;
+const u32 LOGS = 11;
+const u32 RB = 14;
+
+def main(private field[D][S] t_in, private field[N] keys) -> field {
+    field[D][S] mut t = t_in;
+    for u32 i in 0..N {
+        field h = poseidon([keys[i], 0]);
+        bool[254] bits = unpack::<254>(h);
+        for u32 r in 0..D {
+            field[S] mut oh = [0; S];
+            oh[0] = 1;
+            for u32 l in 0..LOGS {
+                u32 sz = 1 << l;
+                for u32 jj in 0..sz {
+                    u32 j = sz - 1 - jj;
+                    field hi = oh[j] * (bits[253 - r*RB - l] ? 1 : 0);
+                    oh[2*j+1] = hi;
+                    oh[2*j] = oh[j] - hi;
+                }
+            }
+            field f0 = 1 + (bits[253 - r*RB - LOGS] ? 1 : 0) * (2**21 - 1);
+            field f1 = 1 + (bits[253 - r*RB - LOGS - 1] ? 1 : 0) * (2**42 - 1);
+            field f2 = 1 + (bits[253 - r*RB - LOGS - 2] ? 1 : 0) * (2**84 - 1);
+            field wgt = f0 * f1 * f2;
+            for u32 s in 0..S { t[r][s] = t[r][s] + oh[s] * wgt; }
+        }
+    }
+    field mut acc = 0;
+    for u32 r in 0..D { for u32 s in 0..S { acc = acc * 3 + t[r][s]; } }
+    return acc;
+}

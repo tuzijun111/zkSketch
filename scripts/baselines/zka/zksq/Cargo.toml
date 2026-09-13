@@ -1,0 +1,19 @@
+[workspace]
+[package]
+name = "zksq"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Query-only isolate for zkSketch's CM decode circuit. External crate on
+# purpose: the zksketch crate is read-only for this harness, and the in-repo
+# decode runners (examples/exp_decode.rs, examples/exp_e3.rs) hard-code
+# d=4 / w in {4,8,16}, which cannot reach the matched d=3 / w=1024 geometry.
+[dependencies]
+zksketch = { path = "../../../.." }   # the zkSketch checkout this directory lives in
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

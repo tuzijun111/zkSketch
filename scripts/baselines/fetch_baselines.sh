@@ -40,5 +40,6 @@ Build notes (no sudo required):
                 FoundationDB/Trillian/Docker) is NOT required for any experiment here.
   zkStream      pins its own rust-toolchain.toml and needs ZoKrates 0.8.8.
 
-Run the experiments with scripts/baselines/run_zka.sh
+Run the zk-Analytics experiments with scripts/baselines/zka/*.sh (see its README.md).
+They read the same BASELINE_DIR; zk-Analytics-side builds go under it (build/, nb-target-*, zka/target).
 NOTE

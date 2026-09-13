@@ -1,0 +1,2 @@
+topk_slots,n,keys,cycles,cycles_per_record,prove_s,khz,rec_per_s,verify_ms,receipt_bytes,r0vm_peak_rss_mb
+1,16384,1024,100695728,6146.0,3202.012,31.45,5.1168,9.712,225834,9453.5

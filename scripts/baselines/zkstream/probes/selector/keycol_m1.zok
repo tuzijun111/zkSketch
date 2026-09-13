@@ -1,0 +1,20 @@
+// Key -> d column indices: Poseidon(key, seed_r), strict 254-bit unpack, low log2(W) bits.
+import "hashes/poseidon/poseidon" as poseidon;
+import "utils/pack/bool/unpack" as unpack;
+const u32 M = 1;
+const u32 D = 3;
+const u32 LOGW = 10;
+const field[3] SEED = [1, 2, 3];
+def main(private field[M] keys) -> field[M][D] {
+    field[M][D] mut cols = [[0; D]; M];
+    for u32 i in 0..M {
+        for u32 r in 0..D {
+            field h = poseidon([keys[i], SEED[r]]);
+            bool[254] b = unpack(h);
+            field mut c = 0;
+            for u32 l in 0..LOGW { c = c * 2 + (b[244 + l] ? 1 : 0); }
+            cols[i][r] = c;
+        }
+    }
+    return cols;
+}

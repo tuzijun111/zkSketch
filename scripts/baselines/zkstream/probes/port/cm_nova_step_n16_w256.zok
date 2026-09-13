@@ -1,0 +1,11 @@
+const u32 N = 16;
+const u32 D = 3;
+const u32 W = 256;
+def main(field[768] state, private u32[N][D] cols) -> field[768] {
+    field[768] mut t = state;
+    for u32 i in 0..N { for u32 r in 0..D {
+        assert(cols[i][r] < W);
+        for u32 c in 0..W { t[r*W+c] = t[r*W+c] + (if (c == cols[i][r]) { 1 } else { 0 }); }
+    } }
+    return t;
+}

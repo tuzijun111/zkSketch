@@ -1,0 +1,9 @@
+# ZoKrates 0.8.8 compiles (bn128), Threadripper PRO 9975WX 64T/559GB shared, load ~1.1, 2026-09-13.
+# /usr/bin/time -v wall s and peak RSS KB; the four compiles ran CONCURRENTLY (single-threaded each), timings may be mildly inflated.
+# Sources: probes/packed8_{c16,u16,u64,p1}.zok generated from probes/cm_packed8_*.tpl. stdlib=/home/binbin/ext-baselines/zok/stdlib.
+# Idiom: 8 lanes of counters packed per field element; column bits from ONE Poseidon-2 of the key + strict unpack::<254>.
+idiom,N_records,D,W,slots_per_row,constraints,compile_s,peak_rss_kb,out_bytes,note
+packed8_committed_saltedIV_digest,16,3,1024,128,80596,44.33,3775576,96033526,2x Poseidon-6 chain over 384 slots (77 blocks each) + batch digest (4 blocks) + update body
+packed8_update_only,16,3,1024,128,24257,4.10,306884,12897067,1516 per record + 1 output
+packed8_update_only,64,3,1024,128,97025,16.61,1066440,52290755,1516 per record + 1 output (slope exact between N=16 and N=64)
+packed8_update_only,1,7,16384,2048,29421,146.79,16185748,12318900,deployed geometry d=7 w=2^14: 29420 per record; compile dominated by 2048-slot in-place decoder

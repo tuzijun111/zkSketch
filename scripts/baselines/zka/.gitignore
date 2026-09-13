@@ -1,0 +1,13 @@
+# zk-Analytics-side builds go to $BASELINE_DIR (common.sh); target/ only appears if cargo is run by hand here.
+target/
+__pycache__/
+# symlink to the zk-Analytics clone, created by common.sh
+/.zka
+# leftovers of interrupted runs: our_query.sh DRY_RUN rows and raw q0 rows,
+# accuracy.sh's backup copy, sha_accel_control.sh's partial CSV
+*.dry
+*.prev
+*.tmp
+.zks_q0_raw.*
+# The repo ignores *.log, but these are the raw console record behind results/*.csv.
+!results/*.log

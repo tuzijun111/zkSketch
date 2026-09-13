@@ -1,0 +1,17 @@
+# Executor-only (no prover) segment counts for zk-Analytics guests, measured 2026-09-12 at load 1.25.
+# WHY: risc0 proves segment-by-segment then lift/joins, so prove_s is predicted far better by
+# k*segments than by an assumed kHz. Two independent PROVE anchors already exist; adding their
+# segment counts makes the prove-time model determinate and turns M1 into an extrapolation of
+# known accuracy instead of an unanchored reach.
+# Cycles reproduce a1_cycles.csv / a2_anchor.csv EXACTLY, which validates the builds.
+guest,topk_slots,n_or_epochs,keys,cycles,segments,cycles_per_segment,prove_s_measured,s_per_segment,source
+aggr_cm,100,512,1024,20520698,22,932759,661.300,30.059,a2_anchor.csv + executor today
+aggr_cm,100,16384,1024,308305992,311,991338,,,M1 TARGET - executor today (a1_cycles.csv cycles)
+aggr_cm,1,1024,1024,16989075,18,943838,,,executor today
+aggr_cm,1,2048,1024,22569842,24,940410,,,executor today
+aggr_cm,1,4096,1024,33730807,36,936967,,,executor today
+aggr_cm,1,16384,1024,100696165,104,968232,3202.012,30.789,zka_matched.csv + executor today
+querier_cm_estimate,1,1,1,845442,1,845442,,,executor today (TOPK=1 query arm)
+querier_cm_estimate,1,4,1,3338025,4,834506,,,executor today
+querier_cm_estimate,1,16,1,13308357,14,950597,,,executor today
+querier_cm_estimate,1,64,1,53189692,55,967085,,,executor today

@@ -1,0 +1,22 @@
+import "hashes/poseidon/poseidon" as poseidon;
+const u32 N = 16;
+const u32 D = 3;
+const u32 W = 64;
+const u32 NB = 39;
+const u32 L = 195;
+def commit(field[D][W] t, field salt) -> field {
+    field[L] mut flat = [0; L];
+    for u32 r in 0..D { for u32 c in 0..W { flat[r*W+c] = t[r][c]; } }
+    field mut h = salt;
+    for u32 b in 0..NB { h = poseidon([h, flat[5*b], flat[5*b+1], flat[5*b+2], flat[5*b+3], flat[5*b+4]]); }
+    return h;
+}
+def main(field com_in, private field salt_in, private field[D][W] t_in, private u32[N][D] cols, private field salt_out) -> field {
+    assert(commit(t_in, salt_in) == com_in);
+    field[D][W] mut t = t_in;
+    for u32 i in 0..N { for u32 r in 0..D {
+        assert(cols[i][r] < W);
+        for u32 c in 0..W { t[r][c] = t[r][c] + (if (c == cols[i][r]) { 1 } else { 0 }); }
+    } }
+    return commit(t, salt_out);
+}

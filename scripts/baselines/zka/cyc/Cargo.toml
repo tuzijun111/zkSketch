@@ -1,0 +1,31 @@
+[workspace]
+[package]
+name = "cyc"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+zkvm-common = { path = "../.zka/zkvm-common" }
+aggregator-core = { path = "../.zka/aggregator/core" }
+aggregator-methods = { path = "../.zka/aggregator/methods" }
+querier-core = { path = "../.zka/querier/core" }
+querier-methods = { path = "../.zka/querier/methods" }
+sha2 = "0.10"
+risc0-zkvm = "3"
+rand = "0.8"
+bincode = "1"
+
+[[bin]]
+name = "cmp"
+path = "src/bin/cmp.rs"
+
+[[bin]]
+name = "qsweep"
+path = "src/bin/qsweep.rs"
+
+[[bin]]
+name = "acc_zka"
+path = "src/bin/acc_zka.rs"
+
+[[bin]]
+name = "cmp_tier"
+path = "src/bin/cmp_tier.rs"

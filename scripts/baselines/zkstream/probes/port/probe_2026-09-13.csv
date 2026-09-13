@@ -1,0 +1,23 @@
+# ZoKrates 0.8.8 probes, Threadripper PRO 9975WX (64T/559GB, shared), 2026-09-13. Raw measurements only.
+# tool=compile: /usr/bin/time wall s, peak RSS KB. g16=ark backend default. nova=zokrates nova (pallas).
+circuit,curve,N,D,W,step,constraints,wall_s,peak_rss_kb,cpu_pct,artifact_bytes
+cmw_selector_u32_public_table,bn128,32,3,1024,compile,408672,163.20,1411452,99,179638743
+commit_poseidon6_md_chain_39blocks,bn128,,3,64,compile,13798,9.50,918916,,
+commit_poseidon6_md_chain_77blocks,bn128,,3,128,compile,27256,17.41,1754472,,
+hash_to_col_poseidon2_unpack254,bn128,16,3,1024,compile,12016,1.60,175540,,
+cm_g16_committed_field_table,bn128,16,3,64,compile,35372,19.41,1792032,,44139661
+cm_g16_committed_field_table,bn128,16,3,64,compute-witness,35372,0.16,32708,108,
+cm_g16_committed_field_table,bn128,16,3,64,setup,35372,0.40,192040,861,15560944
+cm_g16_committed_field_table,bn128,16,3,64,generate-proof,35372,0.50,223596,764,923
+cm_g16_committed_field_table,bn128,16,3,64,verify,35372,0.10,19824,15,1753
+cm_nova_step_field_state,pallas,4,3,16,compile,840,,,,357171
+cm_nova_step_field_state,pallas,4,3,16,nova-setup,840,8.31,283256,,75348862
+cm_nova_step_field_state,pallas,4,3,16,nova-prove-3steps,840,3.90,120812,,4938881
+cm_nova_step_field_state,pallas,4,3,16,nova-compress,840,5.80,375916,,76463
+cm_nova_step_field_state,pallas,4,3,16,nova-verify,840,3.80,129108,,117827498
+cm_nova_step_field_state,pallas,16,3,256,compile,26976,2.60,177916,,
+cm_nova_step_field_state,pallas,16,3,256,nova-setup,26976,82.36,3218436,,836652905
+cm_nova_step_field_state,pallas,16,3,256,nova-prove-4steps,26976,48.73,940536,,23353457
+cm_nova_step_field_state,pallas,16,3,256,nova-compress,26976,67.95,2941012,,135408
+cm_nova_step_field_state,pallas,16,3,256,nova-verify,26976,47.73,1314120,,1239634267
+commit_poseidon6_md_chain_615blocks,bn128,,3,1024,compile,217702,167.41,13544484,,

@@ -1,0 +1,63 @@
+run,system,k,d,w,chunk,step,constraints,wall_s,peak_rss_mb,bytes,public_inputs,ok,note
+20260913T151920,zokrates_cm_op,16,3,1024,,compile_op,80596,42.3290,3684.6094,96033526,,,
+20260913T151920,zokrates_cm_op,16,3,1024,,compile_helper,80980,42.2116,3686.3281,96409356,,,
+20260913T151920,zokrates_cm_op,16,3,1024,,setup,80596,0.9146,381.6367,34298608,,,vk_bytes=1917
+20260913T151920,zokrates_cm_op,16,3,1024,0,witness_helper,,0.3942,54.7500,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,16,3,1024,0,witness_op,80596,0.3812,53.3594,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,16,3,1024,0,prove,80596,0.9565,425.4297,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,16,3,1024,0,verify,,0.0074,21.3906,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,16,3,1024,1,witness_helper,,0.3640,57.0586,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,16,3,1024,1,witness_op,80596,0.3727,54.3086,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,16,3,1024,1,prove,80596,0.9777,426.1445,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,16,3,1024,1,verify,,0.0082,21.9922,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,16,3,1024,2,witness_helper,,0.3808,55.1094,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,16,3,1024,2,witness_op,80596,0.3748,53.3984,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,16,3,1024,2,prove,80596,0.9900,425.8359,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,16,3,1024,2,verify,,0.0071,21.5547,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,16,3,1024,3,witness_helper,,0.3707,55.7500,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,16,3,1024,3,witness_op,80596,0.3692,54.0391,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,16,3,1024,3,prove,80596,0.9452,424.9180,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,16,3,1024,3,verify,,0.0071,21.4688,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,16,3,1024,0,tamper_com_in_plus1,,0.1436,,,,1,rejected
+20260913T151920,zokrates_cm_op,16,3,1024,0,tamper_batch_com_plus1,,0.1439,,,,1,rejected
+20260913T151920,zokrates_cm_op,16,3,1024,0,tamper_salt_in_plus1,,0.1309,,,,1,rejected
+20260913T151920,zokrates_cm_op,16,3,1024,0,tamper_stale_table_cell,,0.1337,,,,1,rejected
+20260913T151920,zokrates_cm_op,16,3,1024,0,tamper_key_not_in_digest,,0.1394,,,,1,rejected
+20260913T151920,zokrates_cm_op,64,3,1024,,compile_op,156559,58.6045,4546.9961,141730906,,,
+20260913T151920,zokrates_cm_op,64,3,1024,,compile_helper,156943,58.4363,4547.3477,142918128,,,
+20260913T151920,zokrates_cm_op,64,3,1024,,setup,156559,1.4634,582.4297,66980016,,,vk_bytes=1917
+20260913T151920,zokrates_cm_op,64,3,1024,0,witness_helper,,0.5905,76.0039,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,64,3,1024,0,witness_op,156559,0.5746,75.4609,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,64,3,1024,0,prove,156559,1.4823,668.1523,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,64,3,1024,0,verify,,0.0069,21.4219,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,64,3,1024,1,witness_helper,,0.5811,77.4492,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,64,3,1024,1,witness_op,156559,0.5754,74.9219,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,64,3,1024,1,prove,156559,1.5280,669.8672,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,64,3,1024,1,verify,,0.0072,21.1016,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,64,3,1024,2,witness_helper,,0.6015,75.6406,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,64,3,1024,2,witness_op,156559,0.5815,74.6484,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,64,3,1024,2,prove,156559,1.4813,667.8789,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,64,3,1024,2,verify,,0.0077,22.0938,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,64,3,1024,3,witness_helper,,0.5841,76.7422,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,64,3,1024,3,witness_op,156559,0.5752,75.1211,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,64,3,1024,3,prove,156559,1.5684,669.5391,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,64,3,1024,3,verify,,0.0081,21.3438,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,256,3,1024,,compile_op,461428,184.6782,8128.6719,326046706,,,
+20260913T151920,zokrates_cm_op,256,3,1024,,compile_helper,461812,186.9506,8129.4023,330478344,,,
+20260913T151920,zokrates_cm_op,256,3,1024,,setup,461428,3.6242,1372.9492,181253872,,,vk_bytes=1917
+20260913T151920,zokrates_cm_op,256,3,1024,0,witness_helper,,1.4902,160.7422,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,256,3,1024,0,witness_op,461428,1.4405,160.4453,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,256,3,1024,0,prove,461428,3.6024,1578.2656,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,256,3,1024,0,verify,,0.0078,21.1016,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,256,3,1024,1,witness_helper,,1.4728,161.5547,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,256,3,1024,1,witness_op,461428,1.4509,159.2969,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,256,3,1024,1,prove,461428,3.5833,1579.3125,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,256,3,1024,1,verify,,0.0074,21.5781,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,256,3,1024,2,witness_helper,,1.4718,159.9141,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,256,3,1024,2,witness_op,461428,1.4389,159.3008,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,256,3,1024,2,prove,461428,3.5659,1578.9023,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,256,3,1024,2,verify,,0.0079,21.4805,,,1,"CLI, includes process start"
+20260913T151920,zokrates_cm_op,256,3,1024,3,witness_helper,,1.4632,161.1562,,,,driver stand-in for native state update
+20260913T151920,zokrates_cm_op,256,3,1024,3,witness_op,461428,1.4844,159.6250,,,1,out==helper.com_out and com_in==prev.com_out
+20260913T151920,zokrates_cm_op,256,3,1024,3,prove,461428,3.6940,1576.7109,997,3,,JSON proof
+20260913T151920,zokrates_cm_op,256,3,1024,3,verify,,0.0077,20.7266,,,1,"CLI, includes process start"

@@ -1,0 +1,60 @@
+// Packed-lane Count-Min update, zkStream Sec 4.4 commit-in/commit-out shape.
+// State: D rows x S slots; each slot packs 8 lanes of 21-bit counters (8*21=168 < 254 bits).
+// Column (10 bits at W=1024) = slot (LOGS bits, tree decoder) + lane (3 bits, weight 2^(21*lane)).
+// Records bound to a public batch digest (Poseidon-6 chain) like zkSketch's batch_commit PI.
+import "hashes/poseidon/poseidon" as poseidon;
+import "utils/pack/bool/unpack" as unpack;
+const u32 N = 16;
+const u32 D = 3;
+const u32 S = 128;
+const u32 LOGS = 7;
+const u32 RB = 10;
+const u32 NBC = 77;
+const u32 LC = 385;
+const u32 NBB = 4;
+const u32 LB = 20;
+
+def commit(field[D][S] t, field salt) -> field {
+    field[LC] mut flat = [0; LC];
+    for u32 r in 0..D { for u32 s in 0..S { flat[r*S+s] = t[r][s]; } }
+    field mut h = poseidon([salt]);
+    for u32 b in 0..NBC { h = poseidon([h, flat[5*b], flat[5*b+1], flat[5*b+2], flat[5*b+3], flat[5*b+4]]); }
+    return h;
+}
+
+def digest(field[N] keys) -> field {
+    field[LB] mut flat = [0; LB];
+    for u32 i in 0..N { flat[i] = keys[i]; }
+    field mut h = 0;
+    for u32 b in 0..NBB { h = poseidon([h, flat[5*b], flat[5*b+1], flat[5*b+2], flat[5*b+3], flat[5*b+4]]); }
+    return h;
+}
+
+def main(field com_in, field batch_com, private field salt_in, private field[D][S] t_in, private field[N] keys, private field salt_out) -> field {
+    assert(commit(t_in, salt_in) == com_in);
+    assert(digest(keys) == batch_com);
+    field[D][S] mut t = t_in;
+    for u32 i in 0..N {
+        field h = poseidon([keys[i], 0]);
+        bool[254] bits = unpack::<254>(h);
+        for u32 r in 0..D {
+            field[S] mut oh = [0; S];
+            oh[0] = 1;
+            for u32 l in 0..LOGS {
+                u32 sz = 1 << l;
+                for u32 jj in 0..sz {
+                    u32 j = sz - 1 - jj;
+                    field hi = oh[j] * (bits[253 - r*RB - l] ? 1 : 0);
+                    oh[2*j+1] = hi;
+                    oh[2*j] = oh[j] - hi;
+                }
+            }
+            field f0 = 1 + (bits[253 - r*RB - LOGS] ? 1 : 0) * (2**21 - 1);
+            field f1 = 1 + (bits[253 - r*RB - LOGS - 1] ? 1 : 0) * (2**42 - 1);
+            field f2 = 1 + (bits[253 - r*RB - LOGS - 2] ? 1 : 0) * (2**84 - 1);
+            field wgt = f0 * f1 * f2;
+            for u32 s in 0..S { t[r][s] = t[r][s] + oh[s] * wgt; }
+        }
+    }
+    return commit(t, salt_out);
+}

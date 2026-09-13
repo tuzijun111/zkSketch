@@ -1,0 +1,17 @@
+// Minimal CM-style update: N records, D rows, W columns, private column index.
+// ZoKrates has no indexed random-access write, so each (record,row) touches all W cells.
+const u32 N = 32;
+const u32 D = 3;
+const u32 W = 1024;
+
+def main(private u32[N][D] cols, u32[D][W] table_in) -> u32[D][W] {
+    u32[D][W] mut t = table_in;
+    for u32 i in 0..N {
+        for u32 r in 0..D {
+            for u32 c in 0..W {
+                t[r][c] = t[r][c] + (if (c == cols[i][r]) { 1 } else { 0 });
+            }
+        }
+    }
+    return t;
+}

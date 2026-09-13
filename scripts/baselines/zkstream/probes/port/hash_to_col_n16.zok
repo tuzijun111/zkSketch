@@ -1,0 +1,18 @@
+import "hashes/poseidon/poseidon" as poseidon;
+import "utils/pack/bool/unpack" as unpack;
+const u32 N = 16;
+const u32 D = 3;
+const u32 LOGW = 10;
+def main(private field[N] keys) -> field[N][D] {
+    field[N][D] mut cols = [[0; D]; N];
+    for u32 i in 0..N {
+        field h = poseidon([keys[i], 0]);
+        bool[254] b = unpack::<254>(h);
+        for u32 r in 0..D {
+            field mut acc = 0;
+            for u32 k in 0..LOGW { acc = acc * 2 + (b[253 - r*LOGW - k] ? 1 : 0); }
+            cols[i][r] = acc;
+        }
+    }
+    return cols;
+}

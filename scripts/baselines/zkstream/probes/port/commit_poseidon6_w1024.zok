@@ -1,0 +1,12 @@
+import "hashes/poseidon/poseidon" as poseidon;
+const u32 D = 3;
+const u32 W = 1024;
+const u32 NB = 615;
+const u32 L = 3075;
+def main(private field[D][W] t, private field salt) -> field {
+    field[L] mut flat = [0; L];
+    for u32 r in 0..D { for u32 c in 0..W { flat[r*W+c] = t[r][c]; } }
+    field mut h = salt;
+    for u32 b in 0..NB { h = poseidon([h, flat[5*b], flat[5*b+1], flat[5*b+2], flat[5*b+3], flat[5*b+4]]); }
+    return h;
+}
