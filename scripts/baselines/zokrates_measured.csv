@@ -1,0 +1,25 @@
+# ZoKrates 0.8.8 compile measurements, Threadripper PRO 9975WX (64T/559GB), load ~2, 2026-09-13.
+# Raw data only. circuit=source; N,D,W = compile-time constants; constraints from `zokrates compile`;
+# rss_kb/compile_s from /usr/bin/time. stdlib=/home/binbin/ext-baselines/zok/stdlib.
+circuit,variant,N,D,W,H,constraints,rss_kb,compile_s
+q5a.poseidon.nosig,nosig,25,,,,19255,,
+q5a.poseidon.nosig,nosig,50,,,,38210,1226416,12.91
+q5a.poseidon.nosig,nosig,100,,,,76170,,
+q5a.poseidon,eddsa,50,,,,809408,2829440,45.03
+historical.poseidon.nosig,nosig,12,,,,20619,,
+historical.poseidon.nosig,nosig,180,,,,295135,,
+challenge1.poseidon.nosig,nosig,180,,,30,339727,,
+cmw,public-table,1,3,64,,13539,75892,0.10
+cmw,public-table,2,3,64,,14022,78172,0.20
+cmw,public-table,4,3,64,,14988,81404,0.20
+cmw,public-table,8,3,64,,16920,91484,0.30
+cmw,public-table,16,3,64,,20784,109384,0.60
+cmw,public-table,32,3,64,,28512,148324,1.20
+cmw,public-table,64,3,64,,43968,242580,2.60
+cmw,public-table,128,3,64,,74880,462844,6.00
+cmw,public-table,256,3,64,,136704,1039556,15.51
+cmw,public-table,16,3,128,,39984,169496,1.60
+cmw,public-table,16,3,256,,78384,310372,4.70
+cmw,public-table,64,3,256,,156864,676536,20.11
+cmw,public-table,16,3,512,,155184,532136,17.41
+cmw,public-table,16,3,1024,,308784,936444,67.24

@@ -1,0 +1,81 @@
+% ============================================================
+% DRAFT REPLACEMENT TEXT for zk1.tex -- zkStream / SPHinx claims
+% Written 2026-09-13. Every factual assertion below is verified against
+% /home/binbin/ext-baselines/zkstream-repo (rev 33c0d68f) and
+% /home/binbin/ext-baselines/zok/stdlib (ZoKrates 0.8.8).
+% ============================================================
+
+% ---------- R1: replaces zk1.tex:153--154 ----------
+Although ZKPs have been increasingly explored for verifiable analytics, most
+existing systems focus on computations over static datasets. The few ZKP-based
+works that consider streaming data prove each released result over a bounded,
+explicitly enumerated portion of the stream: a selected sub-stream or a sliding
+window of recent records~\cite{FioreTuckerSignedStreams2022}, or a fixed-size
+message array supplied to one operator invocation~\cite{zkStreamMiddleware2024}.
+This differs from the conventional streaming model, in which query results are
+continuously released over all data observed up to the current time.
+To the best of our knowledge, no prior non-interactive ZKP system instantiates
+and evaluates a summary maintained over the whole observed prefix.  We do not
+rest that claim on a reading of the literature alone: Section~\ref{sec:rq-zkstream}
+ports the stateful-operator mechanism that zkStream itself
+proposes (its Section~4.4) to a Count-Min update and measures it on our hardware.
+
+% ---------- R2: replaces the zkStream clause at zk1.tex:222 ----------
+zkStream~\cite{zkStreamMiddleware2024} compiles each operator of a stream program
+to a separate ZoKrates/Groth16 circuit over a compile-time-fixed message array,
+and passes Poseidon-committed values between adjacent operator proofs.  Its
+Section~4.4 further proposes stateful operators, ``passing the state as a
+confidential value from one to the next invocation of the operator'', and its
+artifact ships the commitment machinery that would realize this.  The shipped
+benchmarks, however, never instantiate it: across the artifact's operator
+circuits each is either a commitment \emph{producer} or a commitment
+\emph{consumer}, never both, so no proof carries an evolving object from
+$\com(S_{i-1})$ to $\com(S_i)$, and no benchmarked operator maintains a summary of
+the accumulated stream.
+
+% ---------- R3: replaces zk1.tex:383--387 ----------
+This mirrors the proof structure of the prior stream-ZKP
+systems SPHinx~\cite{FioreTuckerSignedStreams2022} and
+zkStream~\cite{zkStreamMiddleware2024}, which emit a separate proof for each
+released computation and link adjacent proofs through committed values.  The
+difference is what crosses the link: there, a committed \emph{result} of a
+bounded computation; here, the committed \emph{state} $\com(S_i)$ of a summary
+that every later batch continues to update.
+
+% ---------- R4: replaces zk1.tex:1194--1200 (the Baselines head) ----------
+\textbf{Baselines.}  \emph{External.}  zkStream~\cite{zkStreamMiddleware2024} is
+the closest deployed system and we compare against it head to head
+(Section~\ref{sec:rq-zkstream}).  Its Section~4.4 explicitly proposes carrying
+operator state forward as a confidential value, and its artifact ships the
+Poseidon commit-in/commit-out mechanism: one circuit emits a committed
+per-slice result, another consumes a fixed number of such commitments as public
+inputs.  What the artifact does not contain is a circuit that is both, i.e.\ an
+update proof taking $\com(S_{i-1})$ and returning $\com(S_i)$ over the same
+evolving object, and no shipped benchmark maintains a sketch.  We therefore do
+not claim that zkStream cannot be extended; we extend it ourselves, in its own
+toolchain, and report the cost.  SPHinx~\cite{FioreTuckerSignedStreams2022} is
+not portable in the same way: a SPHinx proof covers one statistic over one
+queried window with verification linear in that window's length, so no choice of
+input size aligns the two statements.  We additionally compare against
+zk-Analytics~\cite{XXX} at matched semantics.
+
+% ---------- R5: replaces zk1.tex:1206--1213 (RETRACTION of the stand-in) ----------
+\emph{Composition:} the per-batch proof chain against the proof forest across
+machine counts.  The chain is an ablation of \sys\ against itself: it holds the
+leaf circuit, the backend, and the field fixed and varies only the composition
+topology, so it isolates what recursive composition buys.  We do not offer it as
+a proxy for SPHinx or zkStream; the external comparison is carried by
+Section~\ref{sec:rq-zkstream} and by zk-Analytics.
+
+% ---------- R6: positioning sentence to OPEN the new zkStream section ----------
+This section compares \sys's \emph{update circuit} against a direct port of
+zkStream to the same Count-Min geometry on the same machine.  It deliberately
+does not compare composition topologies.  ZoKrates 0.8.8 ships exactly one
+recursion gadget, a BW6-761 verifier for BLS12-377 Groth16 proofs
+(\texttt{stdlib/snark/gm17.zok}); this is a two-chain, not a cycle, so it admits
+exactly one level of recursion and no logarithmic-depth composition, and
+zkStream never invokes it.  Any ZoKrates realization of a streaming sketch is
+therefore a chain by construction.  The proof forest is consequently evaluated
+against \sys's own chain (Section~\ref{sec:rq-topology}), where its benefit is
+audit compactness and multi-machine makespan rather than single-machine prover
+time.
