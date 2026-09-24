@@ -100,6 +100,8 @@ def main():
     ap.add_argument("--w", type=int, default=1024)
     ap.add_argument("--tamper", action="store_true", help="forgery checks at the smallest k")
     ap.add_argument("--allow-busy", action="store_true", help="skip the contention guard")
+    ap.add_argument("--prune", action="store_true",
+                    help="delete each chunk's witness files after it verifies (keeps proofs); needed for long chains")
     a = ap.parse_args()
 
     for tool in (ZOK, "/usr/bin/time"):
@@ -169,11 +171,15 @@ def main():
                                   "-j", f"proof_c{c}.json"], kdir)
             proof = json.loads((kdir / f"proof_c{c}.json").read_text())
             row(k, c, "prove", constraints=cons, wall_s=wall, peak_rss_mb=rss,
-                bytes=size(kdir / f"proof_c{c}.json"), public_inputs=len(proof.get("inputs", [])), note="JSON proof")
+                bytes=size(kdir / f"proof_c{c}.json"), public_inputs=len(proof.get("inputs", [])),
+                note=f"JSON proof; load1={os.getloadavg()[0]:.2f}")
             p, wall, rss = timed([ZOK, "verify", "-v", "cm_op.vk", "-j", f"proof_c{c}.json"], kdir, expect_ok=False)
             row(k, c, "verify", wall_s=wall, peak_rss_mb=rss, ok=int(p.returncode == 0 and "PASSED" in p.stdout),
                 note="CLI, includes process start")
             t, salt_in, prev_com_out = list(t_out), salt_out, com_out
+            if a.prune:
+                for f in (f"helper_c{c}.wit", f"helper_c{c}.json", f"op_c{c}.wit", f"op_c{c}.json"):
+                    (kdir / f).unlink(missing_ok=True)
 
         if a.tamper and k == min(a.k):
             def forged(i, value):

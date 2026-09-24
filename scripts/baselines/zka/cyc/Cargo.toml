@@ -29,3 +29,7 @@ path = "src/bin/acc_zka.rs"
 [[bin]]
 name = "cmp_tier"
 path = "src/bin/cmp_tier.rs"
+
+[[bin]]
+name = "shipped"
+path = "src/bin/shipped.rs"

@@ -1,0 +1,76 @@
+# shipped_exec.sh 2026-09-24T16:04:56+08:00 host=SPRL6201019991 load=[5.39 5.79 5.28]
+# zka=d4a5a9a90 r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# elf T=100 aggr_samples md5=4d3a15678786a46cb2a3d94a06dd041e
+# elf T=100 aggr_histogram md5=6e24be7bfcba6bac6e01e719718d1540
+# elf T=100 aggr_cm md5=6098528d86c6a6bb51a484b1a1d4e759
+# elf T=100 querier-guest-samples md5=b5b43bb86bd5a37f23bacef5d88dd564
+# elf T=100 querier-guest-histogram md5=a719446111244b6e1cea109389b4068f
+# elf T=100 querier-guest-cm md5=138367fbbeb6affed2d5aa67b23070b8
+# elf T=1 aggr_samples md5=25c0803cb4e68789e875825bc041016e
+# elf T=1 aggr_histogram md5=c25771a6d7befdf01bac0615ba8aad6d
+# elf T=1 aggr_cm md5=90fce45df8a7fb0b96153d6c4e19aea6
+# elf T=1 querier-guest-samples md5=716c30fd93eeed1c927d3dafc51fe212
+# elf T=1 querier-guest-histogram md5=9db670cddc171012735d98e2dfae43ae
+# elf T=1 querier-guest-cm md5=5c5efaf279ada5cda477edcc13836814
+[run ] cyc-t100 shipped --mode aggr --family samples --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,aggr,aggr_samples,samples,-,100,32,1,0,16384,16384,8,1,-,8433,8433,1409160,131981406,158859264,152,20,2.158,792,1,true,state_entries=8433,distinct=8433,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode aggr --family histogram --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,aggr,aggr_histogram,histogram,-,100,32,1,0,16384,16384,8,key&0x1FFFFF,-,8433,8433,1409160,272843799,333447168,318,20,4.307,792,1,true,state_entries=8433,distinct=8433,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode aggr --family cm --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,aggr,aggr_cm,cm,-,100,32,1,0,16384,16384,8,1,-,8433,100,1409160,274155148,289669120,277,20,2.766,1304,1,true,heap_occupied=100,distinct=8433,NaN,NaN,0,NaN,aol
+[run ] cyc-t1 shipped --mode aggr --family cm --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,aggr,aggr_cm,cm,-,1,32,1,0,16384,16384,8,1,-,8433,1,1409160,100439836,108134400,104,20,1.339,1304,1,true,heap_occupied=1,distinct=8433,NaN,NaN,0,NaN,aol
+[run ] cyc-t1 shipped --mode aggr --family samples --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,aggr,aggr_samples,samples,-,1,32,1,0,16384,16384,8,1,-,8433,8433,1409160,131981406,158859264,152,20,2.175,792,1,true,state_entries=8433,distinct=8433,NaN,NaN,0,NaN,aol
+[run ] cyc-t1 shipped --mode aggr --family histogram --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,aggr,aggr_histogram,histogram,-,1,32,1,0,16384,16384,8,key&0x1FFFFF,-,8433,8433,1409160,272843799,333447168,318,20,4.356,792,1,true,state_entries=8433,distinct=8433,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode aggr --family histogram --key-id const --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,aggr,aggr_histogram,histogram,-,100,32,1,0,16384,16384,8,key&0x1FFFFF,-,8433,1,1409160,86498951,92536832,89,20,1.228,792,1,true,state_entries=1,distinct=8433,NaN,NaN,0,NaN,const
+[run ] cyc-t100 shipped --mode query --family samples --epochs 1 --limit 10 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_samples,samples,sum_topk,100,32,1,-,16384,16384,8,1,10,8433,8433,1720880,88725164,94896128,91,20,1.297,488,1,true,top=180;135;115;111;108;103;97;94;90;81,top=180;135;115;111;108;103;97;94;90;81,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family histogram --epochs 1 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_histogram,histogram,p90,100,32,1,-,16384,16384,8,key&0x1FFFFF,-,8433,8433,1687016,116355073,126877696,121,20,1.547,420,1,true,p90_value=524288,p90=1864631 bin=20 [1048576..2097152),NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family histogram --epochs 1 --key-id const --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_histogram,histogram,p90,100,32,1,-,16384,16384,8,key&0x1FFFFF,-,8433,1,616,51496,131072,1,17,0.023,420,1,true,p90_value=524288,p90=1864631 bin=20 [1048576..2097152),NaN,NaN,0,NaN,const
+[run ] cyc-t100 shipped --mode query --family cm --epochs 1 --query estimate --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,estimate,100,32,1,-,16384,16384,8,1,-,8433,100,19968,1187600,1310720,2,20,0.040,412,1,true,estimate=189,key=3780053395 exact=180,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family cm --epochs 1 --query topk --limit 10 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,topk,100,32,1,-,16384,16384,8,1,10,8433,100,19912,1402597,1572864,2,20,0.042,488,1,true,top=189;146;132;123;117;107;107;105;103;86,top=180;135;115;111;108;103;97;94;90;81,NaN,NaN,0,NaN,aol
+[run ] cyc-t1 shipped --mode query --family cm --epochs 1 --query estimate --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,estimate,1,32,1,-,16384,16384,8,1,-,8433,1,12840,845442,1048576,1,20,0.035,412,1,true,estimate=189,key=3780053395 exact=180,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family samples --epochs 4 --limit 10 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_samples,samples,sum_topk,100,32,4,-,16384,65536,8,1,10,29390,34884,7118480,374930142,403701760,385,20,5.584,872,4,true,top=1020;730;397;397;391;333;279;263;261;160,top=1020;730;397;397;391;333;279;263;261;160,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family histogram --epochs 4 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_histogram,histogram,p90,100,32,4,-,16384,65536,8,key&0x1FFFFF,-,29390,34884,6978428,481162940,523763712,500,20,6.454,804,4,true,p90_value=524288,p90=1882375 bin=20 [1048576..2097152),NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family histogram --epochs 4 --key-id const --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_histogram,histogram,p90,100,32,4,-,16384,65536,8,key&0x1FFFFF,-,29390,4,2428,165509,262144,1,18,0.027,804,4,true,p90_value=524288,p90=1882375 bin=20 [1048576..2097152),NaN,NaN,0,NaN,const
+[run ] cyc-t100 shipped --mode query --family cm --epochs 4 --query estimate --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,estimate,100,32,4,-,16384,65536,8,1,-,29390,400,79656,4706657,5242880,5,20,0.092,796,4,true,estimate=1064,key=3780053395 exact=1020,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family cm --epochs 4 --query topk --limit 10 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,topk,100,32,4,-,16384,65536,8,1,10,29390,400,79600,5799357,6291456,6,20,0.103,872,4,true,top=1064;777;440;436;430;396;317;312;304;196,top=1020;730;397;397;391;333;279;263;261;160,NaN,NaN,0,NaN,aol
+[run ] cyc-t1 shipped --mode query --family cm --epochs 4 --query estimate --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,estimate,1,32,4,-,16384,65536,8,1,-,29390,4,51144,3338025,3670016,4,20,0.068,796,4,true,estimate=1064,key=3780053395 exact=1020,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family samples --epochs 16 --limit 10 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_samples,samples,sum_topk,100,32,16,-,16384,262144,8,1,10,87540,135505,27651548,1490288047,1612185600,1538,20,22.995,2408,16,true,top=4010;1946;1879;1837;1526;1260;1147;1117;990;842,top=4010;1946;1879;1837;1526;1260;1147;1117;990;842,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family histogram --epochs 16 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_histogram,histogram,p90,100,32,16,-,16384,262144,8,key&0x1FFFFF,-,87540,135505,27107476,1869382965,2034761728,1941,20,24.856,2340,16,true,p90_value=524288,p90=1871077 bin=20 [1048576..2097152),NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family histogram --epochs 16 --key-id const --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_histogram,histogram,p90,100,32,16,-,16384,262144,8,key&0x1FFFFF,-,87540,16,9676,621189,1048576,1,20,0.031,2340,16,true,p90_value=524288,p90=1871077 bin=20 [1048576..2097152),NaN,NaN,0,NaN,const
+[run ] cyc-t100 shipped --mode query --family cm --epochs 16 --query estimate --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,estimate,100,32,16,-,16384,262144,8,1,-,87540,1600,318408,18782885,20185088,20,20,0.299,2332,16,true,estimate=4154,key=3780053395 exact=4010,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family cm --epochs 16 --query topk --limit 10 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,topk,100,32,16,-,16384,262144,8,1,10,87540,1600,318352,24039778,25690112,25,20,0.332,2408,16,true,top=4154;2104;2041;2027;1699;1455;1322;1322;1124;984,top=4010;1946;1879;1837;1526;1260;1147;1117;990;842,NaN,NaN,0,NaN,aol
+[run ] cyc-t1 shipped --mode query --family cm --epochs 16 --query estimate --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,estimate,1,32,16,-,16384,262144,8,1,-,87540,16,204360,13308357,14680064,14,20,0.209,2332,16,true,estimate=4154,key=3780053395 exact=4010,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family samples --epochs 64 --limit 10 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_samples,samples,sum_topk,100,32,64,-,16384,1048576,8,1,10,245620,546948,111611456,6145460364,6664749056,6356,20,112.182,8552,64,true,top=17564;8463;7466;7125;6425;5935;4784;4342;3019;2734,top=17564;8463;7466;7125;6425;5935;4784;4342;3019;2734,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family histogram --epochs 64 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_histogram,histogram,p90,100,32,64,-,16384,1048576,8,key&0x1FFFFF,-,245620,546948,109415468,7545006747,8212447232,7832,20,108.707,8484,64,true,p90_value=524288,p90=1870757 bin=20 [1048576..2097152),NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family histogram --epochs 64 --key-id const --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_histogram,histogram,p90,100,32,64,-,16384,1048576,8,key&0x1FFFFF,-,245620,64,38668,2443537,2621440,3,20,0.081,8484,64,true,p90_value=524288,p90=1870757 bin=20 [1048576..2097152),NaN,NaN,0,NaN,const
+[run ] cyc-t100 shipped --mode query --family cm --epochs 64 --query estimate --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,estimate,100,32,64,-,16384,1048576,8,1,-,245620,6400,1273416,75087797,80740352,77,20,1.564,8476,64,true,estimate=18251,key=3780053395 exact=17564,NaN,NaN,0,NaN,aol
+[run ] cyc-t100 shipped --mode query --family cm --epochs 64 --query topk --limit 10 --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,topk,100,32,64,-,16384,1048576,8,1,10,245620,6400,1273360,97454814,104333312,100,20,2.108,8552,64,true,top=18251;9214;8206;7745;7358;6722;5445;5013;3626;3450,top=17564;8463;7466;7125;6425;5935;4784;4342;3019;2734,NaN,NaN,0,NaN,aol
+[run ] cyc-t1 shipped --mode query --family cm --epochs 64 --query estimate --keys /home/binbin/zkSketch/data/aol.keys
+zka,shipped,query,querier_cm,cm,estimate,1,32,64,-,16384,1048576,8,1,-,245620,64,817224,53189685,57147392,55,20,1.214,8476,64,true,estimate=18251,key=3780053395 exact=17564,NaN,NaN,0,NaN,aol
