@@ -48,6 +48,23 @@
 //! no `L`-round schedule — SpaceSaving is the cheapest Pattern B family,
 //! exactly as the paper notes ("SpaceSaving avoids the … round count").
 //!
+//! ### Permute domains (shared PermuteBus)
+//!
+//! The pinned fork concatenates every `add_permute` of a circuit into ONE
+//! PermuteAir whose `PermuteBus` message is the four value coordinates only
+//! (no op id), so it proves only that the union of all permute inputs equals
+//! the union of all outputs. With both permutes on the same untagged
+//! `[key_lo, key_hi, count, active]` encoding a prover could trade rows
+//! between them and re-fragment a key (PoC:
+//! `tests::shared_permute_bus_forgery_rejected`, accepted before the fix).
+//! The count-sort domain (`grouped`, `g_sorted`, `residual`) therefore carries
+//! `GROUPED_OP_TAG` in the `key_hi` slot (keys are single-limb, and
+//! `key_sorted.key_hi = 0` is enforced), which restores per-op multiset
+//! equality by a counting argument. NOTE: like every constraint on decomposed
+//! fields, this relies on decompositions being bound to their packed values,
+//! which the fork's `recompose/coeff` lowering does by default (see
+//! `crate::recompose_binding` and `BIND_DECOMPOSITIONS`).
+//!
 //! ### Assumptions / scope
 //!
 //! - Per-record `count`/`value` fit in `COUNT_DIFF_BITS − 1` bits
@@ -93,6 +110,8 @@ use p3_uni_stark::StarkGenericConfig;
 
 use crate::config::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config::ConfigWithFriParams;
+use crate::recursion::recursive::statement::{self, Expose, IndexPin};
+use crate::sketch::bind::Binding;
 use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
@@ -112,6 +131,11 @@ const COUNT_DIFF_BITS: usize = 22;
 /// adjacent. Must satisfy `2^(KEY_DIFF_BITS+1) < p` (BabyBear `p ≈ 2^30.9`),
 /// so 29 is the max safe width; callers mask keys to `KEY_DIFF_BITS` bits.
 const KEY_DIFF_BITS: usize = 29;
+
+/// Permute-domain tag carried in the `key_hi` coordinate of every row the
+/// COUNT-SORT permute moves (`grouped` → `g_sorted`). The key-sort permute's
+/// rows (`combined` → `key_sorted`) have `key_hi = 0`. See Stage 6.
+const GROUPED_OP_TAG: u32 = 1;
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -342,11 +366,16 @@ pub fn commit_ss_batch(batch: &[SsFullUpdate]) -> SsFullBatchCommit {
 /// One row of the combined (key-sorted) union, used to drive the
 /// in-circuit group-by. The circuit reconstructs all of this from the
 /// permutation witness, so only the permutations are surfaced.
+#[derive(Clone)]
 struct SsBuild {
     /// `combined` = old rows ‖ batch rows (length cap+m), unsorted.
+    #[allow(dead_code)] // reference copy; the circuit reads `key_sorted` directly.
     combined: Vec<SsFullRow>,
     /// permutation σ_key with `key_sorted[i] = combined[σ_key[i]]`.
     sigma_key: Vec<usize>,
+    /// `key_sorted` = the key-sort permute's output table (honestly
+    /// `combined[σ_key[i]]`; a soundness test may hand-craft it).
+    key_sorted: Vec<SsFullRow>,
     /// grouped table `G` (length cap+m): segment-end rows carry the summed
     /// count, others are dummies.
     grouped: Vec<SsFullRow>,
@@ -372,39 +401,12 @@ fn key_field(key: u64) -> u128 {
     (lo as u128) + ((hi as u128) << 32)
 }
 
-/// Build the SpaceSaving top-`s` update certificate witnesses.
-fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
-    let cap = s_old.params.capacity;
-    let m = s_old.params.batch;
-    let total = cap + m;
-
-    // combined = old rows (key,count,active) ‖ batch rows (key,value,active)
-    let mut combined: Vec<SsFullRow> = Vec::with_capacity(total);
-    for r in &s_old.rows {
-        combined.push(*r);
-    }
-    for u in batch {
-        combined.push(SsFullRow {
-            key: u.key,
-            count: u.value,
-            active: u.active,
-        });
-    }
-
-    // key-sort (ascending by key_field; stable for determinism).
-    let mut idx: Vec<usize> = (0..total).collect();
-    idx.sort_by_key(|&i| key_field(combined[i].key));
-    // Test-only: leave the union unsorted so same-key rows that aren't already
-    // adjacent in `[old ‖ batch]` fragment under the adjacency-only group-by.
-    // The circuit accepts it because union key-sortedness is never enforced.
-    #[cfg(test)]
-    if TAMPER_FRAGMENT.with(|f| f.get()) {
-        idx = (0..total).collect();
-    }
-    let sigma_key = idx.clone();
-    let key_sorted: Vec<SsFullRow> = idx.iter().map(|&i| combined[i]).collect();
-
-    // adjacency tags + running sum (count + active) over equal-key runs.
+/// Group a key-sorted table by ADJACENT equal keys (the in-circuit
+/// PoneglyphDB running-sum gadget): returns `(key_eq_tag, seg_end, grouped)`.
+/// `grouped[r]` is the segment total at a segment end (active iff any
+/// contributor was active) and a dummy elsewhere.
+fn group_by_key(key_sorted: &[SsFullRow]) -> (Vec<u32>, Vec<u32>, Vec<SsFullRow>) {
+    let total = key_sorted.len();
     let mut key_eq_tag = vec![0u32; total];
     let mut acc_count = vec![0u64; total];
     let mut acc_active = vec![0u64; total];
@@ -441,6 +443,75 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
             };
         }
     }
+    (key_eq_tag, seg_end, grouped)
+}
+
+/// The mergeable Misra-Gries compression of a count-sorted grouped table:
+/// `S_new = g_sorted[m..]` with `τ` subtracted (non-positive → dummy), and
+/// `residual = g_sorted[..m]` (original counts).
+fn compress_from_gsorted(
+    params: SsFullParams,
+    g_sorted: &[SsFullRow],
+    tau: u32,
+) -> (SsFullState, Vec<SsFullRow>) {
+    let cap = params.capacity;
+    let m = params.batch;
+    let residual: Vec<SsFullRow> = g_sorted[..m].to_vec();
+    let s_new: Vec<SsFullRow> = (0..cap)
+        .map(|i| {
+            let src = g_sorted[m + i];
+            let c = src.count.saturating_sub(tau);
+            if src.active == 1 && c > 0 {
+                SsFullRow::real(src.key, c)
+            } else {
+                SsFullRow::dummy()
+            }
+        })
+        .collect();
+    (
+        SsFullState {
+            rows: s_new,
+            params,
+        },
+        residual,
+    )
+}
+
+/// Build the SpaceSaving top-`s` update certificate witnesses.
+fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
+    let cap = s_old.params.capacity;
+    let m = s_old.params.batch;
+    let total = cap + m;
+
+    // combined = old rows (key,count,active) ‖ batch rows (key,value,active)
+    let mut combined: Vec<SsFullRow> = Vec::with_capacity(total);
+    for r in &s_old.rows {
+        combined.push(*r);
+    }
+    for u in batch {
+        combined.push(SsFullRow {
+            key: u.key,
+            count: u.value,
+            active: u.active,
+        });
+    }
+
+    // key-sort (ascending by key_field; stable for determinism).
+    let mut idx: Vec<usize> = (0..total).collect();
+    idx.sort_by_key(|&i| key_field(combined[i].key));
+    // Test-only: leave the union unsorted so same-key rows that aren't already
+    // adjacent in `[old ‖ batch]` fragment under the adjacency-only group-by.
+    // The circuit accepts it because union key-sortedness is never enforced.
+    #[cfg(test)]
+    if TAMPER_FRAGMENT.with(|f| f.get()) {
+        idx = (0..total).collect();
+    }
+    let sigma_key = idx.clone();
+    let key_sorted: Vec<SsFullRow> = idx.iter().map(|&i| combined[i]).collect();
+
+    // adjacency tags + running sum (count + active) over equal-key runs.
+    #[allow(unused_mut)]
+    let (key_eq_tag, seg_end, mut grouped) = group_by_key(&key_sorted);
 
     // Test-only: demote the largest-key count-0 ACTIVE segment to a dummy
     // (active bit flipped off), freeing a retained slot for a different
@@ -488,6 +559,7 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
     SsBuild {
         combined,
         sigma_key,
+        key_sorted,
         grouped,
         key_eq_tag,
         seg_end,
@@ -504,11 +576,9 @@ pub fn apply_batch_ss_full(
     s_old: &SsFullState,
     batch: &[SsFullUpdate],
 ) -> (SsFullState, Vec<SsFullRow>) {
-    let cap = s_old.params.capacity;
     let m = s_old.params.batch;
     assert_eq!(batch.len(), m);
     let b = build_ss(s_old, batch);
-    let residual: Vec<SsFullRow> = b.g_sorted[..m].to_vec();
     // Mergeable Misra-Gries / Frequent compression (Agarwal et al. 2012):
     // subtract the (s+1)-th largest grouped count `τ` from every retained
     // counter and clamp non-positive counters to dummies. This gives the
@@ -518,25 +588,31 @@ pub fn apply_batch_ss_full(
     // count-ascending, each retained count ≥ `g_sorted[m] ≥ τ`, so the
     // saturating subtraction never truncates a real survivor and the clamped
     // (count-0) rows form the low-count prefix — final stays (active asc, count asc).
-    let tau = b.tau;
-    let s_new: Vec<SsFullRow> = (0..cap)
-        .map(|i| {
-            let src = b.g_sorted[m + i];
-            let c = src.count.saturating_sub(tau);
-            if src.active == 1 && c > 0 {
-                SsFullRow::real(src.key, c)
-            } else {
-                SsFullRow::dummy()
-            }
-        })
-        .collect();
-    (
-        SsFullState {
-            rows: s_new,
-            params: s_old.params,
-        },
+    compress_from_gsorted(s_old.params, &b.g_sorted, b.tau)
+}
+
+/// Every table the SS leaf binds. [`SsFullLeafCircuit::prove_epoch`] derives
+/// it honestly from `(S_old, B)`; soundness tests hand-craft one to play a
+/// malicious prover (see `tests::shared_permute_bus_*`).
+#[derive(Clone)]
+struct SsWitness {
+    initial: SsFullState,
+    batch: Vec<SsFullUpdate>,
+    final_state: SsFullState,
+    residual: Vec<SsFullRow>,
+    build: SsBuild,
+}
+
+fn honest_ss_witness(initial: &SsFullState, batch: &[SsFullUpdate]) -> SsWitness {
+    let (final_state, residual) = apply_batch_ss_full(initial, batch);
+    let build = build_ss(initial, batch);
+    SsWitness {
+        initial: initial.clone(),
+        batch: batch.to_vec(),
+        final_state,
         residual,
-    )
+        build,
+    }
 }
 
 // ─── Test-only soundness hook ─────────────────────────────────────────────
@@ -564,6 +640,74 @@ thread_local! {
     /// a different zero-weight key. The `grouped.active = se·(acc_active≠0)`
     /// binding must reject it. Drives [`tests::count0_active_rejected`].
     static TAMPER_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override of [`bind_decompositions`].
+    static BIND_DECOMP: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// Test-only override of [`use_op_tag`] (`Some(false)` = pre-fix circuit).
+    static OP_TAG: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether the count-sort permute domain is op-tagged (shared-PermuteBus fix).
+/// Always on outside tests.
+fn use_op_tag() -> bool {
+    #[cfg(test)]
+    if let Some(v) = OP_TAG.with(|c| c.get()) {
+        return v;
+    }
+    true
+}
+
+/// Circuit-level decomposition binding (OFF by default — see
+/// [`BIND_DECOMPOSITIONS`]).
+fn bind_decompositions() -> bool {
+    #[cfg(test)]
+    if let Some(v) = BIND_DECOMP.with(|c| c.get()) {
+        return v;
+    }
+    BIND_DECOMPOSITIONS
+}
+
+/// **Circuit-level decomposition binding (opt-in alternative; OFF).**
+///
+/// Under the pre-fix recompose lowering (fork rev 19dcb37, or
+/// `crate::recompose_binding::with_unbound_recompose`),
+/// `decompose_ext_to_base_coeffs(x)` emits the coefficients as an
+/// unconstrained hint and re-links them to `x` only via a RecomposeAir row
+/// whose WitnessChecks message is `[x_idx, v0..v3]`. The coefficient witnesses
+/// never appear on the bus there, and each gets its bus creator from its first
+/// ALU use. So NOTHING ties the decomposed fields the constraints use to the
+/// packed value that is hashed/permuted:
+/// `tests::decomposition_forgery_accepted_without_coeff_binding` commits to a
+/// final state claiming count 1000 for a key seen once, and the proof
+/// self-verifies.
+///
+/// The fork's default lowering now closes this at no row cost: the
+/// `recompose/coeff` row publishes each coefficient as `[idx, v_i, 0, 0, 0]`,
+/// with first-occurrence creator arbitration
+/// (`tests::decomposition_forgery_rejected_by_recompose_coeff_table`).
+/// This flag is the per-circuit alternative, kept for comparison: for every
+/// decomposed table it adds an explicit ALU recomposition
+/// `sum_i c_i X^i - x = 0` and forces every coefficient into the base field
+/// (range check / boolean / constant / ALU image of such), which makes the
+/// decomposition unique on its own (+18% trace rows at cap=1024, m=16).
+pub const BIND_DECOMPOSITIONS: bool = false;
+
+/// Constrain `x == sum_i c_i X^i` with ALU rows. Sound only if every `c_i`
+/// is separately forced into the base field.
+fn bind_decomposition(
+    b: &mut CircuitBuilder<Challenge>,
+    x: ExprId,
+    coeffs: &[ExprId],
+    zero: ExprId,
+) {
+    let r = b
+        .recompose_base_coeffs_to_ext_via_alu::<Val>(coeffs)
+        .expect("recompose for decomposition binding");
+    let d = b.sub(r, x);
+    b.connect(d, zero);
 }
 
 // ─── Prover ──────────────────────────────────────────────────────────────
@@ -600,14 +744,35 @@ pub struct SsFullLeafCircuit {
     prover: BatchStarkProver<ConfigWithFriParams>,
     circuit_prover_data: Rc<CircuitProverData<ConfigWithFriParams>>,
     trace_rows: u64,
+    /// Whether the count-sort permute's rows carry [`GROUPED_OP_TAG`] in the
+    /// `key_hi` coordinate (the shared-PermuteBus fix). Always `true` outside
+    /// tests; the soundness PoC builds the pre-fix circuit to show the attack.
+    op_tag: bool,
+    /// The composition statement this leaf exposes.
+    expose: Expose,
+    /// Batch index `t` of the next proof (Interval statement only).
+    batch_index: u64,
 }
 
 /// Build the reusable SpaceSaving leaf circuit for a shape.
 pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFullLeafCircuit {
+    build_ss_full_leaf_expose(params, Expose::from_bool(expose_boundary))
+}
+
+/// Build the reusable SpaceSaving leaf circuit with an explicit composition
+/// statement. `Expose::None` / `Expose::Boundary` are exactly
+/// [`build_ss_full_leaf`] with `expose_boundary = false / true`
+/// (byte-for-byte); `Expose::Interval` additionally takes the batch index `t`
+/// as the last public input and exposes
+/// `(init, final, (t, t, 0, 0), Poseidon2(TAG_LEAF, t, Com(B_t)))` with the
+/// in-circuit batch digest (see [`crate::recursion::recursive::statement`]).
+pub fn build_ss_full_leaf_expose(params: SsFullParams, expose: Expose) -> SsFullLeafCircuit {
+    let expose_boundary = expose == Expose::Boundary;
     params.validate();
     let cap = params.capacity;
     let m = params.batch;
     let total = cap + m;
+    let op_tag = use_op_tag();
 
     // ─── Build circuit ──────────────────────────────────────────────────
     let mut b = CircuitBuilder::<Challenge>::new();
@@ -616,9 +781,11 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    crate::recompose_binding::configure(&mut b);
+    let bind_decomp = bind_decompositions();
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
-    if expose_boundary {
+    if expose.exposes() {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
 
@@ -636,6 +803,7 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
     let two_pow_32 = b.alloc_const(Challenge::from_u64(1u64 << 32), "two_pow_32");
+    let grouped_tag = b.alloc_const(Challenge::from_u32(GROUPED_OP_TAG), "grouped_op_tag");
 
     // Private inputs (alloc order MUST match the packing below):
     //   init, final(=s_new), batch, key_sorted, grouped, g_sorted,
@@ -697,6 +865,20 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     for i in 0..DIGEST_PACKING {
         b.connect(h_batch[i], batch_pis[i]);
     }
+    // Interval statement (B6(b)): batch index t (7th public input) and
+    // H = Poseidon2(TAG_LEAF, t, h_batch), exposed with the boundary.
+    if expose.is_interval() {
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b,
+            &Poseidon2Config::BABY_BEAR_D4_W16,
+            &init_pis,
+            &final_pis,
+            &h_batch,
+            zero,
+            Binding::Semantic,
+            IndexPin::Range,
+        );
+    }
 
     // ─── Stage 2: decompose all packed sequences ────────────────────────
     let init_fields: Vec<Vec<ExprId>> = init_packed
@@ -727,6 +909,54 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         .iter()
         .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d res"))
         .collect();
+
+    // ─── Stage 2b (opt-in): bind every decomposition to its packed value ─
+    // See BIND_DECOMPOSITIONS: without this the decomposed fields are not
+    // constrained to the packed (hashed / permuted) values at all.
+    if bind_decomp {
+        assert!(op_tag, "decomposition binding assumes the op-tagged layout");
+        for (packed, fields) in [
+            (&init_packed, &init_fields),
+            (&final_packed, &final_fields),
+            (&batch_packed, &batch_fields),
+            (&key_sorted_packed, &key_sorted_fields),
+            (&grouped_packed, &grouped_fields),
+            (&g_sorted_packed, &g_sorted_fields),
+            (&residual_packed, &residual_fields),
+        ] {
+            for (&p, f) in packed.iter().zip(fields.iter()) {
+                bind_decomposition(&mut b, p, f, zero);
+            }
+        }
+        // Base-force the coefficients no other constraint pins to the base
+        // field: committed init/batch keys (single-limb, < 2^KEY_DIFF_BITS) and
+        // counts/values (< 2^(COUNT_DIFF_BITS−1)), and the g_sorted key (the
+        // final key is its ALU image). Every other coefficient is already
+        // range-checked, boolean, a constant, or an ALU image of such.
+        for r in 0..cap {
+            b.connect(init_fields[r][1], zero);
+            let _ = b
+                .add_range_bits::<Val>(init_fields[r][0], KEY_DIFF_BITS)
+                .expect("init key base-range");
+            let _ = b
+                .add_range_bits::<Val>(init_fields[r][2], COUNT_DIFF_BITS - 1)
+                .expect("init count base-range");
+        }
+        for j in 0..m {
+            b.connect(batch_fields[j][1], zero);
+            let _ = b
+                .add_range_bits::<Val>(batch_fields[j][0], KEY_DIFF_BITS)
+                .expect("batch key base-range");
+            let _ = b
+                .add_range_bits::<Val>(batch_fields[j][2], COUNT_DIFF_BITS - 1)
+                .expect("batch value base-range");
+        }
+        for r in 0..total {
+            let _ = b
+                .add_range_bits::<Val>(g_sorted_fields[r][0], KEY_DIFF_BITS)
+                .expect("g_sorted key base-range");
+        }
+    }
 
     // ─── Stage 3: boolean active-flag checks ────────────────────────────
     let bool_check = |b: &mut CircuitBuilder<Challenge>, a: ExprId| {
@@ -896,8 +1126,16 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         // key gating: grouped.key_lo/hi = active · key_sorted.key_lo/hi
         let want_key_lo = b.mul(key_sorted_fields[r][0], grouped_fields[r][3]);
         b.connect(grouped_fields[r][0], want_key_lo);
-        let want_key_hi = b.mul(key_sorted_fields[r][1], grouped_fields[r][3]);
-        b.connect(grouped_fields[r][1], want_key_hi);
+        if op_tag {
+            // Op tag (shared-PermuteBus fix): every row of the count-sort
+            // permute's INPUT carries GROUPED_OP_TAG in the key_hi slot. The
+            // union keys are single-limb (key_hi = 0 is enforced on key_sorted
+            // above), so key_hi is free to name the permute domain.
+            b.connect(grouped_fields[r][1], grouped_tag);
+        } else {
+            let want_key_hi = b.mul(key_sorted_fields[r][1], grouped_fields[r][3]);
+            b.connect(grouped_fields[r][1], want_key_hi);
+        }
     }
 
     // ─── Stage 6: count-sort G → g_sorted via PermuteAir ────────────────
@@ -909,6 +1147,20 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         .expect("permute count-sort");
     for i in 0..total {
         b.connect(cs_permuted[i], g_sorted_packed[i]);
+    }
+    // ── Op tag on the count-sort OUTPUT (shared-PermuteBus fix) ──
+    // The fork concatenates every add_permute into ONE PermuteAir whose
+    // PermuteBus message is the 4 value coordinates only (no op id), so it
+    // proves only  M(combined) ⊎ M(grouped) = M(key_sorted) ⊎ M(g_sorted).
+    // With key_hi = 0 on every key_sorted row (Stage 5) and key_hi =
+    // GROUPED_OP_TAG on every grouped AND g_sorted row, counting the tagged
+    // elements on each side forces  M(grouped) = M(g_sorted)  and then
+    // M(combined) = M(key_sorted): the two permutes can no longer trade rows
+    // (tests::shared_permute_bus_forgery_rejected).
+    if op_tag {
+        for r in 0..total {
+            b.connect(g_sorted_fields[r][1], grouped_tag);
+        }
     }
 
     // ─── Stage 7: sortedness on g_sorted ────────────────────────────────
@@ -1003,8 +1255,14 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         b.connect(final_fields[i][3], nz);
         let want_key_lo = b.mul(g_sorted_fields[src][0], nz);
         b.connect(final_fields[i][0], want_key_lo);
-        let want_key_hi = b.mul(g_sorted_fields[src][1], nz);
-        b.connect(final_fields[i][1], want_key_hi);
+        if op_tag {
+            // g_sorted.key_hi is the op tag, not key material: the committed
+            // final key_hi is 0 (single-limb keys), as before.
+            b.connect(final_fields[i][1], zero);
+        } else {
+            let want_key_hi = b.mul(g_sorted_fields[src][1], nz);
+            b.connect(final_fields[i][1], want_key_hi);
+        }
     }
 
     // ─── Stage 9: mass conservation ─────────────────────────────────────
@@ -1058,7 +1316,7 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
     air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
-    if expose_boundary {
+    if expose.exposes() {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
     }
@@ -1083,7 +1341,7 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
     prover.register_range_table::<4>();
-    if expose_boundary {
+    if expose.exposes() {
         prover.register_expose_table::<4>();
     }
     let trace_rows: u64 = ext_degrees.iter().map(|&d| 1u64 << d).sum();
@@ -1094,30 +1352,74 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         prover,
         circuit_prover_data: Rc::new(circuit_prover_data),
         trace_rows,
+        op_tag,
+        expose,
+        batch_index: 1,
     }
 }
 
 impl SsFullLeafCircuit {
-    /// Prove one epoch on the prebuilt circuit.
+    /// Pack a table in the key-sort permute's encoding (`key_sorted`).
+    fn pack_union_table(&self, rows: &[SsFullRow]) -> Vec<Challenge> {
+        pack_rows_to_challenge(rows)
+    }
+
+    /// Pack a table in the count-sort permute's encoding (`grouped`,
+    /// `g_sorted`, and `residual`, which is wired to `g_sorted[..m]`): the
+    /// `key_hi` coordinate carries [`GROUPED_OP_TAG`] when the op tag is on.
+    fn pack_grouped_table(&self, rows: &[SsFullRow]) -> Vec<Challenge> {
+        if !self.op_tag {
+            return pack_rows_to_challenge(rows);
+        }
+        use p3_field::BasedVectorSpace;
+        rows.iter()
+            .map(|r| {
+                let (lo, hi) = key_lo_hi(r.key);
+                assert_eq!(hi, 0, "SS keys are single-limb (key_hi = 0)");
+                let coeffs = [
+                    Val::from_u32(lo),
+                    Val::from_u32(GROUPED_OP_TAG),
+                    Val::from_u32(r.count),
+                    Val::from_u32(r.active),
+                ];
+                Challenge::from_basis_coefficients_slice(&coeffs).expect("4 base coeffs")
+            })
+            .collect()
+    }
+
+    /// Prove one epoch on the prebuilt circuit (batch index 1 under the
+    /// Interval statement; see [`Self::prove_epoch_at`]).
     pub fn prove_epoch(
         &mut self,
         initial_state: SsFullState,
         batch: Vec<SsFullUpdate>,
     ) -> SsFullLeafProof {
+        self.prove_epoch_at(1, initial_state, batch)
+    }
+
+    /// The statement this leaf exposes ([`Expose`]).
+    pub fn expose(&self) -> Expose {
+        self.expose
+    }
+
+    /// Prove the epoch of batch `t` (1-based); `t` is part of the Interval
+    /// statement (ignored by the other layouts).
+    pub fn prove_epoch_at(
+        &mut self,
+        t: u64,
+        initial_state: SsFullState,
+        batch: Vec<SsFullUpdate>,
+    ) -> SsFullLeafProof {
+        self.batch_index = t;
         let params = self.params;
         assert_eq!(initial_state.params, params);
         assert_eq!(batch.len(), params.batch);
 
         let cap = params.capacity;
-        let m = params.batch;
-        let total = cap + m;
 
         // ─── Native side ────────────────────────────────────────────────────
-        let (final_state, residual_rows) = apply_batch_ss_full(&initial_state, &batch);
-        let build = build_ss(&initial_state, &batch);
-        let initial_commit = commit_ss_state(&initial_state);
-        let final_commit = commit_ss_state(&final_state);
-        let batch_commit = commit_ss_batch(&batch);
+        let w = honest_ss_witness(&initial_state, &batch);
+        let (final_state, residual_rows, build) = (&w.final_state, &w.residual, &w.build);
 
         // Sanity: mass conservation.
         let init_mass = initial_state.total_mass();
@@ -1145,6 +1447,22 @@ impl SsFullLeafCircuit {
             .update_permute_witnesses(&[build.sigma_key.clone(), build.sigma_count.clone()])
             .expect("update permute witnesses (ss_full)");
 
+        self.prove_witness(&w)
+    }
+
+    /// Pack a witness into public/private inputs, run the circuit, prove and
+    /// self-verify. The Permute ops' hints must already be installed.
+    fn prove_witness(&mut self, w: &SsWitness) -> SsFullLeafProof {
+        let params = self.params;
+        let cap = params.capacity;
+        let m = params.batch;
+        let total = cap + m;
+        let (initial_state, batch) = (&w.initial, &w.batch);
+        let (final_state, residual_rows, build) = (&w.final_state, &w.residual, &w.build);
+        let initial_commit = commit_ss_state(initial_state);
+        let final_commit = commit_ss_state(final_state);
+        let batch_commit = commit_ss_batch(batch);
+
         // ─── Pack public + private ──────────────────────────────────────────
         let init_commit_packed =
             pack_commit_to_challenge(&crate::commitment::CountMinCommit(initial_commit.0));
@@ -1157,18 +1475,20 @@ impl SsFullLeafCircuit {
         public_inputs.extend_from_slice(&init_commit_packed);
         public_inputs.extend_from_slice(&final_commit_packed);
         public_inputs.extend_from_slice(&batch_commit_packed);
+        if self.expose.is_interval() {
+            public_inputs.push(Challenge::from_u64(self.batch_index));
+        }
 
         // MUST match alloc order.
         let mut private_inputs: Vec<Challenge> = Vec::new();
         private_inputs.extend_from_slice(&pack_state_to_challenge(&initial_state));
         private_inputs.extend_from_slice(&pack_state_to_challenge(&final_state));
         private_inputs.extend_from_slice(&pack_batch_to_challenge(&batch));
-        let key_sorted_rows: Vec<SsFullRow> =
-            build.sigma_key.iter().map(|&i| build.combined[i]).collect();
-        private_inputs.extend_from_slice(&pack_rows_to_challenge(&key_sorted_rows));
-        private_inputs.extend_from_slice(&pack_rows_to_challenge(&build.grouped));
+        let key_sorted_rows: &[SsFullRow] = &build.key_sorted;
+        private_inputs.extend_from_slice(&self.pack_union_table(key_sorted_rows));
+        private_inputs.extend_from_slice(&self.pack_grouped_table(&build.grouped));
         #[allow(unused_mut)]
-        let mut g_sorted_vals = pack_rows_to_challenge(&build.g_sorted);
+        let mut g_sorted_vals = self.pack_grouped_table(&build.g_sorted);
         // [test-only] corrupt the post-retention table to confirm the
         // count-sort PermuteAir + sortedness + compaction reject it.
         #[cfg(test)]
@@ -1176,7 +1496,7 @@ impl SsFullLeafCircuit {
             g_sorted_vals[0] += Challenge::ONE;
         }
         private_inputs.extend_from_slice(&g_sorted_vals);
-        private_inputs.extend_from_slice(&pack_rows_to_challenge(&residual_rows));
+        private_inputs.extend_from_slice(&self.pack_grouped_table(residual_rows));
         // key_eq_tag
         for &t in &build.key_eq_tag {
             private_inputs.push(if t == 1 {
@@ -1290,6 +1610,16 @@ fn prove_ss_full_inner(
     expose_boundary: bool,
 ) -> SsFullLeafProof {
     build_ss_full_leaf(params, expose_boundary).prove_epoch(initial_state, batch)
+}
+
+/// Prove batch `t` (1-based) as an **Interval-statement** SpaceSaving leaf.
+pub fn prove_ss_full_interval(
+    params: SsFullParams,
+    t: u64,
+    initial_state: SsFullState,
+    batch: Vec<SsFullUpdate>,
+) -> SsFullLeafProof {
+    build_ss_full_leaf_expose(params, Expose::Interval).prove_epoch_at(t, initial_state, batch)
 }
 
 pub fn generate_proof(params: SsFullParams, updates: Vec<SsFullUpdate>) -> SsFullProof {
@@ -1876,5 +2206,331 @@ mod tests {
             mal.is_err(),
             "a committed S_old dummy with nonzero count must be rejected",
         );
+    }
+
+    // ─── Malicious-prover probes (revision Step 1, Track B) ─────────────────
+
+    fn panic_msg(e: &Box<dyn std::any::Any + Send>) -> String {
+        if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = e.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            "<non-string panic>".to_string()
+        }
+    }
+
+    /// Malicious witness exploiting a PermuteBus SHARED by the two permutes:
+    /// move one union row `x` out of the key-sort permute's output and into the
+    /// count-sort permute's output, paying for it with one all-zero dummy
+    /// grouped row moved the other way. Per op the multisets differ; only the
+    /// union of all permute rows balances. Everything downstream (group-by
+    /// tags, running sums, count-sort order, τ, compression) is recomputed
+    /// honestly from the forged tables, so every non-permute constraint holds.
+    fn forge_cross_permute_witness(
+        initial: &SsFullState,
+        batch: &[SsFullUpdate],
+        x: SsFullRow,
+    ) -> SsWitness {
+        let params = initial.params;
+        let m = params.batch;
+        let total = params.capacity + m;
+        let mut combined: Vec<SsFullRow> = initial.rows.clone();
+        combined.extend(batch.iter().map(|u| SsFullRow {
+            key: u.key,
+            count: u.value,
+            active: u.active,
+        }));
+        // key_sorted' = (combined − {x}) + {dummy}, key-sorted.
+        let mut ks = combined.clone();
+        let pos = ks.iter().position(|r| *r == x).expect("x must be a union row");
+        ks[pos] = SsFullRow::dummy();
+        ks.sort_by_key(|r| key_field(r.key));
+        let (key_eq_tag, seg_end, grouped) = group_by_key(&ks);
+        // g_sorted' = (grouped' − {dummy}) + {x}, count-sorted.
+        let mut gs = grouped.clone();
+        let dpos = gs
+            .iter()
+            .position(|r| *r == SsFullRow::dummy())
+            .expect("an all-zero dummy grouped row");
+        gs[dpos] = x;
+        gs.sort_by_key(|r| (r.active, r.count, key_field(r.key)));
+        let tau = gs[m - 1].count;
+        let (final_state, residual) = compress_from_gsorted(params, &gs, tau);
+        SsWitness {
+            initial: initial.clone(),
+            batch: batch.to_vec(),
+            final_state,
+            residual,
+            build: SsBuild {
+                combined,
+                sigma_key: (0..total).collect(),
+                key_sorted: ks,
+                grouped,
+                key_eq_tag,
+                seg_end,
+                sigma_count: (0..total).collect(),
+                g_sorted: gs,
+                tau,
+            },
+        }
+    }
+
+    /// Run the malicious prover: both Permute ops emit the forged tables.
+    fn prove_forged_cross_permute(
+        params: SsFullParams,
+        w: &SsWitness,
+    ) -> std::thread::Result<SsFullLeafProof> {
+        let mut leaf = build_ss_full_leaf(params, false);
+        let ks = leaf.pack_union_table(&w.build.key_sorted);
+        let gs = leaf.pack_grouped_table(&w.build.g_sorted);
+        crate::sketch::forge_permute::forge_permute_outputs(&mut leaf.circuit, 0, ks);
+        crate::sketch::forge_permute::forge_permute_outputs(&mut leaf.circuit, 1, gs);
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| leaf.prove_witness(w)))
+    }
+
+    /// **Shared-PermuteBus forgery (key fragmentation through the bus).**
+    /// batch = [K, K] into an empty capacity-4 summary. Honest final: {K:2}.
+    /// Forged: the key-sort output drops one (K,1) row for a dummy; the
+    /// count-sort output takes that (K,1) row instead of a dummy grouped row.
+    /// The group-by then sees K once (count 1), and the count-sorted table
+    /// holds K twice — final {K:1, K:1}: the fragmentation break the union
+    /// key-sortedness fix was meant to close, reopened through the bus. Sorted,
+    /// tie-break, Misra-Gries subtraction and mass (2 = 1+1) all hold.
+    ///
+    /// Pre-fix circuit (no op tag): the forged final is ACCEPTED (the proof
+    /// self-verifies). With the op tag the same malicious prover is REJECTED:
+    /// the moved rows no longer have a matching element on the other side of
+    /// the PermuteBus (`GlobalCumulativeMismatch` on PermuteBus).
+    #[test]
+    fn shared_permute_bus_forgery_rejected() {
+        let params = SsFullParams {
+            capacity: 4,
+            batch: 2,
+        };
+        let k = 42u64;
+        let initial = SsFullState::empty(params);
+        let batch = vec![SsFullUpdate::real(k, 1), SsFullUpdate::real(k, 1)];
+        let (honest_final, _) = apply_batch_ss_full(&initial, &batch);
+        assert_eq!(honest_final.frequency(k), 2);
+        let _honest = prove_ss_full(params, initial.clone(), batch.clone());
+
+        let forged = forge_cross_permute_witness(&initial, &batch, SsFullRow::real(k, 1));
+        let copies = forged
+            .final_state
+            .rows
+            .iter()
+            .filter(|r| r.active == 1 && r.key == k && r.count == 1)
+            .count();
+        assert_eq!(copies, 2, "forged final holds K twice at count 1");
+        assert_ne!(
+            commit_ss_state(&forged.final_state),
+            commit_ss_state(&honest_final),
+            "forged final is a different committed state"
+        );
+
+        // Pre-fix circuit: the attack goes through.
+        OP_TAG.with(|c| c.set(Some(false)));
+        let pre = prove_forged_cross_permute(params, &forged);
+        OP_TAG.with(|c| c.set(None));
+        match &pre {
+            Ok(_) => println!("[shared_permute_bus] pre-fix: forged final ACCEPTED (self-verified)"),
+            Err(e) => println!("[shared_permute_bus] pre-fix: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(
+            pre.is_ok(),
+            "PoC premise: the untagged circuit accepts the cross-permute forgery"
+        );
+
+        // Fixed circuit (default): rejected.
+        let post = prove_forged_cross_permute(params, &forged);
+        match &post {
+            Ok(_) => println!("[shared_permute_bus] fixed: forged final ACCEPTED"),
+            Err(e) => println!("[shared_permute_bus] fixed: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(
+            post.is_err(),
+            "op tag must stop the two permutes from trading rows on the shared bus"
+        );
+    }
+
+    /// **Decomposition-binding probe.** `decompose_ext_to_base_coeffs(x)`
+    /// with the recompose NPO and NO coefficient lookups emits the coefficients
+    /// as a hint and re-links them to `x` only through a RecomposeAir row whose
+    /// WitnessChecks message is `[x_idx, v0..v3]` — the coefficient witnesses
+    /// themselves are never on the bus there. The probe commits to a final
+    /// state whose key-7 row says count 1000 while the decomposition feeds the
+    /// honest coefficients (count 1) to every constraint. Returns the outcome.
+    fn run_decomposition_probe(bind: bool) -> std::thread::Result<SsFullLeafProof> {
+        BIND_DECOMP.with(|c| c.set(Some(bind)));
+        let params = SsFullParams {
+            capacity: 4,
+            batch: 2,
+        };
+        let initial = SsFullState::empty(params);
+        let batch = vec![SsFullUpdate::real(7, 1), SsFullUpdate::real(11, 1)];
+        // The honest transition proves under this configuration.
+        let _honest_proof = prove_ss_full(params, initial.clone(), batch.clone());
+        let honest = honest_ss_witness(&initial, &batch);
+        let i = honest
+            .final_state
+            .rows
+            .iter()
+            .position(|r| r.active == 1 && r.key == 7)
+            .expect("key 7 retained");
+        let row = honest.final_state.rows[i];
+        let mut forged = honest.clone();
+        forged.final_state.rows[i].count = 1000;
+
+        let mut leaf = build_ss_full_leaf(params, false);
+        leaf.circuit
+            .update_permute_witnesses(&[
+                honest.build.sigma_key.clone(),
+                honest.build.sigma_count.clone(),
+            ])
+            .expect("sigmas");
+        let wid = leaf.circuit.private_input_rows[params.capacity + i];
+        let (lo, hi) = key_lo_hi(row.key);
+        crate::sketch::forge_permute::forge_decomposition(
+            &mut leaf.circuit,
+            wid,
+            [
+                Val::from_u32(lo),
+                Val::from_u32(hi),
+                Val::from_u32(row.count),
+                Val::from_u32(row.active),
+            ],
+        );
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            leaf.prove_witness(&forged)
+        }));
+        BIND_DECOMP.with(|c| c.set(None));
+        match &res {
+            Ok(_) => println!("[decomposition bind={bind}] forged final (count 1000) ACCEPTED"),
+            Err(e) => println!("[decomposition bind={bind}] forged final REJECTED: {}", panic_msg(e)),
+        }
+        res
+    }
+
+    /// PoC (pre-fix recompose lowering, `BIND_DECOMPOSITIONS = false`): the
+    /// committed final state is NOT bound to the decomposed fields the
+    /// constraints use — a final claiming count 1000 for a key seen once
+    /// self-verifies.
+    #[test]
+    fn decomposition_forgery_accepted_without_coeff_binding() {
+        assert!(
+            crate::recompose_binding::with_unbound_recompose(|| run_decomposition_probe(false))
+                .is_ok(),
+            "expected the unbound decomposition to accept the forged final state"
+        );
+    }
+
+    /// Fix check (the deployed configuration): the fork's `recompose/coeff`
+    /// lowering alone rejects the same malicious prover — the row's
+    /// `[coeff_idx, v_i, 0, 0, 0]` lookups carry the forged packed row's
+    /// coefficients, which the honest coefficients the constraints read cannot
+    /// match.
+    #[test]
+    fn decomposition_forgery_rejected_by_recompose_coeff_table() {
+        assert!(
+            run_decomposition_probe(false).is_err(),
+            "recompose/coeff lowering must reject the forged final state"
+        );
+    }
+
+    /// Fix check for the per-circuit alternative: with the ALU binding
+    /// (+ base-forcing) the same malicious prover is rejected even under the
+    /// pre-fix recompose lowering (the recomposition `sum c_i X^i - x = 0`
+    /// cannot hold for the honest coefficients of a forged packed row).
+    #[test]
+    fn decomposition_forgery_rejected_with_coeff_binding() {
+        assert!(
+            crate::recompose_binding::with_unbound_recompose(|| run_decomposition_probe(true))
+                .is_err(),
+            "bound decomposition must reject the forged final state"
+        );
+    }
+
+    /// Completeness of the opt-in decomposition binding: honest transitions
+    /// (grouping, top-s eviction + Misra-Gries subtraction, a chained epoch
+    /// with a non-empty prior) still self-verify, and the shared-bus forgery is
+    /// still rejected.
+    #[test]
+    fn decomposition_binding_honest_proofs_verify() {
+        BIND_DECOMP.with(|c| c.set(Some(true)));
+        let params = SsFullParams {
+            capacity: 4,
+            batch: 4,
+        };
+        let s0 = SsFullState::empty(params);
+        let b1 = vec![
+            SsFullUpdate::real(42, 1),
+            SsFullUpdate::real(42, 1),
+            SsFullUpdate::real(7, 3),
+            SsFullUpdate::dummy(),
+        ];
+        let p1 = prove_ss_full(params, s0.clone(), b1.clone());
+        let (s1, _) = apply_batch_ss_full(&s0, &b1);
+        assert_eq!(p1.final_.0, commit_ss_state(&s1).0);
+        let b2 = vec![
+            SsFullUpdate::real(9, 5),
+            SsFullUpdate::real(11, 6),
+            SsFullUpdate::real(13, 2),
+            SsFullUpdate::real(42, 4),
+        ];
+        let p2 = prove_ss_full(params, s1.clone(), b2.clone());
+        let (s2, _) = apply_batch_ss_full(&s1, &b2);
+        assert_eq!(p2.initial.0, p1.final_.0);
+        assert_eq!(p2.final_.0, commit_ss_state(&s2).0);
+
+        let p = SsFullParams {
+            capacity: 4,
+            batch: 2,
+        };
+        let batch = vec![SsFullUpdate::real(42, 1), SsFullUpdate::real(42, 1)];
+        let forged =
+            forge_cross_permute_witness(&SsFullState::empty(p), &batch, SsFullRow::real(42, 1));
+        let res = prove_forged_cross_permute(p, &forged);
+        BIND_DECOMP.with(|c| c.set(None));
+        assert!(res.is_err(), "shared-bus forgery must stay rejected under binding");
+    }
+
+    /// Cost of the fixes (padded trace rows + one prove): pre-fix circuit
+    /// (untagged, unbound recompose lowering) vs op tag vs op tag + the
+    /// per-circuit ALU decomposition binding vs op tag + the fork's
+    /// `recompose/coeff` lowering (the deployed configuration).
+    /// Run: `cargo test --release --lib ss_final_full::tests::fix_overhead -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn fix_overhead() {
+        for &(cap, m) in &[(64usize, 16usize), (1024, 16)] {
+            let params = SsFullParams { capacity: cap, batch: m };
+            let batch = gen_padded_batch(params, m);
+            for (label, tag, bind, coeff_table) in [
+                ("pre-fix", false, false, false),
+                ("op-tag", true, false, false),
+                ("op-tag+alu-bind", true, true, false),
+                ("op-tag+coeff", true, false, true),
+            ] {
+                OP_TAG.with(|c| c.set(Some(tag)));
+                BIND_DECOMP.with(|c| c.set(Some(bind)));
+                let mut leaf = if coeff_table {
+                    build_ss_full_leaf(params, false)
+                } else {
+                    crate::recompose_binding::with_unbound_recompose(|| {
+                        build_ss_full_leaf(params, false)
+                    })
+                };
+                OP_TAG.with(|c| c.set(None));
+                BIND_DECOMP.with(|c| c.set(None));
+                let t = std::time::Instant::now();
+                let _ = leaf.prove_epoch(SsFullState::empty(params), batch.clone());
+                println!(
+                    "[ss fix_overhead] cap={cap} m={m} {label:<16} trace_rows={} prove+verify={:?}",
+                    leaf.trace_rows,
+                    t.elapsed()
+                );
+            }
+        }
     }
 }

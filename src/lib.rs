@@ -13,6 +13,7 @@ pub mod dataset;
 pub mod decode;
 pub mod experiments;
 pub mod prover;
+pub mod recompose_binding;
 pub mod recursion;
 pub mod sketch;
 

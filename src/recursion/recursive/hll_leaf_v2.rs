@@ -68,6 +68,15 @@ use crate::sketch::hyperloglog::{
 /// so a v2 leaf can chain with v1 leaves in the same recursive merge.
 const LOG_FINAL_POLY_LEN: usize = 6;
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only malicious prover (`tests::forged_final_decomposition_*`):
+    /// `Some(v)` commits to a final state whose register 0 is `v` while the
+    /// decomposition of that packed register group, which every update
+    /// constraint reads, still returns the honest registers.
+    static FORGE_FINAL_REG0: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
+}
+
 /// Pack the flattened registers into Challenge elements (same layout as v1).
 fn pack_registers_to_challenge(state: &HyperLogLogState) -> Vec<Challenge> {
     let flat: Vec<Val> = state
@@ -136,8 +145,18 @@ pub fn prove_hll_leaf_v2_with_params(
     for u in &batch {
         HyperLogLog::update(&mut final_state, u);
     }
+    // The state the proof commits to as `Com(S_t)`: the honest update, except
+    // under the test-only forgery below.
+    #[allow(unused_mut)]
+    let mut committed_final = final_state.clone();
+    #[cfg(test)]
+    let forge_reg0 = FORGE_FINAL_REG0.with(|c| c.get());
+    #[cfg(test)]
+    if let Some(v) = forge_reg0 {
+        committed_final.registers[0] = v;
+    }
     let initial_commit = commit_hll(&initial_state);
-    let final_commit = commit_hll(&final_state);
+    let final_commit = commit_hll(&committed_final);
     let aggregate = build_aggregate(params.b, &batch);
 
     let mut b_c = CircuitBuilder::<Challenge>::new();
@@ -146,6 +165,7 @@ pub fn prove_hll_leaf_v2_with_params(
         default_babybear_poseidon2_16(),
     );
     b_c.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    crate::recompose_binding::configure(&mut b_c);
 
     // ---- Public inputs (identical to v1) ----
     let initial_commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
@@ -378,7 +398,19 @@ pub fn prove_hll_leaf_v2_with_params(
         }
     }
 
-    let circuit = b_c.build().expect("build v2 leaf circuit");
+    #[allow(unused_mut)]
+    let mut circuit = b_c.build().expect("build v2 leaf circuit");
+    #[cfg(test)]
+    if forge_reg0.is_some() {
+        // Feed the constraints the honest registers of the forged group.
+        let honest = pack_registers_to_challenge(&final_state)[0];
+        let wid = circuit.private_input_rows[cell_packing];
+        let coeffs: [Val; 4] = honest
+            .as_basis_coefficients_slice()
+            .try_into()
+            .expect("4 coefficients");
+        crate::sketch::forge_permute::forge_decomposition(&mut circuit, wid, coeffs);
+    }
 
     // ---- Pack public + private values and run the circuit ----
     let initial_commit_packed = pack_commit_to_challenge(&initial_commit);
@@ -397,7 +429,7 @@ pub fn prove_hll_leaf_v2_with_params(
     }
 
     let initial_regs_packed = pack_registers_to_challenge(&initial_state);
-    let final_regs_packed = pack_registers_to_challenge(&final_state);
+    let final_regs_packed = pack_registers_to_challenge(&committed_final);
     let mut private_inputs: Vec<Challenge> = Vec::new();
     private_inputs.extend_from_slice(&initial_regs_packed);
     private_inputs.extend_from_slice(&final_regs_packed);
@@ -565,5 +597,45 @@ mod tests {
 
         let chain = merge_two_hll(&l1, &l2).expect("merge");
         verify_chain_hll(&chain).expect("verify");
+    }
+
+    /// Forged-decomposition regression test (HyperLogLog family). The prover
+    /// commits to `Com(S')` with register 0 of the honest update raised to 30,
+    /// while the decomposition of that packed register group, which every
+    /// update constraint reads, returns the honest registers. Under the pre-fix
+    /// recompose lowering nothing ties the two, and the proof verifies for a
+    /// state the batch never produced. The fork's `recompose/coeff` lowering
+    /// rejects it.
+    #[test]
+    fn forged_final_decomposition_rejected() {
+        let initial = empty_state();
+        let batch = vec![
+            HyperLogLogUpdate { key: 0xDEAD_BEEF_0000_1111 },
+            HyperLogLogUpdate { key: 0xC0FFEE_FACE_FACE },
+        ];
+        let mut honest = initial.clone();
+        for u in &batch {
+            HyperLogLog::update(&mut honest, u);
+        }
+        assert_ne!(honest.registers[0], 30);
+        let mut forged = honest.clone();
+        forged.registers[0] = 30;
+        let params = HllLeafParams::default();
+        let run = || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                FORGE_FINAL_REG0.with(|c| c.set(Some(30)));
+                let leaf = prove_hll_leaf_v2_with_params(params, initial.clone(), batch.clone());
+                FORGE_FINAL_REG0.with(|c| c.set(None));
+                leaf.final_
+            }))
+            .inspect_err(|_| FORGE_FINAL_REG0.with(|c| c.set(None)))
+        };
+
+        let legacy = crate::recompose_binding::with_unbound_recompose(run)
+            .expect("PoC premise: the unbound lowering accepts the forged final state");
+        assert_eq!(legacy.0, commit_hll(&forged).0, "exposes Com(S')");
+        assert_ne!(legacy.0, commit_hll(&honest).0, "not the certified update");
+
+        assert!(run().is_err(), "recompose/coeff lowering must reject the forged final state");
     }
 }

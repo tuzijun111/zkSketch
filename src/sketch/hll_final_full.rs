@@ -50,14 +50,15 @@ use std::rc::Rc;
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
 use p3_circuit::ops::{
-    Poseidon2Config, generate_expose_trace, generate_poseidon2_trace, generate_recompose_trace,
+    Poseidon2Config, generate_expose_trace, generate_poseidon2_trace, generate_range_trace,
+    generate_recompose_trace,
 };
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         expose_air_builders, expose_preprocessor, poseidon2_air_builders_d4, poseidon2_preprocessor,
-        recompose_air_builders, recompose_preprocessor,
+        range_air_builders, range_preprocessor, recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -67,6 +68,8 @@ use p3_recursion::RecursionOutput;
 use p3_symmetric::CryptographicHasher;
 use p3_uni_stark::StarkGenericConfig;
 
+use crate::sketch::bind::{self, Binding};
+use crate::recursion::recursive::statement::{self, Expose, IndexPin};
 use crate::config::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::countmin_leaf::{
@@ -356,7 +359,130 @@ fn prove_hll_full_inner(
     batch: Vec<HllFullUpdate>,
     expose_boundary: bool,
 ) -> HllFullLeafProof {
+    build_hll_full(params, initial_state, batch, expose_boundary, bind::default_binding()).prove()
+}
+
+/// [`prove_hll_full`] / [`prove_hll_full_exposed`] with an explicit [`Binding`].
+///
+/// [`Binding::Legacy`] is the pre-fix circuit, unchanged. It is unsound: the
+/// register, batch and digest decompositions are unbound, so the committed
+/// final state, the `active` flags and the routing are all free, and every
+/// sponge has a prover-chosen IV. [`Binding::Semantic`] adds canonical bits
+/// on the register-index and ρ digest limbs (a non-canonical `x + p`
+/// decomposition misroutes or re-ranks a record). [`Binding::Bound`] also
+/// ALU-binds every decomposed coefficient (registers are pinned by the
+/// gated-max comparators and the zero/bool field checks; batch keys by
+/// `pin_base`; the pad by `= 0`; digest limbs 2, 3 by `pin_base`) and
+/// hashes with a zero IV (see [`crate::sketch::bind`]).
+pub fn prove_hll_full_with(
+    params: HllFullParams,
+    initial_state: HllFullState,
+    batch: Vec<HllFullUpdate>,
+    expose_boundary: bool,
+    binding: Binding,
+) -> HllFullLeafProof {
+    build_hll_full(params, initial_state, batch, expose_boundary, binding).prove()
+}
+
+/// A built `hll_full` leaf: circuit, witness, registered prover.
+struct HllFullCircuit {
+    circuit: p3_circuit::Circuit<Challenge>,
+    public_inputs: Vec<Challenge>,
+    private_inputs: Vec<Challenge>,
+    prover: BatchStarkProver<ConfigWithFriParams>,
+    circuit_prover_data: CircuitProverData<ConfigWithFriParams>,
+    trace_rows: u64,
+    initial_commit: HllFullStateCommit,
+    final_commit: HllFullStateCommit,
+    batch_commit: HllFullBatchCommit,
+    params: HllFullParams,
+}
+
+impl HllFullCircuit {
+    fn run(&self) -> p3_circuit::tables::Traces<Challenge> {
+        let mut runner = self.circuit.runner();
+        runner.set_public_inputs(&self.public_inputs).expect("set_public_inputs");
+        runner.set_private_inputs(&self.private_inputs).expect("set_private_inputs");
+        runner.run().expect("run hll_full circuit")
+    }
+
+    fn prove(self) -> HllFullLeafProof {
+        let __t_w = std::time::Instant::now();
+        let traces = self.run();
+        let __witness = __t_w.elapsed(); // witness_gen = trace generation only
+        let __t_p = std::time::Instant::now();
+        let proof = self
+            .prover
+            .prove_all_tables(&traces, &self.circuit_prover_data)
+            .expect("prove_all_tables (hll_full)");
+        let __prove = __t_p.elapsed();
+        let __t_v = std::time::Instant::now();
+        self.prover.verify_all_tables(&proof).expect("self-verify hll_full leaf");
+        crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
+            witness: __witness,
+            prove: __prove,
+            verify: __t_v.elapsed(),
+            trace_rows: self.trace_rows,
+        });
+        HllFullLeafProof {
+            output: RecursionOutput(proof, Rc::new(self.circuit_prover_data)),
+            initial: self.initial_commit,
+            final_: self.final_commit,
+            batch_commit: self.batch_commit,
+            params: self.params,
+        }
+    }
+
+    #[cfg(test)]
+    fn prove_traces(
+        &self,
+        traces: &p3_circuit::tables::Traces<Challenge>,
+    ) -> Result<p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>, String> {
+        let proof = self
+            .prover
+            .prove_all_tables(traces, &self.circuit_prover_data)
+            .map_err(|e| format!("prove: {e:?}"))?;
+        self.prover.verify_all_tables(&proof).map_err(|e| format!("verify: {e:?}"))?;
+        Ok(proof)
+    }
+}
+
+fn build_hll_full(
+    params: HllFullParams,
+    initial_state: HllFullState,
+    batch: Vec<HllFullUpdate>,
+    expose_boundary: bool,
+    binding: Binding,
+) -> HllFullCircuit {
+    build_hll_full_expose(params, initial_state, batch, Expose::from_bool(expose_boundary), 1, binding)
+}
+
+/// Like [`prove_hll_full_exposed`] but with the **Interval** statement for
+/// batch `t` (1-based): exposes `(init, final, (t, t, 0, 0), H)` with
+/// `H = Poseidon2(TAG_LEAF, t, Com(B_t))` over the in-circuit batch digest
+/// (see [`crate::recursion::recursive::statement`]).
+pub fn prove_hll_full_interval(
+    params: HllFullParams,
+    t: u64,
+    initial_state: HllFullState,
+    batch: Vec<HllFullUpdate>,
+) -> HllFullLeafProof {
+    build_hll_full_expose(params, initial_state, batch, Expose::Interval, t, bind::default_binding())
+        .prove()
+}
+
+fn build_hll_full_expose(
+    params: HllFullParams,
+    initial_state: HllFullState,
+    batch: Vec<HllFullUpdate>,
+    expose: Expose,
+    t: u64,
+    binding: Binding,
+) -> HllFullCircuit {
+    let expose_boundary = expose == Expose::Boundary;
     params.validate();
+    let bound = binding.is_bound();
+    let cfg = Poseidon2Config::BABY_BEAR_D4_W16;
     assert_eq!(initial_state.params, params);
     assert_eq!(batch.len(), params.batch);
 
@@ -426,7 +552,10 @@ fn prove_hll_full_inner(
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
-    if expose_boundary {
+    if binding.binds_coeffs() {
+        b.enable_range(generate_range_trace::<Val, Challenge>);
+    }
+    if expose.exposes() {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
 
@@ -450,6 +579,14 @@ fn prove_hll_full_inner(
     // register-index constants 0..m.
     let reg_const: Vec<ExprId> =
         (0..m).map(|i| b.alloc_const(Challenge::from_u64(i as u64), "reg")).collect();
+    // Canonicity gadget: `2^i` for the low `m` bits of `p = 2^n − 2^m + 1`.
+    let canon_pow2: Vec<ExprId> = if bound {
+        (0..bind::canon_low_bits::<Val>())
+            .map(|i| b.alloc_const(Challenge::from_u64(1u64 << i), "canon2^i"))
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // Private inputs (alloc order MUST match the packing below):
     //   init, final, batch, h0, h1, rho, sel(b-major), ge_bm(b-major), ge_patch.
@@ -466,27 +603,55 @@ fn prove_hll_full_inner(
     let ge_patch_w: Vec<ExprId> =
         (0..m).map(|_| b.alloc_private_input("ge_patch")).collect();
 
+    if let (Some(&f0), Some(&b0)) = (final_packed.first(), batch_packed.first()) {
+        b.tag(f0, "hllf_final_packed_0").expect("tag");
+        b.tag(b0, "hllf_batch_packed_0").expect("tag");
+    }
+
     // ─── Stage 1: commit bindings ───────────────────────────────────────
-    let hi = b.add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &init_packed, true).expect("h init");
+    let hi = bind::hash_slice(&mut b, &cfg, &init_packed, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(hi[i], init_pis[i]);
     }
-    let hf = b.add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &final_packed, true).expect("h final");
+    let hf = bind::hash_slice(&mut b, &cfg, &final_packed, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(hf[i], final_pis[i]);
     }
-    let hb = b.add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &batch_packed, true).expect("h batch");
+    let hb = bind::hash_slice(&mut b, &cfg, &batch_packed, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(hb[i], batch_pis[i]);
     }
+    // Interval statement (B6(b)): batch index t (7th public input) and
+    // H = Poseidon2(TAG_LEAF, t, hb). Range is enabled only under Bound.
+    if expose.is_interval() {
+        let pin = if binding.binds_coeffs() { IndexPin::Range } else { IndexPin::Bits };
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b, &cfg, &init_pis, &final_pis, &hb, zero, binding, pin,
+        );
+    }
 
     // ─── Stage 2: decompose state + batch ───────────────────────────────
-    let init_fields: Vec<Vec<ExprId>> =
-        init_packed.iter().map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d i")).collect();
-    let final_fields: Vec<Vec<ExprId>> =
-        final_packed.iter().map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d f")).collect();
-    let batch_fields: Vec<Vec<ExprId>> =
-        batch_packed.iter().map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d b")).collect();
+    // Registers: [1],[2] = 0 and [3] boolean below, [0] pinned by the
+    // gated-max comparators — no extra base pin. Batch: key limbs [0],[1]
+    // pinned, `active` [2] boolean below, pad [3] = 0.
+    let init_fields: Vec<Vec<ExprId>> = init_packed
+        .iter()
+        .map(|&p| bind::decompose::<Val, Challenge>(&mut b, p, binding, bind::no_pin, bind::no_pin))
+        .collect();
+    let final_fields: Vec<Vec<ExprId>> = final_packed
+        .iter()
+        .map(|&p| bind::decompose::<Val, Challenge>(&mut b, p, binding, bind::no_pin, bind::no_pin))
+        .collect();
+    let batch_fields: Vec<Vec<ExprId>> = batch_packed
+        .iter()
+        .map(|&p| {
+            bind::decompose::<Val, Challenge>(&mut b, p, binding, bind::no_pin, |b, i, c| match i {
+                0 | 1 => bind::pin_base::<Val, Challenge>(b, c),
+                3 => b.connect(c, zero),
+                _ => {}
+            })
+        })
+        .collect();
 
     let bool_check = |b: &mut CircuitBuilder<Challenge>, a: ExprId| {
         let am1 = b.sub(a, one);
@@ -512,51 +677,100 @@ fn prove_hll_full_inner(
     // reg_idx[j] = bottom-b bits of digest[0] = digest[0] mod m.
     let mut reg_idx: Vec<ExprId> = Vec::with_capacity(mb);
     for j in 0..mb {
-        let hashed = b
-            .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &[batch_packed[j]], true)
-            .expect("hash record key");
-        b.connect(hashed[0], h0[j]);
-        b.connect(hashed[1], h1[j]);
-        let c0 = b.decompose_ext_to_base_coeffs::<Val>(h0[j]).expect("d h0");
-        let c1 = b.decompose_ext_to_base_coeffs::<Val>(h1[j]).expect("d h1");
-        // Route the register from digest limb c0[0].
-        let bits = b.decompose_to_bits::<Val>(c0[0], Val::bits()).expect("bits digest0");
-        let mut rsum = b.mul(bits[0], pow2[0]);
-        for k in 1..blog2 {
-            let t = b.mul(bits[k], pow2[k]);
-            rsum = b.add(rsum, t);
-        }
-        reg_idx.push(rsum);
+        if bound {
+            let hashed = bind::hash_slice(&mut b, &cfg, &[batch_packed[j]], zero, binding);
+            b.connect(hashed[0], h0[j]);
+            b.connect(hashed[1], h1[j]);
+            // Limb 0 → register (canonical bits); limb 1 → ρ (canonical bits);
+            // limbs 2, 3 base-pinned. The second digest Challenge carries
+            // nothing and is not decomposed.
+            let mut bits: Vec<ExprId> = Vec::new();
+            let mut dbits: Vec<ExprId> = Vec::new();
+            let _ = bind::decompose::<Val, Challenge>(
+                &mut b,
+                h0[j],
+                binding,
+                |b, i, c| {
+                    if i < 2 {
+                        let v = b.decompose_to_bits::<Val>(c, Val::bits()).expect("bits digest");
+                        bind::assert_canonical_bits(b, &v, &canon_pow2, one, zero);
+                        if i == 0 {
+                            bits = v;
+                        } else {
+                            dbits = v;
+                        }
+                    }
+                },
+                |b, i, c| {
+                    if i >= 2 {
+                        bind::pin_base::<Val, Challenge>(b, c);
+                    }
+                },
+            );
+            let mut rsum = b.mul(bits[0], pow2[0]);
+            for k in 1..blog2 {
+                let t = b.mul(bits[k], pow2[k]);
+                rsum = b.add(rsum, t);
+            }
+            reg_idx.push(rsum);
+            // ρ = 1 + trailing_zeros(digest[1]) (see the legacy branch).
+            let nbits = Val::bits();
+            let mut acc_zero = b.sub(one, dbits[0]);
+            let mut tz = acc_zero;
+            for k in 1..nbits {
+                let one_minus_bit = b.sub(one, dbits[k]);
+                acc_zero = b.mul(acc_zero, one_minus_bit);
+                tz = b.add(tz, acc_zero);
+            }
+            let rho_circuit = b.add(tz, one);
+            b.connect(rho[j], rho_circuit);
+        } else {
+            let hashed = b
+                .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &[batch_packed[j]], true)
+                .expect("hash record key");
+            b.connect(hashed[0], h0[j]);
+            b.connect(hashed[1], h1[j]);
+            let c0 = b.decompose_ext_to_base_coeffs::<Val>(h0[j]).expect("d h0");
+            let c1 = b.decompose_ext_to_base_coeffs::<Val>(h1[j]).expect("d h1");
+            // Route the register from digest limb c0[0].
+            let bits = b.decompose_to_bits::<Val>(c0[0], Val::bits()).expect("bits digest0");
+            let mut rsum = b.mul(bits[0], pow2[0]);
+            for k in 1..blog2 {
+                let t = b.mul(bits[k], pow2[k]);
+                rsum = b.add(rsum, t);
+            }
+            reg_idx.push(rsum);
 
-        // ── Derive ρ_j = 1 + trailing_zeros(digest[1]) IN-CIRCUIT and bind
-        //    it to the supplied `rho[j]` witness. This closes the soundness
-        //    gap where ρ was a free (only range-checked) witness — a
-        //    malicious prover could otherwise inflate the cardinality.
-        //    `digest[1]` is the SECOND coefficient of the FIRST digest
-        //    Challenge, i.e. `c0[1]` (the two output Challenges decompose as
-        //    c0=[d0,d1,d2,d3], c1=[d4,d5,d6,d7]).
-        //    a_k = ∏_{i≤k}(1−bit_i) = "bits[0..=k] all zero"; tz = Σ_k a_k;
-        //    ρ = tz + 1. (bottom-up running product = trailing zeros.)
-        let dbits = b.decompose_to_bits::<Val>(c0[1], Val::bits()).expect("bits digest1");
-        let nbits = Val::bits();
-        let mut acc_zero = b.sub(one, dbits[0]); // a_0 = 1 − bit_0
-        let mut tz = acc_zero; // Σ a_k, starts at a_0
-        for k in 1..nbits {
-            let one_minus_bit = b.sub(one, dbits[k]);
-            // a_k = a_{k-1} · (1 − bit_k)   (acc_zero lhs → bus creator)
-            acc_zero = b.mul(acc_zero, one_minus_bit);
-            tz = b.add(tz, acc_zero);
-        }
-        let rho_circuit = b.add(tz, one); // ρ = tz + 1
-        b.connect(rho[j], rho_circuit);
+            // ── Derive ρ_j = 1 + trailing_zeros(digest[1]) IN-CIRCUIT and bind
+            //    it to the supplied `rho[j]` witness. This closes the soundness
+            //    gap where ρ was a free (only range-checked) witness — a
+            //    malicious prover could otherwise inflate the cardinality.
+            //    `digest[1]` is the SECOND coefficient of the FIRST digest
+            //    Challenge, i.e. `c0[1]` (the two output Challenges decompose as
+            //    c0=[d0,d1,d2,d3], c1=[d4,d5,d6,d7]).
+            //    a_k = ∏_{i≤k}(1−bit_i) = "bits[0..=k] all zero"; tz = Σ_k a_k;
+            //    ρ = tz + 1. (bottom-up running product = trailing zeros.)
+            let dbits = b.decompose_to_bits::<Val>(c0[1], Val::bits()).expect("bits digest1");
+            let nbits = Val::bits();
+            let mut acc_zero = b.sub(one, dbits[0]); // a_0 = 1 − bit_0
+            let mut tz = acc_zero; // Σ a_k, starts at a_0
+            for k in 1..nbits {
+                let one_minus_bit = b.sub(one, dbits[k]);
+                // a_k = a_{k-1} · (1 − bit_k)   (acc_zero lhs → bus creator)
+                acc_zero = b.mul(acc_zero, one_minus_bit);
+                tz = b.add(tz, acc_zero);
+            }
+            let rho_circuit = b.add(tz, one); // ρ = tz + 1
+            b.connect(rho[j], rho_circuit);
 
-        // Consume the remaining digest limbs so every hash output is read
-        // (WitnessChecks discipline). Used so far: c0[0] (routing), c0[1]
-        // (ρ). Remaining: c0[2], c0[3], c1[0..4].
-        let _ = b.decompose_to_bits::<Val>(c0[2], Val::bits()).expect("consume c0[2]");
-        let _ = b.decompose_to_bits::<Val>(c0[3], Val::bits()).expect("consume c0[3]");
-        for k in 0..4 {
-            let _ = b.decompose_to_bits::<Val>(c1[k], Val::bits()).expect("consume c1");
+            // Consume the remaining digest limbs so every hash output is read
+            // (WitnessChecks discipline). Used so far: c0[0] (routing), c0[1]
+            // (ρ). Remaining: c0[2], c0[3], c1[0..4].
+            let _ = b.decompose_to_bits::<Val>(c0[2], Val::bits()).expect("consume c0[2]");
+            let _ = b.decompose_to_bits::<Val>(c0[3], Val::bits()).expect("consume c0[3]");
+            for k in 0..4 {
+                let _ = b.decompose_to_bits::<Val>(c1[k], Val::bits()).expect("consume c1");
+            }
         }
 
         // Wide-output ablation BASELINE (Experiment E9): a SECOND Poseidon2 hash
@@ -638,6 +852,9 @@ fn prove_hll_full_inner(
     public_inputs.extend_from_slice(&init_commit_packed);
     public_inputs.extend_from_slice(&final_commit_packed);
     public_inputs.extend_from_slice(&batch_commit_packed);
+    if expose.is_interval() {
+        public_inputs.push(Challenge::from_u64(t));
+    }
 
     // Hash digests (native) over the exact committed 4-tuple, to bind the
     // in-circuit hash outputs.
@@ -692,23 +909,17 @@ fn prove_hll_full_inner(
         private_inputs.push(if ge_patch[b_reg] == 1 { Challenge::ONE } else { Challenge::ZERO });
     }
 
-    // ─── Run + prove ────────────────────────────────────────────────────
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
-        runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
-        runner.run().expect("run hll_full circuit")
-    };
-    let __witness = __t_w.elapsed(); // witness_gen = trace generation only
-
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
     let mut preprocessors =
         vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
-    if expose_boundary {
+    if binding.binds_coeffs() {
+        preprocessors.push(range_preprocessor::<Val>());
+        air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
+    }
+    if expose.exposes() {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
     }
@@ -730,26 +941,23 @@ fn prove_hll_full_inner(
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
-    if expose_boundary {
+    if binding.binds_coeffs() {
+        prover.register_range_table::<4>();
+    }
+    if expose.exposes() {
         prover.register_expose_table::<4>();
     }
-    let __t_p = std::time::Instant::now();
-    let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove_all_tables (hll_full)");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify hll_full leaf");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
-    });
 
     let _ = blog2;
-    HllFullLeafProof {
-        output: RecursionOutput(proof, Rc::new(circuit_prover_data)),
-        initial: initial_commit,
-        final_: final_commit,
+    HllFullCircuit {
+        circuit,
+        public_inputs,
+        private_inputs,
+        prover,
+        circuit_prover_data,
+        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
+        initial_commit,
+        final_commit,
         batch_commit,
         params,
     }
@@ -986,5 +1194,151 @@ mod tests {
             meta.push_str("# documented honest-prover gap (range-checked, not re-derived).\n");
             fs::write(out_dir.join("hll_full_proofs.meta.txt"), &meta).expect("w meta");
         });
+    }
+
+    // ── Binding (see `crate::sketch::bind`): legacy-vs-bound forgery tests ──
+
+    use crate::sketch::forge;
+    use p3_circuit::ops::{NpoTypeId, Poseidon2Trace};
+
+    fn fp() -> (HllFullParams, HllFullState, Vec<HllFullUpdate>) {
+        let params = HllFullParams { b: 3, batch: 4 };
+        let s0 = apply_batch(&HllFullState::empty(params), &gen_padded_batch(params, 3));
+        let upd = vec![
+            HllFullUpdate::real(0x1234_5678_9ABC),
+            HllFullUpdate::real(77),
+            HllFullUpdate::real(4242),
+            HllFullUpdate::dummy(),
+        ];
+        (params, s0, upd)
+    }
+
+    #[test]
+    fn hll_full_round_trip_all_bindings() {
+        let (params, s0, upd) = fp();
+        let expect = commit_hll_state(&apply_batch(&s0, &upd));
+        for binding in [Binding::Bound, Binding::Semantic, Binding::Legacy] {
+            let leaf = prove_hll_full_with(params, s0.clone(), upd.clone(), true, binding);
+            assert_eq!(leaf.final_.0, expect.0, "{binding:?}");
+        }
+    }
+
+    /// FORGED FINAL STATE (transplant): recommit register 0 of the final state
+    /// to `r + 5` and rehash; the max-patch still runs on the honest register.
+    fn forged_final(binding: Binding) -> bool {
+        forge::accepted_with_control(&format!("hll_full forged final ({binding:?})"), |f| {
+            forged_final_run(binding, f)
+        })
+    }
+
+    fn forged_final_run(binding: Binding, forge_it: bool) -> bool {
+        let (params, s0, upd) = fp();
+        let c = build_hll_full(params, s0.clone(), upd.clone(), true, binding);
+        let mut traces = c.run();
+        let mut forged = apply_batch(&s0, &upd);
+        if forge_it {
+            forged.registers[0] += 5;
+        }
+        let w = traces.tag_to_witness["hllf_final_packed_0"];
+        forge::set_wid::<Val, Challenge>(&mut traces, w, pack_state_to_challenge(&forged)[0]);
+        forge::rehash_all::<Val, Challenge, _, 16>(&mut traces, Poseidon2Config::BABY_BEAR_D4_W16, &make_perm());
+        forge::accepted(|| c.prove_traces(&traces).map(|_| ()))
+    }
+
+    /// FORGED ACTIVE FLAG (transplant): record 0 is real in the run (its ρ is
+    /// max-folded), then the committed batch is rewritten to mark it a dummy
+    /// (`active = 0`) and rehashed, which also re-hashes its routing digest.
+    fn forged_active(binding: Binding) -> bool {
+        forge::accepted_with_control(&format!("hll_full forged active flag ({binding:?})"), |f| {
+            forged_active_run(binding, f)
+        })
+    }
+
+    fn forged_active_run(binding: Binding, forge_it: bool) -> bool {
+        let (params, s0, upd) = fp();
+        let c = build_hll_full(params, s0, upd.clone(), true, binding);
+        let mut traces = c.run();
+        let mut recs = upd.clone();
+        if forge_it {
+            recs[0].active = 0;
+        }
+        let w = traces.tag_to_witness["hllf_batch_packed_0"];
+        forge::set_wid::<Val, Challenge>(&mut traces, w, pack_batch_to_challenge(&recs)[0]);
+        forge::rehash_all::<Val, Challenge, _, 16>(&mut traces, Poseidon2Config::BABY_BEAR_D4_W16, &make_perm());
+        forge::accepted(|| c.prove_traces(&traces).map(|_| ()))
+    }
+
+    /// FREE SPONGE IV on record 0's routing hash (its last `new_start` row
+    /// reading `batch_packed[0]`): bump a capacity input and rehash.
+    fn forged_iv(binding: Binding) -> bool {
+        forge::accepted_with_control(&format!("hll_full forged IV ({binding:?})"), |f| {
+            forged_iv_run(binding, f)
+        })
+    }
+
+    fn forged_iv_run(binding: Binding, forge_it: bool) -> bool {
+        let (params, s0, upd) = fp();
+        let c = build_hll_full(params, s0, upd, true, binding);
+        let mut traces = c.run();
+        let bp0 = traces.tag_to_witness["hllf_batch_packed_0"].0;
+        let key = NpoTypeId::poseidon2_perm(Poseidon2Config::BABY_BEAR_D4_W16);
+        let mut pt = traces.non_primitive_trace::<Poseidon2Trace<Val>>(&key).expect("p2").clone();
+        let row = pt
+            .operations
+            .iter_mut()
+            .filter(|r| r.new_start && r.in_ctl[0] && r.input_indices[0] == bp0)
+            .last()
+            .expect("record 0 routing hash row");
+        if forge_it {
+            row.input_values[8] += Val::ONE;
+        }
+        traces.non_primitive_traces.insert(key, Box::new(pt));
+        forge::rehash_all::<Val, Challenge, _, 16>(&mut traces, Poseidon2Config::BABY_BEAR_D4_W16, &make_perm());
+        forge::accepted(|| c.prove_traces(&traces).map(|_| ()))
+    }
+
+    #[test]
+    fn forged_final_state_legacy_accepts_bound_rejects() {
+        if !bind::probe::fork_binds_decompose() {
+            assert!(forged_final(Binding::Legacy), "Legacy accepts the forged final (PoC)");
+        }
+        assert!(!forged_final(Binding::Bound), "Bound must reject the forged final");
+        // Merged soundness fork: the fork itself binds decompose coefficients, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if bind::probe::fork_binds_decompose() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(!forged_final(b), "fork binds decompose coefficients: {b:?} must reject too");
+            }
+        }
+    }
+
+    #[test]
+    fn forged_active_flag_legacy_accepts_bound_rejects() {
+        if !bind::probe::fork_binds_decompose() {
+            assert!(forged_active(Binding::Legacy), "Legacy accepts the forged active flag (PoC)");
+        }
+        assert!(!forged_active(Binding::Bound), "Bound must reject the forged active flag");
+        // Merged soundness fork: the fork itself binds decompose coefficients, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if bind::probe::fork_binds_decompose() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(!forged_active(b), "fork binds decompose coefficients: {b:?} must reject too");
+            }
+        }
+    }
+
+    #[test]
+    fn forged_routing_iv_legacy_accepts_bound_rejects() {
+        if !bind::probe::fork_binds_iv() && !bind::probe::fork_binds_decompose() {
+            assert!(forged_iv(Binding::Legacy), "Legacy accepts the free-IV digest (PoC)");
+        }
+        assert!(!forged_iv(Binding::Bound), "Bound must reject the IV forgery");
+        // Merged soundness fork: the fork itself binds the sponge IV, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if bind::probe::fork_binds_iv() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(!forged_iv(b), "fork binds the sponge IV: {b:?} must reject too");
+            }
+        }
     }
 }

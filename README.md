@@ -170,6 +170,19 @@ hash-work savings for high-duplicate batches).
   leaf proofs; verifier work `Θ(E)`.
 - **§4.2 recursive merge + §4.3 chains** (`recursion/recursive/`) — verify two
   leaf proofs *inside* one batch-STARK; verifier work `O(1)` regardless of `E`.
+- **Composition statement + auditor** (`recursion/recursive/{statement,
+  expose_forest, expose_forest_gl, root_vk, noop_leaf}.rs`) — the harness
+  default is the Interval statement (`ZKSKETCH_STATEMENT`): each leaf exposes
+  its batch index and `H(TAG_LEAF, t, Com(B_t))`, the hiding merge enforces
+  index adjacency and folds `H(TAG_MERGE, i, h, j, H_L, H_R)`, and the auditor
+  pins the root VK derived from public parameters (`root_vk.rs`, from a no-op
+  leaf, `noop_leaf.rs`), verifies the STARK, and recomputes the root digest
+  from the public batch log under the run's bracketing (forest, chain, or the
+  multi-machine forest `dist_forest(t, M)`, so the auditor must know the mode
+  and `M`). Leaf proofs the auditor receives directly (per_batch; a one-batch
+  stream) are pinned to the leaf VK the same way
+  (`verify_leaves_against_log`). The auditor's log check costs `O(T)` native
+  hashes per verification (inside the timed verify).
 - **`src/recursion/mmr.rs`** — a standalone append-only Merkle Mountain Range
   ("upload log") over the batch input commitments `{Com(B_t)}`: one published
   root, `O(log t)` inclusion proofs, decoupled from the transition proofs.
@@ -281,6 +294,22 @@ scripts/run_decode.sh                 # decode/query circuits (tests + table)
 | `EXP_COMPOSE_QUERY_EVERY` | mixed *per-batch* variant: one query after every `k`-th batch. Mutually exclusive with `_OPS`; plonky3 only | `0` (off) |
 | `EXP_QUERY_KEY_MODE` | probe key for keyed queries: `first` \| `uniform_stream` \| `hot` \| `absent`. plonky3 only | `first` |
 | `EXP_OUT` / `$1` | output name; `results/<name>.csv` (the `.csv` suffix is optional) | `stream_compose.csv` (plonky3) / `stream_compose_p2.csv` (plonky2) |
+
+**Soundness knobs (plonky3, every surface):**
+
+| Var | Meaning | Default |
+| --- | --- | --- |
+| `ZKSKETCH_BINDING` | binding mode of the circuits that implement it: the Count-Min `omc` and `memcheck` leaves, the HyperLogLog `omc` and `one_hot` (`hll_final_full`) leaves (the `omc` leaves on BabyBear and Goldilocks), the standalone `countmin_merkle` leaf (no runner selects it), the GK band-merge leaves (`bandmerge`, `bandmerge2` on BabyBear and Goldilocks: the in-circuit threshold `θ = ⌊N_t/s⌋`) and the CM/HLL/SpaceSaving/GK decoders (the exposed query statement). CM `one_hot`, CM `merkle`/`merkle_fast`/`merkle_gb` (`countmin_c_merkle`), HLL `merkle`, the GK `bandmerge2_naive` baseline and the SS/GK-group-by update leaves ignore it. Modes: `semantic` (canonical positions, coordinate sort keys, base pins, GK `θ` bound to `N_t`, decoder statements exposed; relies on the fork for coefficient + IV binding), `bound` (adds in-circuit ALU coefficient re-binding and a zero-IV sponge where implemented (CM/HLL) — the fallback for an unfixed fork; the GK/SS circuits build the `semantic` circuit), `legacy` (the pre-fix zkSketch circuits, byte-for-byte against the same fork, for side-by-side cost runs; the merged fork itself changes even the pristine circuits, so `legacy` rows do not reproduce numbers measured at fork rev 19dcb37; **unsound** — only the fork-level fixes still apply; selecting it prints a loud warning to stderr, once per process). Any other value, including a non-UTF-8 one, panics. The variant knobs (`EXP_{CM,HLL}_VARIANT`, `EXP_SS_VARIANT`, `EXP_GK_VARIANT`) are unchanged | `semantic` |
+| `ZKSKETCH_STATEMENT` | composition statement the harness leaves expose and the auditor checks (`statement::composition_expose`): `interval` = `(Com(S_{t-1}), Com(S_t), (t, t), H(TAG_LEAF, t, Com(B_t)))` per leaf, folded by the merge atom (index adjacency + merge digest) and checked at the root against the public batch log (`Com(S_0)`, `Com(S_T)`, every `Com(B_t)`) under the run's bracketing; `boundary` = the pre-B6(b) `(Com(S_{i-1}), Com(S_j))` leaves and merges, byte for byte, with a loud warning that the batch log is not checked. `ZKSKETCH_BINDING=legacy` also selects `boundary` unless this is set. Any other value, including a non-UTF-8 one, panics | `interval` |
+| `EXP_ROOT_VK` | where the auditor's trusted VK comes from: for a composed (chain/forest, `t >= 2`) root the ROOT VK, and wherever the auditor receives leaf proofs directly (per_batch; a one-batch stream) the LEAF VK, against which each leaf is pinned (commitment + metadata) and STARK-verified by a verifier configured from public parameters before its statement is checked against the log. `derive` = from public parameters only (a no-op leaf, plus the fold's tree shape for a root; `O(log t)` dummy merges outside every timed phase), `self` = the legacy self-pin read from the root itself, with per_batch / lone-leaf proofs not re-verified by the auditor (the provers' self-verify is reported). Under `self` the batch-log check is worthless, since any circuit can expose the log's values (loud warning; side-by-side timing only). Or a path to a postcard `RootVk` file (`dist_compose` only; a per_batch or `t = 1` run expects the leaf VK). Files saved before the Interval statement (B6(b)) hold the Boundary-layout VK and now fail closed: re-derive them. A derivation or file error aborts the run | `derive` |
+| `EXP_ROOT_VK_SAVE` | `dist_compose` with `EXP_ROOT_VK=derive`: also write the derived root (or leaf) VK to this path | unset |
+
+`semantic` is only sound on the merged soundness fork (decompose coefficients
+bound through `recompose/coeff`, zero IV on every `new_start` sponge row, bound
+constants, full top-byte range check), which the build must link via the
+`[patch]` in `.cargo/config.toml` until the fork rev is bumped in `Cargo.toml`.
+`cargo test --release --lib bind::tests::fork_probe_report -- --nocapture`
+prints which of these the linked fork provides.
 
 Earlier modes of the E1–E10 ladder (**e3, e4, e5real, e6, e7, e9, e10, inputfold,
 casestudy**) and the RQ1–RQ4 figure track are **retired from the driver** —
@@ -513,7 +542,7 @@ cargo run --release --example hll_chain_n          # HLL chain sweep
 ## Tests
 
 ```bash
-cargo test --release                       # plonky3: 379 lib unit tests (41 #[ignore]d) + tests/ integration
+cargo test --release                       # plonky3: 514 lib unit tests (66 #[ignore]d) + tests/ integration
 cargo test --release --lib dataset::       # one module
 cargo test --release --test two_leaf_hll   # one integration suite
 (cd plonky2 && cargo test --release)       # plonky2 backend (nightly auto)
@@ -540,7 +569,7 @@ public inputs) is covered by the unit tests in `src/`, not by `tests/`.
 | `src/sketch/` | Plaintext sketches + **complete circuits**. Deployed leaves: `countmin_omc`, `hll_omc`, `ss_final_full`, `gk_bandmerge`. Baselines: `countmin_final`, `hll_final_full`, `gk_final_full`, the `*_merkle` sparse-opening leaves, and the `*_v3/_v9` Count-Min variants. |
 | `src/commitment/` | Poseidon2 state commitments per family. |
 | `src/recursion/framework.rs` | §4 generic composition (epoch leaves, merge atom, streaming forest, `R(t)`). |
-| `src/recursion/recursive/` | §4.2 in-circuit merge + §4.3 chains; leaf circuits (`countmin_leaf{,_v2,_v3,_v9,_v9h}`, `hll_leaf{,_v2}`) + merges. |
+| `src/recursion/recursive/` | §4.2 in-circuit merge + §4.3 chains; leaf circuits (`countmin_leaf{,_v2,_v3,_v9,_v9h}`, `hll_leaf{,_v2}`) + merges; the family-agnostic hiding merge atom (`expose_forest{,_gl}.rs`), the Interval composition statement and its log auditor (`statement.rs`), public-parameter root/leaf VK derivation (`root_vk.rs`, `noop_leaf.rs`), and their end-to-end attack tests (`interval_tests.rs`). |
 | `src/recursion/{flat,countmin_flat,hll_flat}.rs` | §4.1 flat chains. |
 | `src/recursion/mmr.rs` | Standalone MMR upload-log over `{Com(B_t)}`. |
 | `src/dataset.rs` | Synthetic generators + real/synthetic loaders + `gen_synthetic` helpers. |

@@ -42,14 +42,15 @@ use std::rc::Rc;
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
 use p3_circuit::ops::{
-    Poseidon2Config, Poseidon2PermCall, generate_poseidon2_trace, generate_recompose_trace,
+    Poseidon2Config, Poseidon2PermCall, generate_poseidon2_trace, generate_range_trace,
+    generate_recompose_trace,
 };
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        poseidon2_air_builders_d4, poseidon2_preprocessor, range_air_builders, range_preprocessor,
+        recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -65,6 +66,7 @@ use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
+use crate::sketch::bind::{self, Binding};
 use crate::sketch::countmin::{CountMinState, CountMinUpdate};
 use crate::sketch::countmin_final::hash_cell_prf;
 
@@ -341,7 +343,98 @@ pub fn prove_countmin_merkle_leaf(
     initial: CountMinState,
     batch: Vec<CountMinUpdate>,
 ) -> CountMinMerkleProof {
+    prove_countmin_merkle_leaf_with(params, initial, batch, bind::default_binding())
+}
+
+/// [`prove_countmin_merkle_leaf`] with an explicit [`Binding`].
+///
+/// [`Binding::Legacy`] is the pre-fix circuit, unchanged. It is unsound: the
+/// routing digest's decomposition is unbound, its bits may be non-canonical,
+/// and every sponge has a prover-chosen IV. A single-block Merkle LEAF hash
+/// with a free capacity and a free second rate limb is invertible, since all
+/// 16 permutation inputs are free. [`Binding::Semantic`] / [`Binding::Bound`]
+/// base-pin the keys and values, which are hashed as whole Challenges, and
+/// take each position from a canonical split. `Bound` also ALU-binds the
+/// digest limbs and hashes every sponge (batch, key, Merkle leaf/node) with
+/// a zero IV (see [`crate::sketch::bind`]).
+pub fn prove_countmin_merkle_leaf_with(
+    params: CountMinMerkleParams,
+    initial: CountMinState,
+    batch: Vec<CountMinUpdate>,
+    binding: Binding,
+) -> CountMinMerkleProof {
+    build_countmin_merkle_leaf(params, initial, batch, binding).prove()
+}
+
+/// A built Merkle leaf: circuit, witness, registered prover.
+struct CmMerkleCircuit {
+    circuit: p3_circuit::Circuit<Challenge>,
+    public_inputs: Vec<Challenge>,
+    private_inputs: Vec<Challenge>,
+    prover: BatchStarkProver<ConfigWithFriParams>,
+    circuit_prover_data: CircuitProverData<ConfigWithFriParams>,
+    trace_rows: u64,
+    initial_roots: Vec<CountMinCommit>,
+    final_roots: Vec<CountMinCommit>,
+    batch_commit: CountMinCommit,
+    params: CountMinMerkleParams,
+}
+
+impl CmMerkleCircuit {
+    fn run(&self) -> p3_circuit::tables::Traces<Challenge> {
+        let mut runner = self.circuit.runner();
+        runner.set_public_inputs(&self.public_inputs).expect("set_public_inputs");
+        runner.set_private_inputs(&self.private_inputs).expect("set_private_inputs");
+        runner.run().expect("run cm merkle circuit")
+    }
+
+    fn prove(self) -> CountMinMerkleProof {
+        let __t_w = std::time::Instant::now();
+        let traces = self.run();
+        let __witness = __t_w.elapsed();
+        let __t_p = std::time::Instant::now();
+        let proof =
+            self.prover.prove_all_tables(&traces, &self.circuit_prover_data).expect("prove cm merkle");
+        let __prove = __t_p.elapsed();
+        let __t_v = std::time::Instant::now();
+        self.prover.verify_all_tables(&proof).expect("self-verify cm merkle leaf");
+        crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
+            witness: __witness,
+            prove: __prove,
+            verify: __t_v.elapsed(),
+            trace_rows: self.trace_rows,
+        });
+        CountMinMerkleProof {
+            output: RecursionOutput(proof, Rc::new(self.circuit_prover_data)),
+            initial_roots: self.initial_roots,
+            final_roots: self.final_roots,
+            batch_commit: self.batch_commit,
+            params: self.params,
+        }
+    }
+
+    #[cfg(test)]
+    fn prove_traces(
+        &self,
+        traces: &p3_circuit::tables::Traces<Challenge>,
+    ) -> Result<p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>, String> {
+        let proof = self
+            .prover
+            .prove_all_tables(traces, &self.circuit_prover_data)
+            .map_err(|e| format!("prove: {e:?}"))?;
+        self.prover.verify_all_tables(&proof).map_err(|e| format!("verify: {e:?}"))?;
+        Ok(proof)
+    }
+}
+
+fn build_countmin_merkle_leaf(
+    params: CountMinMerkleParams,
+    initial: CountMinState,
+    batch: Vec<CountMinUpdate>,
+    binding: Binding,
+) -> CmMerkleCircuit {
     params.validate();
+    let bound = binding.is_bound();
     let CountMinMerkleParams { d, w, batch: m, t_max } = params;
     assert_eq!(initial.params.d, d, "state.d / params.d mismatch");
     assert_eq!(initial.params.w, w, "state.w / params.w mismatch");
@@ -380,6 +473,9 @@ pub fn prove_countmin_merkle_leaf(
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    if bound {
+        b.enable_range(generate_range_trace::<Val, Challenge>);
+    }
 
     // Public inputs: per-row init roots, per-row final roots, batch commit.
     let init_root_pis: Vec<[ExprId; DIGEST_PACKING]> = (0..d)
@@ -397,6 +493,7 @@ pub fn prove_countmin_merkle_leaf(
     let zero = b.alloc_const(Challenge::ZERO, "zero");
     let pow2: Vec<ExprId> =
         (0..h).map(|j| b.alloc_const(Challenge::from_u64(1u64 << j), "2^j")).collect();
+    let split_c = bound.then(|| bind::SplitConsts::new::<Val, Challenge>(&mut b, h, one, zero));
 
     // ── Private witnesses (allocation order MUST match the value-push order) ──
     // The key is fed only to Poseidon2 absorbs; build it from a base coefficient
@@ -444,6 +541,26 @@ pub fn prove_countmin_merkle_leaf(
                 .collect()
         })
         .collect();
+    // Semantic/Bound: per record, per row, the canonical split `(pos, hi, dinv)`
+    // of the row's digest limb (allocated last; pushed last).
+    let split_w: Vec<Vec<[ExprId; 3]>> = if bound {
+        (0..m)
+            .map(|_| (0..d).map(|_| std::array::from_fn(|_| b.alloc_private_input("split"))).collect())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if bound {
+        // Keys and values are hashed as whole Challenges; pin them to the base
+        // field so a key is a real key (not a grindable extension element).
+        for k in 0..m {
+            bind::pin_base::<Val, Challenge>(&mut b, key_coeff[k]);
+            bind::pin_base::<Val, Challenge>(&mut b, values[k]);
+        }
+    }
+    if let Some(&k0) = keys.first() {
+        b.tag(k0, "cmm_key_0").expect("tag");
+    }
 
     // ── S1: open the batch commitment over interleaved (key, value) ──────────
     let mut batch_pre: Vec<ExprId> = Vec::with_capacity(2 * m);
@@ -451,7 +568,7 @@ pub fn prove_countmin_merkle_leaf(
         batch_pre.push(keys[k]);
         batch_pre.push(values[k]);
     }
-    let hb = b.add_hash_slice(&cfg, &batch_pre, true).expect("hash batch");
+    let hb = bind::hash_slice(&mut b, &cfg, &batch_pre, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(hb[i], batch_commit_pis[i]);
     }
@@ -477,10 +594,60 @@ pub fn prove_countmin_merkle_leaf(
     }
 
     // ── S2: derive each record's per-row cell pos = Poseidon2(key)[i] mod w ───
+    // Route record k in row `row` to the one-hot op whose position is `pos`.
+    let route = |b: &mut CircuitBuilder<Challenge>, row: usize, k: usize, pos: ExprId| {
+        let mut sum = zero;
+        let mut routed_pos = zero;
+        let mut routed_active = zero;
+        for c in 0..t_max {
+            let s = sel[row][k][c];
+            let sm1 = b.sub(s, one);
+            let chk = b.mul(s, sm1);
+            b.connect(chk, zero);
+            sum = b.add(sum, s);
+            routed_pos = b.mul_add(s, op_pos_val[row][c], routed_pos);
+            routed_active = b.mul_add(s, op_active_w[row][c], routed_active);
+        }
+        b.connect(sum, one);
+        b.connect(routed_pos, pos);
+        b.connect(routed_active, one);
+    };
     for k in 0..m {
-        let hashed = b.add_hash_slice(&cfg, &[keys[k]], true).expect("hash key");
+        let hashed = bind::hash_slice(&mut b, &cfg, &[keys[k]], zero, binding);
         b.connect(hashed[0], key_h0[k]);
         b.connect(hashed[1], key_h1[k]);
+        if let Some(sc) = &split_c {
+            // Limb i < d = canonical split (yields pos_i); other limbs of an
+            // ALU-bound Challenge are base-pinned; for d ≤ 4 the second digest
+            // Challenge carries no routing and is not decomposed.
+            let sw = &split_w[k];
+            let split_limb = |b: &mut CircuitBuilder<Challenge>, t: usize, c: ExprId| {
+                if t < d {
+                    let [pos, hi, dinv] = sw[t];
+                    let x = bind::canonical_split_gadget::<Val, Challenge>(b, pos, hi, dinv, sc);
+                    b.connect(x, c);
+                }
+            };
+            let pin_unused = |b: &mut CircuitBuilder<Challenge>, t: usize, c: ExprId| {
+                if t >= d {
+                    bind::pin_base::<Val, Challenge>(b, c);
+                }
+            };
+            let _ = bind::decompose::<Val, Challenge>(&mut b, key_h0[k], binding, split_limb, pin_unused);
+            if d > 4 {
+                let _ = bind::decompose::<Val, Challenge>(
+                    &mut b,
+                    key_h1[k],
+                    binding,
+                    |b, i, c| split_limb(b, 4 + i, c),
+                    |b, i, c| pin_unused(b, 4 + i, c),
+                );
+            }
+            for (row, sw_i) in sw.iter().enumerate() {
+                route(&mut b, row, k, sw_i[0]);
+            }
+            continue;
+        }
         let c0 = b.decompose_ext_to_base_coeffs::<Val>(key_h0[k]).expect("decompose h0");
         let c1 = b.decompose_ext_to_base_coeffs::<Val>(key_h1[k]).expect("decompose h1");
         // Digest element `i` is coeff `i` of (c0 ++ c1). Decompose every element
@@ -538,7 +705,15 @@ pub fn prove_countmin_merkle_leaf(
     for i in 0..d {
         let mut prev_root: [ExprId; 2] = init_root_pis[i];
         for c in 0..t_max {
-            let old_root = climb_merkle_path(&mut b, &cfg, op_old_w[i][c], &op_pos_bits[i][c], &op_sib[i][c]);
+            let old_root = climb_merkle_path_with(
+                &mut b,
+                &cfg,
+                op_old_w[i][c],
+                &op_pos_bits[i][c],
+                &op_sib[i][c],
+                zero,
+                binding,
+            );
             if c == 0 {
                 b.connect(old_root[0], prev_root[0]);
                 b.connect(old_root[1], prev_root[1]);
@@ -548,7 +723,15 @@ pub fn prove_countmin_merkle_leaf(
                     b.connect(diff, zero);
                 }
             }
-            let new_root = climb_merkle_path(&mut b, &cfg, op_new_w[i][c], &op_pos_bits[i][c], &op_sib[i][c]);
+            let new_root = climb_merkle_path_with(
+                &mut b,
+                &cfg,
+                op_new_w[i][c],
+                &op_pos_bits[i][c],
+                &op_sib[i][c],
+                zero,
+                binding,
+            );
             prev_root = new_root;
         }
         b.connect(prev_root[0], final_root_pis[i][0]);
@@ -640,23 +823,27 @@ pub fn prove_countmin_merkle_leaf(
             }
         }
     }
-
-    // ─── Run + prove ─────────────────────────────────────────────────────────
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
-        runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
-        runner.run().expect("run cm merkle circuit")
-    };
-    let __witness = __t_w.elapsed();
+    if bound {
+        let hasher = MyHash::new(make_perm());
+        for u in &batch {
+            let input = [Val::from_u64(u.key), Val::ZERO, Val::ZERO, Val::ZERO];
+            let digest: [Val; 8] = hasher.hash_iter(input.iter().copied());
+            for limb in digest.iter().take(d) {
+                private_inputs.extend(bind::canonical_split_vals::<Val>(*limb, h).map(Challenge::from));
+            }
+        }
+    }
 
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
-    let preprocessors =
+    let mut preprocessors =
         vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false)];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+    if bound {
+        preprocessors.push(range_preprocessor::<Val>());
+        air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
+    }
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -676,23 +863,19 @@ pub fn prove_countmin_merkle_leaf(
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
-    let __t_p = std::time::Instant::now();
-    let proof =
-        prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove cm merkle");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify cm merkle leaf");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&dd| 1u64 << dd).sum(),
-    });
+    if bound {
+        prover.register_range_table::<4>();
+    }
 
     let _ = pack_commit_to_challenge;
 
-    CountMinMerkleProof {
-        output: RecursionOutput(proof, Rc::new(circuit_prover_data)),
+    CmMerkleCircuit {
+        circuit,
+        public_inputs,
+        private_inputs,
+        prover,
+        circuit_prover_data,
+        trace_rows: ext_degrees.iter().map(|&dd| 1u64 << dd).sum(),
         initial_roots: plans.iter().map(|p| CountMinCommit(p.init_root)).collect(),
         final_roots: plans.iter().map(|p| CountMinCommit(p.final_root)).collect(),
         batch_commit: CountMinCommit(batch_commit),
@@ -732,6 +915,41 @@ pub(crate) fn climb_merkle_path(
         let parent = b
             .add_hash_slice(cfg, &[lo[0], lo[1], hi[0], hi[1]], true)
             .expect("node hash");
+        cur = [parent[0], parent[1]];
+    }
+    cur
+}
+
+/// [`climb_merkle_path`] under a [`Binding`]: with `binds_iv()` every leaf
+/// and node sponge is [`bind::hash_slice_bound`] (zero-fed first-row limbs),
+/// otherwise identical. A single-block leaf hash with a free capacity AND a
+/// free second rate limb has all 16 permutation inputs free, so its digest
+/// can be inverted to an arbitrary "leaf".
+pub(crate) fn climb_merkle_path_with(
+    b: &mut CircuitBuilder<Challenge>,
+    cfg: &Poseidon2Config,
+    leaf_val: ExprId,
+    pos_bits: &[ExprId],
+    siblings: &[[ExprId; 2]],
+    zero: ExprId,
+    binding: Binding,
+) -> [ExprId; 2] {
+    if !binding.binds_iv() {
+        return climb_merkle_path(b, cfg, leaf_val, pos_bits, siblings);
+    }
+    let leaf_d = bind::hash_slice_bound(b, cfg, &[leaf_val], zero);
+    let mut cur: [ExprId; 2] = [leaf_d[0], leaf_d[1]];
+    for (level, sib) in siblings.iter().enumerate() {
+        let bit = pos_bits[level];
+        let mut lo = [cur[0]; 2];
+        let mut hi = [cur[0]; 2];
+        for limb in 0..2 {
+            let d = b.sub(cur[limb], sib[limb]); // cur − sib
+            let bit_d = b.mul(bit, d); // bit·d
+            lo[limb] = b.sub(cur[limb], bit_d); // cur − bit·d
+            hi[limb] = b.mul_add(bit, d, sib[limb]); // sib + bit·d
+        }
+        let parent = bind::hash_slice_bound(b, cfg, &[lo[0], lo[1], hi[0], hi[1]], zero);
         cur = [parent[0], parent[1]];
     }
     cur
@@ -1060,6 +1278,82 @@ mod tests {
                 t.trace_rows,
                 t.prove
             );
+        }
+    }
+
+    // ── Binding (see `crate::sketch::bind`): legacy-vs-bound forgery tests ──
+
+    use crate::sketch::forge;
+    use crate::sketch::countmin_final::apply_update_prf;
+    use crate::sketch::countmin_v9::CountMinV9;
+    use crate::sketch::Sketch;
+    use p3_circuit::ops::{NpoTypeId, Poseidon2Trace};
+
+    const FP: CountMinMerkleParams = CountMinMerkleParams { d: 2, w: 8, batch: 2, t_max: 2 };
+
+    fn fp_updates() -> Vec<CountMinUpdate> {
+        vec![CountMinUpdate { key: 7, value: 3 }, CountMinUpdate { key: 9, value: 5 }]
+    }
+
+    fn fp_prior() -> CountMinState {
+        let mut s = CountMinV9::new(&CountMinParams { d: FP.d, w: FP.w });
+        apply_update_prf(&mut s, &CountMinUpdate { key: 3, value: 4 });
+        s
+    }
+
+    #[test]
+    fn merkle_round_trip_all_bindings() {
+        let legacy = prove_countmin_merkle_leaf_with(FP, fp_prior(), fp_updates(), Binding::Legacy);
+        for binding in [Binding::Bound, Binding::Semantic] {
+            let r = prove_countmin_merkle_leaf_with(FP, fp_prior(), fp_updates(), binding);
+            assert_eq!(r.final_roots.len(), legacy.final_roots.len());
+            for (a, b) in r.final_roots.iter().zip(&legacy.final_roots) {
+                assert_eq!(a.0, b.0, "{binding:?}");
+            }
+        }
+    }
+
+    /// FREE SPONGE IV on record 0's routing hash (bump a capacity input,
+    /// rehash). Legacy accepts a digest that is not `MyHash(key)` (and routes
+    /// by the unbound coefficients anyway); Bound rejects.
+    fn forged_iv(binding: Binding) -> bool {
+        forge::accepted_with_control(&format!("cm merkle forged IV ({binding:?})"), |f| {
+            forged_iv_run(binding, f)
+        })
+    }
+
+    fn forged_iv_run(binding: Binding, forge_it: bool) -> bool {
+        let c = build_countmin_merkle_leaf(FP, fp_prior(), fp_updates(), binding);
+        let mut traces = c.run();
+        let k0 = traces.tag_to_witness["cmm_key_0"].0;
+        let key = NpoTypeId::poseidon2_perm(Poseidon2Config::BABY_BEAR_D4_W16);
+        let mut pt = traces.non_primitive_trace::<Poseidon2Trace<Val>>(&key).expect("p2").clone();
+        let row = pt
+            .operations
+            .iter_mut()
+            .filter(|r| r.new_start && r.in_ctl[0] && r.input_indices[0] == k0)
+            .last()
+            .expect("record 0 routing hash row");
+        if forge_it {
+            row.input_values[8] += Val::ONE;
+        }
+        traces.non_primitive_traces.insert(key, Box::new(pt));
+        forge::rehash_all::<Val, Challenge, _, 16>(&mut traces, Poseidon2Config::BABY_BEAR_D4_W16, &make_perm());
+        forge::accepted(|| c.prove_traces(&traces).map(|_| ()))
+    }
+
+    #[test]
+    fn forged_routing_iv_legacy_accepts_bound_rejects() {
+        if !bind::probe::fork_binds_iv() && !bind::probe::fork_binds_decompose() {
+            assert!(forged_iv(Binding::Legacy), "Legacy accepts the free-IV digest (PoC)");
+        }
+        assert!(!forged_iv(Binding::Bound), "Bound must reject the IV forgery");
+        // Merged soundness fork: the fork itself binds the sponge IV, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if bind::probe::fork_binds_iv() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(!forged_iv(b), "fork binds the sponge IV: {b:?} must reject too");
+            }
         }
     }
 }

@@ -65,6 +65,7 @@ use p3_uni_stark::StarkGenericConfig;
 use crate::commitment::CountMinCommit;
 use crate::config::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config::ConfigWithFriParams;
+use crate::recursion::recursive::statement::{self, Expose, IndexPin};
 use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
@@ -214,7 +215,7 @@ pub fn prove_countmin_c_merkle_leaf(
     initial: CountMinState,
     batch: Vec<CountMinUpdate>,
 ) -> CountMinCMerkleProof {
-    prove_countmin_c_merkle_leaf_impl(params, initial, batch, false)
+    prove_countmin_c_merkle_leaf_impl(params, initial, batch, Expose::None, 1)
 }
 
 /// Like [`prove_countmin_c_merkle_leaf`] but additionally surfaces the boundary
@@ -229,15 +230,48 @@ pub fn prove_countmin_c_merkle_exposed(
     batch: Vec<CountMinUpdate>,
 ) -> CountMinCMerkleProof {
     assert!(!params.group_by, "boundary-exposing c_merkle requires group_by == false");
-    prove_countmin_c_merkle_leaf_impl(params, initial, batch, true)
+    prove_countmin_c_merkle_leaf_impl(params, initial, batch, Expose::Boundary, 1)
+}
+
+/// Like [`prove_countmin_c_merkle_exposed`] but with the **Interval**
+/// statement for batch `t` (1-based): exposes
+/// `(combined_init, combined_final, (t, t, 0, 0), Poseidon2(TAG_LEAF, t, Com(B_t)))`
+/// with the in-circuit batch digest (see
+/// [`crate::recursion::recursive::statement`]).
+pub fn prove_countmin_c_merkle_interval(
+    params: CountMinCMerkleParams,
+    t: u64,
+    initial: CountMinState,
+    batch: Vec<CountMinUpdate>,
+) -> CountMinCMerkleProof {
+    assert!(!params.group_by, "boundary-exposing c_merkle requires group_by == false");
+    prove_countmin_c_merkle_leaf_impl(params, initial, batch, Expose::Interval, t)
+}
+
+/// The batch commitment `Com(B_t)` the c_merkle leaf binds in-circuit (the
+/// sponge over interleaved `(key, value)`): what the public log publishes.
+pub fn countmin_c_merkle_batch_commit(batch: &[CountMinUpdate]) -> [Val; 8] {
+    let hasher = MyHash::new(make_perm());
+    let flat: Vec<Val> = batch
+        .iter()
+        .flat_map(|u| {
+            [
+                Val::from_u64(u.key), Val::ZERO, Val::ZERO, Val::ZERO,
+                Val::from_u32(u.value), Val::ZERO, Val::ZERO, Val::ZERO,
+            ]
+        })
+        .collect();
+    hasher.hash_iter(flat.iter().copied())
 }
 
 fn prove_countmin_c_merkle_leaf_impl(
     params: CountMinCMerkleParams,
     initial: CountMinState,
     batch: Vec<CountMinUpdate>,
-    expose_boundary: bool,
+    expose: Expose,
+    t: u64,
 ) -> CountMinCMerkleProof {
+    let expose_boundary = expose == Expose::Boundary;
     params.validate();
     let CountMinCMerkleParams { d, w, batch: m, t_max, compress, group_by } = params;
     assert_eq!(initial.params.d, d, "state.d / params.d mismatch");
@@ -297,7 +331,7 @@ fn prove_countmin_c_merkle_leaf_impl(
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
-    if expose_boundary {
+    if expose.exposes() {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
     // No PermuteAir: the key-grouping (key-sort + compaction) stages are
@@ -325,6 +359,14 @@ fn prove_countmin_c_merkle_leaf_impl(
         b.add_expose(&[combined_init[0], combined_init[1], combined_final[0], combined_final[1]])
             .expect("add_expose boundary");
     }
+    // Interval layout: the same in-circuit combined roots, exposed together
+    // with the batch index and digest once the batch digest exists (S1).
+    let interval_boundary = expose.is_interval().then(|| {
+        (
+            combine_roots_in_circuit(&mut b, &cfg, &init_root_pis),
+            combine_roots_in_circuit(&mut b, &cfg, &final_root_pis),
+        )
+    });
 
     // Constants.
     let one = b.alloc_const(Challenge::ONE, "one");
@@ -384,6 +426,20 @@ fn prove_countmin_c_merkle_leaf_impl(
     let hb = b.add_hash_slice(&cfg, &batch_pre, true).expect("hash batch");
     for i in 0..DIGEST_PACKING {
         b.connect(hb[i], batch_commit_pis[i]);
+    }
+    // Interval statement (B6(b)): batch index t (last public input,
+    // bit-pinned: no Range table here) and H = Poseidon2(TAG_LEAF, t, hb).
+    if let Some((combined_init, combined_final)) = interval_boundary {
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b,
+            &cfg,
+            &combined_init,
+            &combined_final,
+            &hb,
+            zero,
+            crate::sketch::bind::Binding::Semantic,
+            IndexPin::Bits,
+        );
     }
 
     // ── Stage F: PRF hash gadget OVER EVERY RECORD (no key-grouping) ─────────
@@ -518,6 +574,9 @@ fn prove_countmin_c_merkle_leaf_impl(
         public_inputs.extend_from_slice(&pack_digest(&plan.final_root));
     }
     public_inputs.extend_from_slice(&pack_digest(&batch_commit));
+    if expose.is_interval() {
+        public_inputs.push(Challenge::from_u64(t));
+    }
 
     let mut private_inputs: Vec<Challenge> = Vec::new();
     // key_coeff (= key mod p), values.
@@ -606,7 +665,7 @@ fn prove_countmin_c_merkle_leaf_impl(
     ];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
-    if expose_boundary {
+    if expose.exposes() {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
     }
@@ -658,7 +717,7 @@ fn prove_countmin_c_merkle_leaf_impl(
     let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
-    if expose_boundary {
+    if expose.exposes() {
         prover.register_expose_table::<4>();
     }
     let __t_p = std::time::Instant::now();

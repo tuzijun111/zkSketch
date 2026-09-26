@@ -376,7 +376,7 @@ dependencies = [
 [[package]]
 name = "p3-circuit"
 version = "0.1.0"
-source = "git+https://github.com/July620/Plonky3_RangeAir?rev=19dcb375650c512a4677110b3b6b668e459c2cda#19dcb375650c512a4677110b3b6b668e459c2cda"
+source = "git+https://github.com/July620/Plonky3_RangeAir?rev=fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287#fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools",
@@ -403,7 +403,7 @@ dependencies = [
 [[package]]
 name = "p3-circuit-prover"
 version = "0.1.0"
-source = "git+https://github.com/July620/Plonky3_RangeAir?rev=19dcb375650c512a4677110b3b6b668e459c2cda#19dcb375650c512a4677110b3b6b668e459c2cda"
+source = "git+https://github.com/July620/Plonky3_RangeAir?rev=fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287#fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287"
 dependencies = [
  "hashbrown 0.16.1",
  "p3-air",
@@ -681,7 +681,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon1-circuit-air"
 version = "0.1.0"
-source = "git+https://github.com/July620/Plonky3_RangeAir?rev=19dcb375650c512a4677110b3b6b668e459c2cda#19dcb375650c512a4677110b3b6b668e459c2cda"
+source = "git+https://github.com/July620/Plonky3_RangeAir?rev=fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287#fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287"
 dependencies = [
  "itertools",
  "p3-air",
@@ -731,7 +731,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon2-circuit-air"
 version = "0.1.0"
-source = "git+https://github.com/July620/Plonky3_RangeAir?rev=19dcb375650c512a4677110b3b6b668e459c2cda#19dcb375650c512a4677110b3b6b668e459c2cda"
+source = "git+https://github.com/July620/Plonky3_RangeAir?rev=fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287#fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287"
 dependencies = [
  "itertools",
  "p3-air",
@@ -755,7 +755,7 @@ dependencies = [
 [[package]]
 name = "p3-recursion"
 version = "0.1.0"
-source = "git+https://github.com/July620/Plonky3_RangeAir?rev=19dcb375650c512a4677110b3b6b668e459c2cda#19dcb375650c512a4677110b3b6b668e459c2cda"
+source = "git+https://github.com/July620/Plonky3_RangeAir?rev=fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287#fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools",

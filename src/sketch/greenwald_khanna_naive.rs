@@ -419,6 +419,80 @@ thread_local! {
     static TAMPER_MERGE_NONMIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+// ─── Op tags (shared-PermuteBus fix, revision Step 1) ───────────────────────
+//
+// The fork concatenates every `add_permute` of a circuit into ONE PermuteAir
+// whose PermuteBus message is the 4 value coordinates only (no op id), so the
+// `2m` per-record permutes (insert = op `2k`, resort = op `2k+1`) only prove
+// that the union of ALL their inputs equals the union of ALL their outputs.
+// On the shared `(value, count, max_error, active)` encoding a prover could
+// swap two records between their insert permutes — replaying the stream in a
+// different order than the committed batch (`tests::record_swap_forgery_rejected`,
+// accepted before this fix). Every element of op `o` therefore carries the op
+// tag `2(o+1)` in its `active` coordinate: inputs get it by a constant ext-add
+// (states, record) or in the ALU recompose (fused rows); outputs are
+// de-tagged and the de-tagged `active` is boolean-checked, which pins every
+// output of op `o` to `{2(o+1), 2(o+1)+1}` — disjoint classes, so per-class
+// counting forces per-op multiset equality. The committed tables keep the
+// committed encoding.
+
+/// `active`-coordinate op tag of permute op `o`.
+fn op_tag_val(o: usize) -> u64 {
+    2 * (o as u64 + 1)
+}
+
+/// Whether [`prove_gk_naive`] tags its permutes. Always on outside tests.
+fn use_op_tag() -> bool {
+    #[cfg(test)]
+    if let Some(v) = OP_TAG.with(|c| c.get()) {
+        return v;
+    }
+    true
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override of [`use_op_tag`] (`Some(false)` = pre-fix circuit).
+    static OP_TAG: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// Test-only malicious prover: `(o, tuples)` makes permute op `o` emit
+    /// `tuples` (packed in op `o`'s encoding, see [`pack_op`]).
+    static FORGE: std::cell::RefCell<Vec<(usize, Vec<GKFullTuple>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Test-only: `Some((o, row, o2))` packs row `row` of op `o`'s OUTPUT
+    /// (permute output AND private input) with op `o2`'s tag — a prover lying
+    /// about the tag so the element matches another op's input on the bus.
+    static ROW_TAG: std::cell::Cell<Option<(usize, usize, usize)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Pack op `o`'s OUTPUT table (`work` for `o = 2k`, `resorted` for `o = 2k+1`)
+/// in its tagged encoding (untagged when `op_tag` is off).
+fn pack_op(tuples: &[GKFullTuple], o: usize, op_tag: bool) -> Vec<Challenge> {
+    use p3_field::BasedVectorSpace;
+    #[allow(unused_mut)]
+    let mut row_tag = vec![o; tuples.len()];
+    #[cfg(test)]
+    if let Some((oo, row, o2)) = ROW_TAG.with(|c| c.get())
+        && oo == o
+    {
+        row_tag[row] = o2;
+    }
+    tuples
+        .iter()
+        .enumerate()
+        .map(|(r, t)| {
+            let tag = if op_tag { op_tag_val(row_tag[r]) } else { 0 };
+            let coeffs = [
+                Val::from_u32(t.value),
+                Val::from_u32(t.count),
+                Val::from_u32(t.max_error),
+                Val::from_u64(t.active as u64 + tag),
+            ];
+            Challenge::from_basis_coefficients_slice(&coeffs).expect("4 base coeffs")
+        })
+        .collect()
+}
+
 // ─── Prover ────────────────────────────────────────────────────────────────
 
 /// Prove one GK epoch by **naive per-record replay** (the strawman baseline).
@@ -432,10 +506,6 @@ pub fn prove_gk_naive(
     assert_eq!(initial_state.params, params);
     assert_eq!(batch.len(), params.batch);
 
-    let cap = params.capacity;
-    let m = params.batch;
-    let work_len = cap + 1;
-
     // ─── Native side ────────────────────────────────────────────────────
     #[cfg(test)]
     let (states, witnesses) = if TAMPER_MERGE_NONMIN.with(|c| c.get()) {
@@ -445,6 +515,22 @@ pub fn prove_gk_naive(
     };
     #[cfg(not(test))]
     let (states, witnesses) = replay_batch(&initial_state, &batch);
+    prove_gk_naive_witness(params, initial_state, batch, &states, &witnesses)
+}
+
+/// Build, run, prove and self-verify the naive replay circuit for a (honest or
+/// hand-crafted) replay witness `S_0 … S_m` + per-record steps.
+fn prove_gk_naive_witness(
+    params: GKFullParams,
+    initial_state: GKFullState,
+    batch: Vec<GKFullUpdate>,
+    states: &[Vec<GKFullTuple>],
+    witnesses: &[StepWitness],
+) -> GKFullLeafProof {
+    let cap = params.capacity;
+    let m = params.batch;
+    let work_len = cap + 1;
+    let op_tag = use_op_tag();
     debug_assert_eq!(states.len(), m + 1);
     debug_assert_eq!(witnesses.len(), m);
     let final_state = GKFullState { tuples: states[m].clone(), params };
@@ -624,8 +710,38 @@ pub fn prove_gk_naive(
     for k in 0..m {
         let prev = &state_fields[k];
         let next = &state_fields[k + 1];
-        let work = &work_fields[k];
         let rec_packed = batch_packed[k];
+        // Op tags of this record's insert (op 2k) and resort (op 2k+1)
+        // permutes: `*_x` adds the tag to a packed value's `active`
+        // coordinate, `*_b` is the base value for de-tagging a decomposed field.
+        let (tag_ins_x, tag_ins_b, tag_rs_b) = {
+            use p3_field::BasedVectorSpace;
+            let tx = |o: usize| {
+                Challenge::from_basis_coefficients_slice(&[
+                    Val::ZERO,
+                    Val::ZERO,
+                    Val::ZERO,
+                    Val::from_u64(op_tag_val(o)),
+                ])
+                .expect("4 coeffs")
+            };
+            (
+                b.alloc_const(tx(2 * k), "op_tag_insert_x"),
+                b.alloc_const(Challenge::from_u64(op_tag_val(2 * k)), "op_tag_insert"),
+                b.alloc_const(Challenge::from_u64(op_tag_val(2 * k + 1)), "op_tag_resort"),
+            )
+        };
+        // The work table is the insert op's OUTPUT: de-tag its `active` field
+        // (the boolean check in `sorted_checks` then pins the op class).
+        let work_eff: Vec<Vec<ExprId>> = if op_tag {
+            work_fields[k]
+                .iter()
+                .map(|f| vec![f[0], f[1], f[2], b.sub(f[3], tag_ins_b)])
+                .collect()
+        } else {
+            work_fields[k].clone()
+        };
+        let work = &work_eff;
 
         // 4.1 — work table is a well-formed sorted summary (cap+1 long).
         sorted_checks(&mut b, work, work_len);
@@ -634,6 +750,10 @@ pub fn prove_gk_naive(
         let mut combined: Vec<ExprId> = Vec::with_capacity(work_len);
         combined.extend(state_packed[k].iter().copied());
         combined.push(rec_packed);
+        if op_tag {
+            // insert op INPUT: tag every committed row's `active` coordinate.
+            combined = combined.iter().map(|&p| b.add(p, tag_ins_x)).collect();
+        }
         let permuted = b
             .add_permute(&combined, witnesses[k].sigma.clone())
             .expect("add_permute (work)");
@@ -769,8 +889,10 @@ pub fn prove_gk_naive(
             let me_diff = b.sub(me_witness, me_kept);
             let me_con = b.mul(one_minus_absorb, me_diff);
             b.connect(me_con, zero);
+            // F is the resort op's INPUT: its `active` coordinate carries the tag.
+            let a_op = if op_tag { b.add(a, tag_rs_b) } else { a };
             let packed = b
-                .recompose_base_coeffs_to_ext_via_alu::<Val>(&[v, c, me_witness, a])
+                .recompose_base_coeffs_to_ext_via_alu::<Val>(&[v, c, me_witness, a_op])
                 .expect("recompose F row via alu");
             f_packed.push(packed);
         }
@@ -795,12 +917,22 @@ pub fn prove_gk_naive(
         // dummy); resorted[1..=cap] is `next`. Constrain resorted[0]'s 4
         // coeffs to 0 and bind resorted[1+i]'s 4 coeffs to next[i]. (All
         // coeffs consumed → no dangling WitnessChecks-bus entry.)
-        for c in 0..4 {
+        // resorted is the resort op's OUTPUT: its `active` field is de-tagged
+        // (the dropped dummy's must equal the bare tag; the rest must equal
+        // `next`'s boolean active flag, which pins the op class).
+        for c in 0..3 {
             b.connect(resorted_fields[0][c], zero);
         }
+        b.connect(resorted_fields[0][3], if op_tag { tag_rs_b } else { zero });
         for i in 0..cap {
-            for c in 0..4 {
+            for c in 0..3 {
                 b.connect(resorted_fields[i + 1][c], next[i][c]);
+            }
+            if op_tag {
+                let a = b.sub(resorted_fields[i + 1][3], tag_rs_b);
+                b.connect(a, next[i][3]);
+            } else {
+                b.connect(resorted_fields[i + 1][3], next[i][3]);
             }
         }
 
@@ -821,7 +953,13 @@ pub fn prove_gk_naive(
         b.connect(next_mass, want);
     }
 
-    let circuit = b.build().expect("build gk_naive circuit");
+    #[allow(unused_mut)]
+    let mut circuit = b.build().expect("build gk_naive circuit");
+    // [test-only] malicious prover: swap in forged Permute outputs.
+    #[cfg(test)]
+    for (o, ts) in FORGE.with(|f| f.take()) {
+        crate::sketch::forge_permute::forge_permute_outputs(&mut circuit, o, pack_op(&ts, o, op_tag));
+    }
 
     // ─── Pack public + private ──────────────────────────────────────────
     let init_commit_packed =
@@ -851,11 +989,11 @@ pub fn prove_gk_naive(
         private_inputs.extend_from_slice(sv);
     }
     private_inputs.extend_from_slice(&pack_batch_to_challenge(&batch));
-    for w in &witnesses {
-        private_inputs.extend_from_slice(&pack_tuples_to_challenge(&w.work));
+    for (k, w) in witnesses.iter().enumerate() {
+        private_inputs.extend_from_slice(&pack_op(&w.work, 2 * k, op_tag));
     }
     let to_ch = |x: u32| if x == 0 { Challenge::ZERO } else { Challenge::ONE };
-    for w in &witnesses {
+    for w in witnesses {
         for &mj in &w.merge_at {
             private_inputs.push(to_ch(mj));
         }
@@ -864,7 +1002,7 @@ pub fn prove_gk_naive(
     // the circuit recomposes into F[j]. Non-absorbing slots use
     // (1−killed)·work[j].max_error; the absorbing slot uses the native
     // propagated value from `fused`.
-    for w in &witnesses {
+    for w in witnesses {
         let fused = build_fused(&w.work, &w.merge_at);
         for j in 0..work_len {
             private_inputs.push(Challenge::from_u32(fused[j].max_error));
@@ -872,11 +1010,11 @@ pub fn prove_gk_naive(
     }
     // resorted_packed witnesses: for each record k, the re-sorted fused table
     // = resort(fused) = next ‖ [dropped dummy] (length cap+1).
-    for w in &witnesses {
+    for (k, w) in witnesses.iter().enumerate() {
         let fused = build_fused(&w.work, &w.merge_at);
         let sf = resort_fused_sigma(&fused);
         let resorted: Vec<GKFullTuple> = sf.iter().map(|&i| fused[i]).collect();
-        private_inputs.extend_from_slice(&pack_tuples_to_challenge(&resorted));
+        private_inputs.extend_from_slice(&pack_op(&resorted, 2 * k + 1, op_tag));
     }
 
     // ─── Run + prove ────────────────────────────────────────────────────
@@ -1071,6 +1209,154 @@ mod tests {
             bad.is_err(),
             "non-minimum merge accepted — merge-minimality range-check is UNSOUND"
         );
+    }
+
+    fn panic_msg(e: &Box<dyn std::any::Any + Send>) -> String {
+        if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = e.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            "<non-string panic>".to_string()
+        }
+    }
+
+    /// Run the malicious prover on a replay witness: `forge` = forged
+    /// Permute outputs, `row_tag` = the test-only tag override.
+    fn prove_forged(
+        params: GKFullParams,
+        initial: &GKFullState,
+        batch: &[GKFullUpdate],
+        states: &[Vec<GKFullTuple>],
+        witnesses: &[StepWitness],
+        tag: bool,
+        forge: Vec<(usize, Vec<GKFullTuple>)>,
+        row_tag: Option<(usize, usize, usize)>,
+    ) -> std::thread::Result<GKFullLeafProof> {
+        OP_TAG.with(|c| c.set(Some(tag)));
+        FORGE.with(|f| *f.borrow_mut() = forge);
+        ROW_TAG.with(|c| c.set(row_tag));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_gk_naive_witness(params, initial.clone(), batch.to_vec(), states, witnesses)
+        }));
+        OP_TAG.with(|c| c.set(None));
+        FORGE.with(|f| f.borrow_mut().clear());
+        ROW_TAG.with(|c| c.set(None));
+        r
+    }
+
+    /// **Shared-PermuteBus forgery: record reordering.** Records `k0` and `k1`
+    /// trade places between their insert permutes (ops `2k0`, `2k1`): step
+    /// `k0`'s work table holds record `k1` and vice versa. Per op the multisets
+    /// differ; only the union of all permute rows balances. Everything else is
+    /// the honest replay of the reordered stream, so every per-step constraint
+    /// (sortedness, forced min-cost merge, per-record mass `+1`) holds, and the
+    /// certified final is the replay of a stream the batch commitment does not
+    /// describe — the leaf's "every tuple of `S_{k+1}` traces back to
+    /// `S_k ∪ {B[k]}`" claim is broken.
+    ///
+    /// Pre-fix (untagged permutes): ACCEPTED. With the `active`-coordinate op
+    /// tag: REJECTED — (a) with the moved record tagged for the op that emits
+    /// it (no matching input on the PermuteBus), and (b) with it tagged for its
+    /// own op so the bus balances (the de-tagged `active` is not boolean).
+    #[test]
+    fn record_swap_forgery_rejected() {
+        let params = GKFullParams { capacity: 4, batch: 8 };
+        let initial = GKFullState::empty(params);
+        let updates: Vec<GKFullUpdate> = [10u32, 50, 20, 60, 30, 70, 40, 80]
+            .iter()
+            .map(|&v| GKFullUpdate::real(v))
+            .collect();
+        let honest = apply_batch_gk_naive(&initial, &updates);
+        let _honest_proof = prove_gk_naive(params, initial.clone(), updates.clone());
+
+        // A swap of two records that changes the certified final.
+        let (k0, k1, states, witnesses) = (0..params.batch)
+            .flat_map(|a| (a + 1..params.batch).map(move |c| (a, c)))
+            .find_map(|(k0, k1)| {
+                let mut order = updates.clone();
+                order.swap(k0, k1);
+                let (st, w) = replay_batch(&initial, &order);
+                (commit_gk_state(&GKFullState {
+                    tuples: st[params.batch].clone(),
+                    params,
+                })
+                .0 != commit_gk_state(&honest).0)
+                    .then_some((k0, k1, st, w))
+            })
+            .expect("a record swap that changes the final state");
+        println!(
+            "[gk naive record swap] records {k0} (value {}) and {k1} (value {}) trade insert \
+             permutes; forged final {:?} vs honest {:?}",
+            updates[k0].value,
+            updates[k1].value,
+            states[params.batch],
+            honest.tuples
+        );
+        let forge = vec![
+            (2 * k0, witnesses[k0].work.clone()),
+            (2 * k1, witnesses[k1].work.clone()),
+        ];
+
+        let pre = prove_forged(params, &initial, &updates, &states, &witnesses, false, forge.clone(), None);
+        match &pre {
+            Ok(_) => println!("[gk naive record swap] pre-fix: forged final ACCEPTED (self-verified)"),
+            Err(e) => println!("[gk naive record swap] pre-fix: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(pre.is_ok(), "PoC premise: the untagged circuit accepts the record swap");
+
+        let post_a = prove_forged(params, &initial, &updates, &states, &witnesses, true, forge.clone(), None);
+        match &post_a {
+            Ok(_) => println!("[gk naive record swap] fixed (a): ACCEPTED"),
+            Err(e) => println!("[gk naive record swap] fixed (a) emitting-op tag: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post_a.is_err(), "op tags must stop records trading insert permutes");
+
+        // (b) the moved record k1 in step k0's work carries op 2k1's tag.
+        let row = witnesses[k0]
+            .work
+            .iter()
+            .position(|t| t.active == 1 && t.value == updates[k1].value)
+            .expect("record k1 sits in step k0's work");
+        let post_b = prove_forged(
+            params,
+            &initial,
+            &updates,
+            &states,
+            &witnesses,
+            true,
+            forge,
+            Some((2 * k0, row, 2 * k1)),
+        );
+        match &post_b {
+            Ok(_) => println!("[gk naive record swap] fixed (b): ACCEPTED"),
+            Err(e) => println!("[gk naive record swap] fixed (b) source-op tag: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post_b.is_err(), "a foreign op tag must fail the de-tagged boolean check");
+    }
+
+    /// Cost of the op tag (padded trace rows + one prove), pre-fix vs fixed.
+    /// Run: `cargo test --release --lib greenwald_khanna_naive::tests::fix_overhead -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn fix_overhead() {
+        for &(capacity, batch) in &[(16usize, 16usize), (64, 16), (256, 16)] {
+            let params = GKFullParams { capacity, batch };
+            let updates: Vec<GKFullUpdate> = (0..batch)
+                .map(|i| GKFullUpdate::real(((i as u32) * 11 + 5) & 0x000F_FFFF))
+                .collect();
+            for (label, tag) in [("pre-fix", false), ("op-tag", true)] {
+                OP_TAG.with(|c| c.set(Some(tag)));
+                let t = std::time::Instant::now();
+                let _ = prove_gk_naive(params, GKFullState::empty(params), updates.clone());
+                OP_TAG.with(|c| c.set(None));
+                println!(
+                    "[gk naive fix_overhead] cap={capacity} m={batch} {label:<8} trace_rows={} prove+verify={:?}",
+                    crate::recursion::recursive::timing::take().trace_rows,
+                    t.elapsed()
+                );
+            }
+        }
     }
 
     #[test]

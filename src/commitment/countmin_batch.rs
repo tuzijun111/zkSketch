@@ -86,6 +86,31 @@ pub fn commit_batch(records: &[CountMinUpdate]) -> CountMinBatchCommit {
     CountMinBatchCommit(digest)
 }
 
+/// Base values per record in the exact-limb layout ([`commit_batch_limbs`]).
+pub const RECORD_WIDTH_LIMBS: usize = 8;
+
+/// Batch commitment with the key as four EXACT 16-bit limbs:
+///
+/// ```text
+/// [k0, k1, k2, k3, value, 0, 0, 0]      (key = Σ k_i·2^{16i})
+/// ```
+///
+/// i.e. two Challenges per record: the key Challenge the `omc` leaf also
+/// hashes for routing, then `[value, 0, 0, 0]`. [`commit_batch`]'s
+/// `key_lo`/`key_hi` are 32-bit and BabyBear's `p < 2^31`, so its encoding
+/// reduces them mod `p` and two batches whose keys agree mod `p` limb-wise
+/// share a commitment. Every limb here is `< 2^16 < p`, so the encoding of
+/// a batch is injective. Used by the `omc` Count-Min leaf under
+/// `Binding::Semantic` / `Binding::Bound`; `Legacy` keeps [`commit_batch`].
+pub fn commit_batch_limbs(records: &[CountMinUpdate]) -> CountMinBatchCommit {
+    let hasher = MyHash::new(make_perm());
+    let flat = records.iter().flat_map(|r| {
+        let l = crate::sketch::bind::key_limbs::<Val>(r.key);
+        [l[0], l[1], l[2], l[3], Val::from_u32(r.value), Val::ZERO, Val::ZERO, Val::ZERO]
+    });
+    CountMinBatchCommit(hasher.hash_iter(flat))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +198,28 @@ mod tests {
         let expected: [Val; DIGEST_W] = hasher.hash_iter(flat);
         let actual = commit_batch(&b);
         assert_eq!(actual.0, expected);
+    }
+
+    /// The exact-limb layout separates keys congruent mod `p`, which the
+    /// 32-bit layout collapses: `k` and `k + p` (both `< 2^32`) share
+    /// [`commit_batch`] but not [`commit_batch_limbs`].
+    #[test]
+    fn limb_commit_separates_keys_congruent_mod_p() {
+        let p = <Val as p3_field::PrimeField64>::ORDER_U64;
+        let a = vec![CountMinUpdate { key: 12_345, value: 1 }];
+        let b = vec![CountMinUpdate { key: 12_345 + p, value: 1 }];
+        assert!(b[0].key < 1 << 32, "both keys are 32-bit");
+        assert_eq!(commit_batch(&a), commit_batch(&b), "32-bit layout reduces mod p");
+        assert_ne!(commit_batch_limbs(&a), commit_batch_limbs(&b));
+        let hasher = MyHash::new(make_perm());
+        let flat: Vec<Val> = b
+            .iter()
+            .flat_map(|r| {
+                let k = |i: u32| Val::from_u64((r.key >> (16 * i)) & 0xFFFF);
+                [k(0), k(1), k(2), k(3), Val::from_u32(r.value), Val::ZERO, Val::ZERO, Val::ZERO]
+            })
+            .collect();
+        assert_eq!(commit_batch_limbs(&b).0, hasher.hash_iter(flat), "layout drift");
     }
 
     /// Empty batch is a valid input (just hashes nothing).
