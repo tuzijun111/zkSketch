@@ -92,6 +92,7 @@ use p3_uni_stark::StarkGenericConfig;
 
 use crate::config_gl::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config_gl::ConfigWithFriParamsGl as ConfigWithFriParams;
+use crate::recursion::recursive::statement::{self, Expose, IndexPin};
 use crate::recursion::recursive::leaf_gl::{
     DIGEST_PACKING, GlCommit, make_leaf_config, pack_commit_to_challenge,
 };
@@ -115,6 +116,14 @@ const COUNT_DIFF_BITS: usize = 22;
 /// The only bound is `2^(KEY_DIFF_BITS+1) < p` (Goldilocks `p ≈ 2^64`), so 48 is
 /// well within range.
 const KEY_DIFF_BITS: usize = 48;
+
+/// Count-sort permute-domain tags (shared-PermuteBus fix; see Stage 6): every
+/// `grouped`/`g_sorted` row is `[key + GROUPED_KEY_TAG, count]`,
+/// `[active, GROUPED_PAD_TAG]`. Union keys are `< 2^KEY_DIFF_BITS` and counts
+/// `< 2^(COUNT_DIFF_BITS−1)`, so neither tagged cell can equal a key-sort cell
+/// (`[key, count]` / `[active, 0]`) — the pad tag is far above any count.
+const GROUPED_KEY_TAG: u64 = 1 << KEY_DIFF_BITS;
+const GROUPED_PAD_TAG: u64 = 1 << 40;
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -268,22 +277,23 @@ fn unpack_cell(
     b: &mut CircuitBuilder<Challenge>,
     cell0: ExprId,
     cell1: ExprId,
-    zero: ExprId,
+    pad: ExprId,
 ) -> Vec<ExprId> {
     let c0 = b
         .decompose_ext_to_base_coeffs::<Val>(cell0)
         .expect("decompose cell0"); // [key, count]
     let c1 = b
         .decompose_ext_to_base_coeffs::<Val>(cell1)
-        .expect("decompose cell1"); // [active, 0]
-    b.connect(c1[1], zero); // pad coord = 0 (consume it)
+        .expect("decompose cell1"); // [active, pad]
+    b.connect(c1[1], pad); // pad coord = 0, or the op tag (consume it)
     vec![c0[0], c0[1], c1[0]] // [key, count, active]
 }
 
-/// Unpack a flat table of cells (2 per row) into the per-row 3-slot fields.
-fn unpack_table(b: &mut CircuitBuilder<Challenge>, cells: &[ExprId], zero: ExprId) -> Vec<Vec<ExprId>> {
+/// Unpack a flat table of cells (2 per row) into the per-row 3-slot fields;
+/// `pad` is the value the trailing coordinate must hold (0 or an op tag).
+fn unpack_table(b: &mut CircuitBuilder<Challenge>, cells: &[ExprId], pad: ExprId) -> Vec<Vec<ExprId>> {
     (0..cells.len() / 2)
-        .map(|r| unpack_cell(b, cells[2 * r], cells[2 * r + 1], zero))
+        .map(|r| unpack_cell(b, cells[2 * r], cells[2 * r + 1], pad))
         .collect()
 }
 
@@ -317,6 +327,28 @@ fn pack_batch_to_challenge(batch: &[SsFullUpdate]) -> Vec<Challenge> {
 fn pack_rows_to_challenge(rows: &[SsFullRow]) -> Vec<Challenge> {
     rows.iter()
         .flat_map(|r| enc_row(r.key, r.count, r.active))
+        .collect()
+}
+
+/// Pack a count-sort-domain table (`grouped`, `g_sorted`) in its op-tagged
+/// encoding `[key + GROUPED_KEY_TAG, count]`, `[active, GROUPED_PAD_TAG]`
+/// (plain encoding when `op_tag` is off).
+fn pack_grouped_rows(rows: &[SsFullRow], op_tag: bool) -> Vec<Challenge> {
+    use p3_field::BasedVectorSpace;
+    if !op_tag {
+        return pack_rows_to_challenge(rows);
+    }
+    let mk = |a: u64, b: u64| {
+        Challenge::from_basis_coefficients_slice(&[Val::from_u64(a), Val::from_u64(b)])
+            .expect("2 coeffs")
+    };
+    rows.iter()
+        .flat_map(|r| {
+            [
+                mk(r.key + GROUPED_KEY_TAG, r.count as u64),
+                mk(r.active as u64, GROUPED_PAD_TAG),
+            ]
+        })
         .collect()
 }
 
@@ -366,11 +398,16 @@ pub fn commit_ss_batch(batch: &[SsFullUpdate]) -> SsFullBatchCommit {
 /// One row of the combined (key-sorted) union, used to drive the
 /// in-circuit group-by. The circuit reconstructs all of this from the
 /// permutation witness, so only the permutations are surfaced.
+#[derive(Clone)]
 struct SsBuild {
     /// `combined` = old rows ‖ batch rows (length cap+m), unsorted.
+    #[allow(dead_code)] // reference copy; the circuit reads `key_sorted` directly.
     combined: Vec<SsFullRow>,
     /// permutation σ_key with `key_sorted[i] = combined[σ_key[i]]`.
     sigma_key: Vec<usize>,
+    /// `key_sorted` = the key-sort permute's output table (honestly
+    /// `combined[σ_key[i]]`; a soundness test may hand-craft it).
+    key_sorted: Vec<SsFullRow>,
     /// grouped table `G` (length cap+m): segment-end rows carry the summed
     /// count, others are dummies.
     grouped: Vec<SsFullRow>,
@@ -429,6 +466,15 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
     let key_sorted: Vec<SsFullRow> = idx.iter().map(|&i| combined[i]).collect();
 
     // adjacency tags + running sum (count + active) over equal-key runs.
+    #[allow(unused_mut)]
+    let (key_eq_tag, seg_end, mut grouped) = group_by_key(&key_sorted);
+    build_ss_rest(combined, sigma_key, key_sorted, key_eq_tag, seg_end, grouped, m)
+}
+
+/// Group a key-sorted table by ADJACENT equal keys (the in-circuit
+/// PoneglyphDB running-sum gadget): returns `(key_eq_tag, seg_end, grouped)`.
+fn group_by_key(key_sorted: &[SsFullRow]) -> (Vec<u32>, Vec<u32>, Vec<SsFullRow>) {
+    let total = key_sorted.len();
     let mut key_eq_tag = vec![0u32; total];
     let mut acc_count = vec![0u64; total];
     let mut acc_active = vec![0u64; total];
@@ -465,6 +511,22 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
             };
         }
     }
+    (key_eq_tag, seg_end, grouped)
+}
+
+/// The rest of [`build_ss`] after the group-by: test-only tampering, the
+/// count-sort and `τ`.
+#[allow(unused_mut)]
+fn build_ss_rest(
+    combined: Vec<SsFullRow>,
+    sigma_key: Vec<usize>,
+    key_sorted: Vec<SsFullRow>,
+    key_eq_tag: Vec<u32>,
+    seg_end: Vec<u32>,
+    mut grouped: Vec<SsFullRow>,
+    m: usize,
+) -> SsBuild {
+    let total = grouped.len();
 
     // Test-only: demote the largest-key count-0 ACTIVE segment to a dummy
     // (active bit flipped off), freeing a retained slot for a different
@@ -512,6 +574,7 @@ fn build_ss(s_old: &SsFullState, batch: &[SsFullUpdate]) -> SsBuild {
     SsBuild {
         combined,
         sigma_key,
+        key_sorted,
         grouped,
         key_eq_tag,
         seg_end,
@@ -528,11 +591,23 @@ pub fn apply_batch_ss_full(
     s_old: &SsFullState,
     batch: &[SsFullUpdate],
 ) -> (SsFullState, Vec<SsFullRow>) {
-    let cap = s_old.params.capacity;
     let m = s_old.params.batch;
     assert_eq!(batch.len(), m);
     let b = build_ss(s_old, batch);
-    let residual: Vec<SsFullRow> = b.g_sorted[..m].to_vec();
+    compress_from_gsorted(s_old.params, &b.g_sorted, b.tau)
+}
+
+/// The mergeable Misra-Gries compression of a count-sorted grouped table:
+/// `S_new = g_sorted[m..]` with `τ` subtracted (non-positive → dummy), and
+/// `residual = g_sorted[..m]` (original counts).
+fn compress_from_gsorted(
+    params: SsFullParams,
+    g_sorted: &[SsFullRow],
+    tau: u32,
+) -> (SsFullState, Vec<SsFullRow>) {
+    let cap = params.capacity;
+    let m = params.batch;
+    let residual: Vec<SsFullRow> = g_sorted[..m].to_vec();
     // Mergeable Misra-Gries / Frequent compression (Agarwal et al. 2012):
     // subtract the (s+1)-th largest grouped count `τ` from every retained
     // counter and clamp non-positive counters to dummies. This gives the
@@ -542,10 +617,9 @@ pub fn apply_batch_ss_full(
     // count-ascending, each retained count ≥ `g_sorted[m] ≥ τ`, so the
     // saturating subtraction never truncates a real survivor and the clamped
     // (count-0) rows form the low-count prefix — final stays (active asc, count asc).
-    let tau = b.tau;
     let s_new: Vec<SsFullRow> = (0..cap)
         .map(|i| {
-            let src = b.g_sorted[m + i];
+            let src = g_sorted[m + i];
             let c = src.count.saturating_sub(tau);
             if src.active == 1 && c > 0 {
                 SsFullRow::real(src.key, c)
@@ -554,13 +628,41 @@ pub fn apply_batch_ss_full(
             }
         })
         .collect();
-    (
-        SsFullState {
-            rows: s_new,
-            params: s_old.params,
-        },
+    (SsFullState { rows: s_new, params }, residual)
+}
+
+/// Every table the SS leaf binds. [`SsFullLeafCircuit::prove_epoch`] derives
+/// it honestly from `(S_old, B)`; soundness tests hand-craft one to play a
+/// malicious prover (see `tests::shared_permute_bus_forgery_rejected`).
+#[derive(Clone)]
+struct SsWitness {
+    initial: SsFullState,
+    batch: Vec<SsFullUpdate>,
+    final_state: SsFullState,
+    residual: Vec<SsFullRow>,
+    build: SsBuild,
+}
+
+fn honest_ss_witness(initial: &SsFullState, batch: &[SsFullUpdate]) -> SsWitness {
+    let (final_state, residual) = apply_batch_ss_full(initial, batch);
+    let build = build_ss(initial, batch);
+    SsWitness {
+        initial: initial.clone(),
+        batch: batch.to_vec(),
+        final_state,
         residual,
-    )
+        build,
+    }
+}
+
+/// Whether the count-sort permute domain is op-tagged (shared-PermuteBus fix).
+/// Always on outside tests.
+fn use_op_tag() -> bool {
+    #[cfg(test)]
+    if let Some(v) = OP_TAG.with(|c| c.get()) {
+        return v;
+    }
+    true
 }
 
 // ─── Test-only soundness hook ─────────────────────────────────────────────
@@ -588,6 +690,8 @@ thread_local! {
     /// a different zero-weight key. The `grouped.active = se·(acc_active≠0)`
     /// binding must reject it. Drives [`tests::count0_active_rejected`].
     static TAMPER_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Test-only override of [`use_op_tag`] (`Some(false)` = pre-fix circuit).
+    static OP_TAG: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 // ─── Prover ──────────────────────────────────────────────────────────────
@@ -624,14 +728,32 @@ pub struct SsFullLeafCircuit {
     prover: BatchStarkProver<ConfigWithFriParams>,
     circuit_prover_data: Rc<CircuitProverData<ConfigWithFriParams>>,
     trace_rows: u64,
+    /// Whether the count-sort permute domain carries the op tags
+    /// ([`GROUPED_KEY_TAG`], [`GROUPED_PAD_TAG`]; the shared-PermuteBus fix).
+    /// Always `true` outside tests; the soundness PoC builds the pre-fix circuit.
+    op_tag: bool,
+    /// The composition statement this leaf exposes.
+    expose: Expose,
+    /// Batch index `t` of the next proof (Interval statement only).
+    batch_index: u64,
 }
 
 /// Build the reusable SpaceSaving leaf circuit for a shape.
 pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFullLeafCircuit {
+    build_ss_full_leaf_expose(params, Expose::from_bool(expose_boundary))
+}
+
+/// Goldilocks SpaceSaving leaf with an explicit composition statement
+/// ([`Expose`]); `None` / `Boundary` are byte-for-byte [`build_ss_full_leaf`],
+/// `Interval` adds the batch index `t` (last public input) and exposes
+/// `(init, final, (t, t), Poseidon2(TAG_LEAF, t, Com(B_t)))`.
+pub fn build_ss_full_leaf_expose(params: SsFullParams, expose: Expose) -> SsFullLeafCircuit {
+    let expose_boundary = expose == Expose::Boundary;
     params.validate();
     let cap = params.capacity;
     let m = params.batch;
     let total = cap + m;
+    let op_tag = use_op_tag();
 
     // ─── Build circuit ──────────────────────────────────────────────────
     let mut b = CircuitBuilder::<Challenge>::new();
@@ -642,7 +764,7 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
-    if expose_boundary {
+    if expose.exposes() {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
 
@@ -659,6 +781,13 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
 
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
+    let key_tag = b.alloc_const(Challenge::from_u64(GROUPED_KEY_TAG), "grouped_key_tag");
+    // Pad coordinate of the count-sort domain's `[active, pad]` cell.
+    let grouped_pad = if op_tag {
+        b.alloc_const(Challenge::from_u64(GROUPED_PAD_TAG), "grouped_pad_tag")
+    } else {
+        zero
+    };
 
     // Private inputs (alloc order MUST match the packing below). Each row is TWO
     // challenges (`[key,count]`, `[active,0]`), so the packed tables are 2× the
@@ -722,14 +851,43 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     for i in 0..DIGEST_PACKING {
         b.connect(h_batch[i], batch_pis[i]);
     }
+    // Interval statement (B6(b)): batch index t (7th public input) and
+    // H = Poseidon2(TAG_LEAF, t, h_batch), exposed with the boundary.
+    if expose.is_interval() {
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b,
+            &Poseidon2Config::GOLDILOCKS_D2_W8,
+            &init_pis,
+            &final_pis,
+            &h_batch,
+            zero,
+            crate::sketch::bind::Binding::Semantic,
+            IndexPin::Range,
+        );
+    }
 
     // ─── Stage 2: unpack all packed sequences to [key, count, active] ──
     let init_fields: Vec<Vec<ExprId>> = unpack_table(&mut b, &init_packed, zero);
     let final_fields: Vec<Vec<ExprId>> = unpack_table(&mut b, &final_packed, zero);
     let batch_fields: Vec<Vec<ExprId>> = unpack_table(&mut b, &batch_packed, zero);
     let key_sorted_fields: Vec<Vec<ExprId>> = unpack_table(&mut b, &key_sorted_packed, zero);
-    let grouped_fields: Vec<Vec<ExprId>> = unpack_table(&mut b, &grouped_packed, zero);
-    let g_sorted_fields: Vec<Vec<ExprId>> = unpack_table(&mut b, &g_sorted_packed, zero);
+    let grouped_fields: Vec<Vec<ExprId>> = unpack_table(&mut b, &grouped_packed, grouped_pad);
+    let g_sorted_fields: Vec<Vec<ExprId>> = unpack_table(&mut b, &g_sorted_packed, grouped_pad);
+    // g_sorted is the count-sort permute's OUTPUT: de-tag its key (every key
+    // use below reads `gs_key`). No output-side key range check is needed:
+    // all `total` grouped `[key, count]` cells lie in the tagged class
+    // `[2^48, 2^49)` and no key-sort OUTPUT can (union keys are range-checked
+    // `< 2^48`; `[active, pad]` cells never can), so counting that class on
+    // the PermuteBus forces every g_sorted `[key, count]` cell into it.
+    let gs_key: Vec<ExprId> = (0..total)
+        .map(|r| {
+            if op_tag {
+                b.sub(g_sorted_fields[r][0], key_tag)
+            } else {
+                g_sorted_fields[r][0]
+            }
+        })
+        .collect();
     let residual_fields: Vec<Vec<ExprId>> = unpack_table(&mut b, &residual_packed, zero);
 
     // ─── Stage 3: boolean active-flag checks ────────────────────────────
@@ -905,10 +1063,22 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         bool_check(&mut b, grouped_fields[r][2]);
         // key gating: grouped.key_lo/hi = active · key_sorted.key_lo/hi
         let want_key = b.mul(key_sorted_fields[r][0], grouped_fields[r][2]);
-        b.connect(grouped_fields[r][0], want_key);
+        // grouped is the count-sort permute's INPUT: its key carries the op tag.
+        let want_key_op = if op_tag { b.add(want_key, key_tag) } else { want_key };
+        b.connect(grouped_fields[r][0], want_key_op);
     }
 
     // ─── Stage 6: count-sort G → g_sorted via PermuteAir ────────────────
+    // Op tags (shared-PermuteBus fix): the fork concatenates every add_permute
+    // into ONE PermuteAir whose PermuteBus message is the 2 value coordinates
+    // only (no op id), so it proves only
+    //   M(combined) ⊎ M(grouped) = M(key_sorted) ⊎ M(g_sorted)
+    // over CELLS. Untagged, a prover could trade a row's cells between the two
+    // permutes and re-fragment a key (tests::shared_permute_bus_forgery_rejected).
+    // The count-sort domain is `[key + 2^48, count]`, `[active, 2^40]` (inputs
+    // built so above; outputs' pad pinned by `unpack_table`), the key-sort
+    // domain's outputs are `[key < 2^48, count < 2^21]`, `[active, 0]`: the
+    // classes are disjoint, so counting forces per-op multiset equality.
     let cs_permuted = b
         .add_permute(
             &grouped_packed,
@@ -966,8 +1136,8 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         // Stage 5; the count-sort permutation preserves the packed values. So
         // a real key decrease wraps to ≈ p and the gated 29-bit check rejects
         // it; a count-unequal pair gates to 0 and is unconstrained.
-        let gk_r = key_field_of(&mut b, &g_sorted_fields[r]);
-        let gk_r1 = key_field_of(&mut b, &g_sorted_fields[r + 1]);
+        let gk_r = gs_key[r];
+        let gk_r1 = gs_key[r + 1];
         let kdiff = b.sub(gk_r1, gk_r);
         let gated = b.mul(count_eq, kdiff);
         let _ = b
@@ -978,7 +1148,8 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     // ─── Stage 8: compaction + Misra-Gries (s+1)-th-value subtraction ────
     // residual ↔ g_sorted[..m] (ORIGINAL counts, needed for mass accounting).
     for i in 0..m {
-        for k in 0..3 {
+        b.connect(residual_fields[i][0], gs_key[i]);
+        for k in 1..3 {
             b.connect(residual_fields[i][k], g_sorted_fields[i][k]);
         }
     }
@@ -1009,7 +1180,7 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         // (mirror Stage 5's key-gating) so a clamped slot cannot smuggle a live key.
         b.connect(final_fields[i][1], c_new);
         b.connect(final_fields[i][2], nz);
-        let want_key = b.mul(g_sorted_fields[src][0], nz);
+        let want_key = b.mul(gs_key[src], nz);
         b.connect(final_fields[i][0], want_key);
     }
 
@@ -1064,7 +1235,7 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 2>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 2>(1));
     air_builders.extend(range_air_builders::<ConfigWithFriParams, 2>(1));
-    if expose_boundary {
+    if expose.exposes() {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 2>());
     }
@@ -1089,7 +1260,7 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
     prover.register_recompose_table::<2>(Poseidon2Config::GOLDILOCKS_D2_W8.d() != 2);
     prover.register_permute_table::<2>();
     prover.register_range_table::<2>();
-    if expose_boundary {
+    if expose.exposes() {
         prover.register_expose_table::<2>();
     }
     let trace_rows: u64 = ext_degrees.iter().map(|&d| 1u64 << d).sum();
@@ -1100,30 +1271,46 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
         prover,
         circuit_prover_data: Rc::new(circuit_prover_data),
         trace_rows,
+        op_tag,
+        expose,
+        batch_index: 1,
     }
 }
 
 impl SsFullLeafCircuit {
-    /// Prove one epoch on the prebuilt circuit.
+    /// Prove one epoch on the prebuilt circuit (batch index 1 under the
+    /// Interval statement; see [`Self::prove_epoch_at`]).
     pub fn prove_epoch(
         &mut self,
         initial_state: SsFullState,
         batch: Vec<SsFullUpdate>,
     ) -> SsFullLeafProof {
+        self.prove_epoch_at(1, initial_state, batch)
+    }
+
+    /// The statement this leaf exposes ([`Expose`]).
+    pub fn expose(&self) -> Expose {
+        self.expose
+    }
+
+    /// Prove the epoch of batch `t` (1-based); `t` is part of the Interval
+    /// statement (ignored by the other layouts).
+    pub fn prove_epoch_at(
+        &mut self,
+        t: u64,
+        initial_state: SsFullState,
+        batch: Vec<SsFullUpdate>,
+    ) -> SsFullLeafProof {
+        self.batch_index = t;
         let params = self.params;
         assert_eq!(initial_state.params, params);
         assert_eq!(batch.len(), params.batch);
 
         let cap = params.capacity;
-        let m = params.batch;
-        let total = cap + m;
 
         // ─── Native side ────────────────────────────────────────────────────
-        let (final_state, residual_rows) = apply_batch_ss_full(&initial_state, &batch);
-        let build = build_ss(&initial_state, &batch);
-        let initial_commit = commit_ss_state(&initial_state);
-        let final_commit = commit_ss_state(&final_state);
-        let batch_commit = commit_ss_batch(&batch);
+        let w = honest_ss_witness(&initial_state, &batch);
+        let (final_state, residual_rows, build) = (&w.final_state, &w.residual, &w.build);
 
         // Sanity: mass conservation.
         let init_mass = initial_state.total_mass();
@@ -1154,6 +1341,22 @@ impl SsFullLeafCircuit {
             ])
             .expect("update permute witnesses (ss_full)");
 
+        self.prove_witness(&w)
+    }
+
+    /// Pack a witness into public/private inputs, run the circuit, prove and
+    /// self-verify. The Permute ops' hints must already be installed.
+    fn prove_witness(&mut self, w: &SsWitness) -> SsFullLeafProof {
+        let params = self.params;
+        let cap = params.capacity;
+        let m = params.batch;
+        let total = cap + m;
+        let (initial_state, batch) = (&w.initial, &w.batch);
+        let (final_state, residual_rows, build) = (&w.final_state, &w.residual, &w.build);
+        let initial_commit = commit_ss_state(initial_state);
+        let final_commit = commit_ss_state(final_state);
+        let batch_commit = commit_ss_batch(batch);
+
         // ─── Pack public + private ──────────────────────────────────────────
         let init_commit_packed =
             pack_commit_to_challenge(&GlCommit(initial_commit.0));
@@ -1166,18 +1369,20 @@ impl SsFullLeafCircuit {
         public_inputs.extend_from_slice(&init_commit_packed);
         public_inputs.extend_from_slice(&final_commit_packed);
         public_inputs.extend_from_slice(&batch_commit_packed);
+        if self.expose.is_interval() {
+            public_inputs.push(Challenge::from_u64(self.batch_index));
+        }
 
         // MUST match alloc order.
         let mut private_inputs: Vec<Challenge> = Vec::new();
-        private_inputs.extend_from_slice(&pack_state_to_challenge(&initial_state));
-        private_inputs.extend_from_slice(&pack_state_to_challenge(&final_state));
-        private_inputs.extend_from_slice(&pack_batch_to_challenge(&batch));
-        let key_sorted_rows: Vec<SsFullRow> =
-            build.sigma_key.iter().map(|&i| build.combined[i]).collect();
-        private_inputs.extend_from_slice(&pack_rows_to_challenge(&key_sorted_rows));
-        private_inputs.extend_from_slice(&pack_rows_to_challenge(&build.grouped));
+        private_inputs.extend_from_slice(&pack_state_to_challenge(initial_state));
+        private_inputs.extend_from_slice(&pack_state_to_challenge(final_state));
+        private_inputs.extend_from_slice(&pack_batch_to_challenge(batch));
+        let key_sorted_rows: &[SsFullRow] = &build.key_sorted;
+        private_inputs.extend_from_slice(&pack_rows_to_challenge(key_sorted_rows));
+        private_inputs.extend_from_slice(&pack_grouped_rows(&build.grouped, self.op_tag));
         #[allow(unused_mut)]
-        let mut g_sorted_vals = pack_rows_to_challenge(&build.g_sorted);
+        let mut g_sorted_vals = pack_grouped_rows(&build.g_sorted, self.op_tag);
         // [test-only] corrupt the post-retention table to confirm the
         // count-sort PermuteAir + sortedness + compaction reject it.
         #[cfg(test)]
@@ -1185,7 +1390,7 @@ impl SsFullLeafCircuit {
             g_sorted_vals[0] += Challenge::ONE;
         }
         private_inputs.extend_from_slice(&g_sorted_vals);
-        private_inputs.extend_from_slice(&pack_rows_to_challenge(&residual_rows));
+        private_inputs.extend_from_slice(&pack_rows_to_challenge(residual_rows));
         // key_eq_tag
         for &t in &build.key_eq_tag {
             private_inputs.push(if t == 1 {
@@ -2040,5 +2245,156 @@ mod tests {
             mal.is_err(),
             "a committed S_old dummy with nonzero count must be rejected",
         );
+    }
+
+    // ─── Malicious-prover probe: shared PermuteBus (revision Step 1) ────────
+
+    fn panic_msg(e: &Box<dyn std::any::Any + Send>) -> String {
+        if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = e.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            "<non-string panic>".to_string()
+        }
+    }
+
+    /// Malicious witness exploiting the SHARED PermuteBus (the BabyBear SS
+    /// attack, on D=2 cells): move union row `x` (both its cells) out of the
+    /// key-sort permute's output and into the count-sort permute's output,
+    /// paying with an all-zero dummy row moved the other way. Everything
+    /// downstream (group-by, count-sort order, τ, compression) is recomputed
+    /// honestly from the forged tables.
+    fn forge_cross_permute_witness(
+        initial: &SsFullState,
+        batch: &[SsFullUpdate],
+        x: SsFullRow,
+    ) -> SsWitness {
+        let params = initial.params;
+        let m = params.batch;
+        let total = params.capacity + m;
+        let mut combined: Vec<SsFullRow> = initial.rows.clone();
+        combined.extend(batch.iter().map(|u| SsFullRow {
+            key: u.key,
+            count: u.value,
+            active: u.active,
+        }));
+        let mut ks = combined.clone();
+        let pos = ks.iter().position(|r| *r == x).expect("x must be a union row");
+        ks[pos] = SsFullRow::dummy();
+        ks.sort_by_key(|r| key_field(r.key));
+        let (key_eq_tag, seg_end, grouped) = group_by_key(&ks);
+        let mut gs = grouped.clone();
+        let dpos = gs
+            .iter()
+            .position(|r| *r == SsFullRow::dummy())
+            .expect("an all-zero dummy grouped row");
+        gs[dpos] = x;
+        gs.sort_by_key(|r| (r.active, r.count, key_field(r.key)));
+        let tau = gs[m - 1].count;
+        let (final_state, residual) = compress_from_gsorted(params, &gs, tau);
+        SsWitness {
+            initial: initial.clone(),
+            batch: batch.to_vec(),
+            final_state,
+            residual,
+            build: SsBuild {
+                combined,
+                sigma_key: (0..total).collect(),
+                key_sorted: ks,
+                grouped,
+                key_eq_tag,
+                seg_end,
+                sigma_count: (0..total).collect(),
+                g_sorted: gs,
+                tau,
+            },
+        }
+    }
+
+    /// Run the malicious prover: both Permute ops emit the forged tables.
+    fn prove_forged_cross_permute(
+        params: SsFullParams,
+        w: &SsWitness,
+    ) -> std::thread::Result<SsFullLeafProof> {
+        let mut leaf = build_ss_full_leaf(params, false);
+        let ks = pack_rows_to_challenge(&w.build.key_sorted);
+        let gs = pack_grouped_rows(&w.build.g_sorted, leaf.op_tag);
+        crate::sketch::forge_permute::forge_permute_outputs(&mut leaf.circuit, 0, ks);
+        crate::sketch::forge_permute::forge_permute_outputs(&mut leaf.circuit, 1, gs);
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| leaf.prove_witness(w)))
+    }
+
+    /// **Shared-PermuteBus forgery (key fragmentation through the bus), D=2.**
+    /// batch = [K, K] into an empty capacity-4 summary. Honest final: {K:2}.
+    /// Forged: the key-sort output drops one (K,1) row for a dummy; the
+    /// count-sort output takes that row instead of a dummy grouped row — final
+    /// {K:1, K:1}. Pre-fix circuit: ACCEPTED. With the count-sort domain's
+    /// `[key+2^48, count]`/`[active, 2^40]` tags: REJECTED (the moved cells
+    /// have no matching element on the PermuteBus).
+    #[test]
+    fn shared_permute_bus_forgery_rejected() {
+        let params = SsFullParams {
+            capacity: 4,
+            batch: 2,
+        };
+        let k = 42u64;
+        let initial = SsFullState::empty(params);
+        let batch = vec![SsFullUpdate::real(k, 1), SsFullUpdate::real(k, 1)];
+        let (honest_final, _) = apply_batch_ss_full(&initial, &batch);
+        assert_eq!(honest_final.frequency(k), 2);
+        let _honest = prove_ss_full(params, initial.clone(), batch.clone());
+
+        let forged = forge_cross_permute_witness(&initial, &batch, SsFullRow::real(k, 1));
+        let copies = forged
+            .final_state
+            .rows
+            .iter()
+            .filter(|r| r.active == 1 && r.key == k && r.count == 1)
+            .count();
+        assert_eq!(copies, 2, "forged final holds K twice at count 1");
+        assert_ne!(
+            commit_ss_state(&forged.final_state),
+            commit_ss_state(&honest_final)
+        );
+
+        OP_TAG.with(|c| c.set(Some(false)));
+        let pre = prove_forged_cross_permute(params, &forged);
+        OP_TAG.with(|c| c.set(None));
+        match &pre {
+            Ok(_) => println!("[ss_gl shared bus] pre-fix: forged final ACCEPTED (self-verified)"),
+            Err(e) => println!("[ss_gl shared bus] pre-fix: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(pre.is_ok(), "PoC premise: the untagged circuit accepts the forgery");
+
+        let post = prove_forged_cross_permute(params, &forged);
+        match &post {
+            Ok(_) => println!("[ss_gl shared bus] fixed: forged final ACCEPTED"),
+            Err(e) => println!("[ss_gl shared bus] fixed: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post.is_err(), "op tags must stop the two permutes trading cells");
+    }
+
+    /// Cost of the op tags (padded trace rows + one prove), pre-fix vs fixed.
+    /// Run: `cargo test --release --lib ss_final_full_gl::tests::fix_overhead -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn fix_overhead() {
+        for &(cap, m) in &[(64usize, 16usize), (1024, 16)] {
+            let params = SsFullParams { capacity: cap, batch: m };
+            let batch = gen_padded_batch(params, m);
+            for (label, tag) in [("pre-fix", false), ("op-tag", true)] {
+                OP_TAG.with(|c| c.set(Some(tag)));
+                let mut leaf = build_ss_full_leaf(params, false);
+                OP_TAG.with(|c| c.set(None));
+                let t = std::time::Instant::now();
+                let _ = leaf.prove_epoch(SsFullState::empty(params), batch.clone());
+                println!(
+                    "[ss_gl fix_overhead] cap={cap} m={m} {label:<8} trace_rows={} prove+verify={:?}",
+                    leaf.trace_rows,
+                    t.elapsed()
+                );
+            }
+        }
     }
 }

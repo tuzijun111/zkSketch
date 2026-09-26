@@ -20,7 +20,9 @@ use zksketch::sketch::countmin_c_merkle::{
 };
 use zksketch::sketch::countmin_final::apply_update_prf;
 use zksketch::sketch::countmin_merkle::combined_commit;
-use zksketch::sketch::countmin_omc::{prove_countmin_omc, prove_countmin_omc_exposed, CmOmcParams};
+use zksketch::sketch::countmin_omc::{
+    countmin_omc_advance, prove_countmin_omc, prove_countmin_omc_exposed, CmOmcParams,
+};
 
 fn empty_state(d: usize, w: usize) -> CountMinState {
     CountMinState { counters: vec![vec![0u32; w]; d], params: CountMinParams { d, w } }
@@ -58,9 +60,7 @@ fn omc_leaves_recursively_merge() {
     // Chained states: leaf1's initial = leaf0's final.
     let s0 = empty_state(d, w);
     let mut s1 = s0.clone();
-    for u in &batch0 {
-        apply_update_prf(&mut s1, u);
-    }
+    countmin_omc_advance(&mut s1, &batch0);
 
     let l0 = omc_leaf_as_v9(d, w, s0, batch0);
     let l1 = omc_leaf_as_v9(d, w, s1, batch1);
@@ -116,8 +116,9 @@ fn merkle_leaves_recursively_merge() {
 fn omc_bound_forest_closes_npo_gap() {
     use zksketch::commitment::countmin::commit_countmin;
     use zksketch::recursion::recursive::expose_forest::{
-        prove_forest_over, read_exposed_boundary, verify_bound_proof,
+        derive_forest_root_vk, prove_forest_over, read_exposed_boundary, verify_bound_proof,
     };
+    use zksketch::recursion::recursive::noop_leaf::cm_omc_noop_leaf;
 
     let (d, w) = (2usize, 4usize);
     let s0 = empty_state(d, w);
@@ -134,15 +135,11 @@ fn omc_bound_forest_closes_npo_gap() {
     let leaf0 =
         prove_countmin_omc_exposed(CmOmcParams { d, w, batch: batch0.len() }, s0.clone(), batch0.clone());
     let mut s1 = s0.clone();
-    for u in &batch0 {
-        apply_update_prf(&mut s1, u);
-    }
+    countmin_omc_advance(&mut s1, &batch0);
     let leaf1 =
         prove_countmin_omc_exposed(CmOmcParams { d, w, batch: batch1.len() }, s1.clone(), batch1.clone());
     let mut s2 = s1.clone();
-    for u in &batch1 {
-        apply_update_prf(&mut s2, u);
-    }
+    countmin_omc_advance(&mut s2, &batch1);
     let c2 = commit_countmin(&s2);
 
     // Each exposed leaf surfaces its REAL boundary commitment.
@@ -150,8 +147,11 @@ fn omc_bound_forest_closes_npo_gap() {
 
     // In-circuit boundary-bound fold: prove_forest_over → prove_hiding_merge,
     // which binds left.final == right.initial in-circuit (the NPO gap closed).
+    // Trusted root VK derived from public parameters only (never read from
+    // the root proof).
+    let root_vk = derive_forest_root_vk(cm_omc_noop_leaf(CmOmcParams { d, w, batch: 2 }), 2);
     let root = prove_forest_over(vec![leaf0.output, leaf1.output]);
-    verify_bound_proof(&root);
+    verify_bound_proof(&root, &root_vk);
     let (initial, final_) = read_exposed_boundary(&root);
     assert_eq!(initial, c0, "root initial = real Com(S_0), bound in-circuit");
     assert_eq!(final_, c2, "root final = real Com(S_2), bound in-circuit");
@@ -166,7 +166,7 @@ fn omc_bound_forest_closes_npo_gap() {
 #[ignore = "spike: heavy recursive proving; run explicitly"]
 fn merkle_bound_forest_closes_npo_gap() {
     use zksketch::recursion::recursive::expose_forest::{
-        prove_forest_over, read_exposed_boundary, verify_bound_proof,
+        derive_forest_root_vk, prove_forest_over, read_exposed_boundary, verify_bound_proof,
     };
 
     let (d, w) = (2usize, 4usize);
@@ -206,8 +206,16 @@ fn merkle_bound_forest_closes_npo_gap() {
         "leaf0 exposes real combined Com(S_1)"
     );
 
+    // Trusted root VK from public parameters only: a no-op (value-0) leaf of
+    // the same c_merkle circuit stands in for every leaf.
+    let noop = prove_countmin_c_merkle_exposed(
+        cp(batch0.len()),
+        s0.clone(),
+        vec![CountMinUpdate { key: 0, value: 0 }; batch0.len()],
+    );
+    let root_vk = derive_forest_root_vk(noop.output.0, 2);
     let root = prove_forest_over(vec![leaf0.output, leaf1.output]);
-    verify_bound_proof(&root);
+    verify_bound_proof(&root, &root_vk);
     let (initial, final_) = read_exposed_boundary(&root);
     assert_eq!(initial, c0, "root initial = real combined Com(S_0), bound in-circuit");
     assert_eq!(final_, c2, "root final = real combined Com(S_2), bound in-circuit");
@@ -243,7 +251,7 @@ fn merkle_exposed_boundary_matches_native_various_d() {
 fn one_hot_bound_forest_closes_npo_gap() {
     use zksketch::commitment::countmin::commit_countmin;
     use zksketch::recursion::recursive::expose_forest::{
-        prove_forest_over, read_exposed_boundary, verify_bound_proof,
+        derive_forest_root_vk, prove_forest_over, read_exposed_boundary, verify_bound_proof,
     };
     use zksketch::sketch::countmin_final::{prove_countmin_final_exposed, CountMinFinalParams};
 
@@ -268,8 +276,15 @@ fn one_hot_bound_forest_closes_npo_gap() {
 
     assert_eq!(read_exposed_boundary(&leaf0.output).0, c0, "leaf0 exposes real Com(S_0)");
 
+    // Trusted root VK from public parameters only (value-0 no-op leaf).
+    let noop = prove_countmin_final_exposed(
+        p(batch0.len()),
+        s0.clone(),
+        vec![CountMinUpdate { key: 0, value: 0 }; batch0.len()],
+    );
+    let root_vk = derive_forest_root_vk(noop.output.0, 2);
     let root = prove_forest_over(vec![leaf0.output, leaf1.output]);
-    verify_bound_proof(&root);
+    verify_bound_proof(&root, &root_vk);
     let (initial, final_) = read_exposed_boundary(&root);
     assert_eq!(initial, c0, "root initial = real Com(S_0), bound in-circuit");
     assert_eq!(final_, c2, "root final = real Com(S_2), bound in-circuit");
@@ -292,13 +307,9 @@ fn omc_leaves_linear_chain() {
     let batch2 = vec![CountMinUpdate { key: 5, value: 1 }, CountMinUpdate { key: 9, value: 1 }];
 
     let mut s1 = s0.clone();
-    for u in &batch0 {
-        apply_update_prf(&mut s1, u);
-    }
+    countmin_omc_advance(&mut s1, &batch0);
     let mut s2 = s1.clone();
-    for u in &batch1 {
-        apply_update_prf(&mut s2, u);
-    }
+    countmin_omc_advance(&mut s2, &batch1);
 
     let l0 = omc_leaf_as_v9(d, w, s0, batch0);
     let l1 = omc_leaf_as_v9(d, w, s1, batch1);

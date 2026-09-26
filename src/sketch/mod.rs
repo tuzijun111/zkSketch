@@ -5,13 +5,24 @@
 //! concrete `CountMin` implementation lives in `countmin.rs` and is empty for
 //! now — Phase 2 fills it in following §5.4 of the paper.
 
+pub mod bind;
+pub mod bloom_omc;
 pub mod countmin;
 pub mod countmin_c_merkle;
 pub mod countmin_final;
+#[cfg(test)]
+mod binding_cost;
+#[cfg(test)]
+pub(crate) mod forge;
+#[cfg(test)]
+pub(crate) mod forge_permute;
+#[cfg(test)]
+mod fork_soundness;
 pub mod countmin_memcheck;
 pub mod countmin_merkle;
 pub mod countmin_omc;
 pub mod countmin_omc_gl;
+pub mod countmin_omc_ungrouped;
 pub mod countmin_replay;
 pub mod countmin_v3;
 pub mod countmin_v9;

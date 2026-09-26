@@ -54,34 +54,21 @@
 //! matching `ss_final_full`. Counts/mass fit in `DIFF_BITS − 1` bits at
 //! prototype scale. The query size `c` is a verifier-supplied public input.
 
-use std::rc::Rc;
-
 use p3_baby_bear::default_babybear_poseidon2_16;
-use p3_batch_stark::ProverData;
-use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_range_trace, generate_recompose_trace};
-use p3_circuit::{CircuitBuilder, ExprId};
-use p3_circuit_prover::{
-    BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
-    batch_stark_prover::{
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        range_air_builders, range_preprocessor, recompose_preprocessor,
-    },
-    common::get_airs_and_degrees_with_prep,
+use p3_circuit::ops::{
+    Poseidon2Config, generate_expose_trace, generate_poseidon2_trace, generate_range_trace,
+    generate_recompose_trace,
 };
+use p3_circuit::{CircuitBuilder, ExprId};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_poseidon2_circuit_air::BabyBearD4Width16;
-use p3_recursion::RecursionOutput;
-use p3_uni_stark::StarkGenericConfig;
 
-use crate::config::{Challenge, LOG_BLOWUP, Val};
-use crate::decode::{DecodeProof, ReleasePolicy};
-use crate::recursion::recursive::config::ConfigWithFriParams;
-use crate::recursion::recursive::countmin_leaf::{
-    DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
-};
-use crate::sketch::ss_final_full::{SsFullState, commit_ss_state};
+use crate::config::{Challenge, Val};
+use crate::decode::{DecodeProof, DecodeVk, ReleasePolicy, StdDecodeCircuit};
+use crate::recursion::recursive::countmin_leaf::{DIGEST_PACKING, pack_commit_to_challenge};
+use crate::sketch::bind::{self, Binding};
+use crate::sketch::ss_final_full::{SsFullParams, SsFullState, commit_ss_state};
 
-const LOG_FINAL_POLY_LEN: usize = 6;
 /// Range-check window for non-negative diffs (count sortedness, the `c −
 /// Σsel ≥ 0` selection bound, and the threshold gate). Counts/`c`/mass fit in
 /// `DIFF_BITS − 1` bits at prototype scale; a "negative" diff wraps past `2^p`
@@ -145,16 +132,56 @@ fn native_select(state: &SsFullState, c: usize) -> (Vec<u32>, u64) {
 /// prover self-verifies and records the witness/prove/verify split via
 /// [`crate::recursion::recursive::timing`]. The `answer` is the released
 /// top-`c` mass (the identity image of the `res` table) under the release
-/// policy.
+/// policy. Uses the process-default [`Binding`] ([`bind::default_binding`]).
 pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> DecodeProof {
+    prove_ss_decode_with(params, state, c, bind::default_binding())
+}
+
+/// [`prove_ss_decode`] with an explicit [`Binding`].
+///
+/// `Semantic` / `Bound` surface the query statement `(Com(S), c, answer)`
+/// through the Expose NPO (16 base values: commit[8], c[4], answer[4]; read
+/// it with [`crate::decode::read_exposed_statement`]), so the verifier learns
+/// which state was queried, with which `c`, and what the certified answer is
+/// (Property 3). [`Binding::Legacy`] is the pre-fix circuit, byte-for-byte:
+/// it exposes nothing, so its proof certifies an answer the verifier never
+/// sees. This decoder has no in-circuit coefficient re-binding (it relies on
+/// the merged fork's `recompose/coeff` binding), so `Bound` builds the same
+/// circuit as `Semantic`.
+pub fn prove_ss_decode_with(
+    params: SsDecodeParams,
+    state: SsFullState,
+    c: usize,
+    binding: Binding,
+) -> DecodeProof {
+    build_ss_decode(params, &state, c, binding).prove("ss decode")
+}
+
+/// The trusted verification key of the SpaceSaving top-`c` decoder for
+/// `params` under `binding`, derived from public parameters only (a proof over
+/// the empty state; the circuit does not depend on the state). Pin query
+/// proofs to it with [`crate::decode::verify_decode_proof`].
+pub fn ss_decode_vk(params: SsDecodeParams, binding: Binding) -> DecodeVk {
+    let empty = SsFullState::empty(SsFullParams { capacity: params.capacity, batch: 1 });
+    build_ss_decode(params, &empty, params.c, binding).derive_vk("ss decode")
+}
+
+/// Build the SpaceSaving top-`c` decode circuit and its witness.
+pub(crate) fn build_ss_decode(
+    params: SsDecodeParams,
+    state: &SsFullState,
+    c: usize,
+    binding: Binding,
+) -> StdDecodeCircuit {
+    let expose = binding.is_bound();
     params.validate();
     assert_eq!(c, params.c, "c argument must match params.c");
     let SsDecodeParams { capacity: cap, c: _c, release } = params;
     assert_eq!(state.rows.len(), cap, "state capacity must match params");
 
     // ─── Native decode ───────────────────────────────────────────────────
-    let commit = commit_ss_state(&state);
-    let (sel_native, mass) = native_select(&state, c);
+    let commit = commit_ss_state(state);
+    let (sel_native, mass) = native_select(state, c);
     let answer = release.apply(mass);
 
     // ─── Build circuit ───────────────────────────────────────────────────
@@ -165,6 +192,9 @@ pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> 
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
+    if expose {
+        b.enable_expose(generate_expose_trace::<Val, Challenge>);
+    }
 
     // PIs: committed state, query size c, released answer.
     let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
@@ -172,6 +202,11 @@ pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> 
     });
     let c_pi = b.alloc_public_input("c");
     let answer_pi = b.alloc_public_input("answer");
+    if expose {
+        b.add_expose(&[commit_pis[0], commit_pis[1], c_pi, answer_pi])
+            .expect("expose (commit, c, answer)");
+    }
+    b.tag(answer_pi, "ss_dec_answer").expect("tag");
 
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
@@ -377,7 +412,7 @@ pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> 
     public_inputs.push(Challenge::from_u64(c as u64));
     public_inputs.push(Challenge::from_u64(answer));
 
-    let mut private_inputs: Vec<Challenge> = pack_cells(&state);
+    let mut private_inputs: Vec<Challenge> = pack_cells(state);
     // sel
     for r in 0..cap {
         private_inputs.push(if sel_native[r] == 1 { Challenge::ONE } else { Challenge::ZERO });
@@ -395,56 +430,7 @@ pub fn prove_ss_decode(params: SsDecodeParams, state: SsFullState, c: usize) -> 
         private_inputs.push(if mass >= t { Challenge::ONE } else { Challenge::ZERO });
     }
 
-    // ─── Run + prove ─────────────────────────────────────────────────────
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
-        runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
-        runner.run().expect("run ss decode circuit")
-    };
-    let __witness = __t_w.elapsed();
-
-    let config = make_leaf_config();
-    let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
-    let preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
-    let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
-    air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
-    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
-
-    let (airs_degrees, primitive_columns, non_primitive_columns) =
-        get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
-            &circuit,
-            &table_packing,
-            &preprocessors,
-            &air_builders,
-            ConstraintProfile::Standard,
-        )
-        .expect("get_airs_and_degrees_with_prep (ss decode)");
-    let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
-    let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
-    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
-    let circuit_prover_data =
-        CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
-
-    let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
-    prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
-    prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
-    prover.register_range_table::<4>();
-    let __t_p = std::time::Instant::now();
-    let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove ss decode");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify ss decode");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
-    });
-
-    DecodeProof { output: RecursionOutput(proof, Rc::new(circuit_prover_data)), answer }
+    StdDecodeCircuit::new(circuit, public_inputs, private_inputs, answer, expose, "ss decode")
 }
 
 #[cfg(test)]
@@ -709,5 +695,108 @@ mod tests {
             runner.run().expect("run must fail on wrong answer");
         }));
         assert!(bad.is_err(), "wrong answer must be rejected by the relation");
+    }
+
+    // ── Query statement (Property 3): exposed (Com(S), c, answer) ──────────
+
+    use crate::decode::{QueryStatement, check_query_statement, read_exposed_statement};
+    use crate::sketch::bind::Binding;
+
+    const QP: SsDecodeParams = SsDecodeParams { capacity: 4, c: 2, release: ReleasePolicy::Identity };
+
+    /// `Semantic` / `Bound` expose `(Com(S), c, answer)`: the statement a
+    /// verifier reads off a VERIFIED proof is exactly the queried commitment,
+    /// the query size and the native answer, across the release policies.
+    /// `Legacy` (the pre-fix circuit) exposes nothing.
+    #[test]
+    fn ss_decode_exposes_commit_c_answer() {
+        let st = state();
+        let commit = commit_ss_state(&st).0;
+        for (c, release) in [
+            (2usize, ReleasePolicy::Identity),
+            (4, ReleasePolicy::Identity),
+            (1, ReleasePolicy::Threshold(1000)),
+            (2, ReleasePolicy::Threshold(5)),
+        ] {
+            let p = SsDecodeParams { capacity: 4, c, release };
+            let answer = release.apply(native_topc_mass(&st, c));
+            let want = QueryStatement::new(commit, c as u64, answer);
+            for binding in [Binding::Semantic, Binding::Bound] {
+                let dc = build_ss_decode(p, &st, c, binding);
+                let proof = dc.prove_traces(&dc.run("ss decode")).expect("honest proof verifies");
+                assert_eq!(read_exposed_statement(&proof), Some(want), "{binding:?} c={c} {release:?}");
+                assert_eq!(check_query_statement(&proof, &want), Ok(()));
+            }
+            let pr = prove_ss_decode(p, st.clone(), c); // process default = Semantic
+            assert_eq!(pr.statement(), Some(want));
+        }
+        let legacy = prove_ss_decode_with(QP, st.clone(), 2, Binding::Legacy);
+        assert_eq!(legacy.statement(), None, "Legacy exposes nothing");
+        assert_eq!(legacy.answer, 7);
+    }
+
+    /// A tampered answer is rejected (shared checks, see
+    /// [`crate::decode::assert_tampered_answer_rejected`]): altering the
+    /// exposed answer / query / commitment fails verification; a transplanted
+    /// answer wire fails proving (with a positive control through the same
+    /// forger); a claimed answer that differs from the exposed one fails the
+    /// statement check; the pre-fix Legacy proof exposes nothing to check.
+    #[test]
+    fn ss_decode_tampered_answer_rejected() {
+        let st = state();
+        let want = QueryStatement::new(commit_ss_state(&st).0, 2, 7);
+        for binding in [Binding::Semantic, Binding::Bound] {
+            crate::decode::assert_tampered_answer_rejected(
+                &build_ss_decode(QP, &st, 2, binding),
+                &build_ss_decode(QP, &st, 2, Binding::Legacy),
+                "ss_dec_answer",
+                want,
+            );
+        }
+        // Threshold release: the answer wire is `flag·mass`.
+        let pt = SsDecodeParams { capacity: 4, c: 2, release: ReleasePolicy::Threshold(5) };
+        crate::decode::assert_tampered_answer_rejected(
+            &build_ss_decode(pt, &st, 2, Binding::Semantic),
+            &build_ss_decode(pt, &st, 2, Binding::Legacy),
+            "ss_dec_answer",
+            want,
+        );
+    }
+
+    /// The pinned verifier ([`crate::decode::verify_decode_proof`]): the VK
+    /// derived from public parameters (empty state) accepts honest proofs over
+    /// other states and returns their statements; it rejects the Legacy proof
+    /// and a proof of a circuit that only exposes a lying statement (which the
+    /// self-pinned check accepts).
+    #[test]
+    fn ss_decode_pinned_verifier() {
+        let st = state();
+        let commit = commit_ss_state(&st).0;
+        let vk = ss_decode_vk(QP, Binding::Semantic);
+        let partial = {
+            let p = SsFullParams { capacity: 4, batch: 4 };
+            let batch =
+                [SsFullUpdate::real(9, 5), SsFullUpdate::dummy(), SsFullUpdate::dummy(), SsFullUpdate::dummy()];
+            apply_batch_ss_full(&SsFullState::empty(p), &batch).0
+        };
+        let (a, b) = (build_ss_decode(QP, &st, 2, Binding::Semantic), build_ss_decode(QP, &partial, 2, Binding::Semantic));
+        crate::decode::assert_pinned_decode_verifier(
+            &vk,
+            &[
+                (&a, QueryStatement::new(commit, 2, 7)),
+                (&b, QueryStatement::new(commit_ss_state(&partial).0, 2, 5)),
+            ],
+            &build_ss_decode(QP, &st, 2, Binding::Legacy),
+        );
+        // A different query size is a different circuit (c is a public input,
+        // but the VK is per params): a c = 3 proof fails the c = 2 pin only if
+        // its circuit differs; it does not, so the pin accepts it and the
+        // statement names c = 3 — the verifier must compare the query.
+        let p3 = SsDecodeParams { capacity: 4, c: 3, release: ReleasePolicy::Identity };
+        let d3 = build_ss_decode(p3, &st, 3, Binding::Semantic);
+        let proof3 = d3.prove_traces(&d3.run("ss decode")).expect("c = 3 proof");
+        let got = crate::decode::verify_decode_proof(&proof3, &vk).expect("same circuit shape");
+        assert_eq!(got, QueryStatement::new(commit, 3, 9));
+        assert!(check_query_statement(&proof3, &QueryStatement::new(commit, 2, 9)).is_err());
     }
 }

@@ -82,11 +82,13 @@ use crate::commitment::countmin::commit_countmin;
 use crate::commitment::countmin_batch::commit_batch;
 use crate::config::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config::ConfigWithFriParams;
+use crate::recursion::recursive::statement::{self, Expose, IndexPin};
 use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
 use crate::recursion::recursive::countmin_leaf_v9::CountMinLeafProofV9;
 use crate::sketch::Sketch;
+use crate::sketch::bind::Binding;
 use crate::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
 use crate::sketch::countmin_v9::CountMinV9;
 
@@ -165,6 +167,49 @@ pub fn hash_cell_prf(row: usize, key: u64, w: usize) -> usize {
 pub fn apply_update_prf(state: &mut CountMinState, u: &CountMinUpdate) {
     for i in 0..state.params.d {
         let j = hash_cell_prf(i, u.key, state.params.w);
+        state.counters[i][j] = state.counters[i][j].saturating_add(u.value);
+    }
+}
+
+/// The single Challenge the PRF absorbs for `key`, as 4 base values.
+///
+/// - [`Binding::Legacy`]: `[key mod p, 0, 0, 0]`, the input of
+///   [`hash_cell_prf`]. Keys congruent mod `p` share it, hence share every
+///   counter. With `p < 2^31` this already happens among 32-bit keys.
+/// - [`Binding::Semantic`] / [`Binding::Bound`]: the four exact 16-bit limbs
+///   `[k0, k1, k2, k3]` ([`crate::sketch::bind::key_limbs`]), an injective
+///   encoding. This is what the `omc` leaf and the Count-Min decoder hash
+///   under those bindings.
+///
+/// The one-hot (`countmin_final`), memcheck and Merkle leaves still hash
+/// the Legacy input under every binding.
+pub fn key_hash_input(key: u64, binding: Binding) -> [Val; 4] {
+    crate::sketch::bind::key_hash_input::<Val>(key, binding)
+        .try_into()
+        .expect("4 BabyBear key coefficients")
+}
+
+/// The PRF digest `MyHash(key_hash_input(key, binding))`.
+pub fn key_digest(key: u64, binding: Binding) -> [Val; 8] {
+    MyHash::new(make_perm()).hash_iter(key_hash_input(key, binding))
+}
+
+/// Row `row`'s bucket of `key` under `binding`: `digest[row] mod w`.
+/// [`hash_cell_prf`] is the `Legacy` case.
+pub fn hash_cell_prf_with(row: usize, key: u64, w: usize, binding: Binding) -> usize {
+    assert!(row < 8, "PRF hash family supports row < 8; got {row}");
+    assert!(w > 0, "width w must be positive");
+    let h = <Val as p3_field::PrimeField64>::as_canonical_u64(&key_digest(key, binding)[row]);
+    (h as usize) % w
+}
+
+/// [`apply_update_prf`] with the key encoding of `binding` (one digest per
+/// update). [`apply_update_prf`] is the `Legacy` case.
+pub fn apply_update_prf_with(state: &mut CountMinState, u: &CountMinUpdate, binding: Binding) {
+    let digest = key_digest(u.key, binding);
+    let w = state.params.w;
+    for i in 0..state.params.d {
+        let j = (<Val as p3_field::PrimeField64>::as_canonical_u64(&digest[i]) as usize) % w;
         state.counters[i][j] = state.counters[i][j].saturating_add(u.value);
     }
 }
@@ -294,7 +339,7 @@ pub fn prove_countmin_final(
     initial_state: CountMinState,
     batch: Vec<CountMinUpdate>,
 ) -> CountMinLeafProofV9 {
-    prove_countmin_final_impl(params, initial_state, batch, false)
+    prove_countmin_final_impl(params, initial_state, batch, Expose::None, 1)
 }
 
 /// Like [`prove_countmin_final`] but additionally surfaces the `(initial, final)`
@@ -308,15 +353,30 @@ pub fn prove_countmin_final_exposed(
     initial_state: CountMinState,
     batch: Vec<CountMinUpdate>,
 ) -> CountMinLeafProofV9 {
-    prove_countmin_final_impl(params, initial_state, batch, true)
+    prove_countmin_final_impl(params, initial_state, batch, Expose::Boundary, 1)
+}
+
+/// Like [`prove_countmin_final_exposed`] but with the **Interval** statement
+/// for batch `t` (1-based): exposes `(init, final, (t, t, 0, 0), H)` with
+/// `H = Poseidon2(TAG_LEAF, t, Com(B_t))` over the in-circuit batch digest
+/// (see [`crate::recursion::recursive::statement`]).
+pub fn prove_countmin_final_interval(
+    params: CountMinFinalParams,
+    t: u64,
+    initial_state: CountMinState,
+    batch: Vec<CountMinUpdate>,
+) -> CountMinLeafProofV9 {
+    prove_countmin_final_impl(params, initial_state, batch, Expose::Interval, t)
 }
 
 fn prove_countmin_final_impl(
     params: CountMinFinalParams,
     initial_state: CountMinState,
     batch: Vec<CountMinUpdate>,
-    expose_boundary: bool,
+    expose: Expose,
+    t: u64,
 ) -> CountMinLeafProofV9 {
+    let expose_boundary = expose == Expose::Boundary;
     params.validate();
     assert_eq!(initial_state.params.d, params.d);
     assert_eq!(initial_state.params.w, params.w);
@@ -393,7 +453,7 @@ fn prove_countmin_final_impl(
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
-    if expose_boundary {
+    if expose.exposes() {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
 
@@ -488,6 +548,20 @@ fn prove_countmin_final_impl(
         .expect("hash batch");
     for i in 0..DIGEST_PACKING {
         b.connect(digest_batch[i], batch_commit_pis[i]);
+    }
+    // Interval statement (B6(b)): batch index t (7th public input, bit-pinned:
+    // this leaf has no Range table) and H = Poseidon2(TAG_LEAF, t, digest_batch).
+    if expose.is_interval() {
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b,
+            &Poseidon2Config::BABY_BEAR_D4_W16,
+            &initial_commit_pis,
+            &final_commit_pis,
+            &digest_batch,
+            zero,
+            crate::sketch::bind::Binding::Semantic,
+            IndexPin::Bits,
+        );
     }
 
     // Decompose packed cells.
@@ -691,6 +765,9 @@ fn prove_countmin_final_impl(
     public_inputs.extend_from_slice(&initial_commit_packed);
     public_inputs.extend_from_slice(&final_commit_packed);
     public_inputs.extend_from_slice(&batch_commit_packed);
+    if expose.is_interval() {
+        public_inputs.push(Challenge::from_u64(t));
+    }
 
     let initial_cells_packed = pack_cells_to_challenge(&initial_state);
     let final_cells_packed = pack_cells_to_challenge(&final_state);
@@ -775,7 +852,7 @@ fn prove_countmin_final_impl(
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
-    if expose_boundary {
+    if expose.exposes() {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
     }
@@ -800,7 +877,7 @@ fn prove_countmin_final_impl(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
-    if expose_boundary {
+    if expose.exposes() {
         prover.register_expose_table::<4>();
     }
     let __t_p = std::time::Instant::now();

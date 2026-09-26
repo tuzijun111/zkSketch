@@ -186,6 +186,7 @@ use p3_uni_stark::StarkGenericConfig;
 
 use crate::config::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config::ConfigWithFriParams;
+use crate::recursion::recursive::statement::{self, Expose, IndexPin};
 use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
@@ -476,6 +477,7 @@ fn pack_union_to_challenge(tuples: &[GKFullTuple]) -> Vec<Challenge> {
 /// permutations (plus the derived tables it binds) are surfaced. This is the
 /// GK analogue of `ss_final_full::SsBuild` (group by VALUE instead of key;
 /// sum count AND max_error; positional split with NO count-sort/tie-break).
+#[derive(Clone)]
 struct GkBuild {
     /// permutation σ_union with `union_sorted[i] = combined[σ_union[i]]`
     /// (value-sorted view).
@@ -533,6 +535,14 @@ fn build_gk(s_old: &GKFullState, batch: &[GKFullUpdate]) -> GkBuild {
     }
     let sigma_union = idx.clone();
     let union_sorted: Vec<GKFullTuple> = idx.iter().map(|&i| combined[i]).collect();
+    finish_gk(sigma_union, union_sorted)
+}
+
+/// Everything after the union permute — group-by-value and the grouped
+/// resort — replayed from a given value-sorted union (honestly
+/// `sort(S_old ‖ B)`; a soundness test may hand in a forged one).
+fn finish_gk(sigma_union: Vec<usize>, union_sorted: Vec<GKFullTuple>) -> GkBuild {
+    let total = union_sorted.len();
 
     // value-adjacency tags + running sums (count + max_error + active).
     let mut value_eq_tag = vec![0u32; total];
@@ -764,16 +774,126 @@ fn prove_gk_full_inner(
     params.validate();
     assert_eq!(initial_state.params, params);
     assert_eq!(batch.len(), params.batch);
+    // Single-pass group-by-value: build the union, value-sort, collapse each
+    // same-value run, re-sort, and positionally split into (excess, S_new).
+    let build = build_gk(&initial_state, &batch);
+    prove_gk_full_build(params, initial_state, batch, &build, expose_boundary)
+}
 
+// ─── Op tag (shared-PermuteBus fix, revision Step 1) ─────────────────────
+//
+// The fork concatenates every `add_permute` into ONE PermuteAir whose
+// PermuteBus message is the 4 value coordinates only (no op id), so the union
+// permute and the grouped-resort permute only prove
+// `M(S_old ⊎ B) ⊎ M(G) = M(U) ⊎ M(G_sorted)`. With honest (canonical)
+// committed inputs the union mass check + the strict active value-ascent leave
+// a prover no room (`tests::shared_bus_trades`: moving a row between the two
+// permutes breaks one or the other), but a NON-canonical committed dummy
+// `(v≠0, 0, 0, 0)` can be routed around the group-by into `S_new` — a second
+// accepted `Com(S_new)` for one `(S_old, B)`. The resort domain (`grouped`,
+// `g_sorted`) therefore carries `GROUPED_OP_TAG` in the `active` coordinate
+// (`active + 2`): its inputs are built as `want_active + 2`, its outputs are
+// de-tagged and the de-tagged flag boolean-checked, so the two permutes' element
+// classes (`active ∈ {0,1}` vs `{2,3}`) are disjoint and per-class counting
+// restores per-op multiset equality — no reliance on the mass/ascent argument.
+
+/// `active`-coordinate tag of the grouped-resort permute domain.
+const GROUPED_OP_TAG: u32 = 2;
+
+/// Whether the grouped-resort permute domain is op-tagged. Always on outside
+/// tests.
+fn use_op_tag() -> bool {
+    #[cfg(test)]
+    if let Some(v) = OP_TAG.with(|c| c.get()) {
+        return v;
+    }
+    true
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override of [`use_op_tag`] (`Some(false)` = pre-fix circuit).
+    static OP_TAG: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// Test-only malicious prover: `(k, tuples)` makes permute op `k` (0 =
+    /// union, 1 = grouped resort) emit `tuples` in its encoding.
+    static FORGE: std::cell::RefCell<Vec<(usize, Vec<GKFullTuple>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Pack a grouped-resort-domain table (`grouped`, `g_sorted`): `active` carries
+/// [`GROUPED_OP_TAG`] when the op tag is on.
+fn pack_grouped(tuples: &[GKFullTuple], op_tag: bool) -> Vec<Challenge> {
+    use p3_field::BasedVectorSpace;
+    let tag = if op_tag { GROUPED_OP_TAG } else { 0 };
+    tuples
+        .iter()
+        .map(|t| {
+            let coeffs = [
+                Val::from_u32(t.value),
+                Val::from_u32(t.count),
+                Val::from_u32(t.max_error),
+                Val::from_u32(t.active + tag),
+            ];
+            Challenge::from_basis_coefficients_slice(&coeffs).expect("4 base coeffs")
+        })
+        .collect()
+}
+
+/// Build, run, prove and self-verify the GK leaf for a (honest or
+/// hand-crafted) group-by witness; `S_new`/`excess` are its `g_sorted` split.
+fn prove_gk_full_build(
+    params: GKFullParams,
+    initial_state: GKFullState,
+    batch: Vec<GKFullUpdate>,
+    build: &GkBuild,
+    expose_boundary: bool,
+) -> GKFullLeafProof {
+    prove_gk_full_build_stmt(
+        params,
+        initial_state,
+        batch,
+        build,
+        Expose::from_bool(expose_boundary),
+        1,
+    )
+}
+
+/// Like [`prove_gk_full_exposed`] but with the **Interval** statement for
+/// batch `t` (1-based): exposes `(init, final, (t, t, 0, 0), H)` with
+/// `H = Poseidon2(TAG_LEAF, t, Com(B_t))` over the in-circuit batch digest.
+pub fn prove_gk_full_interval(
+    params: GKFullParams,
+    t: u64,
+    initial_state: GKFullState,
+    batch: Vec<GKFullUpdate>,
+) -> GKFullLeafProof {
+    params.validate();
+    assert_eq!(initial_state.params, params);
+    assert_eq!(batch.len(), params.batch);
+    let build = build_gk(&initial_state, &batch);
+    prove_gk_full_build_stmt(params, initial_state, batch, &build, Expose::Interval, t)
+}
+
+fn prove_gk_full_build_stmt(
+    params: GKFullParams,
+    initial_state: GKFullState,
+    batch: Vec<GKFullUpdate>,
+    build: &GkBuild,
+    expose: Expose,
+    t: u64,
+) -> GKFullLeafProof {
+    let expose_boundary = expose == Expose::Boundary;
     let cap = params.capacity;
     let m = params.batch;
     let total = cap + m;
+    let op_tag = use_op_tag();
 
     // ─── Native side ────────────────────────────────────────────────────
-    // Single-pass group-by-value: build the union, value-sort, collapse each
-    // same-value run, re-sort, and positionally split into (excess, S_new).
-    let (final_state, excess_tuples) = apply_batch_full(&initial_state, &batch);
-    let build = build_gk(&initial_state, &batch);
+    let excess_tuples: Vec<GKFullTuple> = build.g_sorted[..m].to_vec();
+    let final_state = GKFullState {
+        tuples: build.g_sorted[m..m + cap].to_vec(),
+        params,
+    };
     let initial_commit = commit_gk_state(&initial_state);
     let final_commit = commit_gk_state(&final_state);
     let batch_commit = commit_gk_batch(&batch);
@@ -806,7 +926,7 @@ fn prove_gk_full_inner(
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
-    if expose_boundary {
+    if expose.exposes() {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
 
@@ -828,6 +948,7 @@ fn prove_gk_full_inner(
     // Constants.
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
+    let grouped_tag = b.alloc_const(Challenge::from_u32(GROUPED_OP_TAG), "grouped_op_tag");
 
     // Private inputs (alloc order, MUST match the witness packing below):
     //   init, final(=S_new), batch, union(=value_sorted), grouped, g_sorted,
@@ -885,6 +1006,20 @@ fn prove_gk_full_inner(
     for i in 0..DIGEST_PACKING {
         b.connect(h_batch[i], batch_pis[i]);
     }
+    // Interval statement (B6(b)): batch index t (7th public input, bit-pinned:
+    // no Range table here) and H = Poseidon2(TAG_LEAF, t, h_batch).
+    if expose.is_interval() {
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b,
+            &Poseidon2Config::BABY_BEAR_D4_W16,
+            &init_pis,
+            &final_pis,
+            &h_batch,
+            zero,
+            crate::sketch::bind::Binding::Semantic,
+            IndexPin::Bits,
+        );
+    }
 
     // ─── Stage 2: Decompose every packed sequence ───────────────────────
     let init_fields: Vec<Vec<ExprId>> = init_packed
@@ -913,6 +1048,17 @@ fn prove_gk_full_inner(
     let g_sorted_fields: Vec<Vec<ExprId>> = g_sorted_packed
         .iter()
         .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose g_sorted"))
+        .collect();
+    // g_sorted is the grouped-resort permute's OUTPUT: de-tag its active flag
+    // (every use below reads `gs_act`; its boolean check pins the op class).
+    let gs_act: Vec<ExprId> = (0..total)
+        .map(|r| {
+            if op_tag {
+                b.sub(g_sorted_fields[r][3], grouped_tag)
+            } else {
+                g_sorted_fields[r][3]
+            }
+        })
         .collect();
 
     // ─── Stage 3: Active flag boolean checks ────────────────────────────
@@ -959,7 +1105,7 @@ fn prove_gk_full_inner(
         b.connect(prod, zero);
 
         // g_sorted active boolean check (mirrors ss_final_full Stage 3).
-        let ga = g_sorted_fields[r][3];
+        let ga = gs_act[r];
         let gam1 = b.sub(ga, one);
         let gprod = b.mul(ga, gam1);
         b.connect(gprod, zero);
@@ -1206,13 +1352,20 @@ fn prove_gk_full_inner(
         let must_zero = b.mul(acc_active[r], one_minus_nz);
         b.connect(must_zero, zero);
         let want_active = b.mul(se, nz);
-        b.connect(grouped_fields[r][3], want_active);
+        // grouped is the resort permute's INPUT: its active coordinate carries
+        // the op tag.
+        let want_active_op = if op_tag {
+            b.add(want_active, grouped_tag)
+        } else {
+            want_active
+        };
+        b.connect(grouped_fields[r][3], want_active_op);
         // boolean check on grouped.active.
-        let am1 = b.sub(grouped_fields[r][3], one);
-        let prod = b.mul(grouped_fields[r][3], am1);
+        let am1 = b.sub(want_active, one);
+        let prod = b.mul(want_active, am1);
         b.connect(prod, zero);
         // value gating: grouped.value = active · union_value.
-        let want_value = b.mul(union_fields[r][0], grouped_fields[r][3]);
+        let want_value = b.mul(union_fields[r][0], want_active);
         b.connect(grouped_fields[r][0], want_value);
     }
 
@@ -1248,7 +1401,7 @@ fn prove_gk_full_inner(
     }
     // active monotone increasing (dummies first):
     for r in 0..total - 1 {
-        let diff = b.sub(g_sorted_fields[r + 1][3], g_sorted_fields[r][3]);
+        let diff = b.sub(gs_act[r + 1], gs_act[r]);
         let one_minus = b.sub(one, diff);
         let prod = b.mul(diff, one_minus);
         b.connect(prod, zero);
@@ -1272,7 +1425,7 @@ fn prove_gk_full_inner(
     // conservation, the certified S_t is the UNIQUE canonical per-value
     // aggregation of S_{t-1} ⊎ B.
     for r in 0..total - 1 {
-        let both_active = b.mul(g_sorted_fields[r][3], g_sorted_fields[r + 1][3]);
+        let both_active = b.mul(gs_act[r], gs_act[r + 1]);
         let diff = b.sub(g_sorted_fields[r + 1][0], g_sorted_fields[r][0]);
         let diff_m1 = b.sub(diff, one);
         let gated = b.mul(both_active, diff_m1);
@@ -1313,14 +1466,16 @@ fn prove_gk_full_inner(
         .collect();
 
     for i in 0..m {
-        for k in 0..4 {
+        for k in 0..3 {
             b.connect(excess_fields[i][k], g_sorted_fields[i][k]);
         }
+        b.connect(excess_fields[i][3], gs_act[i]);
     }
     for i in 0..cap {
-        for k in 0..4 {
+        for k in 0..3 {
             b.connect(final_fields[i][k], g_sorted_fields[m + i][k]);
         }
+        b.connect(final_fields[i][3], gs_act[m + i]);
     }
 
     // Excess active-flag boolean check.
@@ -1344,7 +1499,18 @@ fn prove_gk_full_inner(
     let combined_mass = b.add(final_mass_expr, excess_mass_expr);
     b.connect(combined_mass, init_plus_batch);
 
-    let circuit = b.build().expect("build gk_full circuit");
+    #[allow(unused_mut)]
+    let mut circuit = b.build().expect("build gk_full circuit");
+    // [test-only] malicious prover: swap in forged Permute outputs.
+    #[cfg(test)]
+    for (k, ts) in FORGE.with(|f| f.take()) {
+        let outs = if k == 0 {
+            pack_union_to_challenge(&ts)
+        } else {
+            pack_grouped(&ts, op_tag)
+        };
+        crate::sketch::forge_permute::forge_permute_outputs(&mut circuit, k, outs);
+    }
 
     // ─── Pack public + private values ───────────────────────────────────
     let initial_commit_packed =
@@ -1358,6 +1524,9 @@ fn prove_gk_full_inner(
     public_inputs.extend_from_slice(&initial_commit_packed);
     public_inputs.extend_from_slice(&final_commit_packed);
     public_inputs.extend_from_slice(&batch_commit_packed);
+    if expose.is_interval() {
+        public_inputs.push(Challenge::from_u64(t));
+    }
 
     // NOTE: this order MUST match the `alloc_private_input` order above:
     //   init, final, batch, union, grouped, g_sorted, excess,
@@ -1367,9 +1536,9 @@ fn prove_gk_full_inner(
     private_inputs.extend_from_slice(&pack_state_to_challenge(&final_state));
     private_inputs.extend_from_slice(&pack_batch_to_challenge(&batch));
     private_inputs.extend_from_slice(&pack_union_to_challenge(&union_tuples));
-    private_inputs.extend_from_slice(&pack_union_to_challenge(&build.grouped));
+    private_inputs.extend_from_slice(&pack_grouped(&build.grouped, op_tag));
     #[allow(unused_mut)]
-    let mut g_sorted_vals = pack_union_to_challenge(&build.g_sorted);
+    let mut g_sorted_vals = pack_grouped(&build.g_sorted, op_tag);
     // [test-only] corrupt the post-collapse table to confirm the resort
     // PermuteAir + sortedness + compaction reject it.
     #[cfg(test)]
@@ -1436,7 +1605,7 @@ fn prove_gk_full_inner(
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
-    if expose_boundary {
+    if expose.exposes() {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
     }
@@ -1460,7 +1629,7 @@ fn prove_gk_full_inner(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
-    if expose_boundary {
+    if expose.exposes() {
         prover.register_expose_table::<4>();
     }
     let __t_p = std::time::Instant::now();
@@ -1983,5 +2152,152 @@ mod tests {
             fs::write(out_dir.join("gk_full_proofs.meta.txt"), &meta)
                 .expect("write meta file");
         });
+    }
+
+    // ─── Shared-PermuteBus probes (revision Step 1, Track B) ────────────────
+
+    fn panic_msg(e: &Box<dyn std::any::Any + Send>) -> String {
+        if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = e.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            "<non-string panic>".to_string()
+        }
+    }
+
+    /// Malicious witness trading rows between the two permutes on the SHARED
+    /// PermuteBus: the union permute emits `U' = U − {x} + {y}` and the
+    /// grouped-resort permute emits `G_sorted' = G(U') − {y} + {x}` (both
+    /// re-sorted); the group-by is replayed honestly from `U'`. Balances the
+    /// bus iff `y ∈ G(U')`. `None` if `x ∉ U` or `y ∉ G(U')`.
+    fn forge_trade(
+        initial: &GKFullState,
+        batch: &[GKFullUpdate],
+        x: GKFullTuple,
+        y: GKFullTuple,
+    ) -> Option<GkBuild> {
+        let honest = build_gk(initial, batch);
+        let mut u = honest.union_sorted.clone();
+        let pos = u.iter().position(|t| *t == x)?;
+        u[pos] = y;
+        u.sort_by_key(|t| (t.active, t.value));
+        let mut f = finish_gk(honest.sigma_union.clone(), u);
+        let gpos = f.g_sorted.iter().position(|t| *t == y)?;
+        f.g_sorted[gpos] = x;
+        f.g_sorted.sort_by_key(|t| (t.active, t.value));
+        Some(f)
+    }
+
+    fn run_forged(
+        params: GKFullParams,
+        initial: &GKFullState,
+        batch: &[GKFullUpdate],
+        f: &GkBuild,
+        tag: bool,
+    ) -> std::thread::Result<GKFullLeafProof> {
+        OP_TAG.with(|c| c.set(Some(tag)));
+        FORGE.with(|g| *g.borrow_mut() = vec![(0, f.union_sorted.clone()), (1, f.g_sorted.clone())]);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_gk_full_build(params, initial.clone(), batch.to_vec(), f, false)
+        }));
+        OP_TAG.with(|c| c.set(None));
+        FORGE.with(|g| g.borrow_mut().clear());
+        r
+    }
+
+    fn report(label: &str, r: &std::thread::Result<GKFullLeafProof>) {
+        match r {
+            Ok(_) => println!("[gk_full shared bus] {label}: forged final ACCEPTED (self-verified)"),
+            Err(e) => println!("[gk_full shared bus] {label}: REJECTED: {}", panic_msg(e)),
+        }
+    }
+
+    /// **Shared-PermuteBus probes on the group-by GK leaf.** The union and
+    /// grouped-resort permutes share one untagged PermuteBus, as in SS. Unlike
+    /// SS, the direct attacks are blocked even WITHOUT an op tag:
+    ///
+    /// (a) SS's key-fragmentation trade (move a batch row `(K,1,0,1)` from the
+    ///     union output into `G_sorted`, paying with a `(0,0,0,0)` dummy) is
+    ///     REJECTED by the union mass check (Stage 7): the union loses mass 1;
+    /// (b) the mass-balanced version (pay with a fabricated fresh singleton
+    ///     `(u,1,0,1)`, which `G(U')` contains) re-creates a duplicate active
+    ///     value in `G_sorted` and is REJECTED by the strict active value-ascent.
+    ///
+    /// What gets through pre-fix is (c): a NON-canonical committed batch dummy
+    /// `(5,0,0,0)` (the circuit pins a batch dummy's count/max_error, not its
+    /// value) is routed around the group-by (which zeroes inactive rows) into
+    /// `S_new` — a second accepted `Com(S_new)` for the same `(S_old, B)`. The
+    /// op tag REJECTS it (no class-{2,3} element `(5,0,0,2)` on the bus).
+    #[test]
+    fn shared_bus_trades() {
+        let params = GKFullParams { capacity: 4, batch: 2 };
+        let initial = GKFullState::empty(params);
+        let k = GKFullTuple::real(42, 1, 0);
+        let batch = vec![GKFullUpdate::real(42), GKFullUpdate::real(42)];
+
+        // (a) SS-style fragmentation trade, paid with a dummy.
+        let fa = forge_trade(&initial, &batch, k, GKFullTuple::dummy()).expect("trade (a)");
+        let ra = run_forged(params, &initial, &batch, &fa, false);
+        report("pre-fix (a) dummy-paid fragmentation", &ra);
+        assert!(ra.is_err(), "union mass check must reject (a)");
+
+        // (b) mass-balanced: paid with a fabricated fresh singleton.
+        let fb = forge_trade(&initial, &batch, k, GKFullTuple::real(99, 1, 0)).expect("trade (b)");
+        let rb = run_forged(params, &initial, &batch, &fb, false);
+        report("pre-fix (b) singleton-paid fragmentation", &rb);
+        assert!(rb.is_err(), "strict active value-ascent must reject (b)");
+
+        // (c) a non-canonical committed dummy routed around the group-by.
+        let batch_c = vec![GKFullUpdate { value: 5, active: 0 }, GKFullUpdate::real(10)];
+        let _honest = prove_gk_full(params, initial.clone(), batch_c.clone());
+        let (honest_final, _) = apply_batch_full(&initial, &batch_c);
+        let fc = forge_trade(
+            &initial,
+            &batch_c,
+            GKFullTuple { value: 5, count: 0, max_error: 0, active: 0 },
+            GKFullTuple::dummy(),
+        )
+        .expect("trade (c)");
+        let forged_final = GKFullState {
+            tuples: fc.g_sorted[params.batch..].to_vec(),
+            params,
+        };
+        println!(
+            "[gk_full shared bus] (c) forged final {:?} vs honest {:?}",
+            forged_final.tuples, honest_final.tuples
+        );
+        assert_ne!(commit_gk_state(&forged_final).0, commit_gk_state(&honest_final).0);
+        let pre = run_forged(params, &initial, &batch_c, &fc, false);
+        report("pre-fix (c) non-canonical dummy", &pre);
+        assert!(pre.is_ok(), "PoC premise: the untagged circuit accepts (c)");
+        let post = run_forged(params, &initial, &batch_c, &fc, true);
+        report("fixed (c) non-canonical dummy", &post);
+        assert!(post.is_err(), "the op tag must reject (c)");
+        // (a)/(b) stay rejected under the op tag.
+        assert!(run_forged(params, &initial, &batch, &fa, true).is_err());
+        assert!(run_forged(params, &initial, &batch, &fb, true).is_err());
+    }
+
+    /// Cost of the op tag (padded trace rows + one prove), pre-fix vs fixed.
+    /// Run: `cargo test --release --lib gk_final_full::tests::fix_overhead -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn fix_overhead() {
+        for &(cap, m) in &[(64usize, 16usize), (1024, 16)] {
+            let params = GKFullParams { capacity: cap, batch: m };
+            let batch = gen_padded_batch(params, m);
+            for (label, tag) in [("pre-fix", false), ("op-tag", true)] {
+                OP_TAG.with(|c| c.set(Some(tag)));
+                let t = std::time::Instant::now();
+                let _ = prove_gk_full(params, GKFullState::empty(params), batch.clone());
+                OP_TAG.with(|c| c.set(None));
+                println!(
+                    "[gk_full fix_overhead] cap={cap} m={m} {label:<8} trace_rows={} prove+verify={:?}",
+                    crate::recursion::recursive::timing::take().trace_rows,
+                    t.elapsed()
+                );
+            }
+        }
     }
 }

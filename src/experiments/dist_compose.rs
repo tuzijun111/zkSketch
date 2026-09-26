@@ -60,6 +60,20 @@
 //!   to machine k, which merges. Total cross-machine traffic is M−1 proofs,
 //!   bought to unlock the M-way parallelism the sequential chain lacks.
 //!
+//! **Auditor (B6(b)).** Leaves carry the Interval statement by default (each
+//! worker proves its slice's leaves at their GLOBAL batch indices, shipped as
+//! `ToWorker::Task::first_index`); the coordinator's auditor pins the derived
+//! root VK, verifies the root, and checks its statement against the public
+//! batch log (`Com(S_0)`, `Com(S_T)`, `Com(B_1..B_T)` computed natively from
+//! the batches, [`batch_commits`]) under `dist_tree_shape(mode, t, M)`.
+//! Where the auditor receives LEAF proofs directly (per_batch, and the lone
+//! leaf of a one-batch stream) it pins each one to the trusted leaf VK
+//! (derived from a no-op leaf, [`derive_dist_leaf_vk`]), STARK-verifies it with
+//! a verifier configured from public parameters, and checks its statement
+//! against its log entry and the boundary chain ([`audit_leaf_bytes`]); the
+//! reported verify time is that audit, not the workers' self-verify (except
+//! under the legacy `EXP_ROOT_VK=self` opt-in).
+//!
 //! Cross-machine merging is possible because a merge consumes only the
 //! children's `BatchStarkProof`s (see
 //! [`prove_hiding_merge_proofs`](crate::recursion::recursive::expose_forest::prove_hiding_merge_proofs));
@@ -94,27 +108,34 @@ use serde::{Deserialize, Serialize};
 use crate::config::Val;
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::expose_forest::{
-    prove_hiding_merge, prove_hiding_merge_proofs, read_exposed_boundary_proof, vk_pin_values,
-    verify_bound_stark_proof,
+    check_leaves_against_log, leaf_vk, prove_hiding_merge, prove_hiding_merge_proofs,
+    read_exposed_boundary_proof, root_vk_deriver, verify_bound_stark_proof_against_log,
+    verify_bound_stark_proof_pinned, verify_leaves_against_log, vk_pin_values,
+};
+use crate::recursion::recursive::root_vk::{ForestShape, RootVk};
+use crate::recursion::recursive::statement::{
+    BatchLog, Expose, composition_expose, warn_boundary_layout,
 };
 use crate::recursion::recursive::timing;
 use p3_circuit_prover::BatchStarkProof;
 use p3_recursion::RecursionOutput;
 
 use crate::sketch::countmin::{CountMinParams, CountMinState};
-use crate::sketch::countmin_final::apply_update_prf;
-use crate::sketch::countmin_omc::{build_countmin_omc_leaf, CmOmcLeafCircuit, CmOmcParams};
+use crate::sketch::countmin_omc::{
+    build_countmin_omc_leaf_expose, countmin_omc_advance, countmin_omc_batch_commit,
+    CmOmcLeafCircuit, CmOmcParams,
+};
 use crate::sketch::gk_bandmerge::{
-    apply_batch2, build_gkb2_leaf, commit_gk2_state, Gk2State, Gk2Tuple, Gkb2LeafCircuit,
-    GkbParams,
+    apply_batch2, build_gkb2_leaf_expose, commit_gk2_batch, commit_gk2_state, Gk2State, Gk2Tuple,
+    Gkb2LeafCircuit, GkbParams,
 };
 use crate::sketch::hll_omc::{
-    build_hll_omc_leaf, commit_hll_omc, hll_omc_advance, hll_omc_empty, HllOmcLeafCircuit,
-    HllOmcParams,
+    build_hll_omc_leaf_expose, commit_hll_omc, hll_omc_advance, hll_omc_batch_commit,
+    hll_omc_empty, HllOmcLeafCircuit, HllOmcParams,
 };
 use crate::sketch::ss_final_full::{
-    apply_batch_ss_full, build_ss_full_leaf, commit_ss_state, SsFullLeafCircuit, SsFullParams,
-    SsFullRow, SsFullState,
+    apply_batch_ss_full, build_ss_full_leaf_expose, commit_ss_batch, commit_ss_state,
+    SsFullLeafCircuit, SsFullParams, SsFullRow, SsFullState,
 };
 
 // ── Goldilocks (`_gl`) leaf + config imports, aliased so they never clash with
@@ -122,31 +143,35 @@ use crate::sketch::ss_final_full::{
 // `FamLeafCircuitGl` / `worker_main_gl` / `measure_compose_dist_gl` path.
 use crate::recursion::recursive::config_gl::ConfigWithFriParamsGl;
 use crate::sketch::gk_bandmerge_gl::{
-    apply_batch2 as apply_batch2_gl, build_gkb2_leaf as build_gkb2_leaf_gl,
-    commit_gk2_state as commit_gk2_state_gl, Gk2State as Gk2StateGl, Gk2Tuple as Gk2TupleGl,
-    Gkb2LeafCircuit as Gkb2LeafCircuitGl, GkbParams as GkbParamsGl,
+    apply_batch2 as apply_batch2_gl, build_gkb2_leaf_expose as build_gkb2_leaf_expose_gl,
+    commit_gk2_batch as commit_gk2_batch_gl, commit_gk2_state as commit_gk2_state_gl,
+    Gk2State as Gk2StateGl, Gk2Tuple as Gk2TupleGl, Gkb2LeafCircuit as Gkb2LeafCircuitGl,
+    GkbParams as GkbParamsGl,
 };
 use crate::sketch::countmin_omc_gl::{
     CmOmcLeafCircuit as CmOmcLeafCircuitGl, CmOmcParams as CmOmcParamsGl,
-    apply_update_prf as apply_update_prf_gl, build_countmin_omc_leaf as build_countmin_omc_leaf_gl,
-    cm_gl_empty, commit_countmin as commit_countmin_gl,
+    apply_update_prf as apply_update_prf_gl,
+    build_countmin_omc_leaf_expose as build_countmin_omc_leaf_expose_gl, cm_gl_empty,
+    commit_batch as commit_batch_gl, commit_countmin as commit_countmin_gl,
 };
 use crate::sketch::hll_omc_gl::{
-    build_hll_omc_leaf as build_hll_omc_leaf_gl, commit_hll_omc as commit_hll_omc_gl,
-    hll_omc_advance as hll_omc_advance_gl, hll_omc_empty as hll_omc_empty_gl,
-    HllOmcLeafCircuit as HllOmcLeafCircuitGl, HllOmcParams as HllOmcParamsGl,
+    build_hll_omc_leaf_expose as build_hll_omc_leaf_expose_gl, commit_hll_omc as commit_hll_omc_gl,
+    hll_omc_advance as hll_omc_advance_gl, hll_omc_batch_commit as hll_omc_batch_commit_gl,
+    hll_omc_empty as hll_omc_empty_gl, HllOmcLeafCircuit as HllOmcLeafCircuitGl,
+    HllOmcParams as HllOmcParamsGl,
 };
 use crate::sketch::ss_final_full_gl::{
-    apply_batch_ss_full as apply_batch_ss_full_gl, build_ss_full_leaf as build_ss_full_leaf_gl,
-    commit_ss_state as commit_ss_state_gl, SsFullLeafCircuit as SsFullLeafCircuitGl,
-    SsFullParams as SsFullParamsGl, SsFullRow as SsFullRowGl, SsFullState as SsFullStateGl,
-    SsFullUpdate as SsFullUpdateGl,
+    apply_batch_ss_full as apply_batch_ss_full_gl,
+    build_ss_full_leaf_expose as build_ss_full_leaf_expose_gl,
+    commit_ss_batch as commit_ss_batch_gl, commit_ss_state as commit_ss_state_gl,
+    SsFullLeafCircuit as SsFullLeafCircuitGl, SsFullParams as SsFullParamsGl,
+    SsFullRow as SsFullRowGl, SsFullState as SsFullStateGl, SsFullUpdate as SsFullUpdateGl,
 };
 
 use super::families::cm_empty;
 use super::stream_compose::{
     cm_updates_of, gk_vals_of, hll_keys_of, measure_queries_dist, ss_updates_of, QueryKeyMode,
-    StreamFamily, StreamMode, StreamShape,
+    StreamFamily, StreamMode, StreamShape, PAD_KEY,
 };
 
 use crate::commitment::countmin::commit_countmin;
@@ -237,11 +262,9 @@ impl FamState {
     /// Apply one batch in plaintext (the witness-pass step).
     fn advance(&mut self, shape: &StreamShape, batch: &[u32]) {
         match self {
-            Self::Cm(state) => {
-                for u in &cm_updates_of(batch) {
-                    apply_update_prf(state, u);
-                }
-            }
+            // The omc leaf's native update under the process default binding
+            // (the one `FamLeafCircuit::build` uses).
+            Self::Cm(state) => countmin_omc_advance(state, &cm_updates_of(batch)),
             Self::Hll(regs) => hll_omc_advance(regs, &hll_keys_of(batch), 1usize << shape.b),
             Self::Ss(state) => *state = apply_batch_ss_full(state, &ss_updates_of(batch)).0,
             Self::Gk(state) => *state = apply_batch2(state, &gk_vals_of(batch)),
@@ -257,27 +280,107 @@ impl FamState {
             Self::Gk(state) => commit_gk2_state(state).0,
         }
     }
+}
 
-    /// Prove one transition leaf from the current state over `batch`, on the
-    /// worker's prebuilt leaf circuit. Returns the boundary-exposing output
-    /// plus the prover's self-timings.
+/// `Com(B_t)` of every batch of a BabyBear stream, computed natively from the
+/// raw batch records exactly as each family's leaf commits its batch
+/// in-circuit — what the public log publishes. GK's batch commitment also
+/// binds `n_prev` (the arrival count before the batch), which the log
+/// follower derives from the batch lengths.
+pub(crate) fn batch_commits(
+    family: StreamFamily,
+    m: usize,
+    batches: &[Vec<u32>],
+) -> Vec<[Val; 8]> {
+    let mut n_prev = 0u64;
+    batches
+        .iter()
+        .map(|b| match family {
+            StreamFamily::CmOmc => countmin_omc_batch_commit(&cm_updates_of(b)),
+            StreamFamily::HllOmc => hll_omc_batch_commit(&hll_keys_of(b)),
+            StreamFamily::SsCertified => commit_ss_batch(&ss_updates_of(b)).0,
+            StreamFamily::GkBandmerge2 => {
+                let vals = gk_vals_of(b);
+                let c = commit_gk2_batch(&vals, m, n_prev).0;
+                n_prev += vals.len() as u64;
+                c
+            }
+            _ => unreachable!("gl families use batch_commits_gl"),
+        })
+        .collect()
+}
+
+/// The public batch log of a BabyBear stream: `Com(S_0)` and `Com(S_T)` from
+/// the plaintext witness pass plus [`batch_commits`].
+pub(crate) fn stream_batch_log(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+    batches: &[Vec<u32>],
+) -> BatchLog<Val> {
+    let mut st = FamState::empty(family, shape, m);
+    let init = st.commit(shape);
+    for b in batches {
+        st.advance(shape, b);
+    }
+    let commits = batch_commits(family, m, batches);
+    crate::recursion::recursive::expose_forest::batch_log(&init, &st.commit(shape), &commits)
+}
+
+/// Goldilocks analog of [`batch_commits`].
+pub(crate) fn batch_commits_gl(
+    family: StreamFamily,
+    m: usize,
+    batches: &[Vec<u32>],
+) -> Vec<[crate::config_gl::Val; 4]> {
+    let mut n_prev = 0u64;
+    batches
+        .iter()
+        .map(|b| match family {
+            StreamFamily::CmOmcGl => commit_batch_gl(&cm_updates_of(b)).0,
+            StreamFamily::HllOmcGl => hll_omc_batch_commit_gl(&hll_keys_of(b)),
+            StreamFamily::SsCertifiedGl => {
+                let ups: Vec<SsFullUpdateGl> = ss_updates_of(b)
+                    .iter()
+                    .map(|u| SsFullUpdateGl { key: u.key, value: u.value, active: u.active })
+                    .collect();
+                commit_ss_batch_gl(&ups).0
+            }
+            StreamFamily::GkBandmerge2Gl => {
+                let vals = gk_vals_of(b);
+                let c = commit_gk2_batch_gl(&vals, m, n_prev).0;
+                n_prev += vals.len() as u64;
+                c
+            }
+            _ => unreachable!("BabyBear families use batch_commits"),
+        })
+        .collect()
+}
+
+impl FamState {
+
+    /// Prove one transition leaf — batch `t` (1-based, the global stream
+    /// index; part of the Interval statement) — from the current state over
+    /// `batch`, on the worker's prebuilt leaf circuit. Returns the
+    /// statement-exposing output plus the prover's self-timings.
     fn prove_leaf(
         &self,
         leaf: &mut FamLeafCircuit,
+        t: u64,
         batch: &[u32],
     ) -> (RecursionOutput<ConfigWithFriParams>, f64, f64) {
         let output = match (leaf, self) {
             (FamLeafCircuit::Cm(l), Self::Cm(state)) => {
-                l.prove_epoch(state.clone(), cm_updates_of(batch)).output
+                l.prove_epoch_at(t, state.clone(), cm_updates_of(batch)).output
             }
             (FamLeafCircuit::Hll(l), Self::Hll(regs)) => {
-                l.prove_epoch(regs.clone(), hll_keys_of(batch)).output
+                l.prove_epoch_at(t, regs.clone(), hll_keys_of(batch)).output
             }
             (FamLeafCircuit::Ss(l), Self::Ss(state)) => {
-                l.prove_epoch(state.clone(), ss_updates_of(batch)).output
+                l.prove_epoch_at(t, state.clone(), ss_updates_of(batch)).output
             }
             (FamLeafCircuit::Gk(l), Self::Gk(state)) => {
-                l.prove_epoch(state.clone(), gk_vals_of(batch)).output
+                l.prove_epoch_at(t, state.clone(), gk_vals_of(batch)).output
             }
             _ => panic!("FamLeafCircuit/FamState family mismatch"),
         };
@@ -367,22 +470,30 @@ enum FamLeafCircuit {
 }
 
 impl FamLeafCircuit {
+    /// Build the family's composable leaf with the harness composition
+    /// statement ([`composition_expose`]: Interval by default; Boundary for
+    /// the explicit legacy opt-ins).
     fn build(family: StreamFamily, shape: &StreamShape, m: usize) -> Self {
+        let expose = composition_expose();
+        let binding = crate::sketch::bind::default_binding();
         match family {
-            StreamFamily::CmOmc => Self::Cm(build_countmin_omc_leaf(
+            StreamFamily::CmOmc => Self::Cm(build_countmin_omc_leaf_expose(
                 CmOmcParams { d: shape.d, w: shape.w, batch: m },
-                true,
+                expose,
+                binding,
             )),
-            StreamFamily::HllOmc => {
-                Self::Hll(build_hll_omc_leaf(HllOmcParams { b: shape.b, batch: m }, true))
-            }
-            StreamFamily::SsCertified => Self::Ss(build_ss_full_leaf(
+            StreamFamily::HllOmc => Self::Hll(build_hll_omc_leaf_expose(
+                HllOmcParams { b: shape.b, batch: m },
+                expose,
+                binding,
+            )),
+            StreamFamily::SsCertified => Self::Ss(build_ss_full_leaf_expose(
                 SsFullParams { capacity: shape.capacity, batch: m },
-                true,
+                expose,
             )),
-            StreamFamily::GkBandmerge2 => Self::Gk(build_gkb2_leaf(
+            StreamFamily::GkBandmerge2 => Self::Gk(build_gkb2_leaf_expose(
                 GkbParams { capacity: shape.capacity, batch: m, s: shape.gk_s },
-                true,
+                expose,
             )),
             StreamFamily::SsCertifiedGl
             | StreamFamily::GkBandmerge2Gl
@@ -469,28 +580,30 @@ impl FamStateGl {
         }
     }
 
-    /// Prove one transition leaf, mirroring [`FamState::prove_leaf`] exactly.
+    /// Prove one transition leaf (batch `t`), mirroring
+    /// [`FamState::prove_leaf`] exactly.
     fn prove_leaf(
         &self,
         leaf: &mut FamLeafCircuitGl,
+        t: u64,
         batch: &[u32],
     ) -> (RecursionOutput<ConfigWithFriParamsGl>, f64, f64) {
         let output = match (leaf, self) {
             (FamLeafCircuitGl::CmGl(l), Self::CmGl(state)) => {
-                l.prove_epoch(state.clone(), cm_updates_of(batch)).output
+                l.prove_epoch_at(t, state.clone(), cm_updates_of(batch)).output
             }
             (FamLeafCircuitGl::SsGl(l), Self::SsGl(state)) => {
                 let ups: Vec<SsFullUpdateGl> = ss_updates_of(batch)
                     .iter()
                     .map(|u| SsFullUpdateGl { key: u.key, value: u.value, active: u.active })
                     .collect();
-                l.prove_epoch(state.clone(), ups).output
+                l.prove_epoch_at(t, state.clone(), ups).output
             }
             (FamLeafCircuitGl::GkGl(l), Self::GkGl(state)) => {
-                l.prove_epoch(state.clone(), gk_vals_of(batch)).output
+                l.prove_epoch_at(t, state.clone(), gk_vals_of(batch)).output
             }
             (FamLeafCircuitGl::HllGl(l), Self::HllGl(regs)) => {
-                l.prove_epoch(regs.clone(), hll_keys_of(batch)).output
+                l.prove_epoch_at(t, regs.clone(), hll_keys_of(batch)).output
             }
             _ => panic!("FamLeafCircuitGl/FamStateGl family mismatch"),
         };
@@ -575,23 +688,29 @@ enum FamLeafCircuitGl {
 }
 
 impl FamLeafCircuitGl {
+    /// Goldilocks analog of [`FamLeafCircuit::build`] (harness composition
+    /// statement, [`composition_expose`]).
     fn build(family: StreamFamily, shape: &StreamShape, m: usize) -> Self {
+        let expose = composition_expose();
+        let binding = crate::sketch::bind::default_binding();
         match family {
-            StreamFamily::SsCertifiedGl => Self::SsGl(build_ss_full_leaf_gl(
+            StreamFamily::SsCertifiedGl => Self::SsGl(build_ss_full_leaf_expose_gl(
                 SsFullParamsGl { capacity: shape.capacity, batch: m },
-                true,
+                expose,
             )),
-            StreamFamily::GkBandmerge2Gl => Self::GkGl(build_gkb2_leaf_gl(
+            StreamFamily::GkBandmerge2Gl => Self::GkGl(build_gkb2_leaf_expose_gl(
                 GkbParamsGl { capacity: shape.capacity, batch: m, s: shape.gk_s },
-                true,
+                expose,
             )),
-            StreamFamily::HllOmcGl => Self::HllGl(build_hll_omc_leaf_gl(
+            StreamFamily::HllOmcGl => Self::HllGl(build_hll_omc_leaf_expose_gl(
                 HllOmcParamsGl { b: shape.b, batch: m },
-                true,
+                expose,
+                binding,
             )),
-            StreamFamily::CmOmcGl => Self::CmGl(build_countmin_omc_leaf_gl(
+            StreamFamily::CmOmcGl => Self::CmGl(build_countmin_omc_leaf_expose_gl(
                 CmOmcParamsGl { d: shape.d, w: shape.w, batch: m },
-                true,
+                expose,
+                binding,
             )),
             _ => unreachable!("FamLeafCircuitGl only for gl families"),
         }
@@ -642,6 +761,9 @@ enum ToWorker {
         m: u32,
         start: WireState,
         batches: Vec<Vec<u32>>,
+        /// Global 1-based stream index of `batches[0]` (the leaves' Interval
+        /// statement carries the global batch index).
+        first_index: u64,
     },
     /// Forest reduction round: merge this (right-adjacent) peer root into the
     /// local root. Reply: `Merged`.
@@ -773,7 +895,7 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
     send_msg(&mut stream, &FromWorker::Hello { id }).expect("hello");
     serve_guarded(stream, cores, move |s| {
         let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
-        let ToWorker::Task { family, mode, shape, m, start, batches } = task else {
+        let ToWorker::Task { family, mode, shape, m, start, batches, first_index } = task else {
             panic!("first message must be Task");
         };
         // The state's wire tag fixes the family; parse validates agreement.
@@ -792,7 +914,8 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
         let mut root: Option<RecursionOutput<ConfigWithFriParams>> = None;
 
         for (i, batch) in batches.iter().enumerate() {
-            let (output, prove_ms, verify_ms) = state.prove_leaf(&mut leaf, batch);
+            let (output, prove_ms, verify_ms) =
+                state.prove_leaf(&mut leaf, first_index + i as u64, batch);
             state.advance(&shape, batch);
 
             let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
@@ -915,7 +1038,7 @@ fn worker_main_gl(sock: &str, id: u32, cores: usize) -> ! {
     send_msg(&mut stream, &FromWorker::Hello { id }).expect("hello");
     serve_guarded(stream, cores, move |s| {
         let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
-        let ToWorker::Task { family, mode, shape, m, start, batches } = task else {
+        let ToWorker::Task { family, mode, shape, m, start, batches, first_index } = task else {
             panic!("first message must be Task");
         };
         // The state's wire tag fixes the family; parse validates agreement.
@@ -934,7 +1057,8 @@ fn worker_main_gl(sock: &str, id: u32, cores: usize) -> ! {
         let mut root: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
 
         for (i, batch) in batches.iter().enumerate() {
-            let (output, prove_ms, verify_ms) = state.prove_leaf(&mut leaf, batch);
+            let (output, prove_ms, verify_ms) =
+                state.prove_leaf(&mut leaf, first_index + i as u64, batch);
             state.advance(&shape, batch);
 
             let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
@@ -1299,6 +1423,254 @@ impl Drop for ChildGuard {
     }
 }
 
+// ─── Auditor's trusted root VK ───────────────────────────────────────────────
+
+/// Where the auditor's trusted root VK comes from (env `EXP_ROOT_VK`, parsed
+/// by [`crate::recursion::recursive::root_vk::exp_root_vk`]). Fails closed:
+/// * unset / empty / `derive` (the DEFAULT) — derived from public parameters
+///   only: a no-op leaf of the family's leaf circuit plus this run's
+///   merge-tree shape ([`ForestShape::dist_forest`] / [`ForestShape::chain`]);
+///   costs `O(log t + log M)` dummy merges for the forest (`t - 1` for the
+///   chain), outside every timed phase. `EXP_ROOT_VK_SAVE=<path>` also writes
+///   it. A derivation failure aborts the run (no fallback to a self-pin).
+/// * `self` — explicit opt-in to the LEGACY self-pin: the VK is read from the
+///   received root itself, so the pin is vacuous (the pre-H2 behaviour, kept
+///   only for side-by-side runs; a loud warning goes to stderr).
+/// * anything else — a path to a postcard-encoded `RootVk` supplied
+///   externally (e.g. saved by an earlier `derive` run); a read/decode error
+///   aborts the run.
+enum RootVkSource {
+    SelfPinnedLegacy,
+    Derive,
+    File(PathBuf),
+}
+
+fn root_vk_source() -> RootVkSource {
+    use crate::recursion::recursive::root_vk::{exp_root_vk, ExpRootVk};
+    match exp_root_vk() {
+        ExpRootVk::Derive => RootVkSource::Derive,
+        ExpRootVk::SelfPinnedLegacy => RootVkSource::SelfPinnedLegacy,
+        ExpRootVk::File(path) => RootVkSource::File(path),
+    }
+}
+
+/// The merge tree a dist run folds its `t` leaves into.
+fn dist_tree_shape(mode: StreamMode, t: usize, machines: usize) -> ForestShape {
+    match mode {
+        StreamMode::Chain => ForestShape::chain(t),
+        StreamMode::Forest | StreamMode::PerBatch => ForestShape::dist_forest(t, machines),
+    }
+}
+
+/// Public, data-free leaf input whose leaf proof is a NO-OP (initial ==
+/// final boundary): `(setup, batch)` — advance the empty state by `setup`,
+/// then prove `batch`. CM/SS/GK: a batch of `PAD_KEY` no-op records from the
+/// empty state; HLL: re-insert a key the state already holds (`max` is
+/// idempotent), since HLL has no pad sentinel.
+fn noop_leaf_input(family: StreamFamily, m: usize) -> (Vec<u32>, Vec<u32>) {
+    if family.base_family() == StreamFamily::HllOmc {
+        (vec![1], vec![1; m])
+    } else {
+        (Vec::new(), vec![PAD_KEY; m])
+    }
+}
+
+/// Resolve the auditor's trusted VK (see [`RootVkSource`]): `Ok(None)` only
+/// for the explicit legacy opt-in `EXP_ROOT_VK=self` (announced on stderr);
+/// `derive` computes it from public parameters (and writes it to
+/// `EXP_ROOT_VK_SAVE` when set); a file path reads it. Used for the composed
+/// root and, on the paths where the auditor receives LEAF proofs directly
+/// (per_batch; a one-batch stream), for the leaf VK.
+fn resolve_trusted_vk<C: Serialize + DeserializeOwned>(
+    derive: impl FnOnce() -> RootVk<C>,
+) -> Result<Option<RootVk<C>>, String> {
+    match root_vk_source() {
+        RootVkSource::SelfPinnedLegacy => {
+            crate::recursion::recursive::root_vk::warn_self_pinned_legacy("dist_compose auditor");
+            Ok(None)
+        }
+        RootVkSource::Derive => {
+            let t0 = Instant::now();
+            let vk = derive();
+            eprintln!(
+                "    auditor: VK derived from public parameters in {:.1}s",
+                t0.elapsed().as_secs_f64()
+            );
+            if let Ok(path) = std::env::var("EXP_ROOT_VK_SAVE") {
+                let bytes = postcard::to_allocvec(&vk).map_err(|e| format!("encode root VK: {e}"))?;
+                std::fs::write(&path, bytes).map_err(|e| format!("write root VK {path}: {e}"))?;
+            }
+            Ok(Some(vk))
+        }
+        RootVkSource::File(path) => {
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("read root VK {}: {e}", path.display()))?;
+            postcard::from_bytes(&bytes)
+                .map(Some)
+                .map_err(|e| format!("decode root VK {}: {e}", path.display()))
+        }
+    }
+}
+
+/// Resolve the auditor's trusted root VK (see [`RootVkSource`]); under the
+/// legacy `self` opt-in the VK is `self_pin()` (read from the root itself).
+fn resolve_root_vk<C: Serialize + DeserializeOwned>(
+    self_pin: impl FnOnce() -> Vec<C>,
+    derive: impl FnOnce() -> RootVk<C>,
+) -> Result<RootVk<C>, String> {
+    Ok(resolve_trusted_vk(derive)?.unwrap_or_else(|| RootVk::commitment_only(self_pin())))
+}
+
+/// The no-op leaf proof of the family's harness leaf circuit (built exactly as
+/// the workers build it, [`FamLeafCircuit::build`]) over public, data-free
+/// input ([`noop_leaf_input`]) at batch index 1 — the starting point of every
+/// VK derivation.
+fn prove_noop_leaf(family: StreamFamily, shape: &StreamShape, m: usize) -> Proof {
+    let mut leaf = FamLeafCircuit::build(family, shape, m);
+    let mut state = FamState::empty(family, shape, m);
+    let (setup, batch) = noop_leaf_input(family, m);
+    if !setup.is_empty() {
+        state.advance(shape, &setup);
+    }
+    state.prove_leaf(&mut leaf, 1, &batch).0 .0
+}
+
+/// Goldilocks analog of [`prove_noop_leaf`].
+fn prove_noop_leaf_gl(family: StreamFamily, shape: &StreamShape, m: usize) -> ProofGl {
+    let mut leaf = FamLeafCircuitGl::build(family, shape, m);
+    let mut state = FamStateGl::empty(family, shape, m);
+    let (setup, batch) = noop_leaf_input(family, m);
+    if !setup.is_empty() {
+        state.advance(shape, &setup);
+    }
+    state.prove_leaf(&mut leaf, 1, &batch).0 .0
+}
+
+/// The trusted LEAF VK (commitment + metadata) of the family's harness leaf
+/// circuit, from public parameters only: the no-op leaf's own VK. The auditor
+/// pins every leaf proof it receives directly (per_batch; a one-batch stream)
+/// to it ([`verify_leaves_against_log`]).
+pub(crate) fn derive_dist_leaf_vk(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+) -> RootVk<crate::config::Challenge> {
+    leaf_vk(&prove_noop_leaf(family, shape, m))
+}
+
+/// Goldilocks analog of [`derive_dist_leaf_vk`].
+fn derive_dist_leaf_vk_gl(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+) -> RootVk<crate::config_gl::Challenge> {
+    crate::recursion::recursive::expose_forest_gl::leaf_vk(&prove_noop_leaf_gl(family, shape, m))
+}
+
+/// Derive the BabyBear root VK of a dist run from public parameters only.
+/// (Also used by `stream_compose::measure_compose` with `machines = 1`, whose
+/// forest is `ForestShape::dist_forest(t, 1) == ForestShape::forest(t)`.)
+pub(crate) fn derive_dist_root_vk(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+    mode: StreamMode,
+    t: usize,
+    machines: usize,
+) -> RootVk<crate::config::Challenge> {
+    root_vk_deriver(prove_noop_leaf(family, shape, m)).root_vk(&dist_tree_shape(mode, t, machines))
+}
+
+/// Goldilocks analog of [`derive_dist_root_vk`].
+fn derive_dist_root_vk_gl(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+    mode: StreamMode,
+    t: usize,
+    machines: usize,
+) -> RootVk<crate::config_gl::Challenge> {
+    crate::recursion::recursive::expose_forest_gl::root_vk_deriver(prove_noop_leaf_gl(family, shape, m))
+        .root_vk(&dist_tree_shape(mode, t, machines))
+}
+
+/// The auditor's check of LEAF proofs it receives directly, as postcard bytes
+/// (per_batch: all `t` leaves; chain/forest with `t == 1`: the lone leaf).
+///
+/// Default (`EXP_ROOT_VK` unset / `derive`, or a VK file): the trusted leaf VK
+/// is resolved OUTSIDE the timed verify ([`derive_dist_leaf_vk`]), the bytes
+/// are decoded, and then every leaf is pinned to it, STARK-verified, and its
+/// statement checked against `log` ([`verify_leaves_against_log`]); returns the
+/// measured verify time in ms. Legacy `EXP_ROOT_VK=self` (warned): the leaves
+/// are only decoded and their statements checked, which authenticates nothing,
+/// and the workers' self-verify total `self_verify_ms` is reported, exactly as
+/// before the pin existed.
+#[allow(clippy::too_many_arguments)]
+fn audit_leaf_bytes(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+    bytes: &[&[u8]],
+    log: &BatchLog<Val>,
+    layout: Expose,
+    self_verify_ms: f64,
+) -> Result<f64, String> {
+    let vk = resolve_trusted_vk(|| derive_dist_leaf_vk(family, shape, m))?;
+    let proofs: Vec<Proof> = bytes
+        .iter()
+        .map(|b| postcard::from_bytes(b))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("leaf decode: {e}"))?;
+    let refs: Vec<&Proof> = proofs.iter().collect();
+    match &vk {
+        Some(vk) => {
+            let v0 = Instant::now();
+            verify_leaves_against_log(&refs, vk, log, layout)
+                .map_err(|e| format!("leaf audit: {e}"))?;
+            Ok(v0.elapsed().as_secs_f64() * 1000.0)
+        }
+        None => {
+            check_leaves_against_log(&refs, log, layout)
+                .map_err(|e| format!("leaf statements vs log: {e}"))?;
+            Ok(self_verify_ms)
+        }
+    }
+}
+
+/// Goldilocks analog of [`audit_leaf_bytes`].
+#[allow(clippy::too_many_arguments)]
+fn audit_leaf_bytes_gl(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+    bytes: &[&[u8]],
+    log: &BatchLog<crate::config_gl::Val>,
+    layout: Expose,
+    self_verify_ms: f64,
+) -> Result<f64, String> {
+    use crate::recursion::recursive::expose_forest_gl as efg;
+    let vk = resolve_trusted_vk(|| derive_dist_leaf_vk_gl(family, shape, m))?;
+    let proofs: Vec<ProofGl> = bytes
+        .iter()
+        .map(|b| postcard::from_bytes(b))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("leaf decode: {e}"))?;
+    let refs: Vec<&ProofGl> = proofs.iter().collect();
+    match &vk {
+        Some(vk) => {
+            let v0 = Instant::now();
+            efg::verify_leaves_against_log(&refs, vk, log, layout)
+                .map_err(|e| format!("leaf audit: {e}"))?;
+            Ok(v0.elapsed().as_secs_f64() * 1000.0)
+        }
+        None => {
+            efg::check_leaves_against_log(&refs, log, layout)
+                .map_err(|e| format!("leaf statements vs log: {e}"))?;
+            Ok(self_verify_ms)
+        }
+    }
+}
+
 // ─── Coordinator ─────────────────────────────────────────────────────────────
 
 /// One measured distributed-composition cell.
@@ -1554,6 +1926,7 @@ pub fn measure_compose_dist(
                 m: m as u32,
                 start,
                 batches: slice,
+                first_index: a as u64 + 1,
             },
         )
         .map_err(|e| format!("scatter to {i}: {e}"))?;
@@ -1633,26 +2006,14 @@ pub fn measure_compose_dist(
 
     let root_bytes: Option<Vec<u8>> = match mode {
         StreamMode::PerBatch => {
-            // Auditor's proof store: Θ(t) files, plus the native anchor /
-            // boundary-link checks over the exposed commitments.
+            // Auditor's proof store: Θ(t) files. The auditor verifies every
+            // stored leaf below (pinned leaf VK + STARK + statement vs log).
             let _ = std::fs::remove_dir_all(proof_dir);
             std::fs::create_dir_all(proof_dir).map_err(|e| format!("proof dir: {e}"))?;
-            let mut prev_final: Option<[Val; 8]> = None;
             for (i, p) in leaf_proofs.iter().enumerate() {
                 let p = p.as_ref().expect("per_batch leaf proof");
                 std::fs::write(proof_dir.join(format!("leaf_{i:04}.bin")), p)
                     .map_err(|e| format!("write leaf: {e}"))?;
-                let proof: Proof =
-                    postcard::from_bytes(p).map_err(|e| format!("leaf decode: {e}"))?;
-                let (ini, fin) = read_exposed_boundary_proof(&proof);
-                let expect = prev_final.unwrap_or(anchor);
-                if ini.0 != expect {
-                    return Err(format!("per-batch boundary/anchor break at leaf {i}"));
-                }
-                prev_final = Some(fin.0);
-            }
-            if prev_final != Some(final_commit) {
-                return Err("per-batch final commitment mismatch".into());
             }
             None
         }
@@ -1750,14 +2111,29 @@ pub fn measure_compose_dist(
     let merge_ms = mp0.elapsed().as_secs_f64() * 1000.0;
     let total_time_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
-    // ── Auditor: verify the received root bytes; bind its exposed boundary
-    // to the natively recomputed (Com(S_0), Com(S_E)).
+    // ── Auditor: verify the received proof bytes against a trusted VK and
+    // bind their exposed statement to the public batch log (Com(S_0),
+    // Com(S_T), Com(B_1..B_T)), recomputed natively from the batches.
+    let log = crate::recursion::recursive::expose_forest::batch_log(
+        &anchor,
+        &final_commit,
+        &batch_commits(family, m, batches),
+    );
+    let layout = composition_expose();
+    if layout != Expose::Interval {
+        warn_boundary_layout("dist_compose auditor");
+    }
     let (proof_bytes, verify_ms) = match &root_bytes {
         None => {
-            // per_batch: Θ(t) artifact; verify = Σ leaf self-verifies
-            // (measured machine-side at prove time), links checked above.
-            let sum: u64 = leaf_proofs.iter().flatten().map(|p| p.len() as u64).sum();
-            (sum, leaf_verify_sum)
+            // per_batch: the Θ(t) artifact. Every leaf proof is verified
+            // against the trusted LEAF VK, derived from public parameters
+            // outside the timed verify ([`audit_leaf_bytes`]).
+            let bytes: Vec<&[u8]> = leaf_proofs
+                .iter()
+                .map(|p| p.as_deref().expect("per_batch leaf proof"))
+                .collect();
+            let sum: u64 = bytes.iter().map(|p| p.len() as u64).sum();
+            (sum, audit_leaf_bytes(family, &shape, m, &bytes, &log, layout, leaf_verify_sum)?)
         }
         Some(bytes) => {
             let proof: Proof =
@@ -1766,21 +2142,35 @@ pub fn measure_compose_dist(
             if ini.0 != anchor || fin.0 != final_commit {
                 return Err("root boundary != native (Com(S_0), Com(S_E))".into());
             }
+            // The bracketing the machines composed.
+            let tree = dist_tree_shape(mode, t, machines);
+            let interval = layout == Expose::Interval;
             if t == 1 {
-                // Lone leaf: the aggregation verifier lacks the sketch's
-                // Permute table (same caveat as the sim engine) — report the
-                // leaf's own self-verify.
-                (bytes.len() as u64, leaf_verify_sum)
+                // A one-batch stream: the "root" is the lone LEAF proof. The
+                // aggregation verifier cannot check it (it lacks the sketch's
+                // tables), so it is verified like a per_batch leaf: pinned to
+                // the trusted leaf VK, STARK-verified, statement vs the log.
+                (bytes.len() as u64, audit_leaf_bytes(family, &shape, m, &[bytes], &log, layout, leaf_verify_sum)?)
             } else {
-                // The auditor pins the root's VK to a trusted public-profile
-                // parameter. For this honest benchmark we derive that parameter
-                // from the received root (a real auditor holds its own copy for
-                // this (family, forest-size); the pin is a fixed-size equality
-                // check, negligible next to STARK-table verification, so the
-                // measured verify time is faithful either way).
-                let expected_root_vk = vk_pin_values(&proof);
+                // The auditor pins the root's VK (commitment + metadata) to a
+                // trusted copy from `EXP_ROOT_VK` (see [`RootVkSource`]),
+                // resolved outside the timed verify; the pin is a fixed-size
+                // equality check, negligible next to STARK-table verification.
+                // Interval layout (default): the root statement is then
+                // checked against the log (lo = 1, hi = T, Com(S_0), Com(S_T),
+                // and the ordered-batch digest recomputed natively under the
+                // dist bracketing) — O(T) native hashes, inside the timed
+                // verify.
+                let expected_root_vk = resolve_root_vk(
+                    || vk_pin_values(&proof),
+                    || derive_dist_root_vk(family, &shape, m, mode, t, machines),
+                )?;
                 let v0 = Instant::now();
-                verify_bound_stark_proof(&proof, &expected_root_vk);
+                if interval {
+                    verify_bound_stark_proof_against_log(&proof, &expected_root_vk, &log, &tree);
+                } else {
+                    verify_bound_stark_proof_pinned(&proof, &expected_root_vk);
+                }
                 (bytes.len() as u64, v0.elapsed().as_secs_f64() * 1000.0)
             }
         }
@@ -2103,6 +2493,7 @@ fn measure_compose_dist_staged(
                     m: m as u32,
                     start,
                     batches: slice,
+                    first_index: a as u64 + 1,
                 },
             )
             .map_err(|e| format!("scatter to {i}: {e}"))?;
@@ -2244,12 +2635,34 @@ fn measure_compose_dist_staged(
         if ini.0 != anchor || fin.0 != final_commit {
             return Err("root boundary != native (Com(S_0), Com(S_E))".into());
         }
+        let log = crate::recursion::recursive::expose_forest::batch_log(
+            &anchor,
+            &final_commit,
+            &batch_commits(family, m, batches),
+        );
+        let tree = dist_tree_shape(mode, t, machines);
+        let layout = composition_expose();
+        let interval = layout == Expose::Interval;
+        if !interval {
+            warn_boundary_layout("dist_compose (staged) auditor");
+        }
         if t == 1 {
-            (bytes.len() as u64, leaf_verify_sum)
+            // Lone leaf (unreachable in practice: staging needs >= 2 slices):
+            // verified like a per_batch leaf ([`audit_leaf_bytes`]).
+            (bytes.len() as u64, audit_leaf_bytes(family, &shape, m, &[bytes], &log, layout, leaf_verify_sum)?)
         } else {
-            let expected_root_vk = vk_pin_values(&proof);
+            // Staged waves pair aligned power-of-two machine blocks, so the
+            // tree is the concurrent engine's `dist_forest(t, machines)`.
+            let expected_root_vk = resolve_root_vk(
+                || vk_pin_values(&proof),
+                || derive_dist_root_vk(family, &shape, m, mode, t, machines),
+            )?;
             let v0 = Instant::now();
-            verify_bound_stark_proof(&proof, &expected_root_vk);
+            if interval {
+                verify_bound_stark_proof_against_log(&proof, &expected_root_vk, &log, &tree);
+            } else {
+                verify_bound_stark_proof_pinned(&proof, &expected_root_vk);
+            }
             (bytes.len() as u64, v0.elapsed().as_secs_f64() * 1000.0)
         }
     };
@@ -2447,6 +2860,7 @@ pub fn measure_compose_dist_gl(
                 m: m as u32,
                 start,
                 batches: slice,
+                first_index: a as u64 + 1,
             },
         )
         .map_err(|e| format!("scatter to {i}: {e}"))?;
@@ -2526,29 +2940,14 @@ pub fn measure_compose_dist_gl(
 
     let root_bytes: Option<Vec<u8>> = match mode {
         StreamMode::PerBatch => {
-            // Auditor's proof store: Θ(t) files, plus the native anchor /
-            // boundary-link checks over the exposed commitments.
+            // Auditor's proof store: Θ(t) files. The auditor verifies every
+            // stored leaf below (pinned leaf VK + STARK + statement vs log).
             let _ = std::fs::remove_dir_all(proof_dir);
             std::fs::create_dir_all(proof_dir).map_err(|e| format!("proof dir: {e}"))?;
-            let mut prev_final: Option<[crate::config_gl::Val; 4]> = None;
             for (i, p) in leaf_proofs.iter().enumerate() {
                 let p = p.as_ref().expect("per_batch leaf proof");
                 std::fs::write(proof_dir.join(format!("leaf_{i:04}.bin")), p)
                     .map_err(|e| format!("write leaf: {e}"))?;
-                let proof: ProofGl =
-                    postcard::from_bytes(p).map_err(|e| format!("leaf decode: {e}"))?;
-                let (ini, fin) =
-                    crate::recursion::recursive::expose_forest_gl::read_exposed_boundary_proof(
-                        &proof,
-                    );
-                let expect = prev_final.unwrap_or(anchor);
-                if ini.0 != expect {
-                    return Err(format!("per-batch boundary/anchor break at leaf {i}"));
-                }
-                prev_final = Some(fin.0);
-            }
-            if prev_final != Some(final_commit) {
-                return Err("per-batch final commitment mismatch".into());
             }
             None
         }
@@ -2646,14 +3045,28 @@ pub fn measure_compose_dist_gl(
     let merge_ms = mp0.elapsed().as_secs_f64() * 1000.0;
     let total_time_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
-    // ── Auditor: verify the received root bytes; bind its exposed boundary
-    // to the natively recomputed (Com(S_0), Com(S_E)).
+    // ── Auditor: verify the received proof bytes against a trusted VK and
+    // bind their exposed statement to the public batch log, recomputed
+    // natively from the batches.
+    let log = crate::recursion::recursive::expose_forest_gl::batch_log(
+        &anchor,
+        &final_commit,
+        &batch_commits_gl(family, m, batches),
+    );
+    let layout = composition_expose();
+    if layout != Expose::Interval {
+        warn_boundary_layout("dist_compose (gl) auditor");
+    }
     let (proof_bytes, verify_ms) = match &root_bytes {
         None => {
-            // per_batch: Θ(t) artifact; verify = Σ leaf self-verifies
-            // (measured machine-side at prove time), links checked above.
-            let sum: u64 = leaf_proofs.iter().flatten().map(|p| p.len() as u64).sum();
-            (sum, leaf_verify_sum)
+            // per_batch: the Θ(t) artifact; every leaf is verified against
+            // the trusted leaf VK ([`audit_leaf_bytes_gl`]).
+            let bytes: Vec<&[u8]> = leaf_proofs
+                .iter()
+                .map(|p| p.as_deref().expect("per_batch leaf proof"))
+                .collect();
+            let sum: u64 = bytes.iter().map(|p| p.len() as u64).sum();
+            (sum, audit_leaf_bytes_gl(family, &shape, m, &bytes, &log, layout, leaf_verify_sum)?)
         }
         Some(bytes) => {
             let proof: ProofGl =
@@ -2663,25 +3076,35 @@ pub fn measure_compose_dist_gl(
             if ini.0 != anchor || fin.0 != final_commit {
                 return Err("root boundary != native (Com(S_0), Com(S_E))".into());
             }
+            let tree = dist_tree_shape(mode, t, machines);
+            let interval = layout == Expose::Interval;
             if t == 1 {
-                // Lone leaf: the aggregation verifier lacks the sketch's
-                // Permute table (same caveat as the sim engine) — report the
-                // leaf's own self-verify.
-                (bytes.len() as u64, leaf_verify_sum)
+                // A one-batch stream: the lone LEAF proof, verified like a
+                // per_batch leaf (pinned leaf VK, STARK, statement vs log).
+                (bytes.len() as u64, audit_leaf_bytes_gl(family, &shape, m, &[bytes], &log, layout, leaf_verify_sum)?)
             } else {
-                // The auditor pins the root's VK to a trusted public-profile
-                // parameter. For this honest benchmark we derive that parameter
-                // from the received root (a real auditor holds its own copy for
-                // this (family, forest-size); the pin is a fixed-size equality
-                // check, negligible next to STARK-table verification, so the
-                // measured verify time is faithful either way).
-                let expected_root_vk =
-                    crate::recursion::recursive::expose_forest_gl::vk_pin_values(&proof);
+                // The auditor pins the root's VK (commitment + metadata) to a
+                // trusted copy from `EXP_ROOT_VK` (see [`RootVkSource`]),
+                // resolved outside the timed verify; Interval layout (default)
+                // then checks the root statement against the batch log.
+                let expected_root_vk = resolve_root_vk(
+                    || crate::recursion::recursive::expose_forest_gl::vk_pin_values(&proof),
+                    || derive_dist_root_vk_gl(family, &shape, m, mode, t, machines),
+                )?;
                 let v0 = Instant::now();
-                crate::recursion::recursive::expose_forest_gl::verify_bound_stark_proof(
-                    &proof,
-                    &expected_root_vk,
-                );
+                if interval {
+                    crate::recursion::recursive::expose_forest_gl::verify_bound_stark_proof_against_log(
+                        &proof,
+                        &expected_root_vk,
+                        &log,
+                        &tree,
+                    );
+                } else {
+                    crate::recursion::recursive::expose_forest_gl::verify_bound_stark_proof_pinned(
+                        &proof,
+                        &expected_root_vk,
+                    );
+                }
                 (bytes.len() as u64, v0.elapsed().as_secs_f64() * 1000.0)
             }
         }
@@ -2829,6 +3252,205 @@ mod tests {
             for w in r.windows(2) {
                 assert_eq!(w[0].1, w[1].0, "contiguous");
             }
+        }
+    }
+
+    /// The auditor's VK-derivation leaf input is a provable NO-OP for every
+    /// family (native commitment unchanged), so the no-op leaf's boundary is
+    /// self-contiguous — which `root_vk_deriver` requires.
+    #[test]
+    fn noop_leaf_input_is_a_noop_for_all_families() {
+        let sh = shape();
+        let m = 4;
+        for family in [
+            StreamFamily::CmOmc,
+            StreamFamily::HllOmc,
+            StreamFamily::SsCertified,
+            StreamFamily::GkBandmerge2,
+        ] {
+            let mut st = FamState::empty(family, &sh, m);
+            let (setup, batch) = noop_leaf_input(family, m);
+            if !setup.is_empty() {
+                st.advance(&sh, &setup);
+            }
+            let before = st.commit(&sh);
+            st.advance(&sh, &batch);
+            assert_eq!(st.commit(&sh), before, "{family:?}: no-op leaf input must not move the state");
+        }
+        for family in [
+            StreamFamily::CmOmcGl,
+            StreamFamily::HllOmcGl,
+            StreamFamily::SsCertifiedGl,
+            StreamFamily::GkBandmerge2Gl,
+        ] {
+            let mut st = FamStateGl::empty(family, &sh, m);
+            let (setup, batch) = noop_leaf_input(family, m);
+            if !setup.is_empty() {
+                st.advance(&sh, &setup);
+            }
+            let before = st.commit(&sh);
+            st.advance(&sh, &batch);
+            assert_eq!(st.commit(&sh), before, "{family:?}: no-op leaf input must not move the state");
+        }
+    }
+
+    /// END-TO-END (auditor `EXP_ROOT_VK=derive` path): replay a dist forest
+    /// in-process exactly as the workers fold it — per-machine slice cascades,
+    /// then stride-doubling rounds over WIRE-ROUND-TRIPPED roots — and check
+    /// that `derive_dist_root_vk` (public parameters only) reproduces the real
+    /// root's VK and metadata, and that the auditor's pinned verify accepts it.
+    /// `t = 3` leaves on `M = 2` machines: slices of 2 and 1 leaves.
+    fn assert_dist_root_vk_derivable(family: StreamFamily) {
+        let sh = shape();
+        let m = 4;
+        let (t, machines) = (3usize, 2usize);
+        let batches: Vec<Vec<u32>> = (0..t as u32).map(|i| (1..=4).map(|k| k * 7 + i * 13).collect()).collect();
+        let mut leaf = FamLeafCircuit::build(family, &sh, m);
+        let mut st = FamState::empty(family, &sh, m);
+        let mut outputs = Vec::new();
+        for (i, b) in batches.iter().enumerate() {
+            outputs.push(st.prove_leaf(&mut leaf, i as u64 + 1, b).0);
+            st.advance(&sh, b);
+        }
+        let wire = |p: &Proof| -> Proof {
+            postcard::from_bytes(&postcard::to_allocvec(p).unwrap()).unwrap()
+        };
+        // Machine 0 folds leaves [0, 2) (cascade), machine 1 holds leaf 2.
+        let slice0 = prove_hiding_merge(&outputs[0], &outputs[1]);
+        let root = prove_hiding_merge_proofs(&slice0.0, &wire(&outputs[2].0));
+        let tree = dist_tree_shape(StreamMode::Forest, t, machines);
+        assert_eq!(tree.num_leaves(), t);
+        let derived = derive_dist_root_vk(family, &sh, m, StreamMode::Forest, t, machines);
+        assert_eq!(derived.commitment, vk_pin_values(&root.0), "{family:?}: derived dist root VK");
+        assert_eq!(
+            derived.shape,
+            Some(crate::recursion::recursive::root_vk::bound_proof_shape(&root.0)),
+            "{family:?}: derived dist root metadata"
+        );
+        verify_bound_stark_proof_pinned(&wire(&root.0), &derived);
+        // (e) The default auditor path: derived VK + the batch log the
+        // harness computes natively (Interval statement, the default layout).
+        assert_eq!(composition_expose(), Expose::Interval, "default layout");
+        let log = stream_batch_log(family, &sh, m, &batches);
+        verify_bound_stark_proof_against_log(&wire(&root.0), &derived, &log, &tree);
+        // A log with batches 1 and 2 swapped is rejected.
+        let mut swapped = batches.clone();
+        swapped.swap(0, 1);
+        let bad = BatchLog { batch_commits: batch_commits(family, m, &swapped).iter().map(|c| c.to_vec()).collect(), ..log.clone() };
+        assert!(
+            crate::recursion::recursive::expose_forest::check_root_against_log(&root.0, &bad, &tree)
+                .is_err(),
+            "{family:?}: a reordered log must not match the root"
+        );
+    }
+
+    #[test]
+    fn dist_root_vk_derivable_cm_omc() {
+        assert_dist_root_vk_derivable(StreamFamily::CmOmc);
+    }
+
+    #[test]
+    fn dist_root_vk_derivable_hll_omc() {
+        assert_dist_root_vk_derivable(StreamFamily::HllOmc);
+    }
+
+    /// The coordinator's LEAF audit ([`audit_leaf_bytes`], per_batch and the
+    /// lone leaf `t == 1`), for every family on both fields, over wire bytes:
+    /// (1) the honest leaves (t = 1, 2) verify against the leaf VK derived
+    /// from public parameters — so the one public-parameter leaf verifier
+    /// serves each family's leaf circuit; (2) THE REVIEWED ATTACK: a toy
+    /// circuit that only exposes leaf 1's honest statement passes the pre-fix
+    /// statement-only check and is rejected by the audit; (3) a one-leaf log
+    /// (the lone-leaf path) is audited the same way. Skipped when
+    /// `EXP_ROOT_VK` overrides the derived VK.
+    #[test]
+    fn dist_leaf_audit_pins_leaf_vk_all_families() {
+        if std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive") {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        use p3_field::BasedVectorSpace;
+        let sh = shape();
+        let m = 4;
+        let batches: Vec<Vec<u32>> = (0..2u32).map(|i| (1..=4).map(|k| k * 7 + i * 13).collect()).collect();
+        let layout = composition_expose();
+        assert_eq!(layout, Expose::Interval, "default layout");
+        for family in [
+            StreamFamily::CmOmc,
+            StreamFamily::HllOmc,
+            StreamFamily::SsCertified,
+            StreamFamily::GkBandmerge2,
+        ] {
+            let mut leaf = FamLeafCircuit::build(family, &sh, m);
+            let mut st = FamState::empty(family, &sh, m);
+            let mut bytes = Vec::new();
+            for (i, b) in batches.iter().enumerate() {
+                bytes.push(postcard::to_allocvec(&st.prove_leaf(&mut leaf, i as u64 + 1, b).0 .0).unwrap());
+                st.advance(&sh, b);
+            }
+            let refs: Vec<&[u8]> = bytes.iter().map(|b| b.as_slice()).collect();
+            let log = stream_batch_log(family, &sh, m, &batches);
+            let ms = audit_leaf_bytes(family, &sh, m, &refs, &log, layout, -1.0);
+            assert!(ms.as_ref().is_ok_and(|&ms| ms >= 0.0), "{family:?} honest per_batch: {ms:?}");
+            let lone_log = stream_batch_log(family, &sh, m, &batches[..1]);
+            assert!(audit_leaf_bytes(family, &sh, m, &refs[..1], &lone_log, layout, -1.0).is_ok(), "{family:?} lone leaf");
+            // The toy mimicking leaf 1's statement.
+            let l1: Proof = postcard::from_bytes(&bytes[0]).unwrap();
+            let v = crate::recursion::recursive::expose_forest::read_exposed_statement(&l1).values();
+            let cs: Vec<crate::config::Challenge> = v
+                .chunks(4)
+                .map(|c| crate::config::Challenge::from_basis_coefficients_slice(c).unwrap())
+                .collect();
+            let toy = crate::recursion::recursive::expose_forest::prove_exposing_leaf(&cs);
+            let toy_bytes = postcard::to_allocvec(&toy.0).unwrap();
+            assert_eq!(
+                check_leaves_against_log(&[&toy.0], &lone_log, layout),
+                Ok(()),
+                "{family:?}: the pre-fix statement-only check accepts the toy"
+            );
+            for (what, set, lg) in [
+                ("per_batch", vec![toy_bytes.as_slice(), refs[1]], &log),
+                ("lone leaf", vec![toy_bytes.as_slice()], &lone_log),
+            ] {
+                let r = audit_leaf_bytes(family, &sh, m, &set, lg, layout, -1.0);
+                println!("B6B dist leaf audit {family:?} {what} toy: {r:?}");
+                assert!(r.is_err_and(|e| e.contains("leaf 1")), "{family:?} {what}");
+            }
+        }
+        for family in [
+            StreamFamily::CmOmcGl,
+            StreamFamily::HllOmcGl,
+            StreamFamily::SsCertifiedGl,
+            StreamFamily::GkBandmerge2Gl,
+        ] {
+            use crate::recursion::recursive::expose_forest_gl as efg;
+            let mut leaf = FamLeafCircuitGl::build(family, &sh, m);
+            let mut st = FamStateGl::empty(family, &sh, m);
+            let init = st.commit(&sh);
+            let mut bytes = Vec::new();
+            for (i, b) in batches.iter().enumerate() {
+                bytes.push(postcard::to_allocvec(&st.prove_leaf(&mut leaf, i as u64 + 1, b).0 .0).unwrap());
+                st.advance(&sh, b);
+            }
+            let refs: Vec<&[u8]> = bytes.iter().map(|b| b.as_slice()).collect();
+            let commits = batch_commits_gl(family, m, &batches);
+            let log = efg::batch_log(&init, &st.commit(&sh), &commits);
+            let ms = audit_leaf_bytes_gl(family, &sh, m, &refs, &log, layout, -1.0);
+            assert!(ms.as_ref().is_ok_and(|&ms| ms >= 0.0), "{family:?} honest per_batch: {ms:?}");
+            let l1: ProofGl = postcard::from_bytes(&bytes[0]).unwrap();
+            let v = efg::read_exposed_statement(&l1).values();
+            let cs: Vec<crate::config_gl::Challenge> = v
+                .chunks(2)
+                .map(|c| crate::config_gl::Challenge::from_basis_coefficients_slice(c).unwrap())
+                .collect();
+            let toy_bytes = postcard::to_allocvec(&efg::prove_exposing_leaf(&cs).0).unwrap();
+            let set = vec![toy_bytes.as_slice(), refs[1]];
+            let decoded: Vec<ProofGl> = set.iter().map(|b| postcard::from_bytes(b).unwrap()).collect();
+            let drefs: Vec<&ProofGl> = decoded.iter().collect();
+            assert_eq!(efg::check_leaves_against_log(&drefs, &log, layout), Ok(()), "{family:?}: pre-fix accepts");
+            let r = audit_leaf_bytes_gl(family, &sh, m, &set, &log, layout, -1.0);
+            println!("B6B dist leaf audit {family:?} per_batch toy: {r:?}");
+            assert!(r.is_err_and(|e| e.contains("leaf 1")), "{family:?}");
         }
     }
 

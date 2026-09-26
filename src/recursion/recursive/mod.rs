@@ -24,6 +24,11 @@ pub mod countmin_chain_v9;
 pub mod countmin_forest_v9;
 pub mod expose_forest;
 pub mod expose_forest_gl;
+pub mod root_vk;
+pub mod statement;
+#[cfg(test)]
+mod interval_tests;
+pub mod noop_leaf;
 pub mod countmin_leaf;
 pub mod countmin_leaf_v2;
 pub mod countmin_leaf_v3;

@@ -21,6 +21,20 @@
 //! folds nothing — it stores the `t` leaf proofs to a folder and the verifier
 //! holds all of them.
 //!
+//! **Statement (B6(b)).** By default the leaves are built with the Interval
+//! statement (`statement::composition_expose()`): leaf `t` also exposes
+//! `(t, t)` and `H = Poseidon2(TAG_LEAF, t, Com(B_t))`, the merges enforce index
+//! adjacency and fold the digests, and the auditor checks the root against
+//! the public batch log (`Com(S_0)`, `Com(S_T)` and every `Com(B_t)`, computed
+//! natively from the batches: `dist_compose::stream_batch_log`) under the
+//! fold's bracketing. Where the auditor holds LEAF proofs directly (per_batch,
+//! and the lone leaf of a one-batch stream) it pins each one to the leaf VK
+//! derived from public parameters, STARK-verifies it, and checks its statement
+//! against its log entry and the boundary chain; the reported verify time is
+//! that audit. `ZKSKETCH_STATEMENT=boundary` (or `ZKSKETCH_BINDING=legacy`)
+//! selects the pre-B6(b) Boundary layout for side-by-side runs, with a loud
+//! warning that the batch log is then NOT checked.
+//!
 //! ## Mixed updates + queries (`query_at`)
 //!
 //! With a non-empty `query_at` schedule (1-based batch indices), a **query
@@ -70,25 +84,33 @@ use crate::decode::countmin::{prove_cm_decode, CmDecodeParams};
 use crate::decode::gk_bandmerge::{prove_gk2_decode, Gkb2DecodeParams};
 use crate::decode::hyperloglog::{prove_hll_decode_omc, HllDecodeParams};
 use crate::decode::spacesaving::{prove_ss_decode, SsDecodeParams};
-use crate::decode::{DecodeProof, ReleasePolicy};
+use crate::decode::{DecodeProof, QueryStatement, ReleasePolicy, check_query_statement};
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::expose_forest::{
-    prove_chain_over, prove_forest_over, verify_bound_proof,
+    check_leaves_against_log, check_root_against_log, prove_chain_over, prove_forest_over,
+    read_exposed_statement, verify_bound_proof, verify_bound_proof_against_log,
+    verify_bound_proof_self_pinned_legacy, verify_leaves_against_log,
+};
+use crate::recursion::recursive::root_vk::{
+    exp_root_vk, warn_self_pinned_legacy, ExpRootVk, ForestShape, RootVk,
+};
+use crate::recursion::recursive::statement::{
+    composition_expose, warn_boundary_layout, BatchLog, Expose,
 };
 use crate::recursion::recursive::timing;
+use crate::sketch::bind::{default_binding, Binding};
 use p3_recursion::RecursionOutput;
 
 use crate::sketch::countmin::CountMinUpdate;
-use crate::sketch::countmin_final::apply_update_prf;
-use crate::sketch::countmin_omc::{prove_countmin_omc_exposed, CmOmcParams};
+use crate::sketch::countmin_omc::{build_countmin_omc_leaf_expose, countmin_omc_advance, CmOmcParams};
 use crate::sketch::gk_bandmerge::{
-    apply_batch2, commit_gk2_state, prove_gkb2_exposed, Gk2State, GkbParams,
+    apply_batch2, build_gkb2_leaf_expose, commit_gk2_state, Gk2State, GkbParams,
 };
 use crate::sketch::hll_omc::{
-    commit_hll_omc, hll_omc_advance, hll_omc_empty, prove_hll_omc_exposed, HllOmcParams,
+    build_hll_omc_leaf_expose, commit_hll_omc, hll_omc_advance, hll_omc_empty, HllOmcParams,
 };
 use crate::sketch::ss_final_full::{
-    apply_batch_ss_full, commit_ss_state, prove_ss_full_exposed, SsFullParams, SsFullState,
+    apply_batch_ss_full, build_ss_full_leaf_expose, commit_ss_state, SsFullParams, SsFullState,
     SsFullUpdate,
 };
 
@@ -299,25 +321,79 @@ struct QueryArt {
 /// Record one query event: take the decode prover's self-timings, check the
 /// harness-level binding (the state the query circuit hashed must be exactly
 /// the leaf-boundary commitment at `t'` — the decode proof binds it in-circuit
-/// via public inputs, this asserts the two sides agree), and keep the metrics.
+/// via public inputs, this asserts the two sides agree), check the statement
+/// the query proof EXPOSES ([`check_query_exposure`]), and keep the metrics.
+/// `leaf_final` is the PROVER-side value of the update leaf at `t'`, not one
+/// the auditor verified: in chain/forest mode the composed root hides
+/// `Com(S_{t'})` and no prefix root or peak is verified at query time, so this
+/// binds the query to the stream only through the native replay (an open
+/// Property 3 gap; see [`prove_queries_only`]).
+/// `query` is the keyed families' query as the decoder exposes it
+/// ([`cm_query`] for a cm key, [`scalar_query`] for ss `c` / gk value);
+/// `None` for hll (cardinality, no query).
 fn record_query(
     queries: &mut Vec<QueryArt>,
     at_leaf: usize,
     dp: &DecodeProof,
     native_commit: [Val; 8],
     leaf_final: [Val; 8],
+    query: Option<[Val; 4]>,
 ) {
     let tm = timing::take();
     assert_eq!(
         native_commit, leaf_final,
         "query state commitment must equal the leaf boundary at t'={at_leaf}"
     );
+    check_query_exposure(dp, leaf_final, query, at_leaf);
     queries.push(QueryArt {
         at_leaf,
         prove_ms: (tm.witness + tm.prove).as_secs_f64() * 1000.0,
         verify_ms: tm.verify.as_secs_f64() * 1000.0,
         proof_bytes: dp.proof_size() as u64,
     });
+}
+
+/// Property 3 at the harness level: the query proof must EXPOSE the
+/// leaf-boundary commitment at `t'`, the query that was asked and the answer
+/// it reports (`(Com(S), q, answer)`, 16 values; hll `(Com(S), answer)`, 12),
+/// so a verifier reading only the proof learns what was certified. Fails
+/// closed. Skipped under `ZKSKETCH_BINDING=legacy`, whose pre-fix decoders
+/// expose nothing (the Legacy warning is printed when it is selected).
+fn check_query_exposure(dp: &DecodeProof, commit: [Val; 8], query: Option<[Val; 4]>, at_leaf: usize) {
+    if default_binding() == Binding::Legacy {
+        return;
+    }
+    match query {
+        Some(q) => check_query_statement(&dp.output.0, &QueryStatement::with_query(commit, q, dp.answer))
+            .unwrap_or_else(|e| panic!("query proof at t'={at_leaf}: {e}")),
+        None => {
+            let pv = dp
+                .output
+                .0
+                .non_primitives
+                .iter()
+                .map(|e| &e.public_values)
+                .find(|v| v.len() == 12)
+                .unwrap_or_else(|| panic!("hll query proof at t'={at_leaf} exposes no (Com(S), answer)"));
+            assert_eq!(&pv[..8], &commit[..], "hll query proof at t'={at_leaf}: exposed Com(S)");
+            use p3_field::PrimeCharacteristicRing;
+            assert_eq!(pv[8], Val::from_u64(dp.answer), "hll query proof at t'={at_leaf}: exposed answer");
+            assert!(pv[9..].iter().all(|v| *v == Val::ZERO), "hll answer must be a base element");
+        }
+    }
+}
+
+/// The exposed query of a scalar-query decoder (ss `c`, gk value): `(q, 0, 0, 0)`.
+fn scalar_query(q: u64) -> [Val; 4] {
+    use p3_field::PrimeCharacteristicRing;
+    QueryStatement::new([Val::ZERO; 8], q, 0).query
+}
+
+/// The exposed query of the Count-Min decoder for `key` under the process
+/// default binding: the exact 16-bit limbs (`Semantic`/`Bound`), or
+/// `(key mod p, 0, 0, 0)` (`Legacy`).
+fn cm_query(key: u64) -> [Val; 4] {
+    crate::sketch::countmin_final::key_hash_input(key, default_binding())
 }
 
 /// How the probe key for a **keyed** decode query is chosen at each query event.
@@ -604,11 +680,15 @@ fn aggregate_queries(query_arts: &[QueryArt], mode: StreamMode) -> QueryAgg {
 /// one decode query after each `query_at`-listed batch. Mirrors `prove_leaves`'
 /// query logic exactly (same `query_key_mode` probes, same per-family circuits).
 ///
-/// The query decode circuit binds its in-circuit state hash to `Com(S_{t'})`;
-/// because that state is the identical canonical replay the workers' update
-/// leaves expose as their boundary, the answer is bound to the composition
-/// proof at `t'` transitively (there is no separate leaf here to assert against,
-/// so `record_query`'s check is against the freshly recomputed commit itself).
+/// The query decode circuit binds its in-circuit state hash to `Com(S_{t'})`,
+/// and `record_query` checks that the proof EXPOSES the natively recomputed
+/// `Com(S_{t'})` (there is no update leaf here, so the "leaf boundary" it
+/// compares with is that same recomputed commit). What is NOT done: the
+/// auditor verifies no composition proof at `t'` (no prefix root and no
+/// Bentley–Saxe peaks; the whole-stream root hides `Com(S_{t'})`), so the
+/// query answer is tied to the update proofs only through the auditor's own
+/// native replay of the stream, not through a verified proof (an open
+/// Property 3 gap; `query_ctx_verifies` is a structural count only).
 fn prove_queries_only(
     family: StreamFamily,
     shape: StreamShape,
@@ -632,9 +712,9 @@ fn prove_queries_only(
             let mut state = cm_empty(d, w);
             let mut freq: BTreeMap<u64, u64> = BTreeMap::new();
             for (bi, batch) in batches.iter().enumerate() {
-                for u in &cm_updates_of(batch) {
-                    apply_update_prf(&mut state, u);
-                }
+                // The omc leaf's native update (default binding), which the
+                // default-binding decoder below also routes by.
+                countmin_omc_advance(&mut state, &cm_updates_of(batch));
                 if track_freq {
                     for &k in batch {
                         if k != PAD_KEY {
@@ -651,7 +731,7 @@ fn prove_queries_only(
                         key,
                     );
                     let commit = commit_countmin(&state).0;
-                    record_query(&mut queries, bi + 1, &dp, commit, commit);
+                    record_query(&mut queries, bi + 1, &dp, commit, commit, Some(cm_query(key)));
                 }
             }
         }
@@ -668,7 +748,7 @@ fn prove_queries_only(
                         0,
                     );
                     let commit = commit_hll_omc(&regs, b);
-                    record_query(&mut queries, bi + 1, &dp, commit, commit);
+                    record_query(&mut queries, bi + 1, &dp, commit, commit, None);
                 }
             }
         }
@@ -686,7 +766,7 @@ fn prove_queries_only(
                         1,
                     );
                     let commit = commit_ss_state(&state).0;
-                    record_query(&mut queries, bi + 1, &dp, commit, commit);
+                    record_query(&mut queries, bi + 1, &dp, commit, commit, Some(scalar_query(1)));
                 }
             }
         }
@@ -718,7 +798,7 @@ fn prove_queries_only(
                         qval,
                     );
                     let commit = commit_gk2_state(&state).0;
-                    record_query(&mut queries, bi + 1, &dp, commit, commit);
+                    record_query(&mut queries, bi + 1, &dp, commit, commit, Some(scalar_query(qval as u64)));
                 }
             }
         }
@@ -811,16 +891,15 @@ fn prove_leaves(
             let mut freq: BTreeMap<u64, u64> = BTreeMap::new();
             for (bi, batch) in batches.iter().enumerate() {
                 let ups = cm_updates_of(batch);
-                let leaf = prove_countmin_omc_exposed(
+                let leaf = build_countmin_omc_leaf_expose(
                     CmOmcParams { d, w, batch: m },
-                    state.clone(),
-                    ups.clone(),
-                );
+                    composition_expose(),
+                    default_binding(),
+                )
+                .prove_epoch_at(bi as u64 + 1, state.clone(), ups.clone());
                 let leaf_final = leaf.final_commit.0;
                 push(leaf.output, leaf.initial_commit.0, leaf_final);
-                for u in &ups {
-                    apply_update_prf(&mut state, u);
-                }
+                countmin_omc_advance(&mut state, &ups);
                 if track_freq {
                     for &k in batch {
                         if k != PAD_KEY {
@@ -844,7 +923,7 @@ fn prove_leaves(
                         state.clone(),
                         key,
                     );
-                    record_query(&mut queries, bi + 1, &dp, commit_countmin(&state).0, leaf_final);
+                    record_query(&mut queries, bi + 1, &dp, commit_countmin(&state).0, leaf_final, Some(cm_query(key)));
                 }
             }
             e
@@ -856,11 +935,12 @@ fn prove_leaves(
             let e = commit_hll_omc(&regs, b);
             for (bi, batch) in batches.iter().enumerate() {
                 let keys = hll_keys_of(batch);
-                let leaf = prove_hll_omc_exposed(
+                let leaf = build_hll_omc_leaf_expose(
                     HllOmcParams { b, batch: m },
-                    regs.clone(),
-                    keys.clone(),
-                );
+                    composition_expose(),
+                    default_binding(),
+                )
+                .prove_epoch_at(bi as u64 + 1, regs.clone(), keys.clone());
                 let leaf_final = leaf.final_commit.0;
                 push(leaf.output, leaf.initial_commit.0, leaf_final);
                 hll_omc_advance(&mut regs, &keys, m_reg);
@@ -871,7 +951,7 @@ fn prove_leaves(
                         regs.clone(),
                         0,
                     );
-                    record_query(&mut queries, bi + 1, &dp, commit_hll_omc(&regs, b), leaf_final);
+                    record_query(&mut queries, bi + 1, &dp, commit_hll_omc(&regs, b), leaf_final, None);
                 }
             }
             e
@@ -885,7 +965,8 @@ fn prove_leaves(
                 // Key mask (29-bit, low bit 1) + PAD_KEY→dummy live in the
                 // canonical `ss_updates_of` mapping.
                 let ups = ss_updates_of(batch);
-                let leaf = prove_ss_full_exposed(params, state.clone(), ups.clone());
+                let leaf = build_ss_full_leaf_expose(params, composition_expose())
+                    .prove_epoch_at(bi as u64 + 1, state.clone(), ups.clone());
                 let leaf_final = leaf.final_.0;
                 push(leaf.output, leaf.initial.0, leaf_final);
                 state = apply_batch_ss_full(&state, &ups).0;
@@ -896,7 +977,7 @@ fn prove_leaves(
                         state.clone(),
                         1,
                     );
-                    record_query(&mut queries, bi + 1, &dp, commit_ss_state(&state).0, leaf_final);
+                    record_query(&mut queries, bi + 1, &dp, commit_ss_state(&state).0, leaf_final, Some(scalar_query(1)));
                 }
             }
             e
@@ -912,7 +993,8 @@ fn prove_leaves(
                 // canonical `gk_vals_of` mapping (short batches are legal — the
                 // leaf pads its fresh-tuple rows with E_MAX dummies itself).
                 let vals = gk_vals_of(batch);
-                let leaf = prove_gkb2_exposed(params, state.clone(), vals.clone());
+                let leaf = build_gkb2_leaf_expose(params, composition_expose())
+                    .prove_epoch_at(bi as u64 + 1, state.clone(), vals.clone());
                 let leaf_final = leaf.final_.0;
                 push(leaf.output, leaf.initial.0, leaf_final);
                 state = apply_batch2(&state, &vals);
@@ -937,7 +1019,7 @@ fn prove_leaves(
                         state.clone(),
                         qval,
                     );
-                    record_query(&mut queries, bi + 1, &dp, commit_gk2_state(&state).0, leaf_final);
+                    record_query(&mut queries, bi + 1, &dp, commit_gk2_state(&state).0, leaf_final, Some(scalar_query(qval as u64)));
                 }
             }
             e
@@ -980,6 +1062,78 @@ fn makespan(per_leaf: &[f64], machines: usize) -> f64 {
     worst
 }
 
+/// The trusted VK the auditor verifies the stream's artifact against, derived
+/// from public parameters only (a no-op leaf of the family's leaf circuit,
+/// via `dist_compose`) — the default:
+///
+/// * chain / forest with `t >= 2`: the ROOT VK of the fold's tree shape
+///   (`dist_compose::derive_dist_root_vk` with one machine);
+/// * per_batch, and chain / forest with `t == 1` (the artifact is then a lone
+///   leaf proof): the LEAF VK (`dist_compose::derive_dist_leaf_vk`), against
+///   which every leaf the auditor holds is pinned and STARK-verified
+///   (`expose_forest::verify_leaves_against_log`).
+///
+/// `None` only for the explicit `EXP_ROOT_VK=self` legacy opt-in (warned: the
+/// root is self-pinned and leaf proofs are not re-verified), and for a
+/// Goldilocks family, which this engine rejects in `prove_leaves`.
+fn compose_trusted_vk(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+    mode: StreamMode,
+    t: usize,
+) -> Option<RootVk<crate::config::Challenge>> {
+    if family.is_gl() {
+        return None;
+    }
+    let leaf_artifact = mode == StreamMode::PerBatch || t < 2;
+    match exp_root_vk() {
+        ExpRootVk::Derive => Some(if leaf_artifact {
+            super::dist_compose::derive_dist_leaf_vk(family, shape, m)
+        } else {
+            super::dist_compose::derive_dist_root_vk(family, shape, m, mode, t, 1)
+        }),
+        ExpRootVk::SelfPinnedLegacy => {
+            warn_self_pinned_legacy("stream_compose");
+            None
+        }
+        ExpRootVk::File(path) => panic!(
+            "EXP_ROOT_VK={}: a root-VK file is only supported by dist_compose; \
+             use EXP_ROOT_VK=derive (default) or EXP_ROOT_VK=self",
+            path.display()
+        ),
+    }
+}
+
+/// The per_batch / lone-leaf auditor of the sim engine: with a trusted leaf
+/// VK, pin + STARK-verify every leaf and check the statements against `log`
+/// (timed; returns ms). Without one (legacy `EXP_ROOT_VK=self` only), check
+/// the statements alone — which authenticates nothing — and report the
+/// provers' self-verify total `self_verify_ms`, as before the pin existed.
+fn audit_leaves(
+    leaves: &[&p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>],
+    leaf_vk: Option<&RootVk<crate::config::Challenge>>,
+    log: &BatchLog<Val>,
+    layout: Expose,
+    self_verify_ms: f64,
+) -> f64 {
+    match leaf_vk {
+        Some(vk) => {
+            let tv = std::time::Instant::now();
+            if let Err(e) = verify_leaves_against_log(leaves, vk, log, layout) {
+                panic!("leaf audit: {e}");
+            }
+            tv.elapsed().as_secs_f64() * 1000.0
+        }
+        None => {
+            if let Err(e) = check_leaves_against_log(leaves, log, layout) {
+                panic!("leaf statements vs log: {e}");
+            }
+            self_verify_ms
+        }
+    }
+}
+
 /// Measure one `(family, shape, mode, cores, machines)` composition cell over
 /// `batches` (raw dataset keys, all of length `m`). The whole measurement runs
 /// inside a `cores`-thread pool so each proof uses that many cores. `proof_dir`
@@ -1020,6 +1174,9 @@ pub fn measure_compose(
     let mut leafgen_seq_out = 0.0f64;
     let mut q_out = QueryAgg::default();
     let agg = pool.install(|| {
+        // Auditor's trusted root VK: derived from public parameters before (and
+        // outside) the measured pass; never read from the root it verifies.
+        let root_vk = compose_trusted_vk(family, &shape, m, mode, batches.len());
         bench(BenchCfg { warmup: 0, trials: 1 }, || {
             let (leaves, empty_commit, query_arts) =
                 prove_leaves(family, shape, batches, query_at, query_key_mode);
@@ -1036,23 +1193,38 @@ pub fn measure_compose(
                     let _ = std::fs::remove_dir_all(proof_dir);
                     std::fs::create_dir_all(proof_dir).expect("create per-batch proof dir");
                     let mut total_bytes = 0u64;
-                    let mut total_verify = 0.0f64;
+                    let mut self_verify = 0.0f64;
                     for (i, l) in leaves.iter().enumerate() {
                         let bytes =
                             postcard::to_allocvec(&l.output.0).expect("serialize leaf proof");
                         total_bytes += bytes.len() as u64;
                         std::fs::write(proof_dir.join(format!("leaf_{i:04}.bin")), &bytes)
                             .expect("write leaf proof");
-                        total_verify += l.verify_ms;
+                        self_verify += l.verify_ms;
                     }
-                    // Verifier's chain links: anchor (π₁.initial == Com(S₀)) +
-                    // (t-1) boundary equalities. Native compares — negligible but
-                    // real (the paper's Θ(t) link cost).
+                    // The prover's native anchor and boundary links (its own
+                    // Com(S_i) values) — a consistency assert of the harness,
+                    // not an audit: the auditor below reads the boundaries
+                    // from the verified proofs instead.
                     let mut ok = leaves[0].initial == empty_commit;
                     for pair in leaves.windows(2) {
                         ok &= pair[0].final_ == pair[1].initial;
                     }
                     assert!(ok, "per-batch chain boundary/anchor check failed");
+                    // Auditor: every leaf is pinned to the trusted LEAF VK
+                    // (derived from public parameters, outside this pass),
+                    // STARK-verified, and its exposed statement checked
+                    // against the public batch log (Com(S_0) -> ... -> Com(S_T)
+                    // chain; Interval: (t, t, H(TAG_LEAF, t, Com(B_t)))).
+                    // Timed as the per-batch verify (the paper's Θ(t) cost).
+                    let layout = composition_expose();
+                    if layout != Expose::Interval {
+                        warn_boundary_layout("stream_compose per-batch");
+                    }
+                    let log = super::dist_compose::stream_batch_log(family, &shape, m, batches);
+                    let proofs: Vec<_> = leaves.iter().map(|l| &l.output.0).collect();
+                    let total_verify =
+                        audit_leaves(&proofs, root_vk.as_ref(), &log, layout, self_verify);
 
                     // machines: parallel independent leaf proving (no fold).
                     let leafgen = makespan(&prove_ms, machines);
@@ -1066,11 +1238,13 @@ pub fn measure_compose(
                     }
                 }
                 StreamMode::Chain | StreamMode::Forest => {
-                    // A single leaf has nothing to compose. Its proof still
-                    // carries the sketch's Permute table, which the aggregation
-                    // verifier (`verify_bound_proof`) does not register — so for
-                    // t == 1 we report the leaf's own self-verify (run at prove
-                    // time) rather than re-verifying the raw leaf.
+                    // A single leaf has nothing to compose; the artifact is
+                    // the lone leaf proof. Its proof carries the sketch's
+                    // tables (Permute, Range...), which the aggregation
+                    // verifier (`verify_bound_proof*`) does not register, so
+                    // for t == 1 the auditor verifies it as a LEAF: pinned to
+                    // the trusted leaf VK, STARK-verified, statement vs the
+                    // log ([`audit_leaves`]).
                     let single_leaf = leaves.len() < 2;
                     let single_verify_ms = leaves[0].verify_ms;
                     let outputs: Vec<RecursionOutput<ConfigWithFriParams>> =
@@ -1087,13 +1261,51 @@ pub fn measure_compose(
                     };
                     let merge_ms = t0.elapsed().as_secs_f64() * 1000.0;
                     let bytes = proof_size(&root.0) as u64;
-                    // Verifier: one succinct check of the merged root (t == 1 uses
-                    // the leaf's self-verify, see above).
+                    // The public batch log (Com(S_0), Com(S_T), Com(B_1..B_T)),
+                    // computed natively from the batches, and the bracketing
+                    // the fold used.
+                    let log = super::dist_compose::stream_batch_log(family, &shape, m, batches);
+                    let tree = match mode {
+                        StreamMode::Chain => ForestShape::chain(batches.len()),
+                        _ => ForestShape::forest(batches.len()),
+                    };
+                    let layout = composition_expose();
+                    let interval = layout == Expose::Interval;
+                    if !interval {
+                        warn_boundary_layout("stream_compose");
+                    }
+                    // Verifier: one succinct check of the merged root (t == 1:
+                    // the lone leaf, audited as a leaf; see above).
                     let verify_ms = if single_leaf {
-                        single_verify_ms
+                        audit_leaves(&[&root.0], root_vk.as_ref(), &log, layout, single_verify_ms)
                     } else {
                         let tv = std::time::Instant::now();
-                        verify_bound_proof(&root);
+                        // Pinned to the derived root VK (fails closed on a
+                        // mismatch); only the explicit `EXP_ROOT_VK=self`
+                        // opt-in self-pins (a fixed-size equality either way,
+                        // so the timing is comparable). Interval layout
+                        // (default): the root statement is then checked against
+                        // the batch log (O(T) native hashes, inside the timing).
+                        match (&root_vk, interval) {
+                            (Some(vk), true) => verify_bound_proof_against_log(&root, vk, &log, &tree),
+                            (Some(vk), false) => verify_bound_proof(&root, vk),
+                            (None, true) => {
+                                verify_bound_proof_self_pinned_legacy(&root);
+                                if let Err(e) = check_root_against_log(&root.0, &log, &tree) {
+                                    panic!("root statement vs log: {e}");
+                                }
+                            }
+                            (None, false) => verify_bound_proof_self_pinned_legacy(&root),
+                        }
+                        if !interval {
+                            // Boundary layout: the root's (init, final) must
+                            // still be the log's (Com(S_0), Com(S_T)).
+                            let st = read_exposed_statement(&root.0);
+                            assert!(
+                                st.init == log.init && st.final_ == log.final_,
+                                "root boundary != the log's (Com(S_0), Com(S_T))"
+                            );
+                        }
                         tv.elapsed().as_secs_f64() * 1000.0
                     };
                     // Chain is sequential (fold depends on predecessor); forest
@@ -1370,8 +1582,105 @@ mod tests {
             assert!(cell.proof_bytes > 0, "t=1 artifact ({mode:?})");
             // No real fold — the "root" is the lone leaf (sub-ms to select).
             assert!(cell.merge_ms < 10.0, "t=1 has no real merge ({mode:?})");
-            assert!(cell.verify_ms > 0.0, "t=1 uses the leaf self-verify ({mode:?})");
+            assert!(cell.verify_ms > 0.0, "t=1: the auditor verifies the lone leaf ({mode:?})");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Child half of [`boundary_layout_harness_paths`]: a no-op unless the
+    /// parent re-runs this test binary with `ZKSKETCH_STATEMENT_CHILD` set.
+    #[test]
+    fn boundary_layout_child() {
+        if std::env::var_os("ZKSKETCH_STATEMENT_CHILD").is_none() {
+            return;
+        }
+        assert_eq!(composition_expose(), Expose::Boundary, "ZKSKETCH_STATEMENT=boundary");
+        let dir = std::env::temp_dir().join(format!("zksketch_boundary_child_{}", std::process::id()));
+        let two: Vec<Vec<u32>> = (0..2u32).map(|i| (1..=4).map(|k| k * 7 + i * 13).collect()).collect();
+        for (batches, modes) in [
+            (&two[..], &[StreamMode::PerBatch, StreamMode::Chain, StreamMode::Forest][..]),
+            (&two[..1], &[StreamMode::Forest][..]),
+        ] {
+            for &mode in modes {
+                let cell = measure_compose(
+                    StreamFamily::CmOmc,
+                    shape(),
+                    batches,
+                    mode,
+                    1,
+                    1,
+                    &dir,
+                    &[],
+                    QueryKeyMode::First,
+                );
+                assert!(cell.proof_bytes > 0 && cell.verify_ms > 0.0, "{mode:?} t={}", batches.len());
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        println!("CHILD_BOUNDARY_OK");
+    }
+
+    /// The side-by-side Boundary layout through the sim harness, in a child
+    /// process so the parallel test run's environment is untouched:
+    /// `ZKSKETCH_STATEMENT=boundary` builds the pre-B6(b) leaves and merges,
+    /// prints the loud Boundary warning, and every mode (per_batch, chain,
+    /// forest, and the lone leaf) still verifies under the derived root / leaf
+    /// VK and the log's `(Com(S_0), Com(S_T))`.
+    #[test]
+    fn boundary_layout_harness_paths() {
+        if std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive") {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        let exe = std::env::current_exe().expect("test binary path");
+        let out = std::process::Command::new(&exe)
+            .args(["--exact", "experiments::stream_compose::tests::boundary_layout_child", "--nocapture"])
+            .args(["--test-threads", "1"])
+            .env("ZKSKETCH_STATEMENT_CHILD", "1")
+            .env("ZKSKETCH_STATEMENT", "boundary")
+            .env_remove("ZKSKETCH_BINDING")
+            .output()
+            .expect("spawn child test");
+        let text =
+            format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "boundary child failed:\n{text}");
+        assert!(text.contains("CHILD_BOUNDARY_OK"), "{text}");
+        assert!(text.contains("composition layout = Boundary"), "the Boundary warning is printed:\n{text}");
+    }
+
+    /// The sim engine's leaf audit ([`audit_leaves`]: per_batch, and the lone
+    /// leaf of a one-batch stream). With the leaf VK the harness derives
+    /// ([`compose_trusted_vk`]) the honest leaf passes and THE REVIEWED
+    /// ATTACK — a toy circuit exposing leaf 1's honest statement — is rejected;
+    /// the pre-fix statement-only path (still what the legacy
+    /// `EXP_ROOT_VK=self` opt-in runs) accepts it.
+    #[test]
+    fn sim_leaf_audit_rejects_foreign_circuit() {
+        if std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive") {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        use p3_field::BasedVectorSpace;
+        let (sh, m) = (shape(), 4usize);
+        let batches: Vec<Vec<u32>> = vec![(1..=4).collect()];
+        for mode in [StreamMode::PerBatch, StreamMode::Forest] {
+            assert!(compose_trusted_vk(StreamFamily::CmOmc, &sh, m, mode, 1).is_some(), "{mode:?}: leaf VK");
+        }
+        let vk = compose_trusted_vk(StreamFamily::CmOmc, &sh, m, StreamMode::PerBatch, 3)
+            .expect("derived leaf VK");
+        let (leaves, _, _) = prove_leaves(StreamFamily::CmOmc, sh, &batches, &[], QueryKeyMode::First);
+        let log = super::super::dist_compose::stream_batch_log(StreamFamily::CmOmc, &sh, m, &batches);
+        let layout = composition_expose();
+        assert!(audit_leaves(&[&leaves[0].output.0], Some(&vk), &log, layout, -1.0) >= 0.0);
+        let cs: Vec<crate::config::Challenge> = read_exposed_statement(&leaves[0].output.0)
+            .values()
+            .chunks(4)
+            .map(|c| crate::config::Challenge::from_basis_coefficients_slice(c).unwrap())
+            .collect();
+        let toy = crate::recursion::recursive::expose_forest::prove_exposing_leaf(&cs);
+        assert_eq!(audit_leaves(&[&toy.0], None, &log, layout, -1.0), -1.0, "pre-fix path accepts");
+        let r = crate::sketch::forge::catch_msg(|| audit_leaves(&[&toy.0], Some(&vk), &log, layout, -1.0));
+        println!("B6B sim leaf audit toy: {r:?}");
+        assert!(r.is_err_and(|e| e.contains("leaf audit")));
     }
 }

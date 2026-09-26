@@ -25,7 +25,10 @@
 //! this holds, the summary answers any rank query within additive `εN`
 //! (Claim 5 of the source). We take the accuracy parameter `s = 1/ε`, so the
 //! threshold is `θ_t = ⌊N_t / s⌋ = ⌊εN_t⌋`, with `N_t` the cumulative record
-//! count (public in the streaming-forest log).
+//! count. The certified leaves force `N_t` in-circuit (`= N_{t-1} + #active`
+//! and `=` the mass of `S_t`) and, under the default binding, `θ_t = ⌊N_t/s⌋`
+//! from it (`bind_theta`, revision B6(d)); `Binding::Legacy` keeps the pre-fix
+//! free-`θ` circuit.
 //!
 //! ### Batch update
 //!
@@ -213,9 +216,11 @@ use p3_uni_stark::StarkGenericConfig;
 
 use crate::config::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config::ConfigWithFriParams;
+use crate::recursion::recursive::statement::{self, Expose, IndexPin};
 use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
+use crate::sketch::bind::{self, Binding};
 
 const LOG_FINAL_POLY_LEN: usize = 6;
 /// Rank-mass / uncertainty / timestamp range (`g, Δ, t < 2^24`), so the merge
@@ -343,13 +348,16 @@ fn resort_fixed(fused: &[GkbTuple]) -> (Vec<GkbTuple>, Vec<usize>) {
     (sorted, idx)
 }
 
+#[derive(Clone)]
 struct BmRound {
+    #[allow(dead_code)] // captured for reference; the circuit re-derives the decision from hints.
     decisions: Vec<u32>,
     fused: Vec<GkbTuple>,
     resorted: Vec<GkbTuple>,
     sigma: Vec<usize>,
 }
 
+#[derive(Clone)]
 struct BmBuild {
     sigma_union: Vec<usize>,
     union_raw: Vec<GkbTuple>,
@@ -395,6 +403,23 @@ fn build_bm(s_old: &GkbState, batch_vals: &[u32]) -> BmBuild {
     idx.sort_by_key(|&i| (combined[i].e, combined[i].t));
     let sigma_union = idx.clone();
     let union_raw: Vec<GkbTuple> = idx.iter().map(|&i| combined[i]).collect();
+    finish_bm(s_old, sigma_union, union_raw, n_prev, n_t, theta)
+}
+
+/// Everything after the union permute: neighbor-init, the `L_f` fuse/resort
+/// rounds and the compaction, replayed from a given `union_raw` (honestly the
+/// `(e,t)`-sorted union; a soundness test may hand in a forged one).
+fn finish_bm(
+    s_old: &GkbState,
+    sigma_union: Vec<usize>,
+    union_raw: Vec<GkbTuple>,
+    n_prev: u64,
+    n_t: u64,
+    theta: u64,
+) -> BmBuild {
+    let cap = s_old.params.capacity;
+    let m = s_old.params.batch;
+    let total = union_raw.len();
 
     // neighbor-init Δ for active fresh rows (right-to-left).
     let mut union_init = union_raw.clone();
@@ -483,17 +508,179 @@ fn force_nz(
     nz
 }
 
+// ── Fusion threshold θ_t = ⌊N_t / s⌋ (revision B6(d)) ────────────────────
+
+/// Largest threshold the in-circuit θ binding admits: `⌊(2^MASS_BITS − 1)/s⌋`,
+/// i.e. `θ` of any record count `N_t < 2^MASS_BITS` (the leaves' timestamp and
+/// mass range, so it is not a new completeness limit).
+pub(crate) fn theta_max(s: u64) -> u64 {
+    ((1u64 << MASS_BITS) - 1) / s
+}
+
+/// **Bind the fusion threshold to the record count**: constrain
+/// `θ = ⌊N_t / s⌋` in-circuit, from the in-circuit `N_t` (which the leaves
+/// already force to `N_{t-1} + #active(B_t)` and to the mass of the committed
+/// `S_t`). Before this, `θ` was a free public input read only by the fusion
+/// comparisons (`force_le(cond, sum, θ)`), so a prover could raise it and
+/// over-merge, breaking the `εN` rank guarantee (`tests::
+/// gk2_inflated_theta_legacy_accepts_semantic_rejects`).
+///
+/// With `r = N_t − θ·s` the gadget range-checks, all at `MASS_BITS`
+/// (byte-aligned, exact):
+/// * `r ∈ [0, 2^24)` and `s − 1 − r ∈ [0, 2^24)`, so `r + (s−1−r) = s − 1`
+///   holds over the integers (both `< 2^24`, the sum `< 2^25 < p`): `r ≤ s−1`;
+/// * `θ ∈ [0, 2^24)` and `θ_max − θ ∈ [0, 2^24)`: `θ ≤ θ_max = ⌊(2^24−1)/s⌋`.
+///
+/// Then `θ·s + r ≤ 2^24 − 1 + s − 1 < p`, so `N_t ≡ θ·s + r (mod p)` is an
+/// integer identity and `θ = ⌊N_t/s⌋`, `r = N_t mod s` are unique (the range
+/// checks also pin `θ` and `r` to the base field). Honest witnesses exist for
+/// every `N_t < 2^MASS_BITS`. Cost (`gk2_theta_bind_overhead`): 4 three-byte
+/// range checks, +3 constants and +16 ALU rows; padded trace rows unchanged at
+/// cap 16…256.
+///
+/// Generic over the field so the Goldilocks leaf
+/// ([`crate::sketch::gk_bandmerge_gl`]) shares it.
+pub(crate) fn bind_theta<BF, F>(b: &mut CircuitBuilder<F>, theta: ExprId, n_t: ExprId, s: u64)
+where
+    BF: p3_field::PrimeField64,
+    F: p3_field::ExtensionField<BF>,
+{
+    assert!(
+        (1..1u64 << MASS_BITS).contains(&s),
+        "GK accuracy s = {s} must lie in [1, 2^{MASS_BITS})"
+    );
+    let s_c = b.alloc_const(F::from_u64(s), "gk_s");
+    let s_m1 = b.alloc_const(F::from_u64(s - 1), "gk_s_minus_1");
+    let th_max = b.alloc_const(F::from_u64(theta_max(s)), "gk_theta_max");
+    let ts = b.mul(theta, s_c);
+    let r = b.sub(n_t, ts); // N_t − θ·s
+    b.add_range_bits::<BF>(r, MASS_BITS).expect("θ remainder ≥ 0");
+    let y = b.sub(s_m1, r); // s − 1 − r
+    b.add_range_bits::<BF>(y, MASS_BITS).expect("θ remainder < s");
+    b.add_range_bits::<BF>(theta, MASS_BITS).expect("θ ≥ 0");
+    let z = b.sub(th_max, theta); // θ_max − θ
+    b.add_range_bits::<BF>(z, MASS_BITS).expect("θ ≤ θ_max");
+}
+
 // ── Prover ───────────────────────────────────────────────────────────────
 
+// ── Op tags (shared-PermuteBus fix, revision Step 1) ──
+//
+// The fork concatenates every `add_permute` into ONE PermuteAir whose
+// PermuteBus message is the 4 value coordinates only (no op id), so it proves
+// only that the union of ALL permute inputs equals the union of ALL outputs.
+// With every op on the same `(e,g,Δ,t)` encoding a prover could move a tuple
+// out of one op and into another: e.g. a FRESH batch tuple leaves the union
+// output (a dummy takes its slot), skips neighbor-init and every fuse round,
+// and re-enters in the last round's resort output with its committed `Δ = 0`
+// (`tests::gkb_shared_bus_forgery_rejected`). The round-resort ops therefore
+// carry an op tag in the high bits of `t`: op `k` (0 = union, `r+1` = round
+// `r`'s resort) encodes `t' = t + k·2^MASS_BITS`. The fused (input) side is
+// built with the tag; the resorted (output) side is de-tagged and the de-tagged
+// `t` range-checked `< 2^MASS_BITS`, so every element of op `k` lies in
+// `[k·2^24, (k+1)·2^24)` and — the union's outputs being range-checked into
+// class 0 — per-class counting forces per-op multiset equality.
+
+/// Tag added to the `t` coordinate of every element of permute op `k`.
+fn gkb_op_tag(k: usize) -> u64 {
+    (k as u64) << MASS_BITS
+}
+
+/// Encode a one-sided tuple for permute op `k` (`t' = t + k·2^MASS_BITS`).
+fn enc_op(t: &GkbTuple, k: usize) -> Challenge {
+    use p3_field::BasedVectorSpace;
+    let coeffs = [
+        Val::from_u32(t.e),
+        Val::from_u32(t.g as u32),
+        Val::from_u32(t.delta as u32),
+        Val::from_u64(t.t + gkb_op_tag(k)),
+    ];
+    Challenge::from_basis_coefficients_slice(&coeffs).expect("4 base coeffs")
+}
+
+/// Pack a permuted table of op `k` (untagged when `op_tag` is off).
+fn pack_tuples_op(ts: &[GkbTuple], k: usize, op_tag: bool) -> Vec<Challenge> {
+    ts.iter()
+        .map(|t| if op_tag { enc_op(t, k) } else { enc(t) })
+        .collect()
+}
+
+/// Whether [`prove_gkb`] tags its round-resort permutes. Always on outside
+/// tests; the soundness PoC builds the pre-fix circuit.
+fn use_gkb_op_tag() -> bool {
+    #[cfg(test)]
+    if let Some(v) = GKB_OP_TAG.with(|c| c.get()) {
+        return v;
+    }
+    true
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override of [`use_gkb_op_tag`] (`Some(false)` = pre-fix circuit).
+    static GKB_OP_TAG: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// Test-only malicious prover: `(k, tuples)` makes permute op `k` emit
+    /// `tuples` (packed in op `k`'s encoding) instead of a permutation of its
+    /// inputs. Consumed by the next [`prove_gkb_build`].
+    static GKB_FORGE: std::cell::RefCell<Vec<(usize, Vec<GkbTuple>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Test-only: `Some((round, row))` packs that resorted row (permute output
+    /// AND private input) WITHOUT its op tag — a prover lying about the tag.
+    static GKB_UNTAG_ROW: std::cell::Cell<Option<(usize, usize)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// [`pack_tuples_op`] for a round's resorted table, honoring the test-only
+/// [`GKB_UNTAG_ROW`] override.
+fn pack_resorted_op(ts: &[GkbTuple], round: usize, op_tag: bool) -> Vec<Challenge> {
+    #[allow(unused_mut)]
+    let mut v = pack_tuples_op(ts, round + 1, op_tag);
+    #[cfg(test)]
+    if let Some((rd, row)) = GKB_UNTAG_ROW.with(|c| c.get())
+        && rd == round
+    {
+        v[row] = enc(&ts[row]);
+    }
+    v
+}
+
 pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32>) -> GkbLeafProof {
+    prove_gkb_with(params, initial_state, batch_vals, bind::default_binding())
+}
+
+/// [`prove_gkb`] with an explicit [`Binding`]. `Semantic` / `Bound` constrain
+/// the fusion threshold `θ = ⌊N_t/s⌋` in-circuit ([`bind_theta`]); `Legacy`
+/// is the pre-fix circuit, byte-for-byte, whose `θ` is a free public input
+/// (unsound: a prover may over-merge). The GK leaves have no in-circuit
+/// coefficient re-binding, so `Bound` builds the same circuit as `Semantic`.
+pub fn prove_gkb_with(
+    params: GkbParams,
+    initial_state: GkbState,
+    batch_vals: Vec<u32>,
+    binding: Binding,
+) -> GkbLeafProof {
+    assert!(batch_vals.len() <= params.batch);
+    // ── Native side: replay + commitments ──
+    let build = build_bm(&initial_state, &batch_vals);
+    prove_gkb_build(params, initial_state, batch_vals, &build, binding)
+}
+
+/// Build, run, prove and self-verify the one-sided circuit for a (honest or
+/// hand-crafted) band-merge witness.
+fn prove_gkb_build(
+    params: GkbParams,
+    initial_state: GkbState,
+    batch_vals: Vec<u32>,
+    build: &BmBuild,
+    binding: Binding,
+) -> GkbLeafProof {
     let cap = params.capacity;
     let m = params.batch;
     let total = cap + m;
     assert_eq!(total % 2, 0, "total = cap+m must be even");
     assert!(batch_vals.len() <= m);
+    let op_tag = use_gkb_op_tag();
 
-    // ── Native side: replay + commitments ──
-    let build = build_bm(&initial_state, &batch_vals);
     let final_state = GkbState {
         tuples: build.final_tuples.clone(),
         params,
@@ -504,6 +691,8 @@ pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32
     let batch_commit = commit_gkb_batch(&batch_vals, m, build.n_prev);
     let lf = num_rounds(total);
     let num_pairs = total / 2;
+    // Every tagged `t' < (lf+1)·2^MASS_BITS` stays below p (no class wrap).
+    assert!(gkb_op_tag(lf + 1) < 2_013_265_921, "too many rounds for the t-coordinate op tag");
 
     // ── Circuit ──
     let mut b = CircuitBuilder::<Challenge>::new();
@@ -512,6 +701,7 @@ pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    crate::recompose_binding::configure(&mut b);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
 
@@ -719,6 +909,8 @@ pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32
     // resorted table, which becomes `cur_f` for the next round.
     let mut cur_f: Vec<Vec<ExprId>> = uinit_f.clone();
     for round in 0..lf {
+        // Op tag of this round's resort permute (op `round + 1`).
+        let round_tag = b.alloc_const(Challenge::from_u64(gkb_op_tag(round + 1)), "gkb_op_tag");
         // this round's pre-resort fused table (private input, bound below).
         let fused_f: Vec<Vec<ExprId>> = fused_packed[round]
             .iter()
@@ -752,14 +944,17 @@ pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32
             b.connect(fused_f[2 * k][0], lo_e);
             b.connect(fused_f[2 * k][1], lo_g);
             b.connect(fused_f[2 * k][2], lo_d);
-            b.connect(fused_f[2 * k][3], lo_t);
+            // fused rows are this round-op's permute INPUT: t carries the op tag.
+            let lo_t_op = if op_tag { b.add(lo_t, round_tag) } else { lo_t };
+            b.connect(fused_f[2 * k][3], lo_t_op);
             // bind f_hi (row 2k+1) = (b.e, b.g + e·a.g, b.Δ, b.t)
             let eag = b.mul(e, a[1]);
             let hi_g = b.add(bb[1], eag);
             b.connect(fused_f[2 * k + 1][0], bb[0]);
             b.connect(fused_f[2 * k + 1][1], hi_g);
             b.connect(fused_f[2 * k + 1][2], bb[2]);
-            b.connect(fused_f[2 * k + 1][3], bb[3]);
+            let hi_t_op = if op_tag { b.add(bb[3], round_tag) } else { bb[3] };
+            b.connect(fused_f[2 * k + 1][3], hi_t_op);
         }
         // resort: PermuteAir(fused) == resorted[round]
         let perm = b
@@ -768,7 +963,18 @@ pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32
         for i in 0..total {
             b.connect(perm[i], resorted_packed[round][i]);
         }
-        // resorted range-checks + value sortedness (dummies E_MAX last).
+        // resorted range-checks + value sortedness (dummies E_MAX last). The
+        // resorted rows are the op's permute OUTPUT: de-tag t and range-check
+        // the de-tagged value, which pins every output into this op's class.
+        let rs_t: Vec<ExprId> = (0..total)
+            .map(|r| {
+                if op_tag {
+                    b.sub(resort_f[round][r][3], round_tag)
+                } else {
+                    resort_f[round][r][3]
+                }
+            })
+            .collect();
         for r in 0..total {
             let _ = b
                 .add_range_bits::<Val>(resort_f[round][r][0], E_BITS)
@@ -780,7 +986,7 @@ pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32
                 .add_range_bits::<Val>(resort_f[round][r][2], MASS_BITS)
                 .expect("rs Δ");
             let _ = b
-                .add_range_bits::<Val>(resort_f[round][r][3], MASS_BITS)
+                .add_range_bits::<Val>(rs_t[r], MASS_BITS)
                 .expect("rs t");
         }
         for r in 0..total - 1 {
@@ -789,7 +995,16 @@ pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32
                 .add_range_bits::<Val>(diff, E_BITS)
                 .expect("rs sortedness");
         }
-        cur_f = resort_f[round].clone();
+        cur_f = (0..total)
+            .map(|r| {
+                vec![
+                    resort_f[round][r][0],
+                    resort_f[round][r][1],
+                    resort_f[round][r][2],
+                    rs_t[r],
+                ]
+            })
+            .collect();
     }
 
     // ── Stage 7: compaction — final = cur[..cap], excess = cur[cap..] ──
@@ -854,8 +1069,24 @@ pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32
     }
     let np_plus_b = b.add(n_prev_pi, bsum);
     b.connect(np_plus_b, n_t_pi);
+    // θ = ⌊N_t/s⌋ from the in-circuit N_t (revision B6(d); appended last so
+    // the Legacy circuit is byte-for-byte the pre-fix one).
+    if binding.is_bound() {
+        bind_theta::<Val, Challenge>(&mut b, theta_pi, n_t_pi, params.s);
+    }
 
-    let circuit = b.build().expect("build gkb circuit");
+    #[allow(unused_mut)]
+    let mut circuit = b.build().expect("build gkb circuit");
+    // [test-only] malicious prover: swap in forged Permute outputs.
+    #[cfg(test)]
+    for (k, ts) in GKB_FORGE.with(|f| f.take()) {
+        let outs = if k == 0 {
+            pack_tuples_op(&ts, 0, op_tag)
+        } else {
+            pack_resorted_op(&ts, k - 1, op_tag)
+        };
+        crate::sketch::forge_permute::forge_permute_outputs(&mut circuit, k, outs);
+    }
 
     // ── Pack public + private ──
     let initial_commit_packed =
@@ -877,11 +1108,11 @@ pub fn prove_gkb(params: GkbParams, initial_state: GkbState, batch_vals: Vec<u32
     private_inputs.extend_from_slice(&pack_tuples(&final_state.tuples));
     private_inputs.extend_from_slice(&pack_tuples(&fresh_tuples(&batch_vals, m, build.n_prev)));
     private_inputs.extend_from_slice(&pack_tuples(&build.union_raw));
-    for round in &build.rounds {
-        private_inputs.extend_from_slice(&pack_tuples(&round.fused));
+    for (round, rd) in build.rounds.iter().enumerate() {
+        private_inputs.extend_from_slice(&pack_tuples_op(&rd.fused, round + 1, op_tag));
     }
-    for round in &build.rounds {
-        private_inputs.extend_from_slice(&pack_tuples(&round.resorted));
+    for (round, rd) in build.rounds.iter().enumerate() {
+        private_inputs.extend_from_slice(&pack_resorted_op(&rd.resorted, round, op_tag));
     }
     private_inputs.extend_from_slice(&pack_tuples(&build.excess));
     // is_fresh
@@ -1273,6 +1504,7 @@ fn fuse_round_fixed2(cur: &[Gk2Tuple], theta: u64) -> (Vec<Gk2Tuple>, Vec<u8>, V
     (fused, dirs, c1s, c2s)
 }
 
+#[derive(Clone)]
 struct Bm2Round {
     #[allow(dead_code)] // captured for reference; the circuit re-derives the direction from hints.
     dir: Vec<u8>,
@@ -1283,8 +1515,14 @@ struct Bm2Round {
     sigma: Vec<usize>,
 }
 
+#[derive(Clone)]
 struct Bm2Build {
+    /// Tuple-level union permutation: `union_raw[i] = combined[sigma_union[i]]`.
+    #[allow(dead_code)] // kept for reference; the circuit consumes `sigma_union_chal`.
     sigma_union: Vec<usize>,
+    /// Challenge-level union permutation actually installed in the Permute op
+    /// (honestly `expand_sigma(sigma_union)`; a soundness test may re-pair).
+    sigma_union_chal: Vec<usize>,
     union_raw: Vec<Gk2Tuple>,
     union_init: Vec<Gk2Tuple>,
     rounds: Vec<Bm2Round>,
@@ -1328,6 +1566,25 @@ fn build_bm2(s_old: &Gk2State, batch_vals: &[u32]) -> Bm2Build {
     idx.sort_by_key(|&i| (combined[i].e, combined[i].t));
     let sigma_union = idx.clone();
     let union_raw: Vec<Gk2Tuple> = idx.iter().map(|&i| combined[i]).collect();
+    let sigma_union_chal = expand_sigma(&sigma_union);
+    finish_bm2(s_old, sigma_union, sigma_union_chal, union_raw, n_prev, n_t, theta)
+}
+
+/// Everything after the union permute: neighbor-init, the `L_f` fuse/resort
+/// rounds and the compaction, replayed from a given `union_raw` (honestly the
+/// `(e,t)`-sorted union; a soundness test may hand in a forged one).
+fn finish_bm2(
+    s_old: &Gk2State,
+    sigma_union: Vec<usize>,
+    sigma_union_chal: Vec<usize>,
+    union_raw: Vec<Gk2Tuple>,
+    n_prev: u64,
+    n_t: u64,
+    theta: u64,
+) -> Bm2Build {
+    let cap = s_old.params.capacity;
+    let m = s_old.params.batch;
+    let total = union_raw.len();
 
     // two-sided neighbor-init: Δ₁ from the right (right-to-left), Δ₂ from the
     // left (left-to-right). A dummy neighbor has g=Δ=0 so contributes 0 (no gate
@@ -1376,6 +1633,7 @@ fn build_bm2(s_old: &Gk2State, batch_vals: &[u32]) -> Bm2Build {
     let excess = cur[cap..cap + m].to_vec();
     Bm2Build {
         sigma_union,
+        sigma_union_chal,
         union_raw,
         union_init,
         rounds,
@@ -1406,6 +1664,7 @@ pub fn gribelyuk_space_bound(n: u64, s: u64) -> usize {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// Per-record step witness for the naive replay.
+#[derive(Clone)]
 struct Naive2Step {
     /// `prev ‖ fresh`, sorted by `(e,t)`, fresh `Δ=0` (the permute output) —
     /// length `cap+1`.
@@ -1414,7 +1673,11 @@ struct Naive2Step {
     /// table the compress actually operates on; the circuit re-derives it).
     work_init: Vec<Gk2Tuple>,
     /// `work[j] = (prev ‖ fresh)[sigma_insert[j]]`.
+    #[allow(dead_code)] // kept for reference; the circuit consumes `sigma_insert_chal`.
     sigma_insert: Vec<usize>,
+    /// Challenge-level insert permutation actually installed in the Permute op
+    /// (honestly `expand_sigma(sigma_insert)`; a soundness test may re-pair).
+    sigma_insert_chal: Vec<usize>,
     /// The merged pair index (leftmost mergeable) when over capacity; else `cap`.
     merge_at: usize,
     /// Merge direction at `merge_at` (`0` none, `1` a→b, `2` b→a).
@@ -1428,6 +1691,7 @@ struct Naive2Step {
     theta: u64,
 }
 
+#[derive(Clone)]
 struct Naive2Build {
     /// Threaded states `S_0 … S_m`, each `cap` tuples.
     states: Vec<Vec<Gk2Tuple>>,
@@ -1460,9 +1724,16 @@ fn replay_step2(
     } else {
         n_before
     };
-    let theta = n_after / s;
-    // fresh singleton (or a dummy for a padding record).
-    let fresh = match val {
+    let mut combined = prev.to_vec();
+    combined.push(fresh_tuple2(val, n_after));
+    let (work, sigma_insert) = sort_by_et2(&combined);
+    let sigma_insert_chal = expand_sigma(&sigma_insert);
+    finish_step2(work, sigma_insert, sigma_insert_chal, cap, s, n_after, val.is_some())
+}
+
+/// The fresh singleton a record inserts (or a dummy for a padding record).
+fn fresh_tuple2(val: Option<u32>, n_after: u64) -> Gk2Tuple {
+    match val {
         Some(v) => Gk2Tuple {
             e: v,
             g: 0,
@@ -1473,14 +1744,25 @@ fn replay_step2(
             active: 1,
         },
         None => Gk2Tuple::dummy(),
-    };
-    let mut combined = prev.to_vec();
-    combined.push(fresh);
-    let (work, sigma_insert) = sort_by_et2(&combined);
+    }
+}
 
+/// Everything after the insert permute of one naive step (neighbor-init,
+/// two-sided compress, resort), replayed from a given `work` table (honestly
+/// the `(e,t)`-sorted `prev ‖ fresh`; a soundness test may hand in a forged one).
+fn finish_step2(
+    work: Vec<Gk2Tuple>,
+    sigma_insert: Vec<usize>,
+    sigma_insert_chal: Vec<usize>,
+    cap: usize,
+    s: u64,
+    n_after: u64,
+    has_val: bool,
+) -> (Naive2Step, Vec<Gk2Tuple>) {
+    let theta = n_after / s;
     // neighbor-init the fresh tuple (the one with t == n_after, if active).
     let mut work_init = work.clone();
-    if val.is_some() {
+    if has_val {
         let p = work_init
             .iter()
             .position(|t| t.active == 1 && t.t == n_after)
@@ -1528,6 +1810,7 @@ fn replay_step2(
             work,
             work_init,
             sigma_insert,
+            sigma_insert_chal,
             merge_at,
             dir,
             fused,
@@ -1586,17 +1869,69 @@ pub fn apply_batch2_naive(s_old: &Gk2State, batch_vals: &[u32]) -> Gk2State {
 /// insert + two-sided compress in-circuit — the `Θ(m·cap)` strawman baseline.
 /// Binds the same `commit_gk2_state`/`commit_gk2_batch`. Per-step public scalars
 /// `theta_k = ⌊N_k/s⌋` and `n_before_k`.
+///
+/// **Open gap (revision B6(d), not fixed here).** Unlike the certified leaves
+/// ([`build_gkb2_leaf_expose_with`], [`prove_gkb_with`]), this baseline
+/// constrains neither `theta_k` nor `n_before_k`: there is no count/mass
+/// binding to derive them from, so both are free public inputs (a prover can
+/// over-merge or corrupt the `is_fresh` gate). It is a cost baseline only; as
+/// a proof it is unsound, and it is marginally cheaper than a sound replay
+/// would be (so the certified-vs-naive ratio is, if anything, understated).
+/// It ignores `ZKSKETCH_BINDING`.
 pub fn prove_gkb2_naive(
     params: GkbParams,
     initial_state: Gk2State,
     batch_vals: Vec<u32>,
 ) -> Gk2LeafProof {
+    assert!(batch_vals.len() <= params.batch);
+    let build = replay_batch2(&initial_state, &batch_vals);
+    prove_gkb2_naive_build(params, initial_state, batch_vals, &build)
+}
+
+/// Source bits of the naive replay's source-bound layout: `⌈log₂(cap+1)⌉`
+/// (its `2m` permute ops need the rest of the coordinate for op ids).
+fn naive2_src_bits(work_len: usize) -> usize {
+    ((usize::BITS - (work_len - 1).leading_zeros()) as usize).max(1)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only malicious prover: `(k, outputs)` makes permute op `k` of the
+    /// naive replay emit `outputs` (raw challenges). Consumed by the next
+    /// [`prove_gkb2_naive_build`].
+    static NAIVE2_FORGE: std::cell::RefCell<Vec<(usize, Vec<Challenge>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Build, run, prove and self-verify the naive replay circuit for a (honest or
+/// hand-crafted) replay witness.
+///
+/// **Source-bound permutes (revision Step 1, 2026-09-24).** The `2m` per-record
+/// permutes (insert = op `2k`, resort = op `2k+1`) share ONE PermuteBus with no
+/// op id, and each tuple is two challenges, so the committed layout let a prover
+/// re-pair tuple halves inside an op (give a fresh value an old timestamp so it
+/// skips neighbor-init — `tests::gk2_naive_half_repairing_forgery_rejected`,
+/// accepted before this fix) and trade halves between records. Every permuted
+/// table therefore uses [`build_gkb2_leaf`]'s source-bound layout
+/// (`bind_coord_w`, with `⌈log₂(cap+1)⌉` source bits): each output tuple is
+/// exactly one input tuple of the same op.
+fn prove_gkb2_naive_build(
+    params: GkbParams,
+    initial_state: Gk2State,
+    batch_vals: Vec<u32>,
+    build: &Naive2Build,
+) -> Gk2LeafProof {
     let cap = params.capacity;
     let m = params.batch;
     let work_len = cap + 1;
     assert!(batch_vals.len() <= m);
+    let pair_bind = use_pair_bind();
+    let sb = naive2_src_bits(work_len);
+    assert!(
+        bind_coord_w(2 * m, 1, (1 << sb) - 1, sb) < 2_013_265_921,
+        "naive source-bound layout: too many records for the op-id range"
+    );
 
-    let build = replay_batch2(&initial_state, &batch_vals);
     let final_state = Gk2State {
         tuples: build.states[m].clone(),
         params,
@@ -1612,6 +1947,7 @@ pub fn prove_gkb2_naive(
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    crate::recompose_binding::configure(&mut b);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
 
@@ -1753,20 +2089,28 @@ pub fn prove_gkb2_naive(
     }
 
     // ── Stage 3: every threaded state is a well-formed value-sorted summary ──
+    // `bind_op = Some(k)`: `f` is the OUTPUT of permute op `k` in the
+    // source-bound layout (read with `fld6b`, halves bound to one source);
+    // `None`: a committed-layout table (pads pinned to 0).
     let range_and_sort = |b: &mut CircuitBuilder<Challenge>,
                           f: &[Vec<ExprId>],
                           n: usize,
-                          de_inv: Option<&[ExprId]>| {
+                          de_inv: Option<&[ExprId]>,
+                          bind_op: Option<usize>| {
         for r in 0..n {
-            let fl = fld6(f, r);
+            let fl = if bind_op.is_some() { fld6b(f, r) } else { fld6(f, r) };
             let _ = b.add_range_bits::<Val>(fl[0], E_BITS).expect("e");
             let _ = b.add_range_bits::<Val>(fl[1], MASS_BITS).expect("g1");
             let _ = b.add_range_bits::<Val>(fl[2], MASS_BITS).expect("g2");
             let _ = b.add_range_bits::<Val>(fl[3], MASS_BITS).expect("d1");
             let _ = b.add_range_bits::<Val>(fl[4], MASS_BITS).expect("d2");
             let _ = b.add_range_bits::<Val>(fl[5], MASS_BITS).expect("t");
-            b.connect(f[2 * r + 1][2], zero);
-            b.connect(f[2 * r + 1][3], zero);
+            if let Some(k) = bind_op {
+                bind_output_pair_w(b, f, r, k, sb);
+            } else {
+                b.connect(f[2 * r + 1][2], zero);
+                b.connect(f[2 * r + 1][3], zero);
+            }
         }
         for r in 0..n - 1 {
             let diff = b.sub(f[2 * (r + 1)][0], f[2 * r][0]);
@@ -1781,22 +2125,65 @@ pub fn prove_gkb2_naive(
         }
     };
     for t in 0..=m {
-        range_and_sort(&mut b, &state_f[t], cap, None);
+        range_and_sort(&mut b, &state_f[t], cap, None, None);
     }
 
     // ── Stage 4: per-record transition state[k] → state[k+1] ──
     for k in 0..m {
-        // 4.1 insert: work = permute(state[k] ‖ batch[k]).
-        let mut combined: Vec<ExprId> = state_packed[k].clone();
-        combined.push(batch_packed[2 * k]);
-        combined.push(batch_packed[2 * k + 1]);
+        // 4.1 insert: work = permute(state[k] ‖ batch[k]) (op 2k).
+        let combined: Vec<ExprId> = if pair_bind {
+            // Source-bound INPUT: tuple i of state[k] ‖ batch[k] re-encoded as
+            // lo=(e,g₁,g₂,B(2k,0,i)), hi=(Δ₂,t,Δ₁,B(2k,1,i)) from its committed
+            // coefficients (committed pads are pinned to 0: states by Stage 3,
+            // the batch by its well-formedness above).
+            let mut c = Vec::with_capacity(2 * work_len);
+            for i in 0..work_len {
+                let f: &[Vec<ExprId>] = if i < cap {
+                    &state_f[k][2 * i..2 * i + 2]
+                } else {
+                    &batch_f[2 * k..2 * k + 2]
+                };
+                let b_lo = b.alloc_const(
+                    Challenge::from_u64(bind_coord_w(2 * k, 0, i, sb)),
+                    "bind_lo",
+                );
+                let b_hi = b.alloc_const(
+                    Challenge::from_u64(bind_coord_w(2 * k, 1, i, sb)),
+                    "bind_hi",
+                );
+                let lo = b
+                    .recompose_base_coeffs_to_ext_via_alu::<Val>(&[f[0][0], f[0][1], f[0][2], b_lo])
+                    .expect("bound lo");
+                let hi = b
+                    .recompose_base_coeffs_to_ext_via_alu::<Val>(&[f[1][0], f[1][1], f[0][3], b_hi])
+                    .expect("bound hi");
+                c.push(lo);
+                c.push(hi);
+            }
+            c
+        } else {
+            let mut c: Vec<ExprId> = state_packed[k].clone();
+            c.push(batch_packed[2 * k]);
+            c.push(batch_packed[2 * k + 1]);
+            c
+        };
         let perm = b
-            .add_permute(&combined, expand_sigma(&build.steps[k].sigma_insert))
+            .add_permute(&combined, build.steps[k].sigma_insert_chal.clone())
             .expect("permute insert");
         for i in 0..2 * work_len {
             b.connect(perm[i], work_packed[k][i]);
         }
-        range_and_sort(&mut b, &work_f[k], work_len, Some(&de_inv_work[k]));
+        let bind_ins = pair_bind.then_some(2 * k);
+        let bind_rs = pair_bind.then_some(2 * k + 1);
+        range_and_sort(&mut b, &work_f[k], work_len, Some(&de_inv_work[k]), bind_ins);
+        // Δ₁ of work row r (committed layout: lo[3]; source-bound: hi[2]).
+        let work_d1 = |r: usize| -> ExprId {
+            if pair_bind {
+                work_f[k][2 * r + 1][2]
+            } else {
+                work_f[k][2 * r][3]
+            }
+        };
 
         // 4.2 neighbor-init the fresh row → work_init (fresh Δ set two-sided).
         // is_fresh[r] = [t_r > n_before_k] = [n_before_k + 1 ≤ t_r].
@@ -1821,7 +2208,7 @@ pub fn prove_gkb2_naive(
             };
             let fp = b.mul(is_fresh[k][r], base);
             let omf = b.sub(one, is_fresh[k][r]);
-            let op = b.mul(omf, work_f[k][2 * r][3]);
+            let op = b.mul(omf, work_d1(r));
             d1[r] = b.add(fp, op);
         }
         let mut d2: Vec<ExprId> = vec![zero; work_len];
@@ -1968,16 +2355,33 @@ pub fn prove_gkb2_naive(
                 let keep_term = b.mul(keep, wi[pos][c]);
                 let s = b.add(lo_term, hi_term);
                 let val = b.add(s, keep_term);
-                // map field c → (challenge, coeff): 0..3 → lo[c], 4 → hi[0], 5 → hi[1].
-                let (ci, co) = if c < 4 {
+                // map field c → (challenge, coeff): 0..3 → lo[c], 4 → hi[0],
+                // 5 → hi[1]; the source-bound layout moves Δ₁ (c = 3) to hi[2].
+                let (ci, co) = if pair_bind && c == 3 {
+                    (2 * pos + 1, 2)
+                } else if c < 4 {
                     (2 * pos, c)
                 } else {
                     (2 * pos + 1, c - 4)
                 };
                 b.connect(fused_f[ci][co], val);
             }
-            b.connect(fused_f[2 * pos + 1][2], zero);
-            b.connect(fused_f[2 * pos + 1][3], zero);
+            if pair_bind {
+                // fused = resort op 2k+1's INPUT: bind to input position `pos`.
+                let b_lo = b.alloc_const(
+                    Challenge::from_u64(bind_coord_w(2 * k + 1, 0, pos, sb)),
+                    "bind_lo",
+                );
+                let b_hi = b.alloc_const(
+                    Challenge::from_u64(bind_coord_w(2 * k + 1, 1, pos, sb)),
+                    "bind_hi",
+                );
+                b.connect(fused_f[2 * pos][3], b_lo);
+                b.connect(fused_f[2 * pos + 1][3], b_hi);
+            } else {
+                b.connect(fused_f[2 * pos + 1][2], zero);
+                b.connect(fused_f[2 * pos + 1][3], zero);
+            }
         }
         // 4.4 resort: resorted = permute(fused); range+sort+tiebreak.
         let permr = b
@@ -1986,18 +2390,28 @@ pub fn prove_gkb2_naive(
         for i in 0..2 * work_len {
             b.connect(permr[i], resorted_packed[k][i]);
         }
-        range_and_sort(&mut b, &resort_f[k], work_len, Some(&de_inv_rs[k]));
+        range_and_sort(&mut b, &resort_f[k], work_len, Some(&de_inv_rs[k]), bind_rs);
         // 4.5 next state = resorted[..cap].
         for r in 0..cap {
             let sf = fld6(&state_f[k + 1], r);
-            let rf = fld6(&resort_f[k], r);
+            let rf = if pair_bind {
+                fld6b(&resort_f[k], r)
+            } else {
+                fld6(&resort_f[k], r)
+            };
             for c in 0..6 {
                 b.connect(sf[c], rf[c]);
             }
         }
     }
 
-    let circuit = b.build().expect("build gkb2_naive circuit");
+    #[allow(unused_mut)]
+    let mut circuit = b.build().expect("build gkb2_naive circuit");
+    // [test-only] malicious prover: swap in forged Permute outputs.
+    #[cfg(test)]
+    for (k, outs) in NAIVE2_FORGE.with(|f| f.take()) {
+        crate::sketch::forge_permute::forge_permute_outputs(&mut circuit, k, outs);
+    }
 
     // ── Pack public + private ──
     let ip = pack_commit_to_challenge(&crate::commitment::CountMinCommit(initial_commit.0));
@@ -2026,14 +2440,19 @@ pub fn prove_gkb2_naive(
         private_inputs.extend_from_slice(&pack_tuples2(st));
     }
     private_inputs.extend_from_slice(&pack_tuples2(&fresh_tuples2(&batch_vals, m, build.n_prev)));
-    for step in &build.steps {
-        private_inputs.extend_from_slice(&pack_tuples2(&step.work));
+    for (k, step) in build.steps.iter().enumerate() {
+        private_inputs.extend_from_slice(&naive2_pack_work(step, k, pair_bind, sb));
     }
-    for step in &build.steps {
-        private_inputs.extend_from_slice(&pack_tuples2(&step.fused));
+    let identity: Vec<usize> = (0..work_len).collect();
+    for (k, step) in build.steps.iter().enumerate() {
+        private_inputs.extend_from_slice(&if pair_bind {
+            pack_bound2_w(&step.fused, 2 * k + 1, &identity, &identity, sb)
+        } else {
+            pack_tuples2(&step.fused)
+        });
     }
-    for step in &build.steps {
-        private_inputs.extend_from_slice(&pack_tuples2(&step.resorted));
+    for (k, step) in build.steps.iter().enumerate() {
+        private_inputs.extend_from_slice(&naive2_pack_resorted(step, k, pair_bind, sb));
     }
     {
         use p3_field::Field;
@@ -2181,6 +2600,26 @@ pub fn prove_gkb2_naive(
     }
 }
 
+/// Pack step `k`'s `work` table (insert op `2k`'s OUTPUT): output halves name
+/// the input position the challenge-level σ took them from.
+fn naive2_pack_work(step: &Naive2Step, k: usize, pair_bind: bool, sb: usize) -> Vec<Challenge> {
+    if !pair_bind {
+        return pack_tuples2(&step.work);
+    }
+    let n = step.work.len();
+    let src_lo: Vec<usize> = (0..n).map(|r| step.sigma_insert_chal[2 * r] / 2).collect();
+    let src_hi: Vec<usize> = (0..n).map(|r| step.sigma_insert_chal[2 * r + 1] / 2).collect();
+    pack_bound2_w(&step.work, 2 * k, &src_lo, &src_hi, sb)
+}
+
+/// Pack step `k`'s `resorted` table (resort op `2k+1`'s OUTPUT).
+fn naive2_pack_resorted(step: &Naive2Step, k: usize, pair_bind: bool, sb: usize) -> Vec<Challenge> {
+    if !pair_bind {
+        return pack_tuples2(&step.resorted);
+    }
+    pack_bound2_w(&step.resorted, 2 * k + 1, &step.sigma_resort, &step.sigma_resort, sb)
+}
+
 /// Prove one naive two-sided replay epoch from empty, returning proof + state.
 pub fn generate_proof2_naive(params: GkbParams, batch_vals: Vec<u32>) -> Gk2Proof {
     let initial_state = Gk2State::empty(params);
@@ -2315,12 +2754,194 @@ fn fld6(f: &[Vec<ExprId>], r: usize) -> [ExprId; 6] {
     ]
 }
 
+// ── Source-bound permute layout (tuple-half re-pairing + shared-bus fix) ──
+//
+// The fork's PermuteAir proves only that the multiset of ALL permute-input
+// challenges equals the multiset of ALL permute-output challenges (one
+// PermuteBus, no op id), and each tuple is two challenges. With the committed
+// layout lo=(e,g₁,g₂,Δ₁), hi=(Δ₂,t,0,0) a prover can re-pair halves across
+// tuples inside one permute (and trade halves between permutes), e.g. give a
+// fresh value an old timestamp so it skips neighbor-init
+// (`tests::gk2_half_repairing_forgery_rejected`). The permuted tables
+// (union_raw, fused, resorted) therefore use a SOURCE-BOUND layout:
+//     lo = (e, g₁, g₂, B(k,0,i))      hi = (Δ₂, t, Δ₁, B(k,1,i))
+// where `i` is the tuple's position in the INPUT of permute op `k` (0 = union,
+// r+1 = round r's resort) and B(k,h,i) = i + (2k+h+1)·2^SRC_BITS. Every input
+// element is thus unique and names (op, half, source). On the output side the
+// circuit forces lo[3] = src + B(k,0,0), hi[3] = src + B(k,1,0) with the SAME
+// range-checked `src < 2^SRC_BITS`, so each output tuple is exactly one input
+// tuple of the same op (a bijection) — no re-pairing, no cross-op trading.
+// Committed tables (init/final/batch/excess) keep the committed layout.
+
+/// Bits reserved for a tuple's source position in the source-bound layout.
+const SRC_BITS: usize = 20;
+
+/// Binding coordinate of half `h` (0 = lo, 1 = hi) of the tuple at input
+/// position `i` of permute op `k`.
+fn bind_coord(k: usize, h: usize, i: usize) -> u64 {
+    bind_coord_w(k, h, i, SRC_BITS)
+}
+
+/// [`bind_coord`] with `src_bits` reserved for the source position (the naive
+/// replay, whose op count grows with the batch, uses `⌈log₂(cap+1)⌉`).
+fn bind_coord_w(k: usize, h: usize, i: usize, src_bits: usize) -> u64 {
+    i as u64 + (((2 * k + h + 1) as u64) << src_bits)
+}
+
+fn check_bind_range(total: usize, lf: usize) {
+    assert!(
+        total <= 1 << SRC_BITS,
+        "source-bound layout supports cap+m ≤ 2^{SRC_BITS}"
+    );
+    // Every binding coordinate stays below p (no wrap between op ranges).
+    assert!(bind_coord(lf, 1, (1 << SRC_BITS) - 1) < 2_013_265_921);
+}
+
+/// Read tuple `r`'s six fields `[e, g₁, g₂, Δ₁, Δ₂, t]` from a SOURCE-BOUND
+/// table (`f[2r]` = `[e,g₁,g₂,B_lo]`, `f[2r+1]` = `[Δ₂,t,Δ₁,B_hi]`).
+fn fld6b(f: &[Vec<ExprId>], r: usize) -> [ExprId; 6] {
+    [
+        f[2 * r][0],
+        f[2 * r][1],
+        f[2 * r][2],
+        f[2 * r + 1][2],
+        f[2 * r + 1][0],
+        f[2 * r + 1][1],
+    ]
+}
+
+/// Output-side binding for tuple `r` of permute op `k`: both halves name the
+/// same source, `lo[3] = src + B(k,0,0)`, `hi[3] − lo[3] = 2^SRC_BITS`,
+/// `src < 2^SRC_BITS`.
+fn bind_output_pair(b: &mut CircuitBuilder<Challenge>, f: &[Vec<ExprId>], r: usize, k: usize) {
+    bind_output_pair_w(b, f, r, k, SRC_BITS);
+}
+
+/// [`bind_output_pair`] with `src_bits` source bits (see [`bind_coord_w`]).
+fn bind_output_pair_w(
+    b: &mut CircuitBuilder<Challenge>,
+    f: &[Vec<ExprId>],
+    r: usize,
+    k: usize,
+    src_bits: usize,
+) {
+    let base_lo = b.alloc_const(
+        Challenge::from_u64(bind_coord_w(k, 0, 0, src_bits)),
+        "bind_base_lo",
+    );
+    let gap = b.alloc_const(
+        Challenge::from_u64(bind_coord_w(k, 1, 0, src_bits) - bind_coord_w(k, 0, 0, src_bits)),
+        "bind_gap",
+    );
+    let src = b.sub(f[2 * r][3], base_lo);
+    let _ = b
+        .add_range_bits::<Val>(src, src_bits)
+        .expect("bind src range");
+    let d = b.sub(f[2 * r + 1][3], f[2 * r][3]);
+    b.connect(d, gap);
+}
+
+/// Connect fused tuple `p` of round-op `k` (a permute INPUT) to its computed
+/// fields `v = [e, g₁, g₂, Δ₁, Δ₂, t]` in the table's layout.
+fn connect_fused(
+    b: &mut CircuitBuilder<Challenge>,
+    fused_f: &[Vec<ExprId>],
+    p: usize,
+    v: [ExprId; 6],
+    pair_bind: bool,
+    k: usize,
+    zero: ExprId,
+) {
+    connect_fused_w(b, fused_f, p, v, pair_bind, k, zero, SRC_BITS);
+}
+
+/// [`connect_fused`] with `src_bits` source bits (see [`bind_coord_w`]).
+#[allow(clippy::too_many_arguments)]
+fn connect_fused_w(
+    b: &mut CircuitBuilder<Challenge>,
+    fused_f: &[Vec<ExprId>],
+    p: usize,
+    v: [ExprId; 6],
+    pair_bind: bool,
+    k: usize,
+    zero: ExprId,
+    src_bits: usize,
+) {
+    b.connect(fused_f[2 * p][0], v[0]);
+    b.connect(fused_f[2 * p][1], v[1]);
+    b.connect(fused_f[2 * p][2], v[2]);
+    b.connect(fused_f[2 * p + 1][0], v[4]);
+    b.connect(fused_f[2 * p + 1][1], v[5]);
+    if pair_bind {
+        let b_lo = b.alloc_const(Challenge::from_u64(bind_coord_w(k, 0, p, src_bits)), "bind_lo");
+        let b_hi = b.alloc_const(Challenge::from_u64(bind_coord_w(k, 1, p, src_bits)), "bind_hi");
+        b.connect(fused_f[2 * p][3], b_lo);
+        b.connect(fused_f[2 * p + 1][2], v[3]);
+        b.connect(fused_f[2 * p + 1][3], b_hi);
+    } else {
+        b.connect(fused_f[2 * p][3], v[3]);
+        b.connect(fused_f[2 * p + 1][2], zero);
+        b.connect(fused_f[2 * p + 1][3], zero);
+    }
+}
+
+/// Pack a permuted table in the source-bound layout; `src_lo[r]`/`src_hi[r]`
+/// are the input positions the output tuple's lo/hi halves came from (equal
+/// for an honest prover; the input tables use `src = r`).
+fn pack_bound2(ts: &[Gk2Tuple], k: usize, src_lo: &[usize], src_hi: &[usize]) -> Vec<Challenge> {
+    pack_bound2_w(ts, k, src_lo, src_hi, SRC_BITS)
+}
+
+/// [`pack_bound2`] with `src_bits` source bits (see [`bind_coord_w`]).
+fn pack_bound2_w(
+    ts: &[Gk2Tuple],
+    k: usize,
+    src_lo: &[usize],
+    src_hi: &[usize],
+    src_bits: usize,
+) -> Vec<Challenge> {
+    use p3_field::BasedVectorSpace;
+    ts.iter()
+        .enumerate()
+        .flat_map(|(r, t)| {
+            let lo = [
+                Val::from_u32(t.e),
+                Val::from_u32(t.g as u32),
+                Val::from_u32(t.g_o as u32),
+                Val::from_u64(bind_coord_w(k, 0, src_lo[r], src_bits)),
+            ];
+            let hi = [
+                Val::from_u32(t.delta_o as u32),
+                Val::from_u32(t.t as u32),
+                Val::from_u32(t.delta as u32),
+                Val::from_u64(bind_coord_w(k, 1, src_hi[r], src_bits)),
+            ];
+            [
+                Challenge::from_basis_coefficients_slice(&lo).expect("4 lo coeffs"),
+                Challenge::from_basis_coefficients_slice(&hi).expect("4 hi coeffs"),
+            ]
+        })
+        .collect()
+}
+
+/// Whether [`build_gkb2_leaf`] uses the source-bound layout. Always on
+/// outside tests.
+fn use_pair_bind() -> bool {
+    #[cfg(test)]
+    if let Some(v) = PAIR_BIND.with(|c| c.get()) {
+        return v;
+    }
+    true
+}
+
 #[cfg(test)]
 thread_local! {
     /// Test-only tamper: override the public `N_prev` fed to the circuit while
     /// keeping the honest witness, to PoC-verify audit fix #3. Thread-local, so
     /// it is isolated per test thread (parallel-safe).
     static TAMPER_NPREV: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// Test-only override of [`use_pair_bind`] (`Some(false)` = pre-fix layout).
+    static PAIR_BIND: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// The two-sided band-merge transition circuit.
@@ -2335,13 +2956,28 @@ thread_local! {
 /// forced-decision arithmetic (lt/cond/active → dir1/dir2, survivor updates) was
 /// verified canonical.
 ///
-/// Two residual assumptions remain, **shared with the one-sided `prove_gkb`** and
-/// standard for these leaves: (i) the threshold `θ` is a public input assumed to
-/// equal `⌊N_t/s⌋` (cross-checked by the streaming-forest log, not in-circuit);
-/// (ii) the Stage-8 mass sum `Σ(g₁+g₂)` is a field add that could wrap `p` only
-/// for a *crafted* init with `Θ(cap)` maximal `g` values — unreachable in the
-/// chained forest, whose init is the prior canonical state (mass conserved from
-/// an empty epoch 1).
+/// **Tuple-half re-pairing (revision Step 1, 2026-09-24).** Each tuple is two
+/// permuted challenges and the fork's PermuteBus is shared by all permutes with
+/// no op id, so the committed layout let a prover re-pair lo/hi halves (and
+/// trade halves between permutes): swapping the hi halves of an old and a fresh
+/// tuple was ACCEPTED and broke the rank guarantee
+/// (`gk2_half_repairing_forgery_rejected`). The permuted tables now use the
+/// source-bound layout (see `bind_coord`), which forces every output tuple to be
+/// exactly one input tuple of the same op.
+///
+/// **Threshold (revision B6(d), 2026-09-24).** The threshold `θ` used to be a
+/// free public input "assumed to equal `⌊N_t/s⌋` (cross-checked by the
+/// streaming-forest log)"; nothing checked it, and an inflated `θ` over-merged
+/// and was ACCEPTED (`gk2_inflated_theta_legacy_accepts_semantic_rejects`).
+/// Under the default binding the circuit now forces `θ = ⌊N_t/s⌋` from the
+/// in-circuit `N_t` ([`bind_theta`]); `Binding::Legacy` keeps the pre-fix
+/// circuit for side-by-side runs.
+///
+/// One residual assumption remains, **shared with the one-sided `prove_gkb`**
+/// and standard for these leaves: the Stage-8 mass sum `Σ(g₁+g₂)` is a field
+/// add that could wrap `p` only for a *crafted* init with `Θ(cap)` maximal `g`
+/// values — unreachable in the chained forest, whose init is the prior
+/// canonical state (mass conserved from an empty epoch 1).
 pub fn prove_gkb2(
     params: GkbParams,
     initial_state: Gk2State,
@@ -2376,16 +3012,65 @@ pub struct Gkb2LeafCircuit {
     prover: BatchStarkProver<ConfigWithFriParams>,
     circuit_prover_data: Rc<CircuitProverData<ConfigWithFriParams>>,
     trace_rows: u64,
+    /// Whether the permuted tables use the source-bound layout
+    /// ([`pack_bound2`]; the tuple-half re-pairing + shared-PermuteBus fix).
+    /// Always `true` outside tests; the soundness PoC builds the pre-fix circuit.
+    pair_bind: bool,
+    /// The composition statement this leaf exposes.
+    expose: Expose,
+    /// Batch index `t` of the next proof (Interval statement only).
+    batch_index: u64,
 }
 
 /// Build the reusable GK band-merge leaf circuit for a shape.
 pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCircuit {
+    build_gkb2_leaf_expose(params, Expose::from_bool(expose_boundary))
+}
+
+/// Build the reusable GK band-merge leaf circuit with an explicit composition
+/// statement ([`Expose`]); `None` / `Boundary` are byte-for-byte
+/// [`build_gkb2_leaf`], `Interval` adds the batch index `t` (last public
+/// input, after `n_t`) and exposes `(init, final, (t, t, 0, 0), H)` with
+/// `H = Poseidon2(TAG_LEAF, t, Com(B_t))` over the in-circuit batch digest.
+/// Uses the process-default [`Binding`] ([`bind::default_binding`]); see
+/// [`build_gkb2_leaf_expose_with`].
+pub fn build_gkb2_leaf_expose(params: GkbParams, expose: Expose) -> Gkb2LeafCircuit {
+    build_gkb2_leaf_expose_with(params, expose, bind::default_binding())
+}
+
+/// [`build_gkb2_leaf_expose`] with an explicit [`Binding`].
+///
+/// `Semantic` / `Bound` constrain the fusion threshold `θ = ⌊N_t/s⌋`
+/// in-circuit ([`bind_theta`], revision B6(d)). `Legacy` is the pre-fix
+/// circuit, byte-for-byte: its `θ` is a free public input, so a prover can
+/// over-merge (`tests::gk2_inflated_theta_legacy_accepts_semantic_rejects`).
+/// The GK leaf has no in-circuit coefficient re-binding (it relies on the
+/// merged fork's `recompose/coeff` binding), so `Bound` builds the same
+/// circuit as `Semantic`.
+///
+/// **Statement.** `θ`, `N_{t-1}` and `N_t` stay unexposed public inputs (not
+/// statement values): the circuit forces `N_t = mass(S_t)` (Stage 8) and
+/// `N_t = N_{t-1} + #active(B_t)`, and conservation through the union, the
+/// fusion rounds and the compaction then forces `N_{t-1} = mass(S_{t-1})`.
+/// All three are therefore functions of the exposed `Com(S_{t-1})`,
+/// `Com(S_t)` (and the batch `Com(B_t)` the interval digest binds), and the
+/// merge's `left.final == right.init` check already chains `N` between
+/// adjacent leaves. Exposing them would add no binding the verifier could
+/// check against the log.
+pub fn build_gkb2_leaf_expose_with(
+    params: GkbParams,
+    expose: Expose,
+    binding: Binding,
+) -> Gkb2LeafCircuit {
+    let expose_boundary = expose == Expose::Boundary;
     let cap = params.capacity;
     let m = params.batch;
     let total = cap + m;
     assert_eq!(total % 2, 0, "total = cap+m must be even");
     let lf = num_rounds(total);
     let num_pairs = total / 2;
+    let pair_bind = use_pair_bind();
+    check_bind_range(total, lf);
 
     // ── Circuit ──
     let mut b = CircuitBuilder::<Challenge>::new();
@@ -2394,9 +3079,10 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    crate::recompose_binding::configure(&mut b);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
-    if expose_boundary {
+    if expose.exposes() {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
 
@@ -2527,12 +3213,26 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
     for i in 0..DIGEST_PACKING {
         b.connect(h_batch[i], batch_pis[i]);
     }
+    // Interval statement (B6(b)): batch index t (10th public input, after
+    // n_t) and H = Poseidon2(TAG_LEAF, t, h_batch), exposed with the boundary.
+    if expose.is_interval() {
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b,
+            &Poseidon2Config::BABY_BEAR_D4_W16,
+            &init_pis,
+            &final_pis,
+            &h_batch,
+            zero,
+            crate::sketch::bind::Binding::Semantic,
+            IndexPin::Range,
+        );
+    }
 
     // ── Stage 2: decompose ──
     let dec = |b: &mut CircuitBuilder<Challenge>, p: ExprId| -> Vec<ExprId> {
         b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose")
     };
-    let _init_f: Vec<Vec<ExprId>> = init_packed.iter().map(|&p| dec(&mut b, p)).collect();
+    let init_f: Vec<Vec<ExprId>> = init_packed.iter().map(|&p| dec(&mut b, p)).collect();
     let final_f: Vec<Vec<ExprId>> = final_packed.iter().map(|&p| dec(&mut b, p)).collect();
     let batch_f: Vec<Vec<ExprId>> = batch_packed.iter().map(|&p| dec(&mut b, p)).collect();
     let uraw_f: Vec<Vec<ExprId>> = union_raw_packed.iter().map(|&p| dec(&mut b, p)).collect();
@@ -2554,6 +3254,34 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
     }
     let mut combined: Vec<ExprId> = init_packed.clone();
     combined.extend(batch_packed.iter().copied());
+    if pair_bind {
+        // Source-bound union INPUT: tuple i of init ‖ batch is re-encoded as
+        // lo=(e,g₁,g₂,B(0,0,i)), hi=(Δ₂,t,Δ₁,B(0,1,i)) from the committed
+        // coefficients (committed layout lo=(e,g₁,g₂,Δ₁), hi=(Δ₂,t,0,0)).
+        // Committed pads are pinned to 0 (init; batch pads are pinned above).
+        combined = Vec::with_capacity(2 * total);
+        for i in 0..total {
+            let f: &[Vec<ExprId>] = if i < cap {
+                &init_f[2 * i..2 * i + 2]
+            } else {
+                &batch_f[2 * (i - cap)..2 * (i - cap) + 2]
+            };
+            if i < cap {
+                b.connect(f[1][2], zero);
+                b.connect(f[1][3], zero);
+            }
+            let b_lo = b.alloc_const(Challenge::from_u64(bind_coord(0, 0, i)), "bind_lo");
+            let b_hi = b.alloc_const(Challenge::from_u64(bind_coord(0, 1, i)), "bind_hi");
+            let lo = b
+                .recompose_base_coeffs_to_ext_via_alu::<Val>(&[f[0][0], f[0][1], f[0][2], b_lo])
+                .expect("bound lo");
+            let hi = b
+                .recompose_base_coeffs_to_ext_via_alu::<Val>(&[f[1][0], f[1][1], f[0][3], b_hi])
+                .expect("bound hi");
+            combined.push(lo);
+            combined.push(hi);
+        }
+    }
     // Placeholder identity permutations — `prove_epoch` swaps in the real
     // per-batch sigmas via `update_permute_witnesses` before each run.
     let union_perm = b
@@ -2564,16 +3292,25 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
     }
 
     // ── Stage 4: union_raw range-checks + value sortedness + padding ──
+    // `fi` reads the six fields of a PERMUTED table in its layout (the
+    // source-bound layout moves Δ₁ to hi[2]; see `pack_bound2`).
+    let fi = |f: &[Vec<ExprId>], r: usize| -> [ExprId; 6] {
+        if pair_bind { fld6b(f, r) } else { fld6(f, r) }
+    };
     for r in 0..total {
-        let f = fld6(&uraw_f, r);
+        let f = fi(&uraw_f, r);
         let _ = b.add_range_bits::<Val>(f[0], E_BITS).expect("e range");
         let _ = b.add_range_bits::<Val>(f[1], MASS_BITS).expect("g₁ range");
         let _ = b.add_range_bits::<Val>(f[2], MASS_BITS).expect("g₂ range");
         let _ = b.add_range_bits::<Val>(f[3], MASS_BITS).expect("Δ₁ range");
         let _ = b.add_range_bits::<Val>(f[4], MASS_BITS).expect("Δ₂ range");
         let _ = b.add_range_bits::<Val>(f[5], MASS_BITS).expect("t range");
-        b.connect(uraw_f[2 * r + 1][2], zero);
-        b.connect(uraw_f[2 * r + 1][3], zero);
+        if pair_bind {
+            bind_output_pair(&mut b, &uraw_f, r, 0);
+        } else {
+            b.connect(uraw_f[2 * r + 1][2], zero);
+            b.connect(uraw_f[2 * r + 1][3], zero);
+        }
     }
     for r in 0..total - 1 {
         let diff = b.sub(uraw_f[2 * (r + 1)][0], uraw_f[2 * r][0]);
@@ -2613,7 +3350,7 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
         };
         let f_part = b.mul(is_fresh[r], base);
         let omf = b.sub(one, is_fresh[r]);
-        let o_part = b.mul(omf, uraw_f[2 * r][3]);
+        let o_part = b.mul(omf, fi(&uraw_f, r)[3]);
         d1[r] = b.add(f_part, o_part);
     }
     // Δ₂_init left-to-right: fresh ? (g₂_{r-1} + Δ₂_init[r-1]) : Δ₂_raw[r].
@@ -2712,14 +3449,15 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
             let lo_d2 = b.mul(omdir1, a[4]);
             let lo_t = b.mul(omdir1, a[5]);
             let p_lo = 2 * k;
-            b.connect(fused_f[2 * p_lo][0], lo_e);
-            b.connect(fused_f[2 * p_lo][1], lo_g1);
-            b.connect(fused_f[2 * p_lo][2], lo_g2);
-            b.connect(fused_f[2 * p_lo][3], lo_d1);
-            b.connect(fused_f[2 * p_lo + 1][0], lo_d2);
-            b.connect(fused_f[2 * p_lo + 1][1], lo_t);
-            b.connect(fused_f[2 * p_lo + 1][2], zero);
-            b.connect(fused_f[2 * p_lo + 1][3], zero);
+            connect_fused(
+                &mut b,
+                &fused_f,
+                p_lo,
+                [lo_e, lo_g1, lo_g2, lo_d1, lo_d2, lo_t],
+                pair_bind,
+                round + 1,
+                zero,
+            );
             // f_hi (position 2k+1)
             let hi_e = {
                 let x = b.mul(dir2, e_max);
@@ -2736,14 +3474,15 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
             let hi_d2 = b.mul(omdir2, bb[4]);
             let hi_t = b.mul(omdir2, bb[5]);
             let p_hi = 2 * k + 1;
-            b.connect(fused_f[2 * p_hi][0], hi_e);
-            b.connect(fused_f[2 * p_hi][1], hi_g1);
-            b.connect(fused_f[2 * p_hi][2], hi_g2);
-            b.connect(fused_f[2 * p_hi][3], hi_d1);
-            b.connect(fused_f[2 * p_hi + 1][0], hi_d2);
-            b.connect(fused_f[2 * p_hi + 1][1], hi_t);
-            b.connect(fused_f[2 * p_hi + 1][2], zero);
-            b.connect(fused_f[2 * p_hi + 1][3], zero);
+            connect_fused(
+                &mut b,
+                &fused_f,
+                p_hi,
+                [hi_e, hi_g1, hi_g2, hi_d1, hi_d2, hi_t],
+                pair_bind,
+                round + 1,
+                zero,
+            );
         }
         // resort
         let perm = b
@@ -2756,15 +3495,19 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
             b.connect(perm[i], resorted_packed[round][i]);
         }
         for r in 0..total {
-            let f = fld6(&resort_f[round], r);
+            let f = fi(&resort_f[round], r);
             let _ = b.add_range_bits::<Val>(f[0], E_BITS).expect("rs e");
             let _ = b.add_range_bits::<Val>(f[1], MASS_BITS).expect("rs g₁");
             let _ = b.add_range_bits::<Val>(f[2], MASS_BITS).expect("rs g₂");
             let _ = b.add_range_bits::<Val>(f[3], MASS_BITS).expect("rs Δ₁");
             let _ = b.add_range_bits::<Val>(f[4], MASS_BITS).expect("rs Δ₂");
             let _ = b.add_range_bits::<Val>(f[5], MASS_BITS).expect("rs t");
-            b.connect(resort_f[round][2 * r + 1][2], zero);
-            b.connect(resort_f[round][2 * r + 1][3], zero);
+            if pair_bind {
+                bind_output_pair(&mut b, &resort_f[round], r, round + 1);
+            } else {
+                b.connect(resort_f[round][2 * r + 1][2], zero);
+                b.connect(resort_f[round][2 * r + 1][3], zero);
+            }
         }
         for r in 0..total - 1 {
             let diff = b.sub(resort_f[round][2 * (r + 1)][0], resort_f[round][2 * r][0]);
@@ -2783,7 +3526,7 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
                 .add_range_bits::<Val>(w, MASS_BITS)
                 .expect("rs t tiebreak");
         }
-        cur_f = (0..total).map(|r| fld6(&resort_f[round], r)).collect();
+        cur_f = (0..total).map(|r| fi(&resort_f[round], r)).collect();
     }
 
     // ── Stage 7: compaction — final = cur[..cap], excess = cur[cap..] ──
@@ -2859,6 +3602,11 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
     }
     let np_plus_b = b.add(n_prev_pi, count_batch);
     b.connect(np_plus_b, n_t_pi);
+    // ── Stage 9: θ = ⌊N_t/s⌋ from the in-circuit N_t (revision B6(d)) ──
+    // Appended last so the Legacy circuit is byte-for-byte the pre-fix one.
+    if binding.is_bound() {
+        bind_theta::<Val, Challenge>(&mut b, theta_pi, n_t_pi, params.s);
+    }
 
     let circuit = b.build().expect("build gkb2 circuit");
 
@@ -2874,7 +3622,7 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
     air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
-    if expose_boundary {
+    if expose.exposes() {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
     }
@@ -2897,7 +3645,7 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
     prover.register_range_table::<4>();
-    if expose_boundary {
+    if expose.exposes() {
         prover.register_expose_table::<4>();
     }
     let trace_rows: u64 = ext_degrees.iter().map(|&d| 1u64 << d).sum();
@@ -2908,12 +3656,32 @@ pub fn build_gkb2_leaf(params: GkbParams, expose_boundary: bool) -> Gkb2LeafCirc
         prover,
         circuit_prover_data: Rc::new(circuit_prover_data),
         trace_rows,
+        pair_bind,
+        expose,
+        batch_index: 1,
     }
 }
 
 impl Gkb2LeafCircuit {
     /// Prove one epoch on the prebuilt circuit.
     pub fn prove_epoch(&mut self, initial_state: Gk2State, batch_vals: Vec<u32>) -> Gk2LeafProof {
+        self.prove_epoch_at(1, initial_state, batch_vals)
+    }
+
+    /// The statement this leaf exposes ([`Expose`]).
+    pub fn expose(&self) -> Expose {
+        self.expose
+    }
+
+    /// Prove the epoch of batch `t` (1-based); `t` is part of the Interval
+    /// statement (ignored by the other layouts).
+    pub fn prove_epoch_at(
+        &mut self,
+        t: u64,
+        initial_state: Gk2State,
+        batch_vals: Vec<u32>,
+    ) -> Gk2LeafProof {
+        self.batch_index = t;
         let params = self.params;
         assert!(batch_vals.len() <= params.batch);
         let cap = params.capacity;
@@ -2923,6 +3691,21 @@ impl Gkb2LeafCircuit {
 
         // ── Native replay + commitments ──
         let build = build_bm2(&initial_state, &batch_vals);
+        self.prove_build(initial_state, batch_vals, &build)
+    }
+
+    /// Pack a (honest or hand-crafted) band-merge witness, install its permute
+    /// hints, run, prove and self-verify.
+    fn prove_build(
+        &mut self,
+        initial_state: Gk2State,
+        batch_vals: Vec<u32>,
+        build: &Bm2Build,
+    ) -> Gk2LeafProof {
+        let params = self.params;
+        let cap = params.capacity;
+        let m = params.batch;
+        let total = cap + m;
         let final_state = Gk2State {
             tuples: build.final_tuples.clone(),
             params,
@@ -2937,7 +3720,7 @@ impl Gkb2LeafCircuit {
         // Swap the real per-batch permutation hints into the prebuilt graph
         // (op order: union-sort permute, then the lf per-round resort permutes).
         let mut sigmas: Vec<Vec<usize>> = Vec::with_capacity(1 + lf);
-        sigmas.push(expand_sigma(&build.sigma_union));
+        sigmas.push(build.sigma_union_chal.clone());
         for round in 0..lf {
             sigmas.push(expand_sigma(&build.rounds[round].sigma));
         }
@@ -2969,6 +3752,9 @@ impl Gkb2LeafCircuit {
         };
         public_inputs.push(Challenge::from_u64(n_prev_pub));
         public_inputs.push(Challenge::from_u64(build.n_t));
+        if self.expose.is_interval() {
+            public_inputs.push(Challenge::from_u64(self.batch_index));
+        }
 
         let mut private_inputs: Vec<Challenge> = Vec::new();
         private_inputs.extend_from_slice(&pack_tuples2(&initial_state.tuples));
@@ -2978,12 +3764,38 @@ impl Gkb2LeafCircuit {
             m,
             build.n_prev,
         )));
-        private_inputs.extend_from_slice(&pack_tuples2(&build.union_raw));
-        for round in &build.rounds {
-            private_inputs.extend_from_slice(&pack_tuples2(&round.fused));
-        }
-        for round in &build.rounds {
-            private_inputs.extend_from_slice(&pack_tuples2(&round.resorted));
+        if self.pair_bind {
+            // Permuted tables in the source-bound layout. Output halves name the
+            // input position the permute took them from (σ is challenge-level).
+            let identity: Vec<usize> = (0..total).collect();
+            let src_lo: Vec<usize> = (0..total).map(|r| build.sigma_union_chal[2 * r] / 2).collect();
+            let src_hi: Vec<usize> =
+                (0..total).map(|r| build.sigma_union_chal[2 * r + 1] / 2).collect();
+            private_inputs.extend_from_slice(&pack_bound2(&build.union_raw, 0, &src_lo, &src_hi));
+            for (round, rd) in build.rounds.iter().enumerate() {
+                private_inputs.extend_from_slice(&pack_bound2(
+                    &rd.fused,
+                    round + 1,
+                    &identity,
+                    &identity,
+                ));
+            }
+            for (round, rd) in build.rounds.iter().enumerate() {
+                private_inputs.extend_from_slice(&pack_bound2(
+                    &rd.resorted,
+                    round + 1,
+                    &rd.sigma,
+                    &rd.sigma,
+                ));
+            }
+        } else {
+            private_inputs.extend_from_slice(&pack_tuples2(&build.union_raw));
+            for round in &build.rounds {
+                private_inputs.extend_from_slice(&pack_tuples2(&round.fused));
+            }
+            for round in &build.rounds {
+                private_inputs.extend_from_slice(&pack_tuples2(&round.resorted));
+            }
         }
         private_inputs.extend_from_slice(&pack_tuples2(&build.excess));
         // is_fresh
@@ -3114,6 +3926,16 @@ fn prove_gkb2_inner(
     expose_boundary: bool,
 ) -> Gk2LeafProof {
     build_gkb2_leaf(params, expose_boundary).prove_epoch(initial_state, batch_vals)
+}
+
+/// Prove batch `t` (1-based) as an **Interval-statement** GK band-merge leaf.
+pub fn prove_gkb2_interval(
+    params: GkbParams,
+    t: u64,
+    initial_state: Gk2State,
+    batch_vals: Vec<u32>,
+) -> Gk2LeafProof {
+    build_gkb2_leaf_expose(params, Expose::Interval).prove_epoch_at(t, initial_state, batch_vals)
 }
 
 /// Prove one two-sided band-merge epoch from empty, returning proof + final state.
@@ -3611,6 +4433,253 @@ mod tests {
         let _ = prove_gkb2(params, init, batch);
     }
 
+    // ─── θ binding (revision B6(d)) ────────────────────────────────────────
+
+    /// Largest midpoint rank error `|rank(q) − truth|` of `state` against the
+    /// true `stream`, over queries at, just below and just above every value.
+    fn max_rank_err(state: &Gk2State, stream: &[u32]) -> u64 {
+        let mut qs: Vec<u32> = stream.to_vec();
+        qs.extend(stream.iter().map(|&x| x.saturating_sub(1)));
+        qs.extend(stream.iter().map(|&x| x + 1));
+        qs.sort_unstable();
+        qs.dedup();
+        qs.iter()
+            .map(|&q| {
+                let truth = stream.iter().filter(|&&x| x <= q).count() as u64;
+                state.rank(q).abs_diff(truth)
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// An over-merging malicious witness: the honest union of `s_old ⊎ batch`,
+    /// with the neighbor-init, the `L_f` fusion rounds and the compaction
+    /// replayed under the inflated threshold `theta` (so every fusion decision
+    /// is consistent with the claimed `θ`). `None` if it changes nothing or
+    /// the survivors overflow the capacity.
+    fn forge_theta(s_old: &Gk2State, batch: &[u32], theta: u64) -> Option<Bm2Build> {
+        let honest = build_bm2(s_old, batch);
+        let f = finish_bm2(
+            s_old,
+            honest.sigma_union.clone(),
+            honest.sigma_union_chal.clone(),
+            honest.union_raw.clone(),
+            honest.n_prev,
+            honest.n_t,
+            theta,
+        );
+        (f.final_tuples != honest.final_tuples && f.excess.iter().all(|t| t.active == 0))
+            .then_some(f)
+    }
+
+    /// Search two-batch streams and inflated thresholds `θ' ∈ (θ, N_t]` for an
+    /// epoch-2 over-merge whose certified final breaks the `εN` rank
+    /// guarantee by the widest margin. Returns `(s1, b2, forged, stream)`.
+    fn inflated_theta_instance(params: GkbParams) -> (Gk2State, Vec<u32>, Bm2Build, Vec<u32>) {
+        let m = params.batch;
+        let mut best: Option<(u64, Gk2State, Vec<u32>, Bm2Build, Vec<u32>)> = None;
+        for seed in 1..=24u64 {
+            let b1 = lcg_stream(seed, m, 1000);
+            let b2 = lcg_stream(seed + 1000, m, 1000);
+            let s1 = apply_batch2(&Gk2State::empty(params), &b1);
+            let honest = build_bm2(&s1, &b2);
+            let stream: Vec<u32> = b1.iter().chain(b2.iter()).copied().collect();
+            let eps_n = honest.n_t / params.s;
+            for theta in honest.theta + 1..=honest.n_t {
+                let Some(f) = forge_theta(&s1, &b2, theta) else {
+                    continue;
+                };
+                let st = Gk2State {
+                    tuples: f.final_tuples.clone(),
+                    params,
+                    n: f.n_t,
+                };
+                let err = max_rank_err(&st, &stream);
+                let margin = err.saturating_sub(eps_n);
+                if margin > 0 && best.as_ref().is_none_or(|b| margin > b.0) {
+                    best = Some((margin, s1.clone(), b2.clone(), f, stream.clone()));
+                }
+            }
+        }
+        let (_, s1, b2, f, stream) =
+            best.expect("an inflated θ whose over-merge breaks the εN guarantee");
+        (s1, b2, f, stream)
+    }
+
+    /// Exposed `(init, final)` of a Boundary-layout leaf proof.
+    fn exposed_boundary(proof: &p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>) -> [Val; 16] {
+        let pv = proof
+            .non_primitives
+            .iter()
+            .map(|e| &e.public_values)
+            .find(|v| v.len() == 16)
+            .expect("exposed (init, final)");
+        std::array::from_fn(|i| pv[i])
+    }
+
+    /// **Inflated-threshold PoC (revision B6(d)).** `θ` used to be a free
+    /// public input read only by the fusion comparisons, "assumed" to equal
+    /// `⌊N_t/s⌋`. A malicious prover claims a larger `θ'` and replays every
+    /// fusion round under it (each `cond`/`dir` hint consistent with `θ'`),
+    /// so adjacent tuples over-merge. The certified final has the right mass
+    /// (`N_t`) and passes every other check, but its rank uncertainty exceeds
+    /// `εN`: the midpoint estimator errs by more than `εN` for some query.
+    ///
+    /// `Legacy` (the pre-fix circuit, byte-for-byte): ACCEPTED, exposing
+    /// `Com(S')` for the over-merged `S'`. `Semantic` / `Bound`: the circuit
+    /// forces `θ = ⌊N_t/s⌋` ([`bind_theta`]), so no witness exists for `θ'`
+    /// (the runner fails the range reconstruction of `N_t − θ'·s`); each has a
+    /// positive control (the honest build, same leaf) that must verify.
+    #[test]
+    fn gk2_inflated_theta_legacy_accepts_semantic_rejects() {
+        let params = GkbParams {
+            capacity: 16,
+            batch: 8,
+            s: 3,
+        };
+        let (s1, b2, forged, stream) = inflated_theta_instance(params);
+        let honest = build_bm2(&s1, &b2);
+        let eps_n = honest.n_t / params.s;
+        let honest_final = Gk2State {
+            tuples: honest.final_tuples.clone(),
+            params,
+            n: honest.n_t,
+        };
+        let forged_final = Gk2State {
+            tuples: forged.final_tuples.clone(),
+            params,
+            n: forged.n_t,
+        };
+        let (err_h, err_f) = (max_rank_err(&honest_final, &stream), max_rank_err(&forged_final, &stream));
+        println!(
+            "[gk2 θ] N_t={} s={} true θ={} claimed θ'={}: honest max rank err {err_h} (εN={eps_n}, \
+             {} reps), over-merged max rank err {err_f} ({} reps); B2 violations {:?}",
+            honest.n_t,
+            params.s,
+            honest.theta,
+            forged.theta,
+            honest_final.actives().len(),
+            forged_final.actives().len(),
+            semantic_damage(&forged_final, &stream)
+        );
+        assert_eq!(honest.theta, honest.n_t / params.s);
+        assert!(err_h <= eps_n, "the honest final keeps the εN guarantee");
+        assert!(err_f > eps_n, "PoC premise: the over-merged final breaks it");
+        assert_ne!(commit_gk2_state(&forged_final).0, commit_gk2_state(&honest_final).0);
+
+        // Pre-fix circuit (free θ): ACCEPTED, and the proof exposes Com(S').
+        let mut leaf = build_gkb2_leaf_expose_with(params, Expose::Boundary, Binding::Legacy);
+        let pre = crate::sketch::forge::catch_msg(|| {
+            leaf.prove_build(s1.clone(), b2.clone(), &forged)
+        });
+        let proof = match pre {
+            Ok(p) => p,
+            Err(m) => panic!("PoC premise: the pre-fix circuit accepts the over-merge, got {m}"),
+        };
+        let pv = exposed_boundary(&proof.output.0);
+        assert_eq!(&pv[8..], &commit_gk2_state(&forged_final).0[..], "exposes Com(S')");
+        println!("[gk2 θ] Legacy (free θ): over-merged final ACCEPTED (self-verified)");
+
+        // Fixed circuit: honest control verifies, the over-merge is rejected.
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let mut leaf = build_gkb2_leaf_expose_with(params, Expose::Boundary, binding);
+            let ok = crate::sketch::forge::catch_msg(|| {
+                leaf.prove_build(s1.clone(), b2.clone(), &honest)
+            });
+            assert!(ok.is_ok(), "{binding:?}: positive control (honest θ) must verify: {:?}", ok.err());
+            let bad = crate::sketch::forge::catch_msg(|| {
+                leaf.prove_build(s1.clone(), b2.clone(), &forged)
+            });
+            match &bad {
+                Ok(_) => panic!("{binding:?}: the inflated θ must be rejected"),
+                Err(m) => println!("[gk2 θ] {binding:?}: REJECTED: {m}"),
+            }
+        }
+    }
+
+    /// Every `θ ≠ ⌊N_t/s⌋` is rejected, not only inflated ones: an UNDER-stated
+    /// threshold (fewer fusions, a fatter summary) and `θ = ⌊N_t/s⌋ ± 1` at
+    /// the remainder boundaries. Shapes chosen so `N_t mod s` hits both `0`
+    /// and `s − 1`. Legacy accepts each (control of the tamper plumbing).
+    #[test]
+    fn gk2_theta_off_by_one_rejected() {
+        // (s, N): N mod s = 2 = s−1, 0, 0 (cap + m must be even).
+        for (s, n) in [(3u64, 8usize), (4, 8), (3, 6)] {
+            let params = GkbParams {
+                capacity: 16,
+                batch: n,
+                s,
+            };
+            let vals = lcg_stream(7 + s, n, 1000);
+            let s0 = Gk2State::empty(params);
+            let honest = build_bm2(&s0, &vals);
+            assert_eq!(honest.n_t, n as u64);
+            let mut claims = vec![honest.theta + 1];
+            if honest.theta > 0 {
+                claims.push(honest.theta - 1);
+            }
+            for theta in claims {
+                let f = finish_bm2(
+                    &s0,
+                    honest.sigma_union.clone(),
+                    honest.sigma_union_chal.clone(),
+                    honest.union_raw.clone(),
+                    honest.n_prev,
+                    honest.n_t,
+                    theta,
+                );
+                if f.excess.iter().any(|t| t.active == 1) {
+                    continue; // an under-stated θ that overflows the capacity
+                }
+                let mut legacy = build_gkb2_leaf_expose_with(params, Expose::None, Binding::Legacy);
+                assert!(
+                    crate::sketch::forge::catch_msg(|| legacy.prove_build(s0.clone(), vals.clone(), &f))
+                        .is_ok(),
+                    "s={s} N={n} θ'={theta}: Legacy accepts (control)"
+                );
+                let mut leaf = build_gkb2_leaf_expose_with(params, Expose::None, Binding::Semantic);
+                assert!(
+                    crate::sketch::forge::catch_msg(|| leaf.prove_build(s0.clone(), vals.clone(), &f))
+                        .is_err(),
+                    "s={s} N={n} θ={} θ'={theta}: must be rejected",
+                    honest.theta
+                );
+            }
+            // And the honest θ proves under Semantic.
+            let mut leaf = build_gkb2_leaf_expose_with(params, Expose::None, Binding::Semantic);
+            let _ = leaf.prove_build(s0.clone(), vals.clone(), &honest);
+        }
+    }
+
+    /// Cost of the θ binding (Legacy = pre-fix vs Semantic), padded trace
+    /// rows, primitive row counts and proof size. Run:
+    /// `cargo test --release --lib gk_bandmerge::tests::gk2_theta_bind_overhead -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn gk2_theta_bind_overhead() {
+        for &(cap, m) in &[(16usize, 8usize), (64, 16), (256, 16)] {
+            let params = GkbParams {
+                capacity: cap,
+                batch: m,
+                s: 8,
+            };
+            let vals = lcg_stream(7, m, 1 << 20);
+            for binding in [Binding::Legacy, Binding::Semantic] {
+                let mut leaf = build_gkb2_leaf_expose_with(params, Expose::None, binding);
+                let t = std::time::Instant::now();
+                let p = leaf.prove_epoch(Gk2State::empty(params), vals.clone());
+                let bytes = postcard::to_allocvec(&p.output.0).map(|v| v.len()).unwrap_or(0);
+                println!(
+                    "[gk2 θ overhead] cap={cap} m={m} {binding:?}: trace_rows={} rows={:?} \
+                     proof_bytes={bytes} prove+verify={:?}",
+                    leaf.trace_rows,
+                    p.output.0.rows,
+                    t.elapsed()
+                );
+            }
+        }
+    }
+
     /// **Two-sided circuit over a CHAINED epoch**: prove epoch 1 (empty → s1),
     /// then feed the certified s1 as the old state for epoch 2 — exercising the
     /// full path with real old tuples (nonzero g₁,g₂,Δ₁,Δ₂), neighbor-init against
@@ -3681,5 +4750,804 @@ mod tests {
             "mirror branch: 32 increasing values → {} reps (g° absorbed)",
             active.len()
         );
+    }
+
+    // ─── Malicious-prover probes (revision Step 1, Track B) ─────────────────
+
+    fn panic_msg(e: &Box<dyn std::any::Any + Send>) -> String {
+        if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = e.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            "<non-string panic>".to_string()
+        }
+    }
+
+    /// Forge the union by RE-PAIRING tuple halves: union positions `i` and
+    /// `j` exchange their hi halves — `(Δ₂, t)` in the committed layout, and
+    /// `(Δ₂, t, Δ₁)` in the source-bound layout (`hi_has_d1`). The
+    /// challenge-level σ moves the same input challenges (so the multiset of
+    /// permuted challenges is unchanged); neighbor-init, fusion rounds and
+    /// compaction are then replayed honestly from the forged union.
+    fn repair_union(
+        s_old: &Gk2State,
+        batch_vals: &[u32],
+        i: usize,
+        j: usize,
+        hi_has_d1: bool,
+    ) -> Bm2Build {
+        let honest = build_bm2(s_old, batch_vals);
+        let mut ur = honest.union_raw.clone();
+        let (di, ti, d1i) = (ur[i].delta_o, ur[i].t, ur[i].delta);
+        ur[i].delta_o = ur[j].delta_o;
+        ur[i].t = ur[j].t;
+        ur[j].delta_o = di;
+        ur[j].t = ti;
+        if hi_has_d1 {
+            ur[i].delta = ur[j].delta;
+            ur[j].delta = d1i;
+        }
+        let mut sc = honest.sigma_union_chal.clone();
+        sc.swap(2 * i + 1, 2 * j + 1);
+        finish_bm2(
+            s_old,
+            honest.sigma_union.clone(),
+            sc,
+            ur,
+            honest.n_prev,
+            honest.n_t,
+            honest.theta,
+        )
+    }
+
+    /// The union order the circuit checks: e non-decreasing, t ascending on ties.
+    fn union_order_ok(ur: &[Gk2Tuple]) -> bool {
+        ur.windows(2)
+            .all(|w| w[0].e < w[1].e || (w[0].e == w[1].e && w[0].t <= w[1].t))
+    }
+
+    /// Count (B2 violations, εN rank-interval violations) of a state against
+    /// the true stream.
+    fn semantic_damage(state: &Gk2State, stream: &[u32]) -> (usize, usize) {
+        let theta = state.n / state.params.s;
+        let b2 = state
+            .actives()
+            .iter()
+            .filter(|t| t.g + t.delta > theta || t.g_o + t.delta_o > theta)
+            .count();
+        let mut qs: Vec<u32> = stream.to_vec();
+        qs.extend(stream.iter().map(|&x| x.saturating_sub(1)));
+        qs.extend(stream.iter().map(|&x| x + 1));
+        qs.sort_unstable();
+        qs.dedup();
+        let rank_bad = qs
+            .iter()
+            .filter(|&&q| {
+                let truth = stream.iter().filter(|&&x| x <= q).count() as u64;
+                let (lo, hi) = state.rank_interval(q);
+                truth < lo || truth > hi
+            })
+            .count();
+        (b2, rank_bad)
+    }
+
+    /// **Tuple-half re-pairing probe.** Each two-sided tuple is permuted as two
+    /// separate challenges lo=(e,g₁,g₂,Δ₁), hi=(Δ₂,t,0,0); `expand_sigma` only
+    /// describes the honest pairing. Swapping the hi halves of an OLD tuple and
+    /// a FRESH tuple flips both `is_fresh` gates: the fresh value inherits the
+    /// old timestamp (so it keeps its committed Δ₁=0 instead of the neighbor
+    /// init), and the old representative is re-initialized as if fresh. Mass,
+    /// sortedness and the (e,t) tiebreak all still hold.
+    #[test]
+    fn gk2_half_repairing_forgery_rejected() {
+        let params = GkbParams {
+            capacity: 16,
+            batch: 8,
+            s: 3,
+        };
+        let b1: Vec<u32> = vec![100, 400, 200, 700, 300, 600, 500, 800];
+        let b2: Vec<u32> = vec![150, 650, 250, 750, 350, 550, 450, 850];
+        let s1 = apply_batch2(&Gk2State::empty(params), &b1);
+        let honest = build_bm2(&s1, &b2);
+        let honest_final = Gk2State {
+            tuples: honest.final_tuples.clone(),
+            params,
+            n: honest.n_t,
+        };
+        let stream: Vec<u32> = b1.iter().chain(b2.iter()).copied().collect();
+
+        // Search an (old i, fresh j) pair whose re-paired union is still
+        // circuit-ordered, fits the capacity, and changes the final state;
+        // prefer one that also breaks the rank guarantee.
+        let n_prev = honest.n_prev;
+        let ur = &honest.union_raw;
+        let mut pick: Option<(usize, usize, Bm2Build, (usize, usize))> = None;
+        for i in 0..ur.len() {
+            if ur[i].active != 1 || ur[i].t > n_prev {
+                continue;
+            }
+            for j in 0..ur.len() {
+                if ur[j].active != 1 || ur[j].t <= n_prev {
+                    continue;
+                }
+                let f = repair_union(&s1, &b2, i, j, false);
+                if !union_order_ok(&f.union_raw) || f.excess.iter().any(|t| t.active == 1) {
+                    continue;
+                }
+                if f.final_tuples == honest.final_tuples {
+                    continue;
+                }
+                let st = Gk2State {
+                    tuples: f.final_tuples.clone(),
+                    params,
+                    n: f.n_t,
+                };
+                let dmg = semantic_damage(&st, &stream);
+                let better = match &pick {
+                    None => true,
+                    Some((_, _, _, d)) => (dmg.0 + dmg.1) > (d.0 + d.1),
+                };
+                if better {
+                    pick = Some((i, j, f, dmg));
+                }
+            }
+        }
+        let (i, j, forged, dmg) = pick.expect("a re-pairing that changes the final state");
+        let forged_final = Gk2State {
+            tuples: forged.final_tuples.clone(),
+            params,
+            n: forged.n_t,
+        };
+        println!(
+            "[gk2 re-pair] swap hi halves of union[{i}] (old e={}) and union[{j}] (fresh e={}); \
+             forged final: {} B2 violations, {} rank-interval violations (honest: {:?})",
+            ur[i].e,
+            ur[j].e,
+            dmg.0,
+            dmg.1,
+            semantic_damage(&honest_final, &stream)
+        );
+        assert_ne!(
+            commit_gk2_state(&forged_final).0,
+            commit_gk2_state(&honest_final).0
+        );
+
+        // Pre-fix circuit (committed layout on the permutes): ACCEPTED.
+        PAIR_BIND.with(|c| c.set(Some(false)));
+        let mut leaf = build_gkb2_leaf(params, false);
+        PAIR_BIND.with(|c| c.set(None));
+        let pre = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            leaf.prove_build(s1.clone(), b2.clone(), &forged)
+        }));
+        match &pre {
+            Ok(_) => println!("[gk2 re-pair] pre-fix: forged final ACCEPTED (self-verified)"),
+            Err(e) => println!("[gk2 re-pair] pre-fix: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(pre.is_ok(), "PoC premise: the pre-fix circuit accepts the re-pairing");
+
+        // Fixed circuit (source-bound layout), same swap of whole hi halves.
+        let forged_b = repair_union(&s1, &b2, i, j, true);
+        // (a) truthful source labels: the output binding hi[3]−lo[3]=2^SRC_BITS
+        //     cannot hold (the halves name different sources).
+        let mut leaf = build_gkb2_leaf(params, false);
+        let post_a = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            leaf.prove_build(s1.clone(), b2.clone(), &forged_b)
+        }));
+        match &post_a {
+            Ok(_) => println!("[gk2 re-pair] fixed (a): ACCEPTED"),
+            Err(e) => println!("[gk2 re-pair] fixed (a) truthful labels: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post_a.is_err(), "re-paired halves with truthful source labels must be rejected");
+
+        // (b) lying labels: both halves claim the lo's source, so the binding
+        //     holds, but the emitted hi element is not any permute input —
+        //     a malicious prover must forge the Permute op's outputs.
+        let mut lying = forged_b.clone();
+        lying.sigma_union_chal = expand_sigma(&lying.sigma_union);
+        let src: Vec<usize> = lying.sigma_union.clone();
+        let outs = pack_bound2(&lying.union_raw, 0, &src, &src);
+        let mut leaf = build_gkb2_leaf(params, false);
+        let mut sigmas = vec![lying.sigma_union_chal.clone()];
+        for rd in &lying.rounds {
+            sigmas.push(expand_sigma(&rd.sigma));
+        }
+        leaf.circuit.update_permute_witnesses(&sigmas).expect("sigmas");
+        crate::sketch::forge_permute::forge_permute_outputs(&mut leaf.circuit, 0, outs);
+        let post_b = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            leaf.prove_build(s1.clone(), b2.clone(), &lying)
+        }));
+        match &post_b {
+            Ok(_) => println!("[gk2 re-pair] fixed (b): ACCEPTED"),
+            Err(e) => println!("[gk2 re-pair] fixed (b) lying labels: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post_b.is_err(), "re-paired halves with forged labels must be rejected");
+    }
+
+    /// Cost of the source-bound layout (padded trace rows + one prove), pre-fix
+    /// vs fixed. Run:
+    /// `cargo test --release --lib gk_bandmerge::tests::gk2_fix_overhead -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn gk2_fix_overhead() {
+        for &(cap, m) in &[(64usize, 16usize), (256, 16), (1024, 16)] {
+            let params = GkbParams {
+                capacity: cap,
+                batch: m,
+                s: 8,
+            };
+            let vals = lcg_stream(7, m, 1 << 20);
+            for (label, bind) in [("pre-fix", false), ("source-bound", true)] {
+                PAIR_BIND.with(|c| c.set(Some(bind)));
+                let mut leaf = build_gkb2_leaf(params, false);
+                PAIR_BIND.with(|c| c.set(None));
+                let t = std::time::Instant::now();
+                let _ = leaf.prove_epoch(Gk2State::empty(params), vals.clone());
+                println!(
+                    "[gk2 fix_overhead] cap={cap} m={m} {label:<13} trace_rows={} prove+verify={:?}",
+                    leaf.trace_rows,
+                    t.elapsed()
+                );
+            }
+        }
+    }
+
+    /// Forged-decomposition regression test (Greenwald–Khanna family, the
+    /// deployed band-merge leaf). The prover commits to `Com(S')` with the
+    /// first active final tuple's `Δ` bumped by 1, while the decomposition of
+    /// that packed tuple half, which every compaction constraint reads, returns
+    /// the honest tuple. Under the pre-fix recompose lowering nothing ties the
+    /// two, and the proof verifies for a state the batch never produced. The
+    /// fork's `recompose/coeff` lowering rejects it.
+    #[test]
+    fn forged_final_decomposition_rejected() {
+        use p3_field::BasedVectorSpace;
+        let params = GkbParams {
+            capacity: 16,
+            batch: 8,
+            s: 3,
+        };
+        let b1: Vec<u32> = vec![100, 400, 200, 700, 300, 600, 500, 800];
+        let b2: Vec<u32> = vec![150, 650, 250, 750, 350, 550, 450, 850];
+        let s1 = apply_batch2(&Gk2State::empty(params), &b1);
+        let honest = build_bm2(&s1, &b2);
+        let i = honest
+            .final_tuples
+            .iter()
+            .position(|t| t.active == 1)
+            .expect("an active final tuple");
+        let mut forged = honest.clone();
+        forged.final_tuples[i].delta += 1;
+        let forged_final = Gk2State {
+            tuples: forged.final_tuples.clone(),
+            params,
+            n: forged.n_t,
+        };
+        let honest_final = Gk2State {
+            tuples: honest.final_tuples.clone(),
+            params,
+            n: honest.n_t,
+        };
+        // Tuple i's lo half (e, g, g_o, Δ) is private input 2·cap + 2i.
+        let honest_lo: [Val; 4] = enc2(&honest.final_tuples[i])[0]
+            .as_basis_coefficients_slice()
+            .try_into()
+            .expect("4 coefficients");
+        let run = |mut leaf: Gkb2LeafCircuit| {
+            let wid = leaf.circuit.private_input_rows[2 * params.capacity + 2 * i];
+            crate::sketch::forge_permute::forge_decomposition(&mut leaf.circuit, wid, honest_lo);
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                leaf.prove_build(s1.clone(), b2.clone(), &forged).final_
+            }))
+        };
+
+        let legacy = run(crate::recompose_binding::with_unbound_recompose(|| {
+            build_gkb2_leaf(params, false)
+        }))
+        .expect("PoC premise: the unbound lowering accepts the forged final state");
+        assert_eq!(legacy.0, commit_gk2_state(&forged_final).0, "exposes Com(S')");
+        assert_ne!(legacy.0, commit_gk2_state(&honest_final).0, "not the certified update");
+
+        assert!(
+            run(build_gkb2_leaf(params, false)).is_err(),
+            "recompose/coeff lowering must reject the forged final state"
+        );
+    }
+
+    // ─── One-sided prove_gkb: shared-PermuteBus probe ───────────────────────
+
+    /// Rank-interval violations of a one-sided state against the true stream
+    /// (distinct values): for every active tuple `i` in value order the true
+    /// rank of `e_i` must lie in `[r_min_i, r_min_i + Δ_i]`, `r_min_i = Σ_{j≤i} g_j`.
+    fn gkb_rank_violations(state: &GkbState, stream: &[u32]) -> usize {
+        let mut acts = state.actives();
+        acts.sort_by_key(|t| (t.e, t.t));
+        let mut rmin = 0u64;
+        let mut bad = 0;
+        for t in &acts {
+            rmin += t.g;
+            let truth = stream.iter().filter(|&&x| x <= t.e).count() as u64;
+            if truth < rmin || truth > rmin + t.delta {
+                bad += 1;
+            }
+        }
+        bad
+    }
+
+    /// Malicious one-sided witness exploiting the SHARED PermuteBus: the fresh
+    /// union tuple at `x_pos` leaves the union permute's output (an E_MAX dummy
+    /// takes its slot), neighbor-init and all `L_f` fuse rounds are replayed
+    /// honestly WITHOUT it, and it re-enters in the LAST round's resort output
+    /// in place of a dummy — still carrying its committed `Δ = 0`. Per op the
+    /// multisets differ; only the union of all permute rows balances. `None` if
+    /// the forged final would overflow the capacity.
+    fn forge_skip_rounds(s_old: &GkbState, batch: &[u32], x_pos: usize) -> Option<BmBuild> {
+        let cap = s_old.params.capacity;
+        let honest = build_bm(s_old, batch);
+        let mut ur = honest.union_raw.clone();
+        let x = ur.remove(x_pos);
+        ur.push(GkbTuple::dummy()); // dummies (E_MAX) sort last
+        let mut f = finish_bm(
+            s_old,
+            honest.sigma_union.clone(),
+            ur,
+            honest.n_prev,
+            honest.n_t,
+            honest.theta,
+        );
+        let last = f.rounds.last_mut().expect("L_f ≥ 1");
+        let dpos = last.resorted.iter().position(|t| *t == GkbTuple::dummy())?;
+        last.resorted.remove(dpos);
+        let ins = last
+            .resorted
+            .iter()
+            .position(|t| (t.e, t.t) > (x.e, x.t))
+            .unwrap_or(last.resorted.len());
+        last.resorted.insert(ins, x);
+        f.final_tuples = last.resorted[..cap].to_vec();
+        f.excess = last.resorted[cap..].to_vec();
+        if f.excess.iter().any(is_active) {
+            return None;
+        }
+        Some(f)
+    }
+
+    /// **Inflated-threshold PoC on the one-sided circuit (revision B6(d)).**
+    /// Same attack as `gk2_inflated_theta_legacy_accepts_semantic_rejects`:
+    /// the rounds are replayed under a claimed `θ' > ⌊N_t/s⌋`, so the certified
+    /// final over-merges and violates invariant A2 (`g + Δ ≤ ⌊εN⌋`). Legacy
+    /// (free `θ`) ACCEPTS it; Semantic rejects it and proves the honest build.
+    #[test]
+    fn gkb_inflated_theta_legacy_accepts_semantic_rejects() {
+        let params = GkbParams {
+            capacity: 16,
+            batch: 8,
+            s: 3,
+        };
+        let b1: Vec<u32> = vec![800, 700, 600, 500, 400, 300, 200, 100];
+        let b2: Vec<u32> = vec![750, 650, 550, 450, 350, 250, 150, 50];
+        let s1 = apply_batch(&GkbState::empty(params), &b1);
+        let honest = build_bm(&s1, &b2);
+        let a2_violations = |ts: &[GkbTuple]| {
+            ts.iter()
+                .filter(|t| t.active == 1 && t.g + t.delta > honest.theta)
+                .count()
+        };
+        assert_eq!(a2_violations(&honest.final_tuples), 0);
+        let forged = (honest.theta + 1..=honest.n_t)
+            .map(|theta| {
+                finish_bm(
+                    &s1,
+                    honest.sigma_union.clone(),
+                    honest.union_raw.clone(),
+                    honest.n_prev,
+                    honest.n_t,
+                    theta,
+                )
+            })
+            .find(|f| {
+                f.excess.iter().all(|t| t.active == 0) && a2_violations(&f.final_tuples) > 0
+            })
+            .expect("an inflated θ whose over-merge violates A2");
+        println!(
+            "[gkb θ] N_t={} true θ={} claimed θ'={}: {} A2 violations, {} → {} reps",
+            honest.n_t,
+            honest.theta,
+            forged.theta,
+            a2_violations(&forged.final_tuples),
+            honest.final_tuples.iter().filter(|t| t.active == 1).count(),
+            forged.final_tuples.iter().filter(|t| t.active == 1).count(),
+        );
+        let run = |build: &BmBuild, binding: Binding| {
+            crate::sketch::forge::catch_msg(|| {
+                prove_gkb_build(params, s1.clone(), b2.clone(), build, binding)
+            })
+        };
+        let pre = run(&forged, Binding::Legacy);
+        assert!(pre.is_ok(), "PoC premise: Legacy (free θ) accepts: {:?}", pre.err());
+        let forged_state = GkbState {
+            tuples: forged.final_tuples.clone(),
+            params,
+            n: forged.n_t,
+        };
+        assert_eq!(pre.unwrap().final_.0, commit_gkb_state(&forged_state).0);
+        assert!(run(&honest, Binding::Semantic).is_ok(), "positive control: honest θ verifies");
+        match run(&forged, Binding::Semantic) {
+            Ok(_) => panic!("Semantic must reject the inflated θ"),
+            Err(m) => println!("[gkb θ] Semantic: REJECTED: {m}"),
+        }
+    }
+
+    /// **Shared-PermuteBus forgery on the one-sided circuit.** A fresh value is
+    /// routed around the union output and every fuse round (its committed
+    /// `Δ = 0` never gets the neighbor-init `g_right + Δ_right − 1`), so the
+    /// certified final understates its rank uncertainty: the true rank of that
+    /// value falls outside `[r_min, r_min + Δ]`. Mass (`Σg = N_t`), value
+    /// sortedness and every fuse decision still hold.
+    ///
+    /// Pre-fix circuit (untagged permutes): ACCEPTED (self-verifies). With the
+    /// `t`-coordinate op tag the same malicious prover is REJECTED: the tuple
+    /// the last round emits carries op tag `L_f` and has no matching element
+    /// on the PermuteBus (its only copy is the union op's class-0 input).
+    #[test]
+    fn gkb_shared_bus_forgery_rejected() {
+        let params = GkbParams {
+            capacity: 16,
+            batch: 8,
+            s: 3,
+        };
+        let b1: Vec<u32> = vec![900, 800, 700, 600, 500, 400, 300, 200];
+        let b2: Vec<u32> = vec![850, 250, 650, 450, 950, 150, 550, 350];
+        let s1 = apply_batch(&GkbState::empty(params), &b1);
+        let honest = build_bm(&s1, &b2);
+        let stream: Vec<u32> = b1.iter().chain(b2.iter()).copied().collect();
+        let honest_final = GkbState {
+            tuples: honest.final_tuples.clone(),
+            params,
+            n: honest.n_t,
+        };
+        assert_eq!(
+            gkb_rank_violations(&honest_final, &stream),
+            0,
+            "honest final must satisfy the rank intervals"
+        );
+        let _honest_proof = prove_gkb(params, s1.clone(), b2.clone());
+
+        // Pick the fresh tuple whose round-skipping does the most damage.
+        let mut pick: Option<(usize, BmBuild, usize)> = None;
+        for (pos, t) in honest.union_raw.iter().enumerate() {
+            if !is_active(t) || t.t <= honest.n_prev {
+                continue;
+            }
+            let Some(f) = forge_skip_rounds(&s1, &b2, pos) else {
+                continue;
+            };
+            let st = GkbState {
+                tuples: f.final_tuples.clone(),
+                params,
+                n: f.n_t,
+            };
+            let bad = gkb_rank_violations(&st, &stream);
+            if pick.as_ref().is_none_or(|(_, _, b)| bad > *b) {
+                pick = Some((pos, f, bad));
+            }
+        }
+        let (pos, forged, bad) = pick.expect("a fresh tuple to route around the rounds");
+        let x = honest.union_raw[pos];
+        let forged_final = GkbState {
+            tuples: forged.final_tuples.clone(),
+            params,
+            n: forged.n_t,
+        };
+        println!(
+            "[gkb shared bus] fresh e={} (t={}) skips neighbor-init + {} rounds; \
+             forged final: {} rank-interval violations (honest: 0)",
+            x.e,
+            x.t,
+            num_rounds(params.capacity + params.batch),
+            bad
+        );
+        assert!(bad > 0, "the forged final must break the rank guarantee");
+        assert_eq!(
+            forged_final.actives().iter().map(|t| t.g).sum::<u64>(),
+            forged.n_t,
+            "forged final conserves mass"
+        );
+        assert_ne!(
+            commit_gkb_state(&forged_final).0,
+            commit_gkb_state(&honest_final).0
+        );
+
+        let lf = num_rounds(params.capacity + params.batch);
+        let x_row = forged.rounds[lf - 1]
+            .resorted
+            .iter()
+            .position(|t| *t == x)
+            .expect("x re-enters the last round");
+        let run = |tag: bool, untag_x: bool| {
+            GKB_OP_TAG.with(|c| c.set(Some(tag)));
+            GKB_UNTAG_ROW.with(|c| c.set(untag_x.then_some((lf - 1, x_row))));
+            GKB_FORGE.with(|f| {
+                *f.borrow_mut() = vec![
+                    (0, forged.union_raw.clone()),
+                    (lf, forged.rounds[lf - 1].resorted.clone()),
+                ]
+            });
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                prove_gkb_build(params, s1.clone(), b2.clone(), &forged, bind::default_binding())
+            }));
+            GKB_OP_TAG.with(|c| c.set(None));
+            GKB_UNTAG_ROW.with(|c| c.set(None));
+            GKB_FORGE.with(|f| f.borrow_mut().clear());
+            r
+        };
+        let pre = run(false, false);
+        match &pre {
+            Ok(_) => println!("[gkb shared bus] pre-fix: forged final ACCEPTED (self-verified)"),
+            Err(e) => println!("[gkb shared bus] pre-fix: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(pre.is_ok(), "PoC premise: the untagged circuit accepts the forgery");
+        // (a) the malicious prover tags x like the rest of the last round's
+        //     output: no matching (class-0) element on the PermuteBus.
+        let post_a = run(true, false);
+        match &post_a {
+            Ok(_) => println!("[gkb shared bus] fixed (a) tagged x: ACCEPTED"),
+            Err(e) => println!("[gkb shared bus] fixed (a) tagged x: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post_a.is_err(), "op tags must stop the union and a round trading tuples");
+        // (b) it leaves x untagged so the bus balances: the de-tagged
+        //     t − L_f·2^24 wraps and fails the output-side range check.
+        let post_b = run(true, true);
+        match &post_b {
+            Ok(_) => println!("[gkb shared bus] fixed (b) untagged x: ACCEPTED"),
+            Err(e) => println!("[gkb shared bus] fixed (b) untagged x: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post_b.is_err(), "an untagged output must fail the de-tagged t range check");
+    }
+
+    /// Cost of the one-sided op tag (padded trace rows + one prove), pre-fix vs
+    /// fixed. Run:
+    /// `cargo test --release --lib gk_bandmerge::tests::gkb_fix_overhead -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn gkb_fix_overhead() {
+        for &(cap, m) in &[(64usize, 16usize), (256, 16), (1024, 16)] {
+            let params = GkbParams {
+                capacity: cap,
+                batch: m,
+                s: 8,
+            };
+            let vals = lcg_stream(7, m, 1 << 20);
+            for (label, tag) in [("pre-fix", false), ("op-tag", true)] {
+                GKB_OP_TAG.with(|c| c.set(Some(tag)));
+                let t = std::time::Instant::now();
+                let _ = prove_gkb(params, GkbState::empty(params), vals.clone());
+                GKB_OP_TAG.with(|c| c.set(None));
+                println!(
+                    "[gkb fix_overhead] cap={cap} m={m} {label:<8} trace_rows={} prove+verify={:?}",
+                    crate::recursion::recursive::timing::take().trace_rows,
+                    t.elapsed()
+                );
+            }
+        }
+    }
+
+    // ─── Naive two-sided replay: half re-pairing / shared-bus probe ─────────
+
+    /// Replay a naive epoch honestly, except that at record `k0` the insert
+    /// permute RE-PAIRS the hi halves of work rows `i` and `jf` (`(Δ₂,t)` in
+    /// the committed layout, `(Δ₂,t,Δ₁)` in the source-bound one): the
+    /// challenge-level σ moves the same input challenges, so the multiset of
+    /// permuted challenges is unchanged. `None` if the forged work is not
+    /// `(e,t)`-ordered or a later step has no mergeable pair.
+    fn forge_naive2_repair(
+        s_old: &Gk2State,
+        batch: &[u32],
+        k0: usize,
+        i: usize,
+        jf: usize,
+        hi_has_d1: bool,
+    ) -> Option<Naive2Build> {
+        let (cap, m, s) = (s_old.params.capacity, s_old.params.batch, s_old.params.s);
+        let mut states = vec![s_old.tuples.clone()];
+        let mut steps = Vec::with_capacity(m);
+        let mut cur = s_old.tuples.clone();
+        let mut n = s_old.n;
+        for j in 0..m {
+            let val = batch.get(j).copied();
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if j != k0 {
+                    return Some(replay_step2(&cur, cap, s, n, val));
+                }
+                let n_after = n + val.is_some() as u64;
+                let mut combined = cur.clone();
+                combined.push(fresh_tuple2(val, n_after));
+                let (mut work, sigma) = sort_by_et2(&combined);
+                let mut sc = expand_sigma(&sigma);
+                let (d2, t, d1) = (work[i].delta_o, work[i].t, work[i].delta);
+                work[i].delta_o = work[jf].delta_o;
+                work[i].t = work[jf].t;
+                work[jf].delta_o = d2;
+                work[jf].t = t;
+                if hi_has_d1 {
+                    work[i].delta = work[jf].delta;
+                    work[jf].delta = d1;
+                }
+                sc.swap(2 * i + 1, 2 * jf + 1);
+                if !work
+                    .windows(2)
+                    .all(|w| w[0].e < w[1].e || (w[0].e == w[1].e && w[0].t <= w[1].t))
+                {
+                    return None;
+                }
+                Some(finish_step2(work, sigma, sc, cap, s, n_after, val.is_some()))
+            }));
+            let (step, next) = res.ok().flatten()?;
+            if val.is_some() {
+                n += 1;
+            }
+            cur = next;
+            steps.push(step);
+            states.push(cur.clone());
+        }
+        Some(Naive2Build {
+            states,
+            steps,
+            n_prev: s_old.n,
+            n_final: n,
+        })
+    }
+
+    /// Search record `k0`, old row `i`, fresh row `jf` for the most damaging
+    /// re-pairing (committed layout). Returns `(k0, i, jf, forged, damage)`.
+    fn search_naive2_repair(
+        s_old: &Gk2State,
+        batch: &[u32],
+        stream: &[u32],
+    ) -> Option<(usize, usize, usize, Naive2Build, (usize, usize))> {
+        let params = s_old.params;
+        let honest = replay_batch2(s_old, batch);
+        let mut pick: Option<(usize, usize, usize, Naive2Build, (usize, usize))> = None;
+        let mut nb = s_old.n;
+        for k0 in 0..batch.len() {
+            let w = &honest.steps[k0].work;
+            for i in 0..w.len() {
+                if w[i].active != 1 || w[i].t > nb {
+                    continue;
+                }
+                for jf in 0..w.len() {
+                    if w[jf].active != 1 || w[jf].t <= nb {
+                        continue;
+                    }
+                    let Some(f) = forge_naive2_repair(s_old, batch, k0, i, jf, false) else {
+                        continue;
+                    };
+                    let st = Gk2State {
+                        tuples: f.states[params.batch].clone(),
+                        params,
+                        n: f.n_final,
+                    };
+                    let dmg = semantic_damage(&st, stream);
+                    if dmg.0 + dmg.1 > 0
+                        && pick.as_ref().is_none_or(|p| dmg.0 + dmg.1 > p.4.0 + p.4.1)
+                    {
+                        pick = Some((k0, i, jf, f, dmg));
+                    }
+                }
+            }
+            nb += 1;
+        }
+        pick
+    }
+
+    /// **Tuple-half re-pairing / shared-bus forgery on the naive replay.** At
+    /// one record the insert permute swaps the hi halves of an OLD work row and
+    /// the FRESH row: the fresh value inherits the old timestamp (skipping
+    /// neighbor-init) and the old representative is re-initialized as if
+    /// fresh. The rest of the epoch replays honestly; the certified final
+    /// breaks the two-sided rank guarantee.
+    ///
+    /// Pre-fix (committed layout on the permutes): ACCEPTED. Source-bound
+    /// layout: REJECTED with truthful source labels (the output pair's
+    /// `hi[3] − lo[3] ≠ 2^sb`) and with lying labels (the emitted hi element is
+    /// no input of that op → PermuteBus mismatch).
+    #[test]
+    fn gk2_naive_half_repairing_forgery_rejected() {
+        let params = GkbParams {
+            capacity: 4,
+            batch: 8,
+            s: 2,
+        };
+        let b1: Vec<u32> = lcg_stream(11, params.batch, 1000);
+        let b2: Vec<u32> = lcg_stream(29, params.batch, 1000);
+        let s1 = apply_batch2_naive(&Gk2State::empty(params), &b1);
+        let stream: Vec<u32> = b1.iter().chain(b2.iter()).copied().collect();
+        let honest = apply_batch2_naive(&s1, &b2);
+        assert_eq!(semantic_damage(&honest, &stream), (0, 0));
+        let _honest_proof = prove_gkb2_naive(params, s1.clone(), b2.clone());
+
+        let (k0, i, jf, forged, dmg) =
+            search_naive2_repair(&s1, &b2, &stream).expect("a damaging re-pairing");
+        let forged_final = Gk2State {
+            tuples: forged.states[params.batch].clone(),
+            params,
+            n: forged.n_final,
+        };
+        println!(
+            "[gk2 naive re-pair] record {k0}: swap hi halves of work[{i}] (old) and work[{jf}] \
+             (fresh); forged final: {} B2 violations, {} rank-interval violations (honest: 0, 0)",
+            dmg.0, dmg.1
+        );
+        assert_ne!(
+            commit_gk2_state(&forged_final).0,
+            commit_gk2_state(&honest).0
+        );
+        let run = |bind: bool, build: &Naive2Build, forge: Vec<(usize, Vec<Challenge>)>| {
+            PAIR_BIND.with(|c| c.set(Some(bind)));
+            NAIVE2_FORGE.with(|f| *f.borrow_mut() = forge);
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                prove_gkb2_naive_build(params, s1.clone(), b2.clone(), build)
+            }));
+            PAIR_BIND.with(|c| c.set(None));
+            NAIVE2_FORGE.with(|f| f.borrow_mut().clear());
+            r
+        };
+
+        // Pre-fix circuit: ACCEPTED.
+        let pre = run(false, &forged, vec![]);
+        match &pre {
+            Ok(_) => println!("[gk2 naive re-pair] pre-fix: forged final ACCEPTED (self-verified)"),
+            Err(e) => println!("[gk2 naive re-pair] pre-fix: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(pre.is_ok(), "PoC premise: the pre-fix naive circuit accepts the re-pairing");
+
+        // Fixed circuit, same swap of whole (source-bound) hi halves.
+        let forged_b = forge_naive2_repair(&s1, &b2, k0, i, jf, true).expect("source-bound swap");
+        // (a) truthful source labels (the Permute op really moved those halves).
+        let post_a = run(true, &forged_b, vec![]);
+        match &post_a {
+            Ok(_) => println!("[gk2 naive re-pair] fixed (a): ACCEPTED"),
+            Err(e) => println!("[gk2 naive re-pair] fixed (a) truthful labels: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post_a.is_err(), "re-paired halves with truthful labels must be rejected");
+        // (b) lying labels: both halves claim the lo's source; the Permute op's
+        //     outputs must be forged (the emitted hi element is no input).
+        let mut lying = forged_b.clone();
+        lying.steps[k0].sigma_insert_chal = expand_sigma(&lying.steps[k0].sigma_insert);
+        let sb = naive2_src_bits(params.capacity + 1);
+        let outs = naive2_pack_work(&lying.steps[k0], k0, true, sb);
+        let post_b = run(true, &lying, vec![(2 * k0, outs)]);
+        match &post_b {
+            Ok(_) => println!("[gk2 naive re-pair] fixed (b): ACCEPTED"),
+            Err(e) => println!("[gk2 naive re-pair] fixed (b) lying labels: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post_b.is_err(), "re-paired halves with forged labels must be rejected");
+    }
+
+    /// Cost of the naive replay's source-bound layout (padded trace rows + one
+    /// prove), pre-fix vs fixed. Run:
+    /// `cargo test --release --lib gk_bandmerge::tests::gk2_naive_fix_overhead -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn gk2_naive_fix_overhead() {
+        for &(cap, m) in &[(16usize, 16usize), (64, 16), (256, 16)] {
+            let params = GkbParams {
+                capacity: cap,
+                batch: m,
+                s: 8,
+            };
+            let vals = lcg_stream(7, m, 1 << 20);
+            for (label, bind) in [("pre-fix", false), ("source-bound", true)] {
+                PAIR_BIND.with(|c| c.set(Some(bind)));
+                let t = std::time::Instant::now();
+                let _ = prove_gkb2_naive(params, Gk2State::empty(params), vals.clone());
+                PAIR_BIND.with(|c| c.set(None));
+                println!(
+                    "[gk2 naive fix_overhead] cap={cap} m={m} {label:<13} trace_rows={} prove+verify={:?}",
+                    crate::recursion::recursive::timing::take().trace_rows,
+                    t.elapsed()
+                );
+            }
+        }
     }
 }

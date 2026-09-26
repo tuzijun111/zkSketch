@@ -28,7 +28,8 @@
 
 use std::rc::Rc;
 
-use p3_batch_stark::{CommonData, ProverData};
+use p3_batch_stark::common::GlobalPreprocessed;
+use p3_batch_stark::{CommonData, Commitment, ProverData};
 use p3_circuit::CircuitBuilder;
 use p3_circuit::ops::generate_expose_trace;
 use p3_circuit_prover::{
@@ -50,6 +51,11 @@ use crate::recursion::recursive::config_gl::{
 };
 use crate::recursion::recursive::leaf_gl::GlCommit;
 use crate::recursion::recursive::leaf_gl::{make_leaf_config, pack_commit_to_challenge};
+use crate::recursion::recursive::root_vk::{ForestShape, RootVk, ShapeVkDeriver, bound_proof_shape};
+use crate::recursion::recursive::statement::{
+    BatchLog, Expose, Layout, Statement, TAG_MERGE, check_leaf_statements_against_log,
+    check_root_statement, hash_gl, parse_statement,
+};
 
 const LOG_FINAL_POLY_LEN: usize = 6;
 
@@ -211,18 +217,30 @@ pub fn prove_boundary_leaf(
     prove_exposing_leaf(&[iv[0], iv[1], fv[0], fv[1]])
 }
 
-/// The exposed boundary targets of a verified child: the (unique) non-empty
-/// per-instance `air_public_targets` entry — `[initial[0..4], final[0..4]]`
-/// (8 base-field targets).
-fn boundary_targets(result: &impl VerifierCircuitResult<ConfigWithFriParams, BatchOnly>) -> Vec<Target> {
+/// The exposed statement targets of a verified child and their [`Layout`]:
+/// `Boundary` = `[initial[0..4], final[0..4]]` (8 base-field targets);
+/// `Interval` = additionally `[idx (lo, hi), H[0..4]]` (14 targets).
+fn statement_targets(
+    result: &impl VerifierCircuitResult<ConfigWithFriParams, BatchOnly>,
+) -> (Layout, Vec<Target>) {
     let all = result.air_public_targets();
     all.into_iter()
-        .find(|t| t.len() == 2 * COMMIT_LEN)
-        .expect("verified child must surface an 8-element (initial, final) boundary")
+        .find_map(|t| Layout::of_len(t.len(), COMMIT_LEN, EXT_D).map(|l| (l, t)))
+        .expect("verified child must surface an 8-element (Boundary) or 14-element (Interval) statement")
+}
+
+/// The exposed public values of a proof's Expose table.
+fn exposed_values(proof: &BatchStarkProof<ConfigWithFriParams>) -> &[Val] {
+    proof
+        .non_primitives
+        .iter()
+        .map(|e| e.public_values.as_slice())
+        .find(|v| Layout::of_len(v.len(), COMMIT_LEN, EXT_D).is_some())
+        .expect("proof must surface an 8-element (Boundary) or 14-element (Interval) statement")
 }
 
 /// Read the `(initial, final)` commitments a proof surfaced via its Expose
-/// table (the unique non-primitive with `2 * COMMIT_LEN` public values).
+/// table (the first `2 * COMMIT_LEN` values of either layout).
 pub fn read_exposed_boundary(
     output: &RecursionOutput<ConfigWithFriParams>,
 ) -> (GlCommit, GlCommit) {
@@ -234,17 +252,17 @@ pub fn read_exposed_boundary(
 pub fn read_exposed_boundary_proof(
     proof: &BatchStarkProof<ConfigWithFriParams>,
 ) -> (GlCommit, GlCommit) {
-    let pv = proof
-        .non_primitives
-        .iter()
-        .map(|e| &e.public_values)
-        .find(|v| v.len() == 2 * COMMIT_LEN)
-        .expect("proof must surface an 8-element boundary");
+    let pv = exposed_values(proof);
     let mut initial = [Val::ZERO; COMMIT_LEN];
     let mut final_ = [Val::ZERO; COMMIT_LEN];
     initial.copy_from_slice(&pv[0..COMMIT_LEN]);
     final_.copy_from_slice(&pv[COMMIT_LEN..2 * COMMIT_LEN]);
     (GlCommit(initial), GlCommit(final_))
+}
+
+/// The full statement a proof surfaced (either layout).
+pub fn read_exposed_statement(proof: &BatchStarkProof<ConfigWithFriParams>) -> Statement<Val> {
+    parse_statement(exposed_values(proof), COMMIT_LEN, EXT_D).expect("statement layout")
 }
 
 /// In-circuit hiding merge of two adjacent children: verify both, bind
@@ -281,6 +299,74 @@ pub fn prove_hiding_merge_proofs(
     let right_input =
         recursion_input_with_common(right, right_common.as_ref().unwrap_or(&right.stark_common));
 
+    let (circuit, left_result, right_result) =
+        build_hiding_merge_circuit(&left_input, &right_input, &config, &backend, MergeMode::Real);
+
+    prove_aggregation_layer::<ConfigWithFriParams, BatchOnly, BatchOnly, Backend, EXT_D>(
+        &left_input,
+        &right_input,
+        &left_result,
+        &right_result,
+        &circuit,
+        &config,
+        &backend,
+        &params,
+        None,
+    )
+    .expect("prove hiding merge")
+}
+
+/// DERIVATION ONLY: prove the twin of the hiding merge (see
+/// `expose_forest::prove_twin_merge_proofs`, BabyBear).
+fn prove_twin_merge_proofs(
+    left: &BatchStarkProof<ConfigWithFriParams>,
+    right: &BatchStarkProof<ConfigWithFriParams>,
+) -> BatchStarkProof<ConfigWithFriParams> {
+    let config = make_leaf_config();
+    let backend = make_backend();
+    let params = agg_params();
+    let left_input = recursion_input_from_proof(left);
+    let right_input = recursion_input_from_proof(right);
+    let (circuit, left_result, right_result) =
+        build_hiding_merge_circuit(&left_input, &right_input, &config, &backend, MergeMode::Twin);
+    prove_aggregation_layer::<ConfigWithFriParams, BatchOnly, BatchOnly, Backend, EXT_D>(
+        &left_input,
+        &right_input,
+        &left_result,
+        &right_result,
+        &circuit,
+        &config,
+        &backend,
+        &params,
+        None,
+    )
+    .expect("prove twin merge (VK derivation)")
+    .0
+}
+
+type MergeVerifierResult =
+    <Backend as PcsRecursionBackend<ConfigWithFriParams, BatchOnly, EXT_D>>::VerifierResult;
+
+/// Which merge circuit [`build_hiding_merge_circuit`] emits (see
+/// `expose_forest::MergeMode`, BabyBear).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum MergeMode {
+    Real,
+    Twin,
+}
+
+/// The hiding-merge circuit over two children (shared by
+/// [`prove_hiding_merge_proofs`] and [`hiding_merge_vk`]). Layout-dispatched
+/// exactly as `expose_forest::build_hiding_merge_circuit` (BabyBear): the
+/// Boundary atom is unchanged op for op; the Interval atom adds the index
+/// adjacency and the merge digest `H = Poseidon2([TAG_MERGE, i], [h, j], H_L, H_R)`.
+fn build_hiding_merge_circuit(
+    left_input: &RecursionInput<'_, ConfigWithFriParams, BatchOnly>,
+    right_input: &RecursionInput<'_, ConfigWithFriParams, BatchOnly>,
+    config: &ConfigWithFriParams,
+    backend: &Backend,
+    mode: MergeMode,
+) -> (p3_circuit::Circuit<Challenge>, MergeVerifierResult, MergeVerifierResult) {
     // Assemble a custom aggregation circuit: verify both children, then bind +
     // re-expose their boundaries.
     let mut cb = CircuitBuilder::<Challenge>::new();
@@ -288,16 +374,16 @@ pub fn prove_hiding_merge_proofs(
     // `prepare_circuit` enables the verifier's NPOs (challenger perm, recompose,
     // poseidon2); recompose is reused below to repack the outer boundary.
     PcsRecursionBackend::<ConfigWithFriParams, BatchOnly, EXT_D>::prepare_circuit(
-        &backend, &config, &mut cb,
+        backend, config, &mut cb,
     )
     .expect("prepare merge circuit");
 
     let left_result = PcsRecursionBackend::<ConfigWithFriParams, BatchOnly, EXT_D>::build_verifier_circuit(
-        &backend, &left_input, &config, &mut cb,
+        backend, left_input, config, &mut cb,
     )
     .expect("verify left child");
     let right_result = PcsRecursionBackend::<ConfigWithFriParams, BatchOnly, EXT_D>::build_verifier_circuit(
-        &backend, &right_input, &config, &mut cb,
+        backend, right_input, config, &mut cb,
     )
     .expect("verify right child");
 
@@ -311,8 +397,13 @@ pub fn prove_hiding_merge_proofs(
     // with `is_real = 0`, decoupling the surfaced boundary from any witness) and
     // re-expose an arbitrary `(Com_before, Com_after)`.
 
-    let lb = boundary_targets(&left_result); // [left.initial 0..4, left.final 4..8]
-    let rb = boundary_targets(&right_result); // [right.initial 0..4, right.final 4..8]
+    // [left.initial 0..4, left.final 4..8 (, idx 8..10, H 10..14)]
+    let (left_layout, lb) = statement_targets(&left_result);
+    let (right_layout, rb) = statement_targets(&right_result);
+    assert_eq!(
+        left_layout, right_layout,
+        "hiding merge: children expose different statement layouts"
+    );
 
     // (3) Contiguity, in-circuit: left.final == right.initial (4 base elements).
     // Assert via subtraction (`connect(sub(a,b), zero)`) rather than connecting
@@ -323,6 +414,19 @@ pub fn prove_hiding_merge_proofs(
     for k in 0..COMMIT_LEN {
         let diff = cb.sub(lb[COMMIT_LEN + k], rb[k]);
         cb.connect(diff, zero);
+    }
+
+    // Interval layout: index adjacency `right.lo - left.hi == 1` (the twin
+    // asserts `== 0`); same op list and constant set in both modes. A
+    // Goldilocks leaf pins `t < 2^32` and every `(lo, hi)` is a leaf index, so
+    // this field equation cannot wrap here (it can on BabyBear; see
+    // `expose_forest`).
+    if left_layout == Layout::Interval {
+        let one = cb.alloc_const(Challenge::ONE, "one");
+        let step = if mode == MergeMode::Twin { zero } else { one };
+        let (lo, hi) = (2 * COMMIT_LEN, 2 * COMMIT_LEN + 1);
+        let gap = cb.sub(rb[lo], lb[hi]);
+        cb.connect(gap, step);
     }
 
     // (4) Repack the outer boundary into 2+2 Challenge wires (each wire = 2
@@ -341,36 +445,206 @@ pub fn prove_hiding_merge_proofs(
         .recompose_base_coeffs_to_ext_via_alu::<Val>(&rb[COMMIT_LEN + 2..COMMIT_LEN + 4])
         .expect("recompose final_hi");
 
-    cb.add_expose(&[out_init_lo, out_init_hi, out_final_lo, out_final_hi])
-        .expect("re-expose outer boundary");
+    match left_layout {
+        Layout::Boundary => {
+            cb.add_expose(&[out_init_lo, out_init_hi, out_final_lo, out_final_hi])
+                .expect("re-expose outer boundary");
+        }
+        Layout::Interval => {
+            let (lo, hi, h) = (2 * COMMIT_LEN, 2 * COMMIT_LEN + 1, 2 * COMMIT_LEN + EXT_D);
+            let out_idx = cb
+                .recompose_base_coeffs_to_ext_via_alu::<Val>(&[lb[lo], rb[hi]])
+                .expect("recompose idx");
+            let tag = cb.alloc_const(Challenge::from(Val::from_u64(TAG_MERGE)), "tag_merge");
+            let tag_i = cb
+                .recompose_base_coeffs_to_ext_via_alu::<Val>(&[tag, lb[lo]])
+                .expect("recompose (tag, i)");
+            let h_j = cb
+                .recompose_base_coeffs_to_ext_via_alu::<Val>(&[lb[hi], rb[hi]])
+                .expect("recompose (h, j)");
+            let mut inputs = vec![tag_i, h_j];
+            for (targets, off) in [(&lb, h), (&lb, h + 2), (&rb, h), (&rb, h + 2)] {
+                inputs.push(
+                    cb.recompose_base_coeffs_to_ext_via_alu::<Val>(&targets[off..off + 2])
+                        .expect("recompose child digest"),
+                );
+            }
+            let digest = cb
+                .add_hash_slice(&Poseidon2Config::GOLDILOCKS_D2_W8, &inputs, true)
+                .expect("merge digest");
+            let mut exposed = vec![out_init_lo, out_init_hi, out_final_lo, out_final_hi, out_idx];
+            exposed.extend_from_slice(&digest);
+            cb.add_expose(&exposed).expect("re-expose interval statement");
+        }
+    }
 
     let circuit = cb.build().expect("build hiding-merge circuit");
+    (circuit, left_result, right_result)
+}
 
-    prove_aggregation_layer::<ConfigWithFriParams, BatchOnly, BatchOnly, Backend, EXT_D>(
-        &left_input,
-        &right_input,
-        &left_result,
-        &right_result,
-        &circuit,
-        &config,
-        &backend,
-        &params,
-        None,
+/// VK of `merge(left, right)` **without proving it** (Goldilocks analog of
+/// `expose_forest::hiding_merge_vk`): builds the hiding-merge circuit and
+/// commits to its preprocessed trace exactly as `prove_aggregation_layer`
+/// prepares its prover data.
+pub fn hiding_merge_vk(
+    left: &BatchStarkProof<ConfigWithFriParams>,
+    right: &BatchStarkProof<ConfigWithFriParams>,
+) -> Vec<Challenge> {
+    let config = make_leaf_config();
+    let backend = make_backend();
+    let left_common = rebuilt_common_for(left);
+    let right_common = rebuilt_common_for(right);
+    let left_input =
+        recursion_input_with_common(left, left_common.as_ref().unwrap_or(&left.stark_common));
+    let right_input =
+        recursion_input_with_common(right, right_common.as_ref().unwrap_or(&right.stark_common));
+    let (circuit, _, _) =
+        build_hiding_merge_circuit(&left_input, &right_input, &config, &backend, MergeMode::Real);
+    commitment_values(&aggregation_circuit_commitment(&circuit, &config, &backend))
+}
+
+/// The preprocessed commitment object (VK) of an aggregation circuit.
+fn aggregation_circuit_commitment(
+    circuit: &p3_circuit::Circuit<Challenge>,
+    config: &ConfigWithFriParams,
+    backend: &Backend,
+) -> Commitment<ConfigWithFriParams> {
+    let params = agg_params();
+    let preprocessors =
+        PcsRecursionBackend::<ConfigWithFriParams, BatchOnly, EXT_D>::non_primitive_preprocessors(backend);
+    let air_builders =
+        PcsRecursionBackend::<ConfigWithFriParams, BatchOnly, EXT_D>::non_primitive_air_builders(backend);
+    let (airs_degrees, _, _) = get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, EXT_D>(
+        circuit,
+        &params.table_packing,
+        &preprocessors,
+        &air_builders,
+        params.constraint_profile,
     )
-    .expect("prove hiding merge")
+    .expect("get_airs_and_degrees_with_prep (merge VK)");
+    let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
+    let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
+    let prover_data = ProverData::from_airs_and_degrees(config, &airs, &ext_degrees);
+    prover_data
+        .common
+        .preprocessed
+        .as_ref()
+        .expect("a merge circuit has preprocessed columns")
+        .commitment
+        .clone()
+}
+
+/// [`vk_pin_values`] order of a preprocessed commitment object.
+fn commitment_values(commitment: &Commitment<ConfigWithFriParams>) -> Vec<Challenge> {
+    <MerkleCapTargets<Val, DIGEST_ELEMS> as Recursive<Challenge>>::get_values(commitment)
+}
+
+/// A copy of `common` with its preprocessed commitment replaced by `vk`.
+fn common_with_vk(
+    common: &CommonData<ConfigWithFriParams>,
+    vk: &Commitment<ConfigWithFriParams>,
+) -> CommonData<ConfigWithFriParams> {
+    let pre = common.preprocessed.as_ref().expect("a bound proof has preprocessed columns");
+    CommonData::new(
+        Some(GlobalPreprocessed {
+            commitment: vk.clone(),
+            instances: pre.instances.clone(),
+            matrix_to_instance: pre.matrix_to_instance.clone(),
+        }),
+        common.lookups.clone(),
+    )
+}
+
+/// DERIVATION: the REAL merge VK over children of the given proof shapes
+/// (twin dummies allowed) and real VKs (see `expose_forest`, BabyBear).
+fn hiding_merge_vk_with(
+    left: &BatchStarkProof<ConfigWithFriParams>,
+    left_vk: &Commitment<ConfigWithFriParams>,
+    right: &BatchStarkProof<ConfigWithFriParams>,
+    right_vk: &Commitment<ConfigWithFriParams>,
+) -> Commitment<ConfigWithFriParams> {
+    let config = make_leaf_config();
+    let backend = make_backend();
+    let left_common = common_with_vk(
+        rebuilt_common_for(left).as_ref().unwrap_or(&left.stark_common),
+        left_vk,
+    );
+    let right_common = common_with_vk(
+        rebuilt_common_for(right).as_ref().unwrap_or(&right.stark_common),
+        right_vk,
+    );
+    let left_input = recursion_input_with_common(left, &left_common);
+    let right_input = recursion_input_with_common(right, &right_common);
+    let (circuit, _, _) =
+        build_hiding_merge_circuit(&left_input, &right_input, &config, &backend, MergeMode::Real);
+    aggregation_circuit_commitment(&circuit, &config, &backend)
+}
+
+/// Goldilocks analog of `expose_forest::root_vk_deriver`: derives root VKs of
+/// any [`ForestShape`] from one no-op leaf (`initial == final`), via twin
+/// dummies under the Interval layout.
+pub fn root_vk_deriver(
+    noop_leaf: BatchStarkProof<ConfigWithFriParams>,
+) -> ShapeVkDeriver<ConfigWithFriParams, Challenge> {
+    let (initial, final_) = read_exposed_boundary_proof(&noop_leaf);
+    assert_eq!(initial, final_, "the VK-derivation leaf must be a no-op (initial == final boundary)");
+    if let Some(iv) = read_exposed_statement(&noop_leaf).interval {
+        assert_eq!(iv.lo, iv.hi, "the VK-derivation leaf must cover one batch (lo == hi)");
+    }
+    ShapeVkDeriver::new(
+        noop_leaf,
+        Box::new(prove_twin_merge_proofs),
+        Box::new(hiding_merge_vk_with),
+        Box::new(commitment_values),
+    )
+}
+
+/// Trusted root VK of the [`prove_forest_over`] root over `t` leaves of
+/// `noop_leaf`'s circuit, from public parameters only.
+pub fn derive_forest_root_vk(
+    noop_leaf: BatchStarkProof<ConfigWithFriParams>,
+    t: usize,
+) -> RootVk<Challenge> {
+    root_vk_deriver(noop_leaf).root_vk(&ForestShape::forest(t))
 }
 
 /// Verify a boundary-bound proof's STARK tables (the boundary itself is read
 /// from the proof via [`read_exposed_boundary`] — it is bound in-circuit, not
 /// natively trusted).
 ///
-/// In-process convenience for the honest producer: the trusted root VK is the
-/// honestly produced root's own VK. A cross-machine auditor instead calls
-/// [`verify_bound_stark_proof`] with a trusted VK it holds independently (from
-/// the declared public profile), which is what actually anchors the root.
-pub fn verify_bound_proof(output: &RecursionOutput<ConfigWithFriParams>) {
+/// LEGACY (pre-H2 `verify_bound_proof`), kept for side-by-side use: the
+/// "trusted" root VK is read from the proof being verified, so the root-VK
+/// pin is vacuous. An auditor calls [`verify_bound_proof`] with a VK it holds
+/// independently (e.g. from [`root_vk_deriver`]).
+pub fn verify_bound_proof_self_pinned_legacy(output: &RecursionOutput<ConfigWithFriParams>) {
     let expected = vk_pin_values(&output.0);
     verify_bound_stark_proof(&output.0, &expected);
+}
+
+/// Verify a boundary-bound root against an **externally supplied** trusted
+/// root VK (commitment + optional metadata pin) — see
+/// `expose_forest::verify_bound_proof`.
+pub fn verify_bound_proof(
+    output: &RecursionOutput<ConfigWithFriParams>,
+    expected_root_vk: &RootVk<Challenge>,
+) {
+    verify_bound_stark_proof_pinned(&output.0, expected_root_vk);
+}
+
+/// [`verify_bound_stark_proof`] plus the metadata pin (`expected.shape`).
+pub fn verify_bound_stark_proof_pinned(
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+    expected: &RootVk<Challenge>,
+) {
+    if let Some(shape) = &expected.shape {
+        assert!(
+            &bound_proof_shape(proof) == shape,
+            "root proof metadata mismatch: the proof's table packing / row counts / \
+             non-primitive manifest / degree bits / preprocessed layout differ from the \
+             trusted root VK"
+        );
+    }
+    verify_bound_stark_proof(proof, &expected.commitment);
 }
 
 /// Verify a boundary-bound proof against a **trusted root verification key**
@@ -403,6 +677,124 @@ pub fn verify_bound_stark_proof(
     verifier.register_recompose_table::<EXT_D>(Poseidon2Config::GOLDILOCKS_D2_W8.d() != EXT_D);
     verifier.register_expose_table::<EXT_D>();
     verifier.verify_all_tables(proof).expect("verify bound proof");
+}
+
+/// Goldilocks analog of `expose_forest::check_root_against_log`.
+pub fn check_root_against_log(
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+    log: &BatchLog<Val>,
+    shape: &ForestShape,
+) -> Result<(), String> {
+    check_root_statement(&read_exposed_statement(proof), log, shape, &hash_gl, EXT_D)
+}
+
+/// Goldilocks analog of `expose_forest::verify_bound_stark_proof_against_log`:
+/// root-VK + metadata pin, STARK verification, then the batch-log check.
+pub fn verify_bound_stark_proof_against_log(
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+    expected_root_vk: &RootVk<Challenge>,
+    log: &BatchLog<Val>,
+    shape: &ForestShape,
+) {
+    verify_bound_stark_proof_pinned(proof, expected_root_vk);
+    if let Err(e) = check_root_against_log(proof, log, shape) {
+        panic!("root statement rejected against the batch log: {e}");
+    }
+}
+
+// ─── Standalone LEAF verification (per-batch mode, lone leaf `t == 1`) ──────
+//
+// Goldilocks analog of the `expose_forest` section of the same name: a leaf
+// proof that reaches the auditor directly is pinned to a trusted leaf VK
+// derived from public parameters, and verified by a verifier configured from
+// public parameters (never from the proof).
+
+/// Goldilocks analog of `expose_forest::leaf_verifier`: [`make_leaf_config`]
+/// plus the union of the tables the Goldilocks leaf circuits register
+/// (Poseidon2 D = 2 W8, Recompose, Permute, Range, Expose).
+pub fn leaf_verifier() -> BatchStarkProver<ConfigWithFriParams> {
+    let mut v = BatchStarkProver::new(make_leaf_config())
+        .with_table_packing(TablePacking::new(1, 1).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP));
+    v.register_poseidon2_table::<EXT_D>(Poseidon2Config::GOLDILOCKS_D2_W8);
+    v.register_recompose_table::<EXT_D>(Poseidon2Config::GOLDILOCKS_D2_W8.d() != EXT_D);
+    v.register_permute_table::<EXT_D>();
+    v.register_range_table::<EXT_D>();
+    v.register_expose_table::<EXT_D>();
+    v
+}
+
+/// Goldilocks analog of `expose_forest::leaf_vk`: the trusted leaf VK read off
+/// a no-op leaf proof (public, data-free input).
+pub fn leaf_vk(noop_leaf: &BatchStarkProof<ConfigWithFriParams>) -> RootVk<Challenge> {
+    RootVk { commitment: vk_pin_values(noop_leaf), shape: Some(bound_proof_shape(noop_leaf)) }
+}
+
+/// Goldilocks analog of `expose_forest::verify_leaf_proof_pinned`.
+pub fn verify_leaf_proof_pinned(
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+    leaf_vk: &RootVk<Challenge>,
+) -> Result<(), String> {
+    pin_and_verify_leaf(&leaf_verifier(), proof, leaf_vk)
+}
+
+fn pin_and_verify_leaf(
+    verifier: &BatchStarkProver<ConfigWithFriParams>,
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+    leaf_vk: &RootVk<Challenge>,
+) -> Result<(), String> {
+    if let Some(shape) = &leaf_vk.shape {
+        if &bound_proof_shape(proof) != shape {
+            return Err("leaf proof metadata (table packing / rows / non-primitive manifest / \
+                        degree bits / preprocessed layout) differs from the trusted leaf VK"
+                .into());
+        }
+    }
+    if vk_pin_values(proof) != leaf_vk.commitment {
+        return Err("leaf VK mismatch: the proof's preprocessed commitment is not the trusted \
+                    leaf circuit's (a proof of a different circuit)"
+            .into());
+    }
+    verifier
+        .verify_all_tables_for_field::<Challenge>(proof)
+        .map_err(|e| format!("leaf STARK rejected: {e:?}"))
+}
+
+/// Goldilocks analog of `expose_forest::verify_leaves_against_log`.
+pub fn verify_leaves_against_log(
+    proofs: &[&BatchStarkProof<ConfigWithFriParams>],
+    leaf_vk: &RootVk<Challenge>,
+    log: &BatchLog<Val>,
+    layout: Expose,
+) -> Result<(), String> {
+    let verifier = leaf_verifier();
+    for (i, p) in proofs.iter().enumerate() {
+        pin_and_verify_leaf(&verifier, p, leaf_vk).map_err(|e| format!("leaf {}: {e}", i + 1))?;
+    }
+    check_leaves_against_log(proofs, log, layout)
+}
+
+/// Goldilocks analog of `expose_forest::check_leaves_against_log` (values
+/// only; authenticates nothing on its own).
+pub fn check_leaves_against_log(
+    proofs: &[&BatchStarkProof<ConfigWithFriParams>],
+    log: &BatchLog<Val>,
+    layout: Expose,
+) -> Result<(), String> {
+    let stmts: Vec<Statement<Val>> = proofs.iter().map(|p| read_exposed_statement(p)).collect();
+    check_leaf_statements_against_log(&stmts, log, layout, &hash_gl, EXT_D)
+}
+
+/// The published log of a Goldilocks stream.
+pub fn batch_log(
+    init: &[Val; COMMIT_LEN],
+    final_: &[Val; COMMIT_LEN],
+    batch_commits: &[[Val; COMMIT_LEN]],
+) -> BatchLog<Val> {
+    BatchLog {
+        init: init.to_vec(),
+        final_: final_.to_vec(),
+        batch_commits: batch_commits.iter().map(|c| c.to_vec()).collect(),
+    }
 }
 
 /// Bentley–Saxe cascade over boundary leaves, producing one root proof whose
@@ -496,8 +888,11 @@ mod tests {
         let leaf2 = prove_gkb2_exposed(params, s1.clone(), b2.clone());
         let s2 = apply_batch2(&s1, &b2);
 
+        // Trusted root VK derived from a public no-op leaf, never read from
+        // the root proof.
+        let root_vk = derive_forest_root_vk(prove_gkb2_exposed(params, Gk2State::empty(params), Vec::new()).output.0, 2);
         let root = prove_forest_over(vec![leaf1.output, leaf2.output]);
-        verify_bound_proof(&root);
+        verify_bound_proof(&root, &root_vk);
         let (initial, final_) = read_exposed_boundary(&root);
         assert_eq!(initial.0, commit_gk2_state(&s0).0, "root initial = Com(S_0)");
         assert_eq!(final_.0, commit_gk2_state(&s2).0, "root final = Com(S_2)");
@@ -523,8 +918,11 @@ mod tests {
         let leaf2 = prove_ss_full_exposed(params, s1.clone(), b2.clone());
         let (s2, _) = apply_batch_ss_full(&s1, &b2);
 
+        // Trusted root VK derived from a public no-op leaf, never read from
+        // the root proof.
+        let root_vk = derive_forest_root_vk(prove_ss_full_exposed(params, SsFullState::empty(params), vec![SsFullUpdate::dummy(); 2]).output.0, 2);
         let root = prove_forest_over(vec![leaf1.output, leaf2.output]);
-        verify_bound_proof(&root);
+        verify_bound_proof(&root, &root_vk);
         let (initial, final_) = read_exposed_boundary(&root);
         assert_eq!(initial.0, commit_ss_state(&s0).0, "root initial = Com(S_0)");
         assert_eq!(final_.0, commit_ss_state(&s2).0, "root final = Com(S_2)");
@@ -550,8 +948,14 @@ mod tests {
         let mut s2 = s1.clone();
         hll_omc_advance(&mut s2, &b2, m);
 
+        // Trusted root VK derived from a public no-op leaf (re-inserting a key
+        // already present — `max` is idempotent), never read from the root.
+        let mut s7 = hll_omc_empty(params.b);
+        hll_omc_advance(&mut s7, &[7], m);
+        let noop = prove_hll_omc_exposed(params, s7, vec![7; params.batch]).output.0;
+        let root_vk = derive_forest_root_vk(noop, 2);
         let root = prove_forest_over(vec![leaf1.output, leaf2.output]);
-        verify_bound_proof(&root);
+        verify_bound_proof(&root, &root_vk);
         let (initial, final_) = read_exposed_boundary(&root);
         assert_eq!(
             initial.0,
@@ -600,8 +1004,11 @@ mod tests {
             apply_update_prf(&mut s2, u);
         }
 
+        // Trusted root VK derived from a public no-op leaf, never read from
+        // the root proof.
+        let root_vk = derive_forest_root_vk(prove_countmin_omc_exposed(params, cm_gl_empty(2, 4), vec![CountMinUpdate { key: 0, value: 0 }; 2]).output.0, 2);
         let root = prove_forest_over(vec![leaf1.output, leaf2.output]);
-        verify_bound_proof(&root);
+        verify_bound_proof(&root, &root_vk);
         let (initial, final_) = read_exposed_boundary(&root);
         assert_eq!(initial.0, commit_countmin(&s0).0, "root initial = Com(S_0)");
         assert_eq!(final_.0, commit_countmin(&s2).0, "root final = Com(S_2)");

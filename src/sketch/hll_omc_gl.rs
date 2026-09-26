@@ -52,6 +52,8 @@ use p3_symmetric::CryptographicHasher;
 use p3_uni_stark::StarkGenericConfig;
 
 use crate::config_gl::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
+use crate::sketch::bind::{self, Binding};
+use crate::recursion::recursive::statement::{self, Expose, IndexPin};
 use crate::recursion::recursive::config_gl::ConfigWithFriParamsGl as ConfigWithFriParams;
 use crate::recursion::recursive::leaf_gl::{
     DIGEST_PACKING, GlCommit, make_leaf_config, pack_commit_to_challenge,
@@ -83,17 +85,24 @@ thread_local! {
     static TAMPER_SUPPRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Native register routing: `idx = digest[0] mod m`, `ρ = 1 +
-/// trailing_zeros(digest[1])` over the `val_bits()` window (digest =
-/// `MyHash([key, 0])`, one Challenge's worth of coefficients) — mirrors the
-/// in-circuit derivation. NOTE: the Goldilocks digest differs from the
-/// BabyBear [`super::hll_omc::route`], so `hll_gl` register arrays are a
-/// distinct (statistically equivalent) HLL instance — chains/forests must not
-/// mix fields.
+/// Native register routing under the process default [`Binding`] (the one
+/// [`build_hll_omc_leaf`] uses); see [`route_with`].
 pub fn route(key: u64, m: usize) -> (usize, u32) {
+    route_with(key, m, bind::default_binding())
+}
+
+/// Native register routing: `idx = digest[0] mod m`, `ρ = 1 +
+/// trailing_zeros(digest[1])` over the `val_bits()` window, digest =
+/// `MyHash(bind::key_hash_input(key, binding))` (one Challenge's worth of
+/// coefficients): the exact 32-bit limbs `[lo, hi]` under `Semantic`/`Bound`,
+/// `[key mod p, 0]` under `Legacy` (so `k` and `k + p` collide there) —
+/// mirrors the in-circuit derivation. NOTE: the Goldilocks digest differs from
+/// the BabyBear [`super::hll_omc::route_with`], so `hll_gl` register arrays
+/// are a distinct (statistically equivalent) HLL instance — chains/forests
+/// must not mix fields.
+pub fn route_with(key: u64, m: usize, binding: Binding) -> (usize, u32) {
     let hasher = MyHash::new(make_perm());
-    let input = [Val::from_u64(key), Val::ZERO];
-    let digest: [Val; 4] = hasher.hash_iter(input.iter().copied());
+    let digest: [Val; 4] = hasher.hash_iter(bind::key_hash_input::<Val>(key, binding));
     let idx = (<Val as PrimeField64>::as_canonical_u64(&digest[0]) % m as u64) as usize;
     let tail = <Val as PrimeField64>::as_canonical_u64(&digest[1]);
     let nbits = val_bits() as u32;
@@ -157,13 +166,39 @@ pub fn hll_omc_empty(b: usize) -> Vec<u64> {
 }
 
 /// Native single-batch advance: max-fold each key's rank `ρ = route(key, m).1`
-/// into its register — exactly the update the leaf proves — so the resulting
-/// register array feeds the next leaf's `initial` and the boundaries chain.
+/// into its register — exactly the update the leaf proves (process default
+/// [`Binding`]) — so the resulting register array feeds the next leaf's
+/// `initial` and the boundaries chain.
 pub fn hll_omc_advance(regs: &mut [u64], keys: &[u64], m: usize) {
+    hll_omc_advance_with(regs, keys, m, bind::default_binding());
+}
+
+/// [`hll_omc_advance`] for an explicit [`Binding`] (routing by
+/// [`route_with`]).
+pub fn hll_omc_advance_with(regs: &mut [u64], keys: &[u64], m: usize, binding: Binding) {
     for &key in keys {
-        let (idx, rho) = route(key, m);
+        let (idx, rho) = route_with(key, m, binding);
         regs[idx] = regs[idx].max(rho as u64);
     }
+}
+
+/// The batch commitment `Com(B_t)` the Goldilocks omc HLL leaf binds
+/// in-circuit (what the public log publishes for the batch). Process default
+/// [`Binding`].
+pub fn hll_omc_batch_commit(keys: &[u64]) -> [Val; 4] {
+    hll_omc_batch_commit_with(keys, bind::default_binding())
+}
+
+/// [`hll_omc_batch_commit`] for an explicit [`Binding`]: one Challenge per
+/// key, `[lo, hi]` (exact 32-bit limbs) under `Semantic`/`Bound`, `[key mod
+/// p, 0]` under `Legacy`.
+pub fn hll_omc_batch_commit_with(keys: &[u64], binding: Binding) -> [Val; 4] {
+    let hasher = MyHash::new(make_perm());
+    let flat: Vec<Val> = keys
+        .iter()
+        .flat_map(|&k| bind::key_hash_input::<Val>(k, binding))
+        .collect();
+    hasher.hash_iter(flat.iter().copied())
 }
 
 /// `Com(S)` for an HLL/omc register array — the flat Poseidon2 hash over the
@@ -271,6 +306,10 @@ pub fn prove_hll_omc_exposed(
 /// prove swaps in via `Circuit::update_permute_witnesses`.
 pub struct HllOmcLeafCircuit {
     params: HllOmcParams,
+    binding: Binding,
+    expose: Expose,
+    /// Batch index `t` of the next proof (Interval statement only).
+    batch_index: u64,
     circuit: p3_circuit::Circuit<Challenge>,
     prover: BatchStarkProver<ConfigWithFriParams>,
     circuit_prover_data: Rc<CircuitProverData<ConfigWithFriParams>>,
@@ -279,7 +318,44 @@ pub struct HllOmcLeafCircuit {
 
 /// Build the reusable Goldilocks `omc` HLL leaf circuit for a shape.
 pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmcLeafCircuit {
+    build_hll_omc_leaf_with(params, expose_boundary, bind::default_binding())
+}
+
+/// Build the Goldilocks `omc` HLL leaf for a shape and binding.
+///
+/// [`Binding::Legacy`] is the pre-fix circuit, unchanged. It is unsound:
+/// the register and digest decompositions are unbound and the sponge IVs are
+/// free. [`Binding::Semantic`] / [`Binding::Bound`] take each key as two
+/// exact 32-bit limbs, range-checked and ALU-recomposed into the one Challenge
+/// the batch commitment and the routing hash both absorb
+/// ([`bind::key_from_limbs`]), so the hashed key is a real 64-bit key, not a
+/// grindable extension element and not reduced mod `p` (`Legacy`'s `[key mod
+/// p, 0]` routes `k` and `k + p` identically; `tests::congruent_keys_*`), and
+/// range-check `idx_sorted[0]` exactly. `Bound` also
+/// ALU-binds the register cells (`RANK_BITS` range pins) and both routing
+/// digest coefficients (already pinned by their canonical bit
+/// decompositions), skips the unused second digest Challenge, and hashes
+/// with a zero IV (see [`crate::sketch::bind`]).
+pub fn build_hll_omc_leaf_with(
+    params: HllOmcParams,
+    expose_boundary: bool,
+    binding: Binding,
+) -> HllOmcLeafCircuit {
+    build_hll_omc_leaf_expose(params, Expose::from_bool(expose_boundary), binding)
+}
+
+/// Goldilocks `omc` HLL leaf with an explicit composition statement
+/// ([`Expose`]); `None` / `Boundary` are byte-for-byte
+/// [`build_hll_omc_leaf_with`], `Interval` adds the batch index `t` (last
+/// public input) and exposes `(init, final, (t, t), H)`.
+pub fn build_hll_omc_leaf_expose(
+    params: HllOmcParams,
+    expose: Expose,
+    binding: Binding,
+) -> HllOmcLeafCircuit {
+    let expose_boundary = expose == Expose::Boundary;
     params.validate();
+    let bound = binding.is_bound();
     let HllOmcParams { batch: m_batch, .. } = params;
     let m = params.m();
     let addr_bits = params.addr_bits();
@@ -297,7 +373,7 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
-    if expose_boundary {
+    if expose.exposes() {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
 
@@ -341,9 +417,22 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
     let final_packed: Vec<ExprId> = (0..cell_packing)
         .map(|_| b.alloc_private_input("final_cell_packed"))
         .collect();
-    let key_coeff: Vec<ExprId> = (0..m_batch)
-        .map(|_| b.alloc_private_input("key_coeff"))
-        .collect();
+    // Legacy: one field element per key (the key mod p). Semantic/Bound: the
+    // two exact 32-bit limbs.
+    let key_coeff: Vec<ExprId> = if bound {
+        Vec::new()
+    } else {
+        (0..m_batch)
+            .map(|_| b.alloc_private_input("key_coeff"))
+            .collect()
+    };
+    let key_limbs: Vec<[ExprId; 2]> = if bound {
+        (0..m_batch)
+            .map(|_| std::array::from_fn(|_| b.alloc_private_input("key_limb")))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let key_h0: Vec<ExprId> = (0..m_batch)
         .map(|_| b.alloc_private_input("key_h0"))
         .collect();
@@ -375,46 +464,107 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
         .collect();
 
     // ── Stage A: bind both register arrays + batch to their commitments ──
-    let digest_init = b
-        .add_hash_slice(&cfg, &init_packed, true)
-        .expect("hash init");
+    if let Some(&f0) = final_packed.first() {
+        b.tag(f0, "hllgl_final_packed_0").expect("tag");
+    }
+    let digest_init = bind::hash_slice(&mut b, &cfg, &init_packed, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(digest_init[i], init_commit_pis[i]);
     }
-    let digest_final = b
-        .add_hash_slice(&cfg, &final_packed, true)
-        .expect("hash final");
+    let digest_final = bind::hash_slice(&mut b, &cfg, &final_packed, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(digest_final[i], final_commit_pis[i]);
     }
+    let pin_reg = |b: &mut CircuitBuilder<Challenge>, _i: usize, c: ExprId| {
+        bind::range_exact::<Val, Challenge>(b, c, RANK_BITS);
+    };
     let o_cells: Vec<ExprId> = init_packed
         .iter()
-        .flat_map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).unwrap())
+        .flat_map(|&p| bind::decompose::<Val, Challenge>(&mut b, p, binding, bind::no_pin, pin_reg))
         .collect();
     let n_cells: Vec<ExprId> = final_packed
         .iter()
-        .flat_map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).unwrap())
+        .flat_map(|&p| bind::decompose::<Val, Challenge>(&mut b, p, binding, bind::no_pin, pin_reg))
         .collect();
-    // Keys → field elements; batch commitment over them.
-    let keys_t: Vec<ExprId> = (0..m_batch)
-        .map(|k| {
-            b.recompose_base_coeffs_to_ext_via_alu::<Val>(&[key_coeff[k], zero])
-                .expect("recompose key")
-        })
-        .collect();
-    let hb = b.add_hash_slice(&cfg, &keys_t, true).expect("hash batch");
+    // Keys → one Challenge each (exact limbs under Semantic/Bound); batch
+    // commitment over them.
+    let keys_t: Vec<ExprId> = if bound {
+        key_limbs
+            .iter()
+            .map(|l| bind::key_from_limbs::<Val, Challenge>(&mut b, l))
+            .collect()
+    } else {
+        (0..m_batch)
+            .map(|k| {
+                b.recompose_base_coeffs_to_ext_via_alu::<Val>(&[key_coeff[k], zero])
+                    .expect("recompose key")
+            })
+            .collect()
+    };
+    if let Some(&k0) = keys_t.first() {
+        b.tag(k0, "hllgl_keys_t_0").expect("tag");
+    }
+    let hb = bind::hash_slice(&mut b, &cfg, &keys_t, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(hb[i], batch_commit_pis[i]);
+    }
+    // Interval statement (B6(b)): batch index t (7th public input) and
+    // H = Poseidon2(TAG_LEAF, t, hb), exposed with the boundary.
+    if expose.is_interval() {
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b,
+            &cfg,
+            &init_commit_pis,
+            &final_commit_pis,
+            &hb,
+            zero,
+            binding,
+            IndexPin::Range,
+        );
     }
 
     // ── Stage F: per record, derive (idx, ρ) from the key hash → payload ──
     let mut payload = Vec::with_capacity(m_batch);
     for k in 0..m_batch {
-        let hashed = b
-            .add_hash_slice(&cfg, &[keys_t[k]], true)
-            .expect("hash key");
+        let hashed = bind::hash_slice(&mut b, &cfg, &[keys_t[k]], zero, binding);
         b.connect(hashed[0], key_h0[k]);
         b.connect(hashed[1], key_h1[k]);
+        if bound {
+            // Coefficient 0 → idx (canonical bits), coefficient 1 → ρ (canonical
+            // bits); both pin themselves. The second digest Challenge is unused.
+            let mut idx_bits: Vec<ExprId> = Vec::new();
+            let mut dbits: Vec<ExprId> = Vec::new();
+            let _ = bind::decompose::<Val, Challenge>(
+                &mut b,
+                key_h0[k],
+                binding,
+                |b, i, c| {
+                    let bits = b.decompose_to_bits::<Val>(c, val_bits()).expect("bits digest");
+                    assert_canonical_bits(b, &bits, &canon_pow2, one, zero);
+                    if i == 0 {
+                        idx_bits = bits;
+                    } else {
+                        dbits = bits;
+                    }
+                },
+                bind::no_pin,
+            );
+            let mut idx = zero;
+            for j in 0..addr_bits {
+                idx = b.mul_add(idx_bits[j], pow2_consts[j], idx);
+            }
+            let mut acc_zero = b.sub(one, dbits[0]);
+            let mut tz = acc_zero;
+            for k2 in 1..val_bits() {
+                let omb = b.sub(one, dbits[k2]);
+                acc_zero = b.mul(acc_zero, omb);
+                tz = b.add(tz, acc_zero);
+            }
+            let rho = b.add(tz, one);
+            let packed = b.mul(idx, shift_val_const);
+            payload.push(b.add(packed, rho));
+            continue;
+        }
         let c0 = b
             .decompose_ext_to_base_coeffs::<Val>(key_h0[k])
             .expect("decompose h0");
@@ -459,9 +609,6 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
         payload.push(b.add(packed, rho));
     }
 
-    // ── Stage G: permute payload into register-sorted order ──────────────
-    // Placeholder identity permutation — `prove_epoch` swaps in the real
-    // per-batch sigma via `update_permute_witnesses` before each run.
     let payload_sorted = b
         .add_permute(&payload, (0..m_batch).collect::<Vec<_>>())
         .expect("permute reg");
@@ -480,6 +627,9 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
         b.connect(inv_diff[0], zero);
         // First segment starts at ρ_sorted[0].
         b.connect(acc[0], rho_sorted_w[0]);
+        if bound {
+            bind::range_exact::<Val, Challenge>(&mut b, idx_sorted_w[0], addr_bits);
+        }
     }
     for r in 1..m_batch {
         // eq_tag[r] == (idx_sorted[r] == idx_sorted[r-1]).
@@ -592,7 +742,7 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 2>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 2>(1));
     air_builders.extend(range_air_builders::<ConfigWithFriParams, 2>(1));
-    if expose_boundary {
+    if expose.exposes() {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 2>());
     }
@@ -617,13 +767,16 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
     prover.register_recompose_table::<2>(Poseidon2Config::GOLDILOCKS_D2_W8.d() != 2);
     prover.register_permute_table::<2>();
     prover.register_range_table::<2>();
-    if expose_boundary {
+    if expose.exposes() {
         prover.register_expose_table::<2>();
     }
     let trace_rows: u64 = ext_degrees.iter().map(|&d| 1u64 << d).sum();
 
     HllOmcLeafCircuit {
         params,
+        binding,
+        expose,
+        batch_index: 1,
         circuit,
         prover,
         circuit_prover_data: Rc::new(circuit_prover_data),
@@ -631,10 +784,89 @@ pub fn build_hll_omc_leaf(params: HllOmcParams, expose_boundary: bool) -> HllOmc
     }
 }
 
+type GlEpoch = (Vec<Challenge>, Vec<Challenge>, GlCommit, GlCommit, GlCommit);
+
 impl HllOmcLeafCircuit {
+    pub fn binding(&self) -> Binding {
+        self.binding
+    }
+
     /// Prove one epoch on the prebuilt circuit. `initial` is the `m` register
     /// values; `keys` is the `params.batch` record keys.
     pub fn prove_epoch(&mut self, initial: Vec<u64>, keys: Vec<u64>) -> HllOmcProof {
+        self.prove_epoch_at(1, initial, keys)
+    }
+
+    /// The statement this leaf exposes ([`Expose`]).
+    pub fn expose(&self) -> Expose {
+        self.expose
+    }
+
+    /// Prove the epoch of batch `t` (1-based); `t` is part of the Interval
+    /// statement (ignored by the other layouts).
+    pub fn prove_epoch_at(&mut self, t: u64, initial: Vec<u64>, keys: Vec<u64>) -> HllOmcProof {
+        self.batch_index = t;
+        let params = self.params;
+        let __t_w = std::time::Instant::now();
+        let (traces, (_, _, initial_commit, final_commit, batch_commit)) = self.run_epoch(initial, keys);
+        let __witness = __t_w.elapsed();
+
+        let __t_p = std::time::Instant::now();
+        let proof = self
+            .prover
+            .prove_all_tables(&traces, &self.circuit_prover_data)
+            .expect("prove_all_tables (hll_omc_gl)");
+        let __prove = __t_p.elapsed();
+        let __t_v = std::time::Instant::now();
+        self.prover
+            .verify_all_tables(&proof)
+            .expect("self-verify hll_omc_gl leaf");
+        crate::recursion::recursive::timing::record(
+            crate::recursion::recursive::timing::LeafTiming {
+                witness: __witness,
+                prove: __prove,
+                verify: __t_v.elapsed(),
+                trace_rows: self.trace_rows,
+            },
+        );
+
+        HllOmcProof {
+            output: RecursionOutput(proof, Rc::clone(&self.circuit_prover_data)),
+            initial_commit,
+            final_commit,
+            batch_commit,
+            params,
+        }
+    }
+
+    /// Run the circuit on one epoch's witness; returns the traces and inputs.
+    fn run_epoch(&mut self, initial: Vec<u64>, keys: Vec<u64>) -> (p3_circuit::tables::Traces<Challenge>, GlEpoch) {
+        let ep = self.epoch(initial, keys);
+        let traces = {
+            let mut runner = self.circuit.runner();
+            runner.set_public_inputs(&ep.0).expect("set pubs");
+            runner.set_private_inputs(&ep.1).expect("set privs");
+            runner.run().expect("run hll_omc_gl")
+        };
+        (traces, ep)
+    }
+
+    /// Prove + self-verify arbitrary traces of this circuit.
+    #[cfg(test)]
+    fn prove_traces(
+        &self,
+        traces: &p3_circuit::tables::Traces<Challenge>,
+    ) -> Result<p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>, String> {
+        let proof = self
+            .prover
+            .prove_all_tables(traces, &self.circuit_prover_data)
+            .map_err(|e| format!("prove: {e:?}"))?;
+        self.prover.verify_all_tables(&proof).map_err(|e| format!("verify: {e:?}"))?;
+        Ok(proof)
+    }
+
+    /// Native side of one epoch + runner inputs (swaps the permutation hints).
+    fn epoch(&mut self, initial: Vec<u64>, keys: Vec<u64>) -> GlEpoch {
         let params = self.params;
         let HllOmcParams { batch: m_batch, .. } = params;
         let m = params.m();
@@ -647,8 +879,9 @@ impl HllOmcLeafCircuit {
         let init_regs: Vec<u32> = initial.iter().map(|&x| x as u32).collect();
         let mut idx_of = vec![0usize; m_batch];
         let mut rho_of = vec![0u32; m_batch];
+        let binding = self.binding;
         for (k, &key) in keys.iter().enumerate() {
-            let (i, r) = route(key, m);
+            let (i, r) = route_with(key, m, binding);
             idx_of[k] = i;
             rho_of[k] = r;
         }
@@ -728,15 +961,8 @@ impl HllOmcLeafCircuit {
         let initial_commit = commit_regs(&init_regs);
         let final_commit = commit_regs(&committed_final_regs);
 
-        // Batch commitment over the keys (one Val each, MyHash([key,0]) blocks).
-        let batch_commit: GlCommit = {
-            let hasher = MyHash::new(make_perm());
-            let flat: Vec<Val> = keys
-                .iter()
-                .flat_map(|&k| [Val::from_u64(k), Val::ZERO])
-                .collect();
-            GlCommit(hasher.hash_iter(flat.iter().copied()))
-        };
+        // Batch commitment over the keys (one Challenge each).
+        let batch_commit: GlCommit = GlCommit(hll_omc_batch_commit_with(&keys, binding));
 
         // Dense old/new register multisets + touched read/write rows, in the
         // offline-memory-checking read/write-set form with a time coordinate `ts`
@@ -793,29 +1019,37 @@ impl HllOmcLeafCircuit {
         public_inputs.extend_from_slice(&pack_commit_to_challenge(&initial_commit));
         public_inputs.extend_from_slice(&pack_commit_to_challenge(&final_commit));
         public_inputs.extend_from_slice(&pack_commit_to_challenge(&batch_commit));
+        if self.expose.is_interval() {
+            public_inputs.push(Challenge::from_u64(self.batch_index));
+        }
 
         let mut private_inputs: Vec<Challenge> = Vec::new();
         private_inputs.extend_from_slice(&pack_cells_to_challenge(&init_regs));
         private_inputs.extend_from_slice(&pack_cells_to_challenge(&committed_final_regs));
-        for &k in &keys {
-            private_inputs.push(Challenge::from_u64(k));
+        if binding.is_bound() {
+            for &k in &keys {
+                private_inputs.extend(bind::key_limbs::<Val>(k).into_iter().map(Challenge::from));
+            }
+        } else {
+            for &k in &keys {
+                private_inputs.push(Challenge::from_u64(k));
+            }
         }
-        {
+        let digests: Vec<[Val; 4]> = {
             let hasher = MyHash::new(make_perm());
-            for &k in &keys {
-                let input = [Val::from_u64(k), Val::ZERO];
-                let digest: [Val; 4] = hasher.hash_iter(input.iter().copied());
-                private_inputs.push(
-                    Challenge::from_basis_coefficients_slice(&digest[0..2]).expect("2 coeffs"),
-                );
-            }
-            for &k in &keys {
-                let input = [Val::from_u64(k), Val::ZERO];
-                let digest: [Val; 4] = hasher.hash_iter(input.iter().copied());
-                private_inputs.push(
-                    Challenge::from_basis_coefficients_slice(&digest[2..4]).expect("2 coeffs"),
-                );
-            }
+            keys.iter()
+                .map(|&k| hasher.hash_iter(bind::key_hash_input::<Val>(k, binding)))
+                .collect()
+        };
+        for digest in &digests {
+            private_inputs.push(
+                Challenge::from_basis_coefficients_slice(&digest[0..2]).expect("2 coeffs"),
+            );
+        }
+        for digest in &digests {
+            private_inputs.push(
+                Challenge::from_basis_coefficients_slice(&digest[2..4]).expect("2 coeffs"),
+            );
         }
         for r in 0..m_batch {
             private_inputs.push(Challenge::from_u64(idx_sorted[r]));
@@ -849,44 +1083,7 @@ impl HllOmcLeafCircuit {
             private_inputs.push(Challenge::from_u64(ft_native[a]));
         }
 
-        // ─── Run + prove ─────────────────────────────────────────────────────
-        let __t_w = std::time::Instant::now();
-        let traces = {
-            let mut runner = self.circuit.runner();
-            runner.set_public_inputs(&public_inputs).expect("set pubs");
-            runner
-                .set_private_inputs(&private_inputs)
-                .expect("set privs");
-            runner.run().expect("run hll_omc_gl")
-        };
-        let __witness = __t_w.elapsed();
-
-        let __t_p = std::time::Instant::now();
-        let proof = self
-            .prover
-            .prove_all_tables(&traces, &self.circuit_prover_data)
-            .expect("prove_all_tables (hll_omc_gl)");
-        let __prove = __t_p.elapsed();
-        let __t_v = std::time::Instant::now();
-        self.prover
-            .verify_all_tables(&proof)
-            .expect("self-verify hll_omc_gl leaf");
-        crate::recursion::recursive::timing::record(
-            crate::recursion::recursive::timing::LeafTiming {
-                witness: __witness,
-                prove: __prove,
-                verify: __t_v.elapsed(),
-                trace_rows: self.trace_rows,
-            },
-        );
-
-        HllOmcProof {
-            output: RecursionOutput(proof, Rc::clone(&self.circuit_prover_data)),
-            initial_commit,
-            final_commit,
-            batch_commit,
-            params,
-        }
+        (public_inputs, private_inputs, initial_commit, final_commit, batch_commit)
     }
 }
 
@@ -897,6 +1094,17 @@ fn prove_hll_omc_impl(
     expose_boundary: bool,
 ) -> HllOmcProof {
     build_hll_omc_leaf(params, expose_boundary).prove_epoch(initial, keys)
+}
+
+/// [`prove_hll_omc`] / [`prove_hll_omc_exposed`] with an explicit [`Binding`].
+pub fn prove_hll_omc_with(
+    params: HllOmcParams,
+    initial: Vec<u64>,
+    keys: Vec<u64>,
+    expose_boundary: bool,
+    binding: Binding,
+) -> HllOmcProof {
+    build_hll_omc_leaf_with(params, expose_boundary, binding).prove_epoch(initial, keys)
 }
 
 #[cfg(test)]
@@ -939,12 +1147,18 @@ mod tests {
         assert!(rejected(p), "the value p must be rejected as non-canonical");
     }
 
-    /// Native max-fold reference for the final register array.
+    /// Native max-fold reference for the final register array (process
+    /// default binding, as `prove_hll_omc` uses).
     fn native_final(b: usize, initial: &[u64], keys: &[u64]) -> Vec<u32> {
+        native_final_with(b, initial, keys, bind::default_binding())
+    }
+
+    /// [`native_final`] with `binding`'s routing.
+    fn native_final_with(b: usize, initial: &[u64], keys: &[u64], binding: Binding) -> Vec<u32> {
         let m = 1usize << b;
         let mut regs: Vec<u32> = initial.iter().map(|&x| x as u32).collect();
         for &k in keys {
-            let (idx, rho) = route(k, m);
+            let (idx, rho) = route_with(k, m, binding);
             regs[idx] = regs[idx].max(rho);
         }
         regs
@@ -1066,5 +1280,162 @@ mod tests {
             res.is_err(),
             "max-suppression (unchanged commit) must be rejected"
         );
+    }
+
+    // ── Binding (see `crate::sketch::bind`): legacy-vs-bound forgery tests ──
+
+    use crate::sketch::forge;
+    use p3_circuit::ops::{NpoTypeId, Poseidon2Trace};
+
+    const FP: HllOmcParams = HllOmcParams { b: 3, batch: 4 };
+    const FP_KEYS: [u64; 4] = [7, 11, 13, 17];
+
+    fn fp_prior() -> Vec<u64> {
+        let mut prior = vec![0u64; FP.m()];
+        hll_omc_advance(&mut prior, &[101, 202, 303], FP.m());
+        prior
+    }
+
+    fn cfg() -> Poseidon2Config {
+        Poseidon2Config::GOLDILOCKS_D2_W8
+    }
+
+    /// Honest epochs verify under every binding and certify that binding's
+    /// native model (register fold and batch commitment); 64-bit keys use
+    /// both exact limbs.
+    #[test]
+    fn omc_gl_round_trip_all_bindings() {
+        let mut keys = FP_KEYS.to_vec();
+        keys[3] = 0xFEDC_BA98_7654_3210;
+        for binding in [Binding::Bound, Binding::Semantic, Binding::Legacy] {
+            let expect = native_final_with(FP.b, &fp_prior(), &keys, binding);
+            let r = prove_hll_omc_with(FP, fp_prior(), keys.clone(), true, binding);
+            assert_eq!(r.final_commit.0, commit_regs(&expect).0, "{binding:?}");
+            assert_eq!(r.batch_commit.0, hll_omc_batch_commit_with(&keys, binding));
+        }
+    }
+
+    /// First `k ≥ 12_345` whose congruent twin `k + p` (Goldilocks `p = 2^64 −
+    /// 2^32 + 1`, both u64) lands in a DIFFERENT register under the exact-limb
+    /// encoding.
+    fn congruent_pair(m: usize) -> (u64, u64) {
+        let p = <Val as PrimeField64>::ORDER_U64;
+        (12_345u64..)
+            .map(|k| (k, k + p))
+            .find(|&(k, t)| route_with(k, m, Binding::Semantic).0 != route_with(t, m, Binding::Semantic).0)
+            .expect("a separated pair")
+    }
+
+    /// Native routing: `Legacy` hashes `[key mod p, 0]`, so `k` and `k + p`
+    /// share register, rank and batch commitment (the documented control);
+    /// `Semantic`/`Bound` hash the exact 32-bit limbs and separate them.
+    #[test]
+    fn congruent_keys_native_routing() {
+        let m = 1usize << 10;
+        let (k, t) = congruent_pair(m);
+        assert_eq!(route_with(k, m, Binding::Legacy), route_with(t, m, Binding::Legacy));
+        assert_eq!(
+            hll_omc_batch_commit_with(&[k], Binding::Legacy),
+            hll_omc_batch_commit_with(&[t], Binding::Legacy)
+        );
+        for binding in [Binding::Semantic, Binding::Bound] {
+            assert_ne!(route_with(k, m, binding), route_with(t, m, binding));
+            assert_ne!(hll_omc_batch_commit_with(&[k], binding), hll_omc_batch_commit_with(&[t], binding));
+        }
+    }
+
+    /// Proof level: one batch `[k, k + p]` into empty registers. `Legacy`
+    /// certifies one raised register (the documented control),
+    /// `Semantic`/`Bound` two.
+    #[test]
+    fn congruent_keys_legacy_collide_semantic_bound_separate() {
+        let params = HllOmcParams { b: 10, batch: 2 };
+        let (k, t) = congruent_pair(params.m());
+        for binding in [Binding::Legacy, Binding::Semantic, Binding::Bound] {
+            let expect = native_final_with(params.b, &vec![0; params.m()], &[k, t], binding);
+            let r = prove_hll_omc_with(params, vec![0; params.m()], vec![k, t], true, binding);
+            assert_eq!(r.final_commit.0, commit_regs(&expect).0, "{binding:?}");
+            let raised = expect.iter().filter(|&&x| x > 0).count();
+            assert_eq!(raised, if binding.is_bound() { 2 } else { 1 }, "{binding:?}");
+        }
+    }
+
+    /// FORGED FINAL STATE (transplant): recommit the first packed register
+    /// Challenge with register 0 raised by one, rehash.
+    fn forged_final(binding: Binding) -> bool {
+        forge::accepted_with_control(&format!("hll_gl forged final ({binding:?})"), |f| {
+            forged_final_run(binding, f)
+        })
+    }
+
+    fn forged_final_run(binding: Binding, forge_it: bool) -> bool {
+        let mut leaf = build_hll_omc_leaf_with(FP, true, binding);
+        let (mut traces, _) = leaf.run_epoch(fp_prior(), FP_KEYS.to_vec());
+        let mut forged = native_final_with(FP.b, &fp_prior(), &FP_KEYS, binding);
+        if forge_it {
+            forged[0] += 1;
+        }
+        let w = traces.tag_to_witness["hllgl_final_packed_0"];
+        forge::set_wid::<Val, Challenge>(&mut traces, w, pack_cells_to_challenge(&forged)[0]);
+        forge::rehash_all::<Val, Challenge, _, 8>(&mut traces, cfg(), &make_perm());
+        forge::accepted(|| leaf.prove_traces(&traces).map(|_| ()))
+    }
+
+    /// FREE SPONGE IV on record 0's routing hash (the last `new_start` row
+    /// reading `keys_t[0]`; capacity limb 2 = base 4).
+    fn forged_iv(binding: Binding) -> bool {
+        forge::accepted_with_control(&format!("hll_gl forged IV ({binding:?})"), |f| {
+            forged_iv_run(binding, f)
+        })
+    }
+
+    fn forged_iv_run(binding: Binding, forge_it: bool) -> bool {
+        let mut leaf = build_hll_omc_leaf_with(FP, true, binding);
+        let (mut traces, _) = leaf.run_epoch(fp_prior(), FP_KEYS.to_vec());
+        let k0 = traces.tag_to_witness["hllgl_keys_t_0"].0;
+        let key = NpoTypeId::poseidon2_perm(cfg());
+        let mut pt = traces.non_primitive_trace::<Poseidon2Trace<Val>>(&key).expect("p2").clone();
+        let row = pt
+            .operations
+            .iter_mut()
+            .filter(|r| r.new_start && r.in_ctl[0] && r.input_indices[0] == k0)
+            .last()
+            .expect("record 0 routing hash row");
+        if forge_it {
+            row.input_values[4] += Val::ONE;
+        }
+        traces.non_primitive_traces.insert(key, Box::new(pt));
+        forge::rehash_all::<Val, Challenge, _, 8>(&mut traces, cfg(), &make_perm());
+        forge::accepted(|| leaf.prove_traces(&traces).map(|_| ()))
+    }
+
+    #[test]
+    fn forged_final_state_legacy_accepts_bound_rejects() {
+        if !bind::probe::fork_binds_decompose() {
+            assert!(forged_final(Binding::Legacy), "Legacy accepts the forged final (PoC)");
+        }
+        assert!(!forged_final(Binding::Bound), "Bound must reject the forged final");
+        // Merged soundness fork: the fork itself binds decompose coefficients, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if bind::probe::fork_binds_decompose() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(!forged_final(b), "fork binds decompose coefficients: {b:?} must reject too");
+            }
+        }
+    }
+
+    #[test]
+    fn forged_routing_iv_legacy_accepts_bound_rejects() {
+        if !bind::probe::fork_binds_iv() && !bind::probe::fork_binds_decompose() {
+            assert!(forged_iv(Binding::Legacy), "Legacy accepts the free-IV digest (PoC)");
+        }
+        assert!(!forged_iv(Binding::Bound), "Bound must reject the IV forgery");
+        // Merged soundness fork: the fork itself binds the sponge IV, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if bind::probe::fork_binds_iv() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(!forged_iv(b), "fork binds the sponge IV: {b:?} must reject too");
+            }
+        }
     }
 }

@@ -23,7 +23,7 @@ use zksketch::experiments::metrics::{append_csv, bench, write_env_json, BenchCfg
 use zksketch::experiments::results_dir;
 use zksketch::recursion::recursive::timing;
 use zksketch::sketch::countmin::{CountMin, CountMinParams, CountMinState, CountMinUpdate};
-use zksketch::sketch::countmin_final::apply_update_prf;
+use zksketch::sketch::countmin_omc::countmin_omc_advance;
 use zksketch::sketch::gk_final_full::{apply_batch_full, GKFullParams, GKFullState, GKFullUpdate};
 use zksketch::sketch::hll_final_full::{apply_update as hll_apply, HllFullParams, HllFullState, HllFullUpdate};
 use zksketch::sketch::ss_final_full::{apply_batch_ss_full, SsFullParams, SsFullState, SsFullUpdate};
@@ -46,11 +46,13 @@ fn keys_for(name: &str, n: usize) -> Vec<u32> {
     }
 }
 
+/// The state the omc leaf certifies for `keys` (process default binding),
+/// which the default-binding decoder routes by.
 fn cm_state(d: usize, w: usize, keys: &[u32]) -> CountMinState {
     let mut s = CountMin::new(&CountMinParams { d, w });
-    for &k in keys {
-        apply_update_prf(&mut s, &CountMinUpdate { key: k as u64, value: 1 });
-    }
+    let ups: Vec<CountMinUpdate> =
+        keys.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
+    countmin_omc_advance(&mut s, &ups);
     s
 }
 

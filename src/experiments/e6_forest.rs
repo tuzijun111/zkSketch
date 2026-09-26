@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::commitment::countmin::commit_countmin;
+use crate::commitment::countmin_batch::commit_batch;
 use crate::commitment::{CountMinBatchCommit, CountMinCommit};
 use crate::config::Val;
 use crate::recursion::framework::{EpochLeaf, StreamingForest};
@@ -36,18 +37,30 @@ use crate::recursion::recursive::countmin_forest_v9::{
 use crate::recursion::recursive::countmin_leaf::CountMinLeafParams;
 use crate::recursion::recursive::countmin_leaf_v9::CountMinLeafProofV9;
 use crate::recursion::recursive::countmin_merge_v9::verify_chain_countmin_v9;
-use crate::recursion::recursive::expose_forest::{prove_forest_over, verify_bound_proof};
+use crate::recursion::recursive::expose_forest::{
+    batch_log, check_leaves_against_log, check_root_against_log, derive_forest_root_vk,
+    prove_forest_over, read_exposed_statement, verify_bound_proof, verify_bound_proof_against_log,
+    verify_bound_proof_self_pinned_legacy, verify_leaves_against_log,
+};
+use crate::recursion::recursive::root_vk::{
+    exp_root_vk, warn_self_pinned_legacy, ExpRootVk, ForestShape, RootVk,
+};
+use crate::recursion::recursive::statement::{composition_expose, warn_boundary_layout, Expose};
 use crate::recursion::recursive::timing;
 use crate::sketch::countmin::{CountMinState, CountMinUpdate};
 use crate::sketch::countmin_c_merkle::{
-    prove_countmin_c_merkle_exposed, prove_countmin_c_merkle_leaf, CountMinCMerkleParams,
+    countmin_c_merkle_batch_commit, prove_countmin_c_merkle_exposed,
+    prove_countmin_c_merkle_interval, prove_countmin_c_merkle_leaf, CountMinCMerkleParams,
 };
 use crate::sketch::countmin_final::{
     apply_update_prf, hash_cell_prf, prove_countmin_final, prove_countmin_final_exposed,
-    CountMinFinalParams,
+    prove_countmin_final_interval, CountMinFinalParams,
 };
 use crate::sketch::countmin_merkle::{combined_commit, merkle_root_mode};
-use crate::sketch::countmin_omc::{prove_countmin_omc, prove_countmin_omc_exposed, CmOmcParams};
+use crate::sketch::countmin_omc::{
+    build_countmin_omc_leaf_expose, countmin_omc_advance, countmin_omc_batch_commit,
+    prove_countmin_omc, CmOmcParams,
+};
 
 use super::families::{cm_empty, cm_epoch};
 use super::metrics::{bench, read_vmrss_kb, BenchCfg, RunOutcome};
@@ -68,14 +81,16 @@ fn key_mix(i: usize, j: usize) -> u32 {
     (((i as u64) << 20 ^ (j as u64 + 1)).wrapping_mul(0x9E37_79B9) as u32) | 1
 }
 
-/// Which Count-Min leaf prover the streaming forest uses per epoch. All three
-/// share the same per-record `hash_cell_prf` cell hashing, so the natively
-/// chained state sequence `S₀..S_t` is consistent with every variant and the
-/// forest boundary check (`leaf[i].com_after == leaf[i+1].com_before`) holds.
-/// (`hash_cell_prf` reduces the key with `Val::from_u64` — i.e. mod p — before
-/// hashing, so passing the full key (native chain / omc) or a pre-reduced
-/// `key mod p` (c_merkle) yields identical cell positions; the chain holds
-/// regardless of key magnitude, NOT because keys happen to be below p.) They
+/// Which Count-Min leaf prover the streaming forest uses per epoch. The
+/// natively chained state sequence `S₀..S_t` follows each variant's own cell
+/// hashing ([`cm_variant_apply`]), so the forest boundary check
+/// (`leaf[i].com_after == leaf[i+1].com_before`) holds for every variant.
+/// `one_hot` and `merkle` route by [`hash_cell_prf`], which reduces the key
+/// with `Val::from_u64` — i.e. mod p — before hashing (so the full key and a
+/// pre-reduced `key mod p` give identical cells). `omc` under the default
+/// `Semantic`/`Bound` binding hashes the key's four exact 16-bit limbs
+/// instead (its `Legacy` binding keeps the mod-p hash); the E6 keys are
+/// 32-bit, so the two families route differently. The variants otherwise
 /// differ only in the Step-5 rebind / commitment scheme — matching the
 /// `EXP_CM_VARIANT` vocabulary in `examples/exp_e1.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -343,7 +358,7 @@ pub fn measure_batches(
     for batch in batches {
         let mut ns = states.last().unwrap().clone();
         for &key in batch {
-            apply_update_prf(&mut ns, &CountMinUpdate { key: key as u64, value: 1 });
+            cm_variant_apply(variant, &mut ns, &CountMinUpdate { key: key as u64, value: 1 });
         }
         states.push(ns);
     }
@@ -450,7 +465,7 @@ pub fn measure_batches_recursive(
     for batch in batches {
         let mut ns = states.last().unwrap().clone();
         for &key in batch {
-            apply_update_prf(&mut ns, &CountMinUpdate { key: key as u64, value: 1 });
+            cm_variant_apply(variant, &mut ns, &CountMinUpdate { key: key as u64, value: 1 });
         }
         states.push(ns);
     }
@@ -551,7 +566,7 @@ pub fn measure_batches_chain(
     for batch in batches {
         let mut ns = states.last().unwrap().clone();
         for &key in batch {
-            apply_update_prf(&mut ns, &CountMinUpdate { key: key as u64, value: 1 });
+            cm_variant_apply(variant, &mut ns, &CountMinUpdate { key: key as u64, value: 1 });
         }
         states.push(ns);
     }
@@ -610,6 +625,105 @@ pub fn measure_batches_chain(
     }
 }
 
+/// Public, data-free **no-op leaf** of the chosen exposed Count-Min variant
+/// (`value = 0` updates from the empty state, so `initial == final`), for
+/// root-VK derivation. Same circuit (hence VK) as every real leaf of the same
+/// public parameters `(d, w, m[, t_max])`.
+fn cm_noop_exposed_leaf(
+    variant: CmLeaf,
+    d: usize,
+    w: usize,
+    m: usize,
+    t_max: usize,
+) -> p3_circuit_prover::BatchStarkProof<crate::recursion::recursive::config::ConfigWithFriParams> {
+    let zeros = vec![CountMinUpdate { key: 0, value: 0 }; m];
+    let expose = composition_expose();
+    match variant {
+        CmLeaf::OneHot => {
+            let p = CountMinFinalParams { d, w, batch: m };
+            let leaf = match expose {
+                Expose::Interval => prove_countmin_final_interval(p, 1, cm_empty(d, w), zeros),
+                _ => prove_countmin_final_exposed(p, cm_empty(d, w), zeros),
+            };
+            leaf.output.0
+        }
+        CmLeaf::Omc => crate::recursion::recursive::noop_leaf::cm_omc_noop_leaf_expose(
+            CmOmcParams { d, w, batch: m },
+            expose,
+            crate::sketch::bind::default_binding(),
+        ),
+        CmLeaf::Merkle => {
+            let cp = CountMinCMerkleParams { d, w, batch: m, t_max, compress: false, group_by: false };
+            let leaf = match expose {
+                Expose::Interval => prove_countmin_c_merkle_interval(cp, 1, cm_empty(d, w), zeros),
+                _ => prove_countmin_c_merkle_exposed(cp, cm_empty(d, w), zeros),
+            };
+            leaf.output.0
+        }
+    }
+}
+
+/// `Com(S)` under the variant's own state-commitment scheme (the dense commit
+/// for one_hot/omc; `combined_commit` of the per-row Merkle roots at
+/// `compress = false` for merkle) — the log's `Com(S_0)` / `Com(S_T)`.
+fn cm_variant_state_commit(variant: CmLeaf, state: &CountMinState) -> [Val; 8] {
+    match variant {
+        CmLeaf::OneHot | CmLeaf::Omc => commit_countmin(state).0,
+        CmLeaf::Merkle => {
+            let roots: Vec<CountMinCommit> = state
+                .counters
+                .iter()
+                .map(|row| {
+                    let cells: Vec<u64> = row.iter().map(|&c| c as u64).collect();
+                    CountMinCommit(merkle_root_mode(&cells, false))
+                })
+                .collect();
+            combined_commit(&roots).0
+        }
+    }
+}
+
+/// One native Count-Min update with the variant's cell hashing: the omc
+/// leaf's process-default binding ([`countmin_omc_advance`]) for `omc`, the
+/// mod-p [`apply_update_prf`] for `one_hot` and `merkle`.
+fn cm_variant_apply(variant: CmLeaf, state: &mut CountMinState, u: &CountMinUpdate) {
+    match variant {
+        CmLeaf::Omc => countmin_omc_advance(state, std::slice::from_ref(u)),
+        CmLeaf::OneHot | CmLeaf::Merkle => apply_update_prf(state, u),
+    }
+}
+
+/// `Com(B_t)` as the variant's leaf binds it in-circuit — the log's batch
+/// commitment.
+fn cm_variant_batch_commit(variant: CmLeaf, updates: &[CountMinUpdate]) -> [Val; 8] {
+    match variant {
+        CmLeaf::OneHot => commit_batch(updates).0,
+        CmLeaf::Omc => countmin_omc_batch_commit(updates),
+        CmLeaf::Merkle => countmin_c_merkle_batch_commit(updates),
+    }
+}
+
+/// The trusted root VK the E6 bound-forest auditor verifies against: derived
+/// from public parameters only (default), or `None` for the explicit
+/// `EXP_ROOT_VK=self` legacy self-pin. Computed OUTSIDE every timed phase.
+/// For `t == 1` the shape `forest(1)` is the lone leaf, so this is the LEAF VK
+/// (the no-op leaf's own commitment and metadata), against which the lone
+/// leaf proof is pinned and STARK-verified.
+fn e6_root_vk(variant: CmLeaf, d: usize, w: usize, m: usize, t_max: usize, t: usize) -> Option<RootVk<crate::config::Challenge>> {
+    match exp_root_vk() {
+        ExpRootVk::Derive => Some(derive_forest_root_vk(cm_noop_exposed_leaf(variant, d, w, m, t_max), t)),
+        ExpRootVk::SelfPinnedLegacy => {
+            warn_self_pinned_legacy("e6_forest recursive_bound");
+            None
+        }
+        ExpRootVk::File(path) => panic!(
+            "EXP_ROOT_VK={}: a root-VK file is only supported by dist_compose; \
+             use EXP_ROOT_VK=derive (default) or EXP_ROOT_VK=self",
+            path.display()
+        ),
+    }
+}
+
 /// Like [`measure_batches_recursive`] but the recursive fold is **boundary-bound
 /// in-circuit** (`expose_forest::prove_forest_over`): each leaf exposes its
 /// `(initial, final)` commitment via the Expose NPO, and every merge binds
@@ -651,26 +765,68 @@ pub fn measure_batches_recursive_bound(
     for batch in batches {
         let mut ns = states.last().unwrap().clone();
         for &key in batch {
-            apply_update_prf(&mut ns, &CountMinUpdate { key: key as u64, value: 1 });
+            cm_variant_apply(variant, &mut ns, &CountMinUpdate { key: key as u64, value: 1 });
         }
         states.push(ns);
     }
 
+    // Auditor's trusted root VK, derived from public parameters (never read
+    // from the root it verifies) before and outside every timed phase.
+    let root_vk = e6_root_vk(variant, d, w, m, t_max, t);
+    // The public batch log (Com(S_0), Com(S_T), Com(B_1..B_T)) under the
+    // variant's commitment schemes, and the composition layout (Interval by
+    // default; Boundary only on the explicit legacy opt-ins).
+    let expose = composition_expose();
+    let log = {
+        let commits: Vec<[Val; 8]> = batches
+            .iter()
+            .map(|b| {
+                let ups: Vec<CountMinUpdate> =
+                    b.iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
+                cm_variant_batch_commit(variant, &ups)
+            })
+            .collect();
+        batch_log(
+            &cm_variant_state_commit(variant, &states[0]),
+            &cm_variant_state_commit(variant, &states[t]),
+            &commits,
+        )
+    };
+    if expose != Expose::Interval {
+        warn_boundary_layout("e6_forest recursive_bound");
+    }
+
     let agg = bench(cfg, || {
-        // Sequential leaf-gen with the boundary-EXPOSING prover (proofs !Send).
+        // Sequential leaf-gen with the statement-EXPOSING prover (proofs !Send).
         let (outputs, t_gen) = time_it(|| {
             (0..t)
                 .map(|i| {
                     let updates: Vec<CountMinUpdate> =
                         batches[i].iter().map(|&k| CountMinUpdate { key: k as u64, value: 1 }).collect();
-                    match variant {
-                        CmLeaf::OneHot => {
+                    let idx = i as u64 + 1;
+                    match (variant, expose) {
+                        (CmLeaf::OneHot, Expose::Interval) => prove_countmin_final_interval(
+                            CountMinFinalParams { d, w, batch: m },
+                            idx,
+                            states[i].clone(),
+                            updates,
+                        )
+                        .output,
+                        (CmLeaf::OneHot, _) => {
                             prove_countmin_final_exposed(CountMinFinalParams { d, w, batch: m }, states[i].clone(), updates).output
                         }
-                        CmLeaf::Omc => {
-                            prove_countmin_omc_exposed(CmOmcParams { d, w, batch: m }, states[i].clone(), updates).output
+                        (CmLeaf::Omc, _) => build_countmin_omc_leaf_expose(
+                            CmOmcParams { d, w, batch: m },
+                            expose,
+                            crate::sketch::bind::default_binding(),
+                        )
+                        .prove_epoch_at(idx, states[i].clone(), updates)
+                        .output,
+                        (CmLeaf::Merkle, Expose::Interval) => {
+                            let cp = CountMinCMerkleParams { d, w, batch: m, t_max, compress: false, group_by: false };
+                            prove_countmin_c_merkle_interval(cp, idx, states[i].clone(), updates).output
                         }
-                        CmLeaf::Merkle => {
+                        (CmLeaf::Merkle, _) => {
                             let cp = CountMinCMerkleParams { d, w, batch: m, t_max, compress: false, group_by: false };
                             prove_countmin_c_merkle_exposed(cp, states[i].clone(), updates).output
                         }
@@ -683,10 +839,13 @@ pub fn measure_batches_recursive_bound(
         // and capture the returned root for verify + sizing.
         let mut outputs_holder = Some(outputs);
         let mut root_opt = None;
+        let mut lone_leaf = None;
         let (_, t_merge) = time_it(|| {
-            let outputs = outputs_holder.take().expect("outputs taken once");
+            let mut outputs = outputs_holder.take().expect("outputs taken once");
             if outputs.len() >= 2 {
                 root_opt = Some(prove_forest_over(outputs));
+            } else {
+                lone_leaf = outputs.pop();
             }
         });
         // Verifier side: one succinct check of the boundary-bound root proof —
@@ -694,10 +853,59 @@ pub fn measure_batches_recursive_bound(
         let (verify, proof_bytes) = match &root_opt {
             Some(root) => {
                 let bytes = proof_size(&root.0) as u64;
-                let (_, tv) = time_it(|| verify_bound_proof(root));
+                // Pinned to the derived root VK (fails closed on a mismatch);
+                // only the explicit `EXP_ROOT_VK=self` opt-in self-pins. The
+                // pin is a fixed-size equality either way, so timing is equal.
+                // Interval layout (default): the root statement is then
+                // checked against the batch log under forest(t)'s bracketing.
+                let tree = ForestShape::forest(t);
+                let interval = expose == Expose::Interval;
+                let (_, tv) = time_it(|| match (&root_vk, interval) {
+                    (Some(vk), true) => verify_bound_proof_against_log(root, vk, &log, &tree),
+                    (Some(vk), false) => verify_bound_proof(root, vk),
+                    (None, true) => {
+                        verify_bound_proof_self_pinned_legacy(root);
+                        if let Err(e) = check_root_against_log(&root.0, &log, &tree) {
+                            panic!("root statement vs log: {e}");
+                        }
+                    }
+                    (None, false) => verify_bound_proof_self_pinned_legacy(root),
+                });
+                if !interval {
+                    // Boundary layout: the root's (init, final) must still be
+                    // the log's (Com(S_0), Com(S_T)).
+                    let st = read_exposed_statement(&root.0);
+                    assert!(
+                        st.init == log.init && st.final_ == log.final_,
+                        "root boundary != the log's (Com(S_0), Com(S_T))"
+                    );
+                }
                 (tv, bytes)
             }
-            None => (Duration::ZERO, INTERVAL_PROOF_BYTES),
+            // t == 1: nothing was merged; the artifact is the lone LEAF
+            // proof. Default: pinned to the derived leaf VK, STARK-verified,
+            // statement vs the log (timed; its real size). Legacy
+            // `EXP_ROOT_VK=self`: statement check only (authenticates nothing)
+            // and the pre-pin report (0 ms, the interval-record size).
+            None => {
+                let leaf = lone_leaf.as_ref().expect("t == 1 keeps its lone leaf");
+                match &root_vk {
+                    Some(vk) => {
+                        let (r, tv) =
+                            time_it(|| verify_leaves_against_log(&[&leaf.0], vk, &log, expose));
+                        if let Err(e) = r {
+                            panic!("lone-leaf audit: {e}");
+                        }
+                        (tv, proof_size(&leaf.0) as u64)
+                    }
+                    None => {
+                        if let Err(e) = check_leaves_against_log(&[&leaf.0], &log, expose) {
+                            panic!("lone-leaf statement vs log: {e}");
+                        }
+                        (Duration::ZERO, INTERVAL_PROOF_BYTES)
+                    }
+                }
+            }
         };
         RunOutcome {
             witness_gen: t_gen,
@@ -783,7 +991,7 @@ pub fn measure_batches_per_batch(
     for batch in batches {
         let mut ns = states.last().unwrap().clone();
         for &key in batch {
-            apply_update_prf(&mut ns, &CountMinUpdate { key: key as u64, value: 1 });
+            cm_variant_apply(variant, &mut ns, &CountMinUpdate { key: key as u64, value: 1 });
         }
         states.push(ns);
     }
@@ -932,6 +1140,56 @@ mod tests {
                 "prove time must be measured ({variant:?})"
             );
             let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The boundary-bound recursive path verifies its root against the root
+    /// VK DERIVED from public parameters (the default `EXP_ROOT_VK=derive`),
+    /// for every leaf variant: the value-0 no-op leaf of each variant must
+    /// have the same VK as its real leaves, or the pinned verify panics.
+    #[test]
+    fn recursive_bound_verifies_against_derived_root_vk() {
+        if std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive") {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived root VK");
+            return;
+        }
+        for variant in [CmLeaf::OneHot, CmLeaf::Omc, CmLeaf::Merkle] {
+            let (t, m) = (2usize, 4usize);
+            let batches: Vec<Vec<u32>> =
+                (0..t).map(|i| (0..m).map(|j| key_mix(i, j % 3)).collect()).collect();
+            let cell = measure_batches_recursive_bound(
+                variant,
+                2,
+                4,
+                &batches,
+                BenchCfg { warmup: 0, trials: 1 },
+            );
+            assert!(cell.proof_bytes > 0, "root artifact ({variant:?})");
+            assert!(cell.merge_ms_median > 0.0, "fold measured ({variant:?})");
+        }
+    }
+
+    /// `recursive_bound` over ONE batch: nothing is merged, and the auditor
+    /// pins the lone leaf to the derived leaf VK, STARK-verifies it and checks
+    /// its statement against the log (it used to verify nothing and report
+    /// 0 ms and the constant interval-record size).
+    #[test]
+    fn recursive_bound_single_batch_verifies_lone_leaf() {
+        if std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive") {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        for variant in [CmLeaf::OneHot, CmLeaf::Omc, CmLeaf::Merkle] {
+            let batches: Vec<Vec<u32>> = vec![(0..4).map(|j| key_mix(0, j % 3)).collect()];
+            let cell = measure_batches_recursive_bound(
+                variant,
+                2,
+                4,
+                &batches,
+                BenchCfg { warmup: 0, trials: 1 },
+            );
+            assert!(cell.proof_bytes > INTERVAL_PROOF_BYTES, "the lone leaf's real size ({variant:?})");
+            assert!(cell.verify_ms_median > 0.0, "the lone leaf is verified ({variant:?})");
         }
     }
 }

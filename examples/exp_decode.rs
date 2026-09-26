@@ -25,7 +25,9 @@ use zksketch::recursion::recursive::timing;
 use zksketch::decode::countmin::{CmDecodeParams, prove_cm_decode};
 use zksketch::sketch::Sketch; // brings `CountMin::new` into scope
 use zksketch::sketch::countmin::{CountMin, CountMinParams, CountMinUpdate};
-use zksketch::sketch::countmin_final::{apply_update_prf, hash_cell_prf};
+use zksketch::sketch::bind::default_binding;
+use zksketch::sketch::countmin_final::hash_cell_prf_with;
+use zksketch::sketch::countmin_omc::countmin_omc_advance;
 
 // ---- HLL (omc) ----
 use zksketch::decode::hyperloglog::{BETA, HllDecodeParams, fixed_res, prove_hll_decode_omc};
@@ -89,15 +91,15 @@ fn run_cm() -> Row {
     let query = 7u64;
 
     let mut st = CountMin::new(&CountMinParams { d, w });
-    for &k in &stream {
-        apply_update_prf(&mut st, &CountMinUpdate { key: k, value: 1 });
-    }
+    let ups: Vec<CountMinUpdate> = stream.iter().map(|&k| CountMinUpdate { key: k, value: 1 }).collect();
+    countmin_omc_advance(&mut st, &ups);
     let true_count = stream.iter().filter(|&&k| k == query).count() as u64;
     // PRF-consistent point estimate: min over the PRF-routed cells (the state
-    // was built with `apply_update_prf`, so plain `CountMin::query` would read
-    // the wrong columns). This mirrors the decode circuit's native estimator.
+    // was built with the omc leaf's native update, so plain `CountMin::query`
+    // would read the wrong columns). This mirrors the decode circuit's native
+    // estimator under the same (default) binding.
     let sketch_est = (0..d)
-        .map(|row| st.counters[row][hash_cell_prf(row, query, w)] as u64)
+        .map(|row| st.counters[row][hash_cell_prf_with(row, query, w, default_binding())] as u64)
         .min()
         .unwrap(); // min-of-rows, ≥ true_count
 

@@ -47,15 +47,15 @@ use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
 use p3_circuit::ops::{
     Poseidon2Config, generate_expose_trace, generate_permute_trace, generate_poseidon2_trace,
-    generate_recompose_trace,
+    generate_range_trace, generate_recompose_trace,
 };
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         expose_air_builders, expose_preprocessor, permute_air_builders, permute_preprocessor,
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        poseidon2_air_builders_d4, poseidon2_preprocessor, range_air_builders, range_preprocessor,
+        recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -69,6 +69,7 @@ use crate::commitment::countmin_batch::commit_batch;
 use crate::commitment::{CountMinBatchCommit, CountMinCommit};
 use crate::config::{Challenge, LOG_BLOWUP, Val};
 use crate::recursion::recursive::config::ConfigWithFriParams;
+use crate::recursion::recursive::statement::{self, Expose, IndexPin};
 use crate::recursion::recursive::countmin_leaf::{
     CountMinLeafParams, DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
@@ -87,6 +88,15 @@ const LOG_FINAL_POLY_LEN: usize = 6;
 /// bits — the same bound used by the v3 leaf.
 const SHIFT_VAL_BITS: u64 = 20;
 const SHIFT_VAL: u64 = 1u64 << SHIFT_VAL_BITS;
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only malicious prover (`tests::forged_final_decomposition_*`):
+    /// `Some(delta)` commits to a final state whose cell 0 is bumped by `delta`
+    /// while the decomposition of that packed cell group, which every update
+    /// constraint reads, still returns the honest counters.
+    static FORGE_FINAL_CELL0: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
 
 /// Per-row hash family multipliers `a_i`. **Must match** the constants in
 /// `src/sketch/countmin_v9.rs::HASH_A`. We re-declare here as a `Val`-
@@ -193,6 +203,29 @@ fn prove_countmin_leaf_v9_inner(
     batch: Vec<CountMinUpdate>,
     expose_boundary: bool,
 ) -> CountMinLeafProofV9 {
+    prove_countmin_leaf_v9_stmt(params, initial_state, batch, Expose::from_bool(expose_boundary), 1)
+}
+
+/// Like [`prove_countmin_leaf_v9_exposed_with_params`] but with the
+/// **Interval** statement for batch `t` (1-based): exposes
+/// `(init, final, (t, t, 0, 0), Poseidon2(TAG_LEAF, t, Com(B_t)))` with the
+/// in-circuit batch digest (see [`crate::recursion::recursive::statement`]).
+pub fn prove_countmin_leaf_v9_interval_with_params(
+    params: CountMinLeafParams,
+    t: u64,
+    initial_state: CountMinState,
+    batch: Vec<CountMinUpdate>,
+) -> CountMinLeafProofV9 {
+    prove_countmin_leaf_v9_stmt(params, initial_state, batch, Expose::Interval, t)
+}
+
+fn prove_countmin_leaf_v9_stmt(
+    params: CountMinLeafParams,
+    initial_state: CountMinState,
+    batch: Vec<CountMinUpdate>,
+    expose: Expose,
+    t: u64,
+) -> CountMinLeafProofV9 {
     params.validate();
     assert_eq!(initial_state.params.d, params.d);
     assert_eq!(initial_state.params.w, params.w);
@@ -203,118 +236,248 @@ fn prove_countmin_leaf_v9_inner(
         params.w
     );
 
+    // Native side: the honest key-sorted + counter-sorted views of the batch
+    // (the §5.2 key-grouping hints the in-circuit verifier re-derives).
+    let views = v9_honest_views(params, &batch);
+    if cfg!(debug_assertions) {
+        let mut replay = initial_state.clone();
+        for u in &batch {
+            CountMinV9::update(&mut replay, u);
+        }
+        debug_assert_eq!(
+            replay.counters,
+            v9_final_from_views(params, &initial_state, &views).counters,
+            "view-derived final must equal the v9 replay"
+        );
+    }
+    prove_v9_views_stmt(params, initial_state, batch, &views, expose, t)
+}
+
+/// The two sorted views every v9 private table is derived from: the key-sort
+/// permute's output and the counter-sort permute's output. Honestly both are
+/// sorts of their inputs; a soundness test may hand-craft them.
+#[derive(Clone)]
+struct V9Views {
+    /// `key_sorted[i] = batch[sigma_key[i]]` (the key-sort permute's hint).
+    sigma_key: Vec<usize>,
+    /// Key-sorted records `(key_field, value)`, `key_field` = canonical `Val` key.
+    key_sorted: Vec<(u64, u32)>,
+    /// `ctr_sorted[i] = U_ctr[sigma[i]]` (the counter-sort permute's hint).
+    sigma: Vec<usize>,
+    /// Counter-sorted `(combined, value)` rows.
+    ctr_sorted: Vec<(u64, u32)>,
+}
+
+/// Segment-end flags + per-row running sums of a sorted `(group, value)` list
+/// (the in-circuit adjacency-tag gadget): `(eq_tag, acc, seg_end)`.
+fn v9_group(rows: &[(u64, u32)]) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+    let n = rows.len();
+    let mut tag = vec![0u32; n];
+    let mut acc = vec![0u32; n];
+    for r in 0..n {
+        if r > 0 && rows[r].0 == rows[r - 1].0 {
+            tag[r] = 1;
+            acc[r] = acc[r - 1].saturating_add(rows[r].1);
+        } else {
+            acc[r] = rows[r].1;
+        }
+    }
+    let seg_end: Vec<u32> = (0..n)
+        .map(|r| u32::from(r + 1 == n || tag[r + 1] == 0))
+        .collect();
+    (tag, acc, seg_end)
+}
+
+/// `U_ctr` (the counter-sort permute's input) of a key-sorted view: each row
+/// hashed once per sketch row, carrying its segment total at segment ends and
+/// 0 elsewhere.
+fn v9_u_ctr(params: CountMinLeafParams, key_sorted: &[(u64, u32)]) -> Vec<(u64, u32)> {
+    let (d, w) = (params.d, params.w);
+    let (_, key_acc, g_active) = v9_group(key_sorted);
+    let mut u = Vec::with_capacity(key_sorted.len() * d);
+    for (r, &(kf, _)) in key_sorted.iter().enumerate() {
+        let eff = if g_active[r] == 1 { key_acc[r] } else { 0 };
+        for i in 0..d {
+            let bucket = crate::sketch::countmin_v9::hash_cell_v9(i, kf, w);
+            u.push(((i * w + bucket) as u64, eff));
+        }
+    }
+    u
+}
+
+/// The honest views: sort the batch by key, then sort `U_ctr` by address.
+fn v9_honest_views(params: CountMinLeafParams, batch: &[CountMinUpdate]) -> V9Views {
+    let mut indexed_keys: Vec<(usize, &CountMinUpdate)> = batch.iter().enumerate().collect();
+    indexed_keys.sort_by_key(|(_, u)| u.key);
+    let sigma_key: Vec<usize> = indexed_keys.iter().map(|(i, _)| *i).collect();
+    let key_sorted: Vec<(u64, u32)> = indexed_keys
+        .iter()
+        .map(|(_, u)| {
+            let kf = <Val as p3_field::PrimeField64>::as_canonical_u64(&Val::from_u64(u.key));
+            (kf, u.value)
+        })
+        .collect();
+    let u_ctr = v9_u_ctr(params, &key_sorted);
+    let mut indexed: Vec<(usize, &(u64, u32))> = u_ctr.iter().enumerate().collect();
+    indexed.sort_by_key(|(_, (combined, _))| *combined);
+    let sigma: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
+    let ctr_sorted: Vec<(u64, u32)> = indexed.iter().map(|(_, r)| **r).collect();
+    V9Views {
+        sigma_key,
+        key_sorted,
+        sigma,
+        ctr_sorted,
+    }
+}
+
+/// The final state the circuit certifies for given views: `S_0` plus each
+/// counter segment's total at its address.
+fn v9_final_from_views(
+    params: CountMinLeafParams,
+    initial: &CountMinState,
+    views: &V9Views,
+) -> CountMinState {
+    let w = params.w;
+    let (_, acc, seg_end) = v9_group(&views.ctr_sorted);
+    let mut fin = initial.clone();
+    for (r, &(c, _)) in views.ctr_sorted.iter().enumerate() {
+        if seg_end[r] == 1 {
+            let (row, col) = (c as usize / w, c as usize % w);
+            fin.counters[row][col] = fin.counters[row][col].wrapping_add(acc[r]);
+        }
+    }
+    fin
+}
+
+// ── Hardened permute encoding (revision Step 1) ──────────────────────────
+//
+// The legacy leaf packs both permute domains into ONE base element `x·2^20 + v`
+// (coordinate 0), which is unsound twice over:
+//
+// 1. **Shared PermuteBus.** The fork concatenates every `add_permute` into ONE
+//    PermuteAir whose PermuteBus message is the 4 value coordinates only (no op
+//    id), so the key-sort and counter-sort permutes only prove that the union
+//    of their inputs equals the union of their outputs. A record with a small
+//    key `k < d·w` (`k·2^20 + v`) is also a valid counter payload "cell k += v":
+//    a prover moves it into the counter-sort output — a direct, un-hashed
+//    increment — and pays with another key's counter payload decoded as a fake
+//    record (`tests::v9_shared_bus_forgery_rejected`).
+// 2. **Packed split.** The sorted views are split from ONE in-field equation
+//    `payload = x·2^20 + v` in two free witnesses: `(c − 1, v + 2^20)` re-splits
+//    `(c, v)` (moving an increment to the neighbouring cell), and a key-sort row
+//    re-splits into a garbage key (`tests::v9_packed_split_forgery_rejected`).
+//    On BabyBear `1920·2^20 = p − 1`, so range checks alone cannot fix it.
+//
+// The hardened encoding keeps the two fields in separate coordinates and tags
+// each domain in its own coordinate:
+//     key sort:     (key_field, value, 1, 0) = key_field + value·X + X²
+//     counter sort: (combined,  value, 0, 1) = combined  + value·X + X³
+// Injective once every coordinate is BASE: `key_field_sorted` is (the hash's
+// bit decomposition), `combined_sorted` is (active rows: the one-hot cell
+// selector; inactive rows: equal to the next row via the eq-tag chain), and
+// `val_sorted_by_key` / `val_sorted` are pinned by [`assert_base`]. The X²/X³
+// tags make the two domains disjoint on the shared bus, so per-op multiset
+// equality holds. (Like every constraint here, this presumes bound
+// decompositions and constants.)
+
+/// Whether [`prove_countmin_leaf_v9`] uses the hardened tuple encoding.
+/// Always on outside tests; the soundness PoCs build the legacy circuit.
+fn use_hardened() -> bool {
+    #[cfg(test)]
+    if let Some(v) = HARDENED.with(|c| c.get()) {
+        return v;
+    }
+    true
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override of [`use_hardened`] (`Some(false)` = legacy circuit).
+    static HARDENED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// Test-only malicious prover: `(k, outputs)` makes permute op `k` (0 = key
+    /// sort, 1 = counter sort) emit `outputs`.
+    static FORGE: std::cell::RefCell<Vec<(usize, Vec<Challenge>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Force `x` into the BASE field (31-bit RangeAir decomposition of coefficient
+/// 0; the byte window covers `[0, p)`, so no base value is excluded).
+fn assert_base(b: &mut CircuitBuilder<Challenge>, x: ExprId) {
+    b.add_range_bits::<Val>(x, Val::bits()).expect("assert_base");
+}
+
+/// A permute element: legacy `x·2^20 + v`, or the hardened tuple
+/// `x + v·X + X^(2+domain)` (`domain` 0 = key sort, 1 = counter sort).
+#[cfg(test)]
+fn v9_elem(x: u64, v: u32, hardened: bool, domain: usize) -> Challenge {
+    use p3_field::BasedVectorSpace;
+    let c = if hardened {
+        let mut c = [Val::from_u64(x), Val::from_u32(v), Val::ZERO, Val::ZERO];
+        c[2 + domain] = Val::ONE;
+        c
+    } else {
+        [
+            Val::from_u64(x) * Val::from_u64(SHIFT_VAL) + Val::from_u32(v),
+            Val::ZERO,
+            Val::ZERO,
+            Val::ZERO,
+        ]
+    };
+    Challenge::from_basis_coefficients_slice(&c).expect("4 coeffs")
+}
+
+/// Build, run, prove and self-verify the v9 leaf for given (honest or
+/// hand-crafted) views; the certified final is [`v9_final_from_views`].
+fn prove_v9_views(
+    params: CountMinLeafParams,
+    initial_state: CountMinState,
+    batch: Vec<CountMinUpdate>,
+    views: &V9Views,
+    expose_boundary: bool,
+) -> CountMinLeafProofV9 {
+    prove_v9_views_stmt(params, initial_state, batch, views, Expose::from_bool(expose_boundary), 1)
+}
+
+/// [`prove_v9_views`] with an explicit statement ([`Expose`]) and batch index.
+fn prove_v9_views_stmt(
+    params: CountMinLeafParams,
+    initial_state: CountMinState,
+    batch: Vec<CountMinUpdate>,
+    views: &V9Views,
+    expose: Expose,
+    t: u64,
+) -> CountMinLeafProofV9 {
+    let expose_boundary = expose == Expose::Boundary;
     let CountMinLeafParams { d, w, batch: m } = params;
     let num_cells = params.num_cells();
     let cell_packing = params.cell_packing();
     let n_ctr = m * d;
     let w_log2 = w.trailing_zeros() as usize;
+    let hardened = use_hardened();
 
-    // Native side: replay the v9 sketch update, compute commitments.
-    let mut final_state = initial_state.clone();
-    for u in &batch {
-        CountMinV9::update(&mut final_state, u);
+    let final_state = v9_final_from_views(params, &initial_state, views);
+    // The state the proof commits to as `Com(S_t)`: the view-derived update,
+    // except under the test-only forged-decomposition prover below.
+    #[allow(unused_mut)]
+    let mut committed_final = final_state.clone();
+    #[cfg(test)]
+    let forge_delta = FORGE_FINAL_CELL0.with(|c| c.get());
+    #[cfg(test)]
+    if let Some(delta) = forge_delta {
+        committed_final.counters[0][0] += delta;
     }
     let initial_commit = commit_countmin(&initial_state);
-    let final_commit = commit_countmin(&final_state);
+    let final_commit = commit_countmin(&committed_final);
     let batch_commit = commit_batch(&batch);
 
-    // ─── Native side, Phase 9g pipeline ───────────────────────────────────
-    //
-    // The raw batch is the ground truth. We compute the §5.2 key-grouping
-    // off-circuit as a hint (the in-circuit verifier re-derives it and
-    // checks each step). All native quantities below feed the private-
-    // witness arrays the circuit consumes.
-
-    // 1. Sort raw_batch by key → σ_key permutation.
-    let mut indexed_keys: Vec<(usize, &CountMinUpdate)> = batch.iter().enumerate().collect();
-    indexed_keys.sort_by_key(|(_, u)| u.key);
-    let sigma_key: Vec<usize> = indexed_keys.iter().map(|(i, _)| *i).collect();
-    let key_sorted_native: Vec<&CountMinUpdate> =
-        indexed_keys.iter().map(|(_, u)| *u).collect();
-
-    // 2. Sorted-by-key per-record fields, in Val (matches in-circuit
-    //    `key_field = key_lo + key_hi · 2^32`).
-    let key_field_sorted_native: Vec<u64> = key_sorted_native
-        .iter()
-        .map(|u| Val::from_u64(u.key))
-        .map(|v| <Val as p3_field::PrimeField64>::as_canonical_u64(&v))
-        .collect();
-    let val_sorted_by_key_native: Vec<u32> = key_sorted_native.iter().map(|u| u.value).collect();
-
-    // 3. Adjacent-equality tags + inverse-diff witnesses on key_field_sorted.
-    let mut key_eq_tag_native: Vec<u32> = vec![0; m];
-    for r in 1..m {
-        if key_field_sorted_native[r] == key_field_sorted_native[r - 1] {
-            key_eq_tag_native[r] = 1;
-        }
-    }
-
-    // 4. Running-sum aggregation per key segment.
-    let mut key_acc_native: Vec<u32> = vec![0; m];
-    if m > 0 {
-        key_acc_native[0] = val_sorted_by_key_native[0];
-        for r in 1..m {
-            key_acc_native[r] = if key_eq_tag_native[r] == 1 {
-                key_acc_native[r - 1].saturating_add(val_sorted_by_key_native[r])
-            } else {
-                val_sorted_by_key_native[r]
-            };
-        }
-    }
-
-    // 5. g_active flag — 1 iff this row is the last in its key segment
-    //    (so its key_acc holds the segment total).
-    let mut g_active_native: Vec<u32> = vec![0; m];
-    for r in 0..m {
-        let ends_segment = if r == m - 1 { true } else { key_eq_tag_native[r + 1] == 0 };
-        g_active_native[r] = u32::from(ends_segment);
-    }
-
-    // 6. Build U_ctr from sorted-by-key data, with g_active-gated values:
-    //    inactive rows contribute (combined, 0) to the counter-sort, so
-    //    the running-sum at the counter level adds nothing for them.
-    let mut u_ctr_data: Vec<(u64, u32)> = Vec::with_capacity(n_ctr);
-    for r in 0..m {
-        let key_orig = key_sorted_native[r].key;
-        let effective_val =
-            if g_active_native[r] == 1 { key_acc_native[r] } else { 0 };
-        for i in 0..d {
-            let bucket = crate::sketch::countmin_v9::hash_cell_v9(i, key_orig, w);
-            let combined = (i * w + bucket) as u64;
-            u_ctr_data.push((combined, effective_val));
-        }
-    }
-    let mut indexed: Vec<(usize, &(u64, u32))> = u_ctr_data.iter().enumerate().collect();
-    indexed.sort_by_key(|(_, (combined, _))| *combined);
-    let sigma: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
-    let combined_sorted_native: Vec<u64> = indexed.iter().map(|(_, (c, _))| *c).collect();
-    let val_sorted_native: Vec<u32> = indexed.iter().map(|(_, (_, v))| *v).collect();
-
-    // 7. Counter-level adjacent-equality tags + running sum (unchanged
-    //    from the previous design, just now operating on the g_active-
-    //    gated U_ctr).
-    let mut tag_native: Vec<u32> = vec![0; n_ctr];
-    for r in 1..n_ctr {
-        if combined_sorted_native[r] == combined_sorted_native[r - 1] {
-            tag_native[r] = 1;
-        }
-    }
-    let mut acc_native: Vec<u32> = vec![0; n_ctr];
-    if n_ctr > 0 {
-        acc_native[0] = val_sorted_native[0];
-        for r in 1..n_ctr {
-            acc_native[r] = if tag_native[r] == 1 {
-                acc_native[r - 1].saturating_add(val_sorted_native[r])
-            } else {
-                val_sorted_native[r]
-            };
-        }
-    }
-    let mut a_active_native: Vec<u32> = vec![0; n_ctr];
-    for r in 0..n_ctr {
-        let ends_segment = if r == n_ctr - 1 { true } else { tag_native[r + 1] == 0 };
-        a_active_native[r] = u32::from(ends_segment);
-    }
+    let sigma_key = views.sigma_key.clone();
+    let key_field_sorted_native: Vec<u64> = views.key_sorted.iter().map(|r| r.0).collect();
+    let val_sorted_by_key_native: Vec<u32> = views.key_sorted.iter().map(|r| r.1).collect();
+    let (key_eq_tag_native, _, _) = v9_group(&views.key_sorted);
+    let sigma = views.sigma.clone();
+    let combined_sorted_native: Vec<u64> = views.ctr_sorted.iter().map(|r| r.0).collect();
+    let val_sorted_native: Vec<u32> = views.ctr_sorted.iter().map(|r| r.1).collect();
+    let (tag_native, _, a_active_native) = v9_group(&views.ctr_sorted);
 
     // ─── Build the circuit ───────────────────────────────────────────────
     let mut b = CircuitBuilder::<Challenge>::new();
@@ -323,8 +486,12 @@ fn prove_countmin_leaf_v9_inner(
         default_babybear_poseidon2_16(),
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    crate::recompose_binding::configure(&mut b);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
-    if expose_boundary {
+    if hardened {
+        b.enable_range(generate_range_trace::<Val, Challenge>);
+    }
+    if expose.exposes() {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
 
@@ -356,6 +523,23 @@ fn prove_countmin_leaf_v9_inner(
     // ---- Constants ----
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
+    // Basis constants of the hardened tuple encoding (x + v·X + X² / X³).
+    let basis = |i: usize| -> Challenge {
+        use p3_field::BasedVectorSpace;
+        let mut c = [Val::ZERO; 4];
+        c[i] = Val::ONE;
+        Challenge::from_basis_coefficients_slice(&c).expect("basis")
+    };
+    // (Allocated only when hardened, so the legacy graph stays identical.)
+    let (x_const, x2_const, x3_const) = if hardened {
+        (
+            b.alloc_const(basis(1), "X"),
+            b.alloc_const(basis(2), "X^2"),
+            b.alloc_const(basis(3), "X^3"),
+        )
+    } else {
+        (zero, zero, zero)
+    };
     let w_const = b.alloc_const(Challenge::from_u64(w as u64), "w");
     let shift_val_const = b.alloc_const(Challenge::from_u64(SHIFT_VAL), "shift_val");
     // 2^32 mod BabyBear, used to reconstruct a Val key from (key_lo, key_hi).
@@ -470,6 +654,21 @@ fn prove_countmin_leaf_v9_inner(
     for i in 0..DIGEST_PACKING {
         b.connect(digest_batch[i], batch_commit_pis[i]);
     }
+    // Interval statement (B6(b)): batch index t (7th public input) and
+    // H = Poseidon2(TAG_LEAF, t, digest_batch). Range only when hardened.
+    if expose.is_interval() {
+        let pin = if hardened { IndexPin::Range } else { IndexPin::Bits };
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b,
+            &Poseidon2Config::BABY_BEAR_D4_W16,
+            &initial_commit_pis,
+            &final_commit_pis,
+            &digest_batch,
+            zero,
+            crate::sketch::bind::Binding::Semantic,
+            pin,
+        );
+    }
 
     // 2. Decompose packed cells into individual base-embedded ExprIds.
     let initial_cells: Vec<ExprId> = initial_packed
@@ -513,8 +712,14 @@ fn prove_countmin_leaf_v9_inner(
     //     against the sorted view.
     let mut key_payload: Vec<ExprId> = Vec::with_capacity(m);
     for k in 0..m {
-        let kf_shifted = b.mul(key_field[k], shift_val_const);
-        let kp = b.add(kf_shifted, value_w[k]);
+        let kp = if hardened {
+            // key-sort tuple (key_field, value, 1, 0).
+            let t = b.mul_add(value_w[k], x_const, x2_const);
+            b.add(key_field[k], t)
+        } else {
+            let kf_shifted = b.mul(key_field[k], shift_val_const);
+            b.add(kf_shifted, value_w[k])
+        };
         key_payload.push(kp);
     }
 
@@ -531,8 +736,18 @@ fn prove_countmin_leaf_v9_inner(
     //     constraint, which (given the bit budget) uniquely determines
     //     them.
     for r in 0..m {
-        let kfs = b.mul(key_field_sorted[r], shift_val_const);
-        let recovered = b.add(kfs, val_sorted_by_key[r]);
+        let recovered = if hardened {
+            // key-sort tuple (key_field_sorted, val_sorted_by_key, 1, 0); the
+            // value coordinate is pinned to the base field (the key is, by the
+            // hash's bit decomposition below).
+            assert_base(&mut b, val_sorted_by_key[r]);
+            let t = b.mul_add(val_sorted_by_key[r], x_const, x2_const);
+            b.add(key_field_sorted[r], t)
+        } else {
+            // LEGACY (unsound): one in-field equation in two free witnesses.
+            let kfs = b.mul(key_field_sorted[r], shift_val_const);
+            b.add(kfs, val_sorted_by_key[r])
+        };
         b.connect(recovered, key_payload_sorted[r]);
     }
 
@@ -604,8 +819,14 @@ fn prove_countmin_leaf_v9_inner(
             // Build the payload entry inline.
             let row_times_w = b.mul(row_consts[i], w_const);
             let combined_expr = b.add(row_times_w, pos_sum);
-            let combined_shifted = b.mul(combined_expr, shift_val_const);
-            let payload_expr = b.add(combined_shifted, effective_val);
+            let payload_expr = if hardened {
+                // counter-sort tuple (combined, value, 0, 1).
+                let t = b.mul_add(effective_val, x_const, x3_const);
+                b.add(combined_expr, t)
+            } else {
+                let combined_shifted = b.mul(combined_expr, shift_val_const);
+                b.add(combined_shifted, effective_val)
+            };
             payload.push(payload_expr);
         }
     }
@@ -617,8 +838,18 @@ fn prove_countmin_leaf_v9_inner(
 
     // 7. Decode payload_sorted into (combined_sorted, val_sorted).
     for r in 0..n_ctr {
-        let combined_shifted = b.mul(combined_sorted[r], shift_val_const);
-        let recovered = b.add(combined_shifted, val_sorted[r]);
+        let recovered = if hardened {
+            // counter-sort tuple (combined_sorted, val_sorted, 0, 1); the value
+            // coordinate is pinned to the base field (combined_sorted is, by the
+            // cell selector / eq-tag chain below).
+            assert_base(&mut b, val_sorted[r]);
+            let t = b.mul_add(val_sorted[r], x_const, x3_const);
+            b.add(combined_sorted[r], t)
+        } else {
+            // LEGACY (unsound): one in-field equation in two free witnesses.
+            let combined_shifted = b.mul(combined_sorted[r], shift_val_const);
+            b.add(combined_shifted, val_sorted[r])
+        };
         b.connect(recovered, payload_sorted[r]);
     }
 
@@ -690,7 +921,25 @@ fn prove_countmin_leaf_v9_inner(
         b.connect(updated, final_cells[idx]);
     }
 
-    let circuit = b.build().expect("build v9 leaf circuit");
+    #[allow(unused_mut)]
+    let mut circuit = b.build().expect("build v9 leaf circuit");
+    #[cfg(test)]
+    if forge_delta.is_some() {
+        // Feed the constraints the honest counters of the forged cell group.
+        use p3_field::BasedVectorSpace;
+        let honest = pack_cells_to_challenge(&final_state)[0];
+        let wid = circuit.private_input_rows[cell_packing];
+        let coeffs: [Val; 4] = honest
+            .as_basis_coefficients_slice()
+            .try_into()
+            .expect("4 coefficients");
+        crate::sketch::forge_permute::forge_decomposition(&mut circuit, wid, coeffs);
+    }
+    // [test-only] malicious prover: swap in forged Permute outputs.
+    #[cfg(test)]
+    for (k, outs) in FORGE.with(|f| f.take()) {
+        crate::sketch::forge_permute::forge_permute_outputs(&mut circuit, k, outs);
+    }
 
     // ─── Pack public + private values ─────────────────────────────────────
     let initial_commit_packed = pack_commit_to_challenge(&initial_commit);
@@ -701,9 +950,12 @@ fn prove_countmin_leaf_v9_inner(
     public_inputs.extend_from_slice(&initial_commit_packed);
     public_inputs.extend_from_slice(&final_commit_packed);
     public_inputs.extend_from_slice(&batch_commit_packed);
+    if expose.is_interval() {
+        public_inputs.push(Challenge::from_u64(t));
+    }
 
     let initial_cells_packed = pack_cells_to_challenge(&initial_state);
-    let final_cells_packed = pack_cells_to_challenge(&final_state);
+    let final_cells_packed = pack_cells_to_challenge(&committed_final);
     let batch_packed_native = pack_batch_to_challenge(&batch);
     let mut private_inputs: Vec<Challenge> = Vec::new();
     private_inputs.extend_from_slice(&initial_cells_packed);
@@ -795,10 +1047,16 @@ fn prove_countmin_leaf_v9_inner(
         recompose_preprocessor::<Val>(false),
     ];
     preprocessors.push(permute_preprocessor::<Val>());
+    if hardened {
+        preprocessors.push(range_preprocessor::<Val>());
+    }
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
-    if expose_boundary {
+    if hardened {
+        air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
+    }
+    if expose.exposes() {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
     }
@@ -823,7 +1081,10 @@ fn prove_countmin_leaf_v9_inner(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
-    if expose_boundary {
+    if hardened {
+        prover.register_range_table::<4>();
+    }
+    if expose.exposes() {
         prover.register_expose_table::<4>();
     }
     let proof = prover
@@ -832,6 +1093,10 @@ fn prove_countmin_leaf_v9_inner(
     prover
         .verify_all_tables(&proof)
         .expect("self-verify v9 leaf");
+    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
+        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
+        ..Default::default()
+    });
 
     CountMinLeafProofV9 {
         output: RecursionOutput(proof, Rc::new(circuit_prover_data)),
@@ -899,5 +1164,243 @@ mod tests {
 
         let expected_batch_commit = commit_batch(&batch);
         assert_eq!(leaf.batch_commit.0, expected_batch_commit.0);
+    }
+
+    // ─── Malicious-prover probe: shared PermuteBus (revision Step 1) ────────
+
+    fn panic_msg(e: &Box<dyn std::any::Any + Send>) -> String {
+        if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = e.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            "<non-string panic>".to_string()
+        }
+    }
+
+    /// Count-Min point estimate `min_i C[i][h_i(key)]`.
+    fn estimate(state: &CountMinState, key: u64) -> u32 {
+        (0..state.params.d)
+            .map(|i| {
+                state.counters[i][crate::sketch::countmin_v9::hash_cell_v9(i, key, state.params.w)]
+            })
+            .min()
+            .expect("d ≥ 1")
+    }
+
+    /// **Shared-PermuteBus forgery (key-sort ↔ counter-sort trade).** Batch
+    /// `[(3, 5), (1000, 7)]` at `(d, w) = (2, 4)`. The small key 3's record
+    /// payload `3·2^20 + 5` is also a valid counter payload "cell 3 += 5", and
+    /// key 1000's row-1 counter payload `c0·2^20 + 7` is also a valid record
+    /// "(key c0, value 7)". The malicious prover emits the record in the
+    /// counter-sort output and the counter payload in the key-sort output; the
+    /// rest (grouping, hashing of the fake record, running sums, sparse patch)
+    /// is honest. The certified state misses key 1000's row-1 increment and
+    /// key 3's hashed increments: Count-Min UNDER-estimates both.
+    ///
+    /// Legacy encoding: ACCEPTED. Hardened tuple encoding: REJECTED (the fake
+    /// record's key-sort tuple `(c0, 7, 1, 0)` has no matching input — key
+    /// 1000's counter tuple is `(c0, 7, 0, 1)`).
+    #[test]
+    fn v9_shared_bus_forgery_rejected() {
+        let params = CountMinLeafParams { d: 2, w: 4, batch: 2 };
+        let initial = empty_state(params.d, params.w);
+        let (k_small, v_small, big, v_big) = (3u64, 5u32, 1000u64, 7u32);
+        let batch = vec![
+            CountMinUpdate { key: k_small, value: v_small },
+            CountMinUpdate { key: big, value: v_big },
+        ];
+        let honest = v9_honest_views(params, &batch);
+        let honest_final = v9_final_from_views(params, &initial, &honest);
+        assert!(estimate(&honest_final, big) >= v_big && estimate(&honest_final, k_small) >= v_small);
+        let _honest = prove_countmin_leaf_v9_with_params(params, initial.clone(), batch.clone());
+
+        // key 1000's row-1 counter address (row 1 ⇒ c0 ∈ [w, 2w), never 3).
+        let c0 = (params.w + crate::sketch::countmin_v9::hash_cell_v9(1, big, params.w)) as u64;
+        let mut key_sorted: Vec<(u64, u32)> = honest.key_sorted.clone();
+        let xpos = key_sorted.iter().position(|r| *r == (k_small, v_small)).expect("x");
+        key_sorted[xpos] = (c0, v_big);
+        key_sorted.sort_by_key(|r| r.0);
+        let mut ctr = v9_u_ctr(params, &key_sorted);
+        let ypos = ctr.iter().position(|r| *r == (c0, v_big)).expect("y ∈ U_ctr'");
+        ctr[ypos] = (k_small, v_small);
+        ctr.sort_by_key(|r| r.0);
+        let forged = V9Views {
+            sigma_key: (0..params.batch).collect(),
+            key_sorted: key_sorted.clone(),
+            sigma: (0..ctr.len()).collect(),
+            ctr_sorted: ctr.clone(),
+        };
+        let forged_final = v9_final_from_views(params, &initial, &forged);
+        println!(
+            "[v9 shared bus] forged final {:?} (honest {:?}); estimate(1000) = {} (true 7), \
+             estimate(3) = {} (true 5)",
+            forged_final.counters,
+            honest_final.counters,
+            estimate(&forged_final, big),
+            estimate(&forged_final, k_small)
+        );
+        assert!(
+            estimate(&forged_final, big) < v_big || estimate(&forged_final, k_small) < v_small,
+            "the forged state must under-estimate a key"
+        );
+
+        let run = |hardened: bool| {
+            HARDENED.with(|c| c.set(Some(hardened)));
+            let ks: Vec<Challenge> =
+                key_sorted.iter().map(|&(k, v)| v9_elem(k, v, hardened, 0)).collect();
+            let cs: Vec<Challenge> = ctr.iter().map(|&(c, v)| v9_elem(c, v, hardened, 1)).collect();
+            FORGE.with(|f| *f.borrow_mut() = vec![(0, ks), (1, cs)]);
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                prove_v9_views(params, initial.clone(), batch.clone(), &forged, false)
+            }));
+            HARDENED.with(|c| c.set(None));
+            FORGE.with(|f| f.borrow_mut().clear());
+            r
+        };
+        let pre = run(false);
+        match &pre {
+            Ok(_) => println!("[v9 shared bus] legacy: forged final ACCEPTED (self-verified)"),
+            Err(e) => println!("[v9 shared bus] legacy: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(pre.is_ok(), "PoC premise: the legacy circuit accepts the trade");
+        let post = run(true);
+        match &post {
+            Ok(_) => println!("[v9 shared bus] hardened: forged final ACCEPTED"),
+            Err(e) => println!("[v9 shared bus] hardened: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post.is_err(), "the tagged tuples must stop the key-sort/counter-sort trade");
+    }
+
+    /// **Packed-split forgery.** Honest permutations, dishonest DECODING: the
+    /// legacy counter-sort output `c·2^20 + v` is split as `(c − 1, v + 2^20)`
+    /// (the same field element), so the increment lands in the neighbouring
+    /// cell, inflated by 2^20, and the key hashed to cell `c` is
+    /// under-estimated. Legacy: ACCEPTED. Hardened: REJECTED — the tuple
+    /// `(c − 1, v + 2^20, 0, 1)` is not the permuted `(c, v, 0, 1)`.
+    #[test]
+    fn v9_packed_split_forgery_rejected() {
+        let params = CountMinLeafParams { d: 2, w: 4, batch: 2 };
+        let initial = empty_state(params.d, params.w);
+        let batch = vec![
+            CountMinUpdate { key: 7, value: 3 },
+            CountMinUpdate { key: 11, value: 5 },
+        ];
+        let honest = v9_honest_views(params, &batch);
+        // A counter row whose address c ≥ 1 is a singleton segment.
+        let rows = &honest.ctr_sorted;
+        let r = (0..rows.len())
+            .find(|&r| {
+                rows[r].0 >= 1
+                    && rows[r].1 > 0
+                    && (r == 0 || rows[r - 1].0 != rows[r].0)
+                    && (r + 1 == rows.len() || rows[r + 1].0 != rows[r].0)
+                    && (r == 0 || rows[r - 1].0 != rows[r].0 - 1)
+            })
+            .expect("a singleton counter segment");
+        let (c, v) = rows[r];
+        let mut forged = honest.clone();
+        forged.ctr_sorted[r] = (c - 1, v + (1 << SHIFT_VAL_BITS));
+        let honest_final = v9_final_from_views(params, &initial, &honest);
+        let forged_final = v9_final_from_views(params, &initial, &forged);
+        let (row, col) = (c as usize / params.w, c as usize % params.w);
+        println!(
+            "[v9 packed split] counter row ({c}, {v}) re-split as ({}, {}): cell ({row},{col}) \
+             {} → {}",
+            c - 1,
+            v + (1 << SHIFT_VAL_BITS),
+            honest_final.counters[row][col],
+            forged_final.counters[row][col]
+        );
+        assert!(forged_final.counters[row][col] < honest_final.counters[row][col]);
+
+        let run = |hardened: bool| {
+            HARDENED.with(|cc| cc.set(Some(hardened)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                prove_v9_views(params, initial.clone(), batch.clone(), &forged, false)
+            }));
+            HARDENED.with(|cc| cc.set(None));
+            r
+        };
+        let pre = run(false);
+        match &pre {
+            Ok(_) => println!("[v9 packed split] legacy: forged final ACCEPTED (self-verified)"),
+            Err(e) => println!("[v9 packed split] legacy: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(pre.is_ok(), "PoC premise: the legacy packed split accepts the re-split");
+        let post = run(true);
+        match &post {
+            Ok(_) => println!("[v9 packed split] hardened: forged final ACCEPTED"),
+            Err(e) => println!("[v9 packed split] hardened: REJECTED: {}", panic_msg(e)),
+        }
+        assert!(post.is_err(), "the tuple encoding must reject the re-split");
+    }
+
+    /// Cost of the hardened encoding (tagged tuples + base pins): padded trace
+    /// rows, legacy vs hardened. Run:
+    /// `cargo test --release --lib countmin_leaf_v9::tests::fix_overhead -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn fix_overhead() {
+        for &(d, w, m) in &[(4usize, 16usize, 16usize), (4, 16, 64)] {
+            let params = CountMinLeafParams { d, w, batch: m };
+            let batch: Vec<CountMinUpdate> = (0..m)
+                .map(|i| CountMinUpdate {
+                    key: (i as u64).wrapping_mul(0x9E37_79B9) + 1,
+                    value: 1,
+                })
+                .collect();
+            for (label, hardened) in [("legacy", false), ("hardened", true)] {
+                HARDENED.with(|c| c.set(Some(hardened)));
+                let t = std::time::Instant::now();
+                let _ = prove_countmin_leaf_v9_with_params(params, empty_state(d, w), batch.clone());
+                HARDENED.with(|c| c.set(None));
+                println!(
+                    "[v9 fix_overhead] d={d} w={w} m={m} {label:<8} trace_rows={} prove+verify={:?}",
+                    crate::recursion::recursive::timing::take().trace_rows,
+                    t.elapsed()
+                );
+            }
+        }
+    }
+
+    /// Forged-decomposition regression test (Count-Min family). The prover
+    /// commits to `Com(S')` with `S'` = the honest update plus 5 in cell 0,
+    /// while the decomposition of that packed cell group, which every update
+    /// constraint reads, returns the honest counters. Under the pre-fix
+    /// recompose lowering nothing ties the two, and the proof verifies for a
+    /// state the batch never produced. The fork's `recompose/coeff` lowering
+    /// rejects it.
+    #[test]
+    fn forged_final_decomposition_rejected() {
+        let params = CountMinLeafParams { d: 2, w: 4, batch: 2 };
+        let initial = empty_state(params.d, params.w);
+        let batch = vec![
+            CountMinUpdate { key: 7, value: 3 },
+            CountMinUpdate { key: 11, value: 5 },
+        ];
+        let mut honest = initial.clone();
+        for u in &batch {
+            CountMinV9::update(&mut honest, u);
+        }
+        let mut forged = honest.clone();
+        forged.counters[0][0] += 5;
+        let run = || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                FORGE_FINAL_CELL0.with(|c| c.set(Some(5)));
+                let leaf =
+                    prove_countmin_leaf_v9_with_params(params, initial.clone(), batch.clone());
+                FORGE_FINAL_CELL0.with(|c| c.set(None));
+                leaf.final_
+            }))
+            .inspect_err(|_| FORGE_FINAL_CELL0.with(|c| c.set(None)))
+        };
+
+        let legacy = crate::recompose_binding::with_unbound_recompose(run)
+            .expect("PoC premise: the unbound lowering accepts the forged final state");
+        assert_eq!(legacy.0, commit_countmin(&forged).0, "exposes Com(S')");
+        assert_ne!(legacy.0, commit_countmin(&honest).0, "not the certified update");
+
+        assert!(run().is_err(), "recompose/coeff lowering must reject the forged final state");
     }
 }

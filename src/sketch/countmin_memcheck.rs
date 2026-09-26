@@ -62,18 +62,20 @@ use std::rc::Rc;
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
 use p3_circuit::ops::{
-    Poseidon2Config, generate_permute_trace, generate_poseidon2_trace, generate_recompose_trace,
+    Poseidon2Config, generate_permute_trace, generate_poseidon2_trace, generate_range_trace,
+    generate_recompose_trace,
 };
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         permute_air_builders, permute_preprocessor, poseidon2_air_builders_d4,
-        poseidon2_preprocessor, recompose_air_builders, recompose_preprocessor,
+        poseidon2_preprocessor, range_air_builders, range_preprocessor, recompose_air_builders,
+        recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_poseidon2_circuit_air::BabyBearD4Width16;
 use p3_recursion::RecursionOutput;
 use p3_uni_stark::StarkGenericConfig;
@@ -88,6 +90,7 @@ use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
 use crate::sketch::Sketch;
+use crate::sketch::bind::{self, Binding};
 use crate::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
 use crate::sketch::countmin_final::{apply_update_prf, hash_cell_prf};
 use crate::sketch::countmin_v9::CountMinV9;
@@ -111,6 +114,16 @@ thread_local! {
     /// gate then fails, so the self-verify rejects. Drives
     /// [`tests::tamper_rejected`]. Always `false` outside tests.
     static TAMPER_FINAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only malicious prover: `(touch index k·d + i, claimed address,
+    /// claimed value)` overrides the honest touch of record `k` on row `i`
+    /// in the claimed sorted view (and hence the committed sparse patch).
+    /// Drives `tests::stage_g_collision_*`.
+    static FORGE_TOUCHES: std::cell::RefCell<Vec<(usize, u64, u32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────
@@ -258,7 +271,100 @@ pub fn prove_countmin_memcheck(
     params: CmMemcheckParams,
     batch: Vec<CountMinUpdate>,
 ) -> CountMinMemcheckProof {
+    prove_countmin_memcheck_with(params, batch, bind::default_binding())
+}
+
+/// [`prove_countmin_memcheck`] with an explicit [`Binding`].
+///
+/// [`Binding::Legacy`] is the pre-fix circuit, unchanged (unsound: batch
+/// fields and digest limbs are unbound, sponge IVs are free, and the
+/// counter sort packs `address·2^20 + value`, which collides on BabyBear once
+/// `d·w > 1920`). [`Binding::Semantic`] / [`Binding::Bound`] use canonical
+/// position splits, the coordinate-wise sort key `address + value·e₁`, an
+/// exact range on `combined_sorted[0]` and base pins on `val_sorted`;
+/// `Bound` also ALU-binds the batch fields and digest limbs and hashes with a
+/// zero IV (see [`crate::sketch::bind`]).
+pub fn prove_countmin_memcheck_with(
+    params: CmMemcheckParams,
+    batch: Vec<CountMinUpdate>,
+    binding: Binding,
+) -> CountMinMemcheckProof {
+    build_countmin_memcheck(params, batch, binding).prove()
+}
+
+/// A built memcheck leaf: circuit, witness, registered prover.
+struct MemcheckCircuit {
+    circuit: p3_circuit::Circuit<Challenge>,
+    public_inputs: Vec<Challenge>,
+    private_inputs: Vec<Challenge>,
+    prover: BatchStarkProver<ConfigWithFriParams>,
+    circuit_prover_data: CircuitProverData<ConfigWithFriParams>,
+    trace_rows: u64,
+    final_commit: CountMinCommit,
+    batch_commit: CountMinCommit,
+    params: CmMemcheckParams,
+    patch: Vec<(usize, u32)>,
+}
+
+impl MemcheckCircuit {
+    fn run(&self) -> p3_circuit::tables::Traces<Challenge> {
+        let mut runner = self.circuit.runner();
+        runner.set_public_inputs(&self.public_inputs).expect("set_public_inputs");
+        runner.set_private_inputs(&self.private_inputs).expect("set_private_inputs");
+        runner.run().expect("run countmin_memcheck circuit")
+    }
+
+    fn prove(self) -> CountMinMemcheckProof {
+        let __t_w = std::time::Instant::now();
+        let traces = self.run();
+        let __witness = __t_w.elapsed();
+        let __t_p = std::time::Instant::now();
+        let proof = self
+            .prover
+            .prove_all_tables(&traces, &self.circuit_prover_data)
+            .expect("prove_all_tables (memcheck)");
+        let __prove = __t_p.elapsed();
+        let __t_v = std::time::Instant::now();
+        self.prover
+            .verify_all_tables(&proof)
+            .expect("self-verify countmin_memcheck leaf");
+        crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
+            witness: __witness,
+            prove: __prove,
+            verify: __t_v.elapsed(),
+            trace_rows: self.trace_rows,
+        });
+        CountMinMemcheckProof {
+            output: RecursionOutput(proof, Rc::new(self.circuit_prover_data)),
+            final_commit: self.final_commit,
+            batch_commit: self.batch_commit,
+            params: self.params,
+            patch: self.patch,
+        }
+    }
+
+    #[cfg(test)]
+    fn prove_traces(
+        &self,
+        traces: &p3_circuit::tables::Traces<Challenge>,
+    ) -> Result<p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>, String> {
+        let proof = self
+            .prover
+            .prove_all_tables(traces, &self.circuit_prover_data)
+            .map_err(|e| format!("prove: {e:?}"))?;
+        self.prover.verify_all_tables(&proof).map_err(|e| format!("verify: {e:?}"))?;
+        Ok(proof)
+    }
+}
+
+fn build_countmin_memcheck(
+    params: CmMemcheckParams,
+    batch: Vec<CountMinUpdate>,
+    binding: Binding,
+) -> MemcheckCircuit {
     params.validate();
+    let bound = binding.is_bound();
+    let cfg = Poseidon2Config::BABY_BEAR_D4_W16;
     assert_eq!(batch.len(), params.batch, "batch.len() != params.batch");
 
     let CmMemcheckParams { d, w, batch: m } = params;
@@ -285,6 +391,12 @@ pub fn prove_countmin_memcheck(
             u_ctr_data.push((combined, u.value));
         }
     }
+    #[cfg(test)]
+    FORGE_TOUCHES.with(|f| {
+        for &(idx, addr, val) in f.borrow().iter() {
+            u_ctr_data[idx] = (addr, val);
+        }
+    });
     let mut indexed: Vec<(usize, &(u64, u32))> = u_ctr_data.iter().enumerate().collect();
     indexed.sort_by_key(|(_, (combined, _))| *combined);
     let sigma_ctr: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
@@ -334,6 +446,10 @@ pub fn prove_countmin_memcheck(
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
+    if bound {
+        assert!(addr_bits <= 24, "bound memcheck: d·w must be ≤ 2^24");
+        b.enable_range(generate_range_trace::<Val, Challenge>);
+    }
 
     // Public inputs: (final_commit, batch_commit). The initial state is the
     // public empty state, so it needs no commitment input.
@@ -356,6 +472,25 @@ pub fn prove_countmin_memcheck(
     let pow2_consts: Vec<ExprId> = (0..w_log2.max(addr_bits))
         .map(|j| b.alloc_const(Challenge::from_u64(1u64 << j), "2^j"))
         .collect();
+    // Semantic/Bound: e₁ (coordinate-wise sort key), i·w, split constants.
+    // (Allocated only when used, so the Legacy circuit stays byte-identical.)
+    let e1 = if bound {
+        b.alloc_const(
+            Challenge::from_basis_coefficients_slice(&[Val::ZERO, Val::ONE, Val::ZERO, Val::ZERO])
+                .expect("e1"),
+            "e1",
+        )
+    } else {
+        zero
+    };
+    let row_w_consts: Vec<ExprId> = if bound {
+        (0..d)
+            .map(|i| b.alloc_const(Challenge::from_u64((i * w) as u64), "row_i*w"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let split_c = bound.then(|| bind::SplitConsts::new::<Val, Challenge>(&mut b, w_log2, one, zero));
 
     // Private inputs.
     let batch_packed: Vec<ExprId> =
@@ -377,17 +512,21 @@ pub fn prove_countmin_memcheck(
     let inv_diff: Vec<ExprId> =
         (0..n_ctr).map(|_| b.alloc_private_input("inv_diff")).collect();
 
+    if let Some(&b0) = batch_packed.first() {
+        b.tag(b0, "mc_batch_packed_0").expect("tag");
+    }
+
     // ─── Bind the batch to its commitment ────────────────────────────────
-    let digest_batch = b
-        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &batch_packed, true)
-        .expect("hash batch");
+    let digest_batch = bind::hash_slice(&mut b, &cfg, &batch_packed, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(digest_batch[i], batch_commit_pis[i]);
     }
     for k in 0..m {
-        let coeffs = b
-            .decompose_ext_to_base_coeffs::<Val>(batch_packed[k])
-            .expect("decompose batch_packed");
+        let coeffs = bind::decompose::<Val, Challenge>(&mut b, batch_packed[k], binding, bind::no_pin, |b, i, c| {
+            if i < 3 {
+                bind::pin_base::<Val, Challenge>(b, c);
+            }
+        });
         b.connect(coeffs[0], key_lo[k]);
         b.connect(coeffs[1], key_hi[k]);
         b.connect(coeffs[2], value_w[k]);
@@ -398,6 +537,9 @@ pub fn prove_countmin_memcheck(
         let hi_shifted = b.mul(key_hi[k], two_pow_32_const);
         key_field.push(b.add(key_lo[k], hi_shifted));
     }
+    if let Some(&kf0) = key_field.first() {
+        b.tag(kf0, "mc_key_field_0").expect("tag");
+    }
 
     // ─── PRF hash gadget over every record → payload rows ────────────────
     // (Identical to countmin_final Stage F.)
@@ -407,14 +549,51 @@ pub fn prove_countmin_memcheck(
         let h1 = b.alloc_private_input("h_digest_1");
         h_digest_witnesses.push((h0, h1));
     }
+    // Semantic/Bound: per record, per row, the canonical split `(pos, hi, dinv)`
+    // of the row's digest limb (allocated after the digests; pushed after them).
+    let split_w: Vec<Vec<[ExprId; 3]>> = if bound {
+        (0..m)
+            .map(|_| (0..d).map(|_| std::array::from_fn(|_| b.alloc_private_input("split"))).collect())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut payload: Vec<ExprId> = Vec::with_capacity(n_ctr);
     for k in 0..m {
-        let hashed = b
-            .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &[key_field[k]], true)
-            .expect("hash key_field[k]");
+        let hashed = bind::hash_slice(&mut b, &cfg, &[key_field[k]], zero, binding);
         let (h0, h1) = h_digest_witnesses[k];
         b.connect(hashed[0], h0);
         b.connect(hashed[1], h1);
+        if let Some(sc) = &split_c {
+            let sw = &split_w[k];
+            let split_limb = |b: &mut CircuitBuilder<Challenge>, t: usize, c: ExprId| {
+                if t < d {
+                    let [pos, hi, dinv] = sw[t];
+                    let x = bind::canonical_split_gadget::<Val, Challenge>(b, pos, hi, dinv, sc);
+                    b.connect(x, c);
+                }
+            };
+            let pin_unused = |b: &mut CircuitBuilder<Challenge>, t: usize, c: ExprId| {
+                if t >= d {
+                    bind::pin_base::<Val, Challenge>(b, c);
+                }
+            };
+            let _ = bind::decompose::<Val, Challenge>(&mut b, h0, binding, split_limb, pin_unused);
+            if d > 4 {
+                let _ = bind::decompose::<Val, Challenge>(
+                    &mut b,
+                    h1,
+                    binding,
+                    |b, i, c| split_limb(b, 4 + i, c),
+                    |b, i, c| pin_unused(b, 4 + i, c),
+                );
+            }
+            for (i, sw_i) in sw.iter().enumerate() {
+                let comb = b.add(row_w_consts[i], sw_i[0]);
+                payload.push(b.mul_add(value_w[k], e1, comb));
+            }
+            continue;
+        }
         let coeffs_0 = b.decompose_ext_to_base_coeffs::<Val>(h0).expect("decompose h0");
         let coeffs_1 = b.decompose_ext_to_base_coeffs::<Val>(h1).expect("decompose h1");
         let h_vals: [ExprId; 8] = [
@@ -448,9 +627,21 @@ pub fn prove_countmin_memcheck(
         .add_permute(&payload, sigma_ctr.clone())
         .expect("add_permute (counter sort)");
     for r in 0..n_ctr {
-        let combined_shifted = b.mul(combined_sorted[r], shift_val_const);
-        let recovered = b.add(combined_shifted, val_sorted[r]);
+        let recovered = if bound {
+            b.mul_add(val_sorted[r], e1, combined_sorted[r])
+        } else {
+            let combined_shifted = b.mul(combined_sorted[r], shift_val_const);
+            b.add(combined_shifted, val_sorted[r])
+        };
         b.connect(recovered, payload_sorted[r]);
+    }
+    if bound {
+        // First sorted address exact (later ones: + range-checked gaps);
+        // sorted values base (they reach the entries through `acc`).
+        bind::range_exact::<Val, Challenge>(&mut b, combined_sorted[0], addr_bits);
+        for r in 0..n_ctr {
+            bind::pin_base::<Val, Challenge>(&mut b, val_sorted[r]);
+        }
     }
 
     // ─── Adjacent-equality + running sum + segment-end flags ─────────────
@@ -517,9 +708,7 @@ pub fn prove_countmin_memcheck(
             .expect("recompose sparse entry");
         entries.push(entry);
     }
-    let digest_entries = b
-        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &entries, true)
-        .expect("hash sparse patch");
+    let digest_entries = bind::hash_slice(&mut b, &cfg, &entries, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(digest_entries[i], final_commit_pis[i]);
     }
@@ -581,17 +770,17 @@ pub fn prove_countmin_memcheck(
             private_inputs.push(d0);
             private_inputs.push(d1);
         }
+        if bound {
+            for u in &batch {
+                let input = [Val::from_u64(u.key), Val::ZERO, Val::ZERO, Val::ZERO];
+                let digest: [Val; 8] = hasher.hash_iter(input.iter().copied());
+                for limb in digest.iter().take(d) {
+                    private_inputs
+                        .extend(bind::canonical_split_vals::<Val>(*limb, w_log2).map(Challenge::from));
+                }
+            }
+        }
     }
-
-    // ─── Run + prove ─────────────────────────────────────────────────────
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
-        runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
-        runner.run().expect("run countmin_memcheck circuit")
-    };
-    let __witness = __t_w.elapsed();
 
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
@@ -603,6 +792,10 @@ pub fn prove_countmin_memcheck(
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
+    if bound {
+        preprocessors.push(range_preprocessor::<Val>());
+        air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
+    }
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -623,24 +816,17 @@ pub fn prove_countmin_memcheck(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
-    let __t_p = std::time::Instant::now();
-    let proof = prover
-        .prove_all_tables(&traces, &circuit_prover_data)
-        .expect("prove_all_tables (memcheck)");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover
-        .verify_all_tables(&proof)
-        .expect("self-verify countmin_memcheck leaf");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
-    });
+    if bound {
+        prover.register_range_table::<4>();
+    }
 
-    CountMinMemcheckProof {
-        output: RecursionOutput(proof, Rc::new(circuit_prover_data)),
+    MemcheckCircuit {
+        circuit,
+        public_inputs,
+        private_inputs,
+        prover,
+        circuit_prover_data,
+        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
         final_commit,
         batch_commit: CountMinCommit(batch_commit.0),
         params,
@@ -769,5 +955,233 @@ mod tests {
         );
         assert!(r.patch.len() <= d * batch);
         assert!(r.query(updates[0].key) >= 1);
+    }
+
+    // ── Binding (see `crate::sketch::bind`): legacy-vs-bound forgery tests ──
+
+    use crate::sketch::forge;
+    use p3_circuit::ops::{NpoTypeId, Poseidon2Trace};
+
+    const FP: CmMemcheckParams = CmMemcheckParams { d: 2, w: 8, batch: 2 };
+
+    fn fp_updates() -> Vec<CountMinUpdate> {
+        vec![CountMinUpdate { key: 7, value: 3 }, CountMinUpdate { key: 9, value: 5 }]
+    }
+
+    #[test]
+    fn memcheck_round_trip_all_bindings() {
+        let legacy = prove_countmin_memcheck_with(FP, fp_updates(), Binding::Legacy);
+        for binding in [Binding::Bound, Binding::Semantic] {
+            let r = prove_countmin_memcheck_with(FP, fp_updates(), binding);
+            assert_eq!(r.final_commit.0, legacy.final_commit.0, "{binding:?}");
+            assert_eq!(r.query(7), legacy.query(7));
+        }
+        // d > 4 (second digest Challenge).
+        let p = CmMemcheckParams { d: 7, w: 8, batch: 2 };
+        let r = prove_countmin_memcheck_with(p, fp_updates(), Binding::Bound);
+        assert!(r.query(9) >= 5);
+    }
+
+    /// FORGED BATCH RECORD (transplant): record 0 routes key 7, then the
+    /// committed batch is rewritten to key 1234 and rehashed.
+    fn forged_batch(binding: Binding) -> bool {
+        forge::accepted_with_control(&format!("cm memcheck forged batch ({binding:?})"), |f| {
+            forged_batch_run(binding, f)
+        })
+    }
+
+    fn forged_batch_run(binding: Binding, forge_it: bool) -> bool {
+        let c = build_countmin_memcheck(FP, fp_updates(), binding);
+        let mut traces = c.run();
+        let mut recs = fp_updates();
+        if forge_it {
+            recs[0].key = 1234;
+        }
+        let w = traces.tag_to_witness["mc_batch_packed_0"];
+        forge::set_wid::<Val, Challenge>(&mut traces, w, pack_batch_to_challenge(&recs)[0]);
+        forge::rehash_all::<Val, Challenge, _, 16>(&mut traces, Poseidon2Config::BABY_BEAR_D4_W16, &make_perm());
+        forge::accepted(|| c.prove_traces(&traces).map(|_| ()))
+    }
+
+    /// FREE SPONGE IV on record 0's routing hash.
+    fn forged_iv(binding: Binding) -> bool {
+        forge::accepted_with_control(&format!("cm memcheck forged IV ({binding:?})"), |f| {
+            forged_iv_run(binding, f)
+        })
+    }
+
+    fn forged_iv_run(binding: Binding, forge_it: bool) -> bool {
+        let c = build_countmin_memcheck(FP, fp_updates(), binding);
+        let mut traces = c.run();
+        let kf0 = traces.tag_to_witness["mc_key_field_0"].0;
+        let key = NpoTypeId::poseidon2_perm(Poseidon2Config::BABY_BEAR_D4_W16);
+        let mut pt = traces.non_primitive_trace::<Poseidon2Trace<Val>>(&key).expect("p2").clone();
+        let row = pt
+            .operations
+            .iter_mut()
+            .find(|r| r.new_start && r.in_ctl[0] && r.input_indices[0] == kf0)
+            .expect("record 0 routing hash row");
+        if forge_it {
+            row.input_values[8] += Val::ONE;
+        }
+        traces.non_primitive_traces.insert(key, Box::new(pt));
+        forge::rehash_all::<Val, Challenge, _, 16>(&mut traces, Poseidon2Config::BABY_BEAR_D4_W16, &make_perm());
+        forge::accepted(|| c.prove_traces(&traces).map(|_| ()))
+    }
+
+    #[test]
+    fn forged_batch_record_legacy_accepts_bound_rejects() {
+        if !bind::probe::fork_binds_decompose() {
+            assert!(forged_batch(Binding::Legacy), "Legacy accepts the forged batch record (PoC)");
+        }
+        assert!(!forged_batch(Binding::Bound), "Bound must reject the forged batch record");
+        // Merged soundness fork: the fork itself binds decompose coefficients, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if bind::probe::fork_binds_decompose() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(!forged_batch(b), "fork binds decompose coefficients: {b:?} must reject too");
+            }
+        }
+    }
+
+    #[test]
+    fn forged_routing_iv_legacy_accepts_bound_rejects() {
+        if !bind::probe::fork_binds_iv() && !bind::probe::fork_binds_decompose() {
+            assert!(forged_iv(Binding::Legacy), "Legacy accepts the free-IV digest (PoC)");
+        }
+        assert!(!forged_iv(Binding::Bound), "Bound must reject the IV forgery");
+        // Merged soundness fork: the fork itself binds the sponge IV, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if bind::probe::fork_binds_iv() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(!forged_iv(b), "fork binds the sponge IV: {b:?} must reject too");
+            }
+        }
+    }
+
+    // ── Circuit-level attack: Stage-G packing collision ─────────────────────
+    //
+    // The memcheck port of `countmin_omc::tests::stage_g_collision_*` (same
+    // Stage-G code). Fork-independent: in-field arithmetic on the `Legacy`
+    // packing `address·2^20 + value`, closed only by the `Semantic`
+    // coordinate-wise sort key.
+
+    use crate::sketch::forge_permute;
+
+    /// Where a (possibly forged) memcheck proof ended: `Ok((certified final
+    /// commitment, certified sparse patch))` if it proved and verified, else
+    /// `Err((runner_rejected, message))`.
+    type McOutcome = Result<(CountMinCommit, Vec<(usize, u32)>), (bool, String)>;
+
+    /// On BabyBear `1920·2^20 = p − 1`, so `(a + 1920)·2^20 + (v + 1) ≡
+    /// a·2^20 + v`. With `d·w = 2048 > 1920`, record 0's row-0 touch at
+    /// bucket `a < 128` is re-split in the claimed sorted view as address
+    /// `a + 1920` (row 1) with value `v + 1`, and the certified sparse patch
+    /// follows it. `proof_level` also forges the Stage-G PermuteAir outputs
+    /// to the claimed sorted tuples, so only the PermuteBus can reject. With
+    /// `forged = false` the same plumbing carries the honest touch (control).
+    /// Returns the outcome and `a`.
+    fn stage_g_collision(binding: Binding, forged: bool, proof_level: bool) -> (McOutcome, usize) {
+        let (d, w, m) = (2usize, 1024usize, 2usize);
+        let params = CmMemcheckParams { d, w, batch: m };
+        let key = (1u64..)
+            .find(|&k| hash_cell_prf(0, k, w) < 128)
+            .expect("key with row-0 bucket < 128");
+        let a = hash_cell_prf(0, key, w) as u64;
+        let updates = vec![
+            CountMinUpdate { key, value: 5 },
+            CountMinUpdate { key: key + 7_777, value: 1 },
+        ];
+        let touch = if forged { (0, a + 1920, 6) } else { (0, a, 5) };
+        FORGE_TOUCHES.with(|f| *f.borrow_mut() = vec![touch]);
+        let built = forge::catch_msg(|| build_countmin_memcheck(params, updates.clone(), binding));
+        FORGE_TOUCHES.with(|f| f.borrow_mut().clear());
+        let mut c = built.expect("build (the runner has not run yet)");
+        if proof_level {
+            let mut sorted: Vec<(u64, u32)> = updates
+                .iter()
+                .flat_map(|u| {
+                    (0..d).map(move |i| ((i * w + hash_cell_prf(i, u.key, w)) as u64, u.value))
+                })
+                .collect();
+            sorted[0] = (touch.1, touch.2);
+            sorted.sort_by_key(|&(c, _)| c); // the same stable sort as the builder
+            let tuples: Vec<Challenge> = sorted
+                .iter()
+                .map(|&(c, v)| {
+                    if binding.is_bound() {
+                        Challenge::from_basis_coefficients_slice(&[
+                            Val::from_u64(c),
+                            Val::from_u32(v),
+                            Val::ZERO,
+                            Val::ZERO,
+                        ])
+                        .expect("4 coeffs")
+                    } else {
+                        Challenge::from_u64(c * SHIFT_VAL + u64::from(v))
+                    }
+                })
+                .collect();
+            forge_permute::forge_permute_outputs(&mut c.circuit, 0, tuples);
+        }
+        let out = match forge::catch_msg(|| c.run()) {
+            Err(msg) => Err((true, msg)),
+            Ok(traces) => match forge::catch_msg(|| c.prove_traces(&traces)) {
+                Ok(Ok(_)) => Ok((c.final_commit, c.patch.clone())),
+                Ok(Err(e)) => Err((false, e)),
+                Err(msg) => Err((false, format!("prove panicked: {msg}"))),
+            },
+        };
+        (out, a as usize)
+    }
+
+    fn check_stage_g_collision(proof_level: bool) {
+        let total = |patch: &[(usize, u32)], addr: usize| -> u32 {
+            patch.iter().filter(|e| e.0 == addr).map(|e| e.1).sum()
+        };
+        for binding in [Binding::Legacy, Binding::Semantic, Binding::Bound] {
+            let what = format!("memcheck {binding:?} Stage-G collision (proof_level={proof_level})");
+            let (ctl, a) = stage_g_collision(binding, false, proof_level);
+            eprintln!("{what} control: {ctl:?}");
+            let (honest_commit, honest_patch) =
+                ctl.unwrap_or_else(|e| panic!("{what}: the control must verify: {e:?}"));
+            let (out, _) = stage_g_collision(binding, true, proof_level);
+            eprintln!("{what} forged: {out:?}");
+            if binding.is_bound() {
+                let ok = match &out {
+                    Err((true, msg)) => {
+                        !proof_level
+                            && msg.contains("run countmin_memcheck")
+                            && msg.contains("WitnessConflict")
+                    }
+                    Err((false, msg)) => proof_level && msg.starts_with("verify:"),
+                    Ok(_) => false,
+                };
+                assert!(ok, "{what}: expected rejection, got {out:?}");
+            } else {
+                let (commit, patch) = out.expect("Legacy accepts the (a + 1920, v + 1) re-split (PoC)");
+                assert_ne!(commit, honest_commit, "{what}: certifies a different patch");
+                assert_eq!(total(&patch, a) + 5, total(&honest_patch, a), "{what}: the +5 left `a`");
+                assert_eq!(
+                    total(&patch, a + 1920),
+                    total(&honest_patch, a + 1920) + 6,
+                    "{what}: …and landed at a + 1920 as +6"
+                );
+            }
+        }
+    }
+
+    /// Witness level: `Semantic`/`Bound` conflict at the Stage-G `connect`;
+    /// `Legacy` ACCEPTS.
+    #[test]
+    fn stage_g_collision_legacy_accepts_semantic_bound_reject() {
+        check_stage_g_collision(false);
+    }
+
+    /// Proof level: the verifier rejects `Semantic`/`Bound` on the
+    /// PermuteBus; `Legacy` ACCEPTS.
+    #[test]
+    fn stage_g_collision_proof_level_legacy_accepts_semantic_bound_reject() {
+        check_stage_g_collision(true);
     }
 }

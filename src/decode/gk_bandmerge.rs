@@ -19,32 +19,21 @@
 //! have `le = 0` and `g₁=g₂=0`, so they perturb neither `P_i`, `k`, nor the
 //! bracket deviations.
 
-use std::rc::Rc;
-
 use p3_baby_bear::default_babybear_poseidon2_16;
-use p3_batch_stark::ProverData;
-use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_range_trace, generate_recompose_trace};
-use p3_circuit::{CircuitBuilder, ExprId};
-use p3_circuit_prover::{
-    BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
-    batch_stark_prover::{
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        range_air_builders, range_preprocessor, recompose_preprocessor,
-    },
-    common::get_airs_and_degrees_with_prep,
+use p3_circuit::ops::{
+    Poseidon2Config, generate_expose_trace, generate_poseidon2_trace, generate_range_trace,
+    generate_recompose_trace,
 };
+use p3_circuit::{CircuitBuilder, ExprId};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_poseidon2_circuit_air::BabyBearD4Width16;
-use p3_recursion::RecursionOutput;
-use p3_uni_stark::StarkGenericConfig;
 
-use crate::config::{Challenge, LOG_BLOWUP, Val};
-use crate::decode::{DecodeProof, ReleasePolicy};
-use crate::recursion::recursive::config::ConfigWithFriParams;
-use crate::recursion::recursive::countmin_leaf::{DIGEST_PACKING, make_leaf_config};
-use crate::sketch::gk_bandmerge::{E_MAX, Gk2State, commit_gk2_state, pack_tuples2};
+use crate::config::{Challenge, Val};
+use crate::decode::{DecodeProof, DecodeVk, ReleasePolicy, StdDecodeCircuit};
+use crate::recursion::recursive::countmin_leaf::DIGEST_PACKING;
+use crate::sketch::bind::{self, Binding};
+use crate::sketch::gk_bandmerge::{E_MAX, Gk2State, GkbParams, commit_gk2_state, pack_tuples2};
 
-const LOG_FINAL_POLY_LEN: usize = 6;
 /// Value/query comparison width (`e, q < 2^22 = E_MAX+1`).
 const E_BITS: usize = 22;
 /// Rank-mass field width (`g, Δ, t < 2^24`); matches the update circuit.
@@ -101,14 +90,54 @@ fn pack_commit(digest: &[Val; 8]) -> [Challenge; DIGEST_PACKING] {
 }
 
 /// Prove a two-sided GK **approximate-rank** quantile decode against a committed
-/// [`Gk2State`]. Self-verifies; records the timing split.
+/// [`Gk2State`]. Self-verifies; records the timing split. Uses the
+/// process-default [`Binding`] ([`bind::default_binding`]).
 pub fn prove_gk2_decode(params: Gkb2DecodeParams, state: Gk2State, query: u32) -> DecodeProof {
+    prove_gk2_decode_with(params, state, query, bind::default_binding())
+}
+
+/// [`prove_gk2_decode`] with an explicit [`Binding`].
+///
+/// `Semantic` / `Bound` surface the query statement `(Com(S), q, answer)`
+/// through the Expose NPO (16 base values: commit[8], q[4], answer[4]; read it
+/// with [`crate::decode::read_exposed_statement`]) and pin the query's three
+/// upper extension coordinates to 0, so the exposed query is exactly the
+/// scalar the rank relation used (Property 3). [`Binding::Legacy`] is the
+/// pre-fix circuit, byte-for-byte: it exposes nothing, so its proof certifies
+/// an answer the verifier never sees. No in-circuit coefficient re-binding
+/// (the merged fork binds decompositions), so `Bound` equals `Semantic`.
+pub fn prove_gk2_decode_with(
+    params: Gkb2DecodeParams,
+    state: Gk2State,
+    query: u32,
+    binding: Binding,
+) -> DecodeProof {
+    build_gk2_decode(params, &state, query, binding).prove("gk2 decode")
+}
+
+/// The trusted verification key of the two-sided GK rank decoder for
+/// `params` under `binding`, derived from public parameters only (a proof over
+/// the empty state). Pin query proofs to it with
+/// [`crate::decode::verify_decode_proof`].
+pub fn gk2_decode_vk(params: Gkb2DecodeParams, binding: Binding) -> DecodeVk {
+    let empty = Gk2State::empty(GkbParams { capacity: params.capacity, batch: 2, s: 1 });
+    build_gk2_decode(params, &empty, 0, binding).derive_vk("gk2 decode")
+}
+
+/// Build the two-sided GK rank decode circuit and its witness.
+pub(crate) fn build_gk2_decode(
+    params: Gkb2DecodeParams,
+    state: &Gk2State,
+    query: u32,
+    binding: Binding,
+) -> StdDecodeCircuit {
+    let expose = binding.is_bound();
     params.validate();
     let Gkb2DecodeParams { capacity: cap, release } = params;
     assert_eq!(state.tuples.len(), cap, "state shape must match params");
 
-    let commit = commit_gk2_state(&state);
-    let est = native_estimate(&state, query);
+    let commit = commit_gk2_state(state);
+    let est = native_estimate(state, query);
     let answer = release.apply(est.res);
 
     let mut b = CircuitBuilder::<Challenge>::new();
@@ -118,12 +147,20 @@ pub fn prove_gk2_decode(params: Gkb2DecodeParams, state: Gk2State, query: u32) -
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
+    if expose {
+        b.enable_expose(generate_expose_trace::<Val, Challenge>);
+    }
 
     let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
         b.alloc_public_input(if i == 0 { "commit_lo" } else { "commit_hi" })
     });
     let query_pi = b.alloc_public_input("query");
     let answer_pi = b.alloc_public_input("answer");
+    if expose {
+        b.add_expose(&[commit_pis[0], commit_pis[1], query_pi, answer_pi])
+            .expect("expose (commit, query, answer)");
+    }
+    b.tag(answer_pi, "gk2_dec_answer").expect("tag");
 
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
@@ -151,6 +188,13 @@ pub fn prove_gk2_decode(params: Gkb2DecodeParams, state: Gk2State, query: u32) -
 
     let qc = b.decompose_ext_to_base_coeffs::<Val>(query_pi).expect("decompose query");
     let query_b = qc[0];
+    if expose {
+        // The exposed query is the whole Challenge: pin its upper coordinates
+        // so it is exactly the scalar `q` the relation below uses.
+        for &hi in &qc[1..] {
+            b.connect(hi, zero);
+        }
+    }
 
     // ── Stage 2: decompose each tuple (2 challenges → 8 base coeffs) ──
     let f: Vec<Vec<ExprId>> = cells_packed
@@ -307,61 +351,13 @@ pub fn prove_gk2_decode(params: Gkb2DecodeParams, state: Gk2State, query: u32) -
         private_inputs.push(if est.res >= t { Challenge::ONE } else { Challenge::ZERO });
     }
 
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
-        runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
-        runner.run().expect("run gk2 decode circuit")
-    };
-    let __witness = __t_w.elapsed();
-
-    let config = make_leaf_config();
-    let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
-    let preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
-    let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
-    air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
-    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
-
-    let (airs_degrees, primitive_columns, non_primitive_columns) =
-        get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
-            &circuit,
-            &table_packing,
-            &preprocessors,
-            &air_builders,
-            ConstraintProfile::Standard,
-        )
-        .expect("get_airs_and_degrees_with_prep (gk2 decode)");
-    let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
-    let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
-    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
-    let circuit_prover_data =
-        CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
-
-    let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
-    prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
-    prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
-    prover.register_range_table::<4>();
-    let __t_p = std::time::Instant::now();
-    let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove gk2 decode");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify gk2 decode");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
-    });
-
-    DecodeProof { output: RecursionOutput(proof, Rc::new(circuit_prover_data)), answer }
+    StdDecodeCircuit::new(circuit, public_inputs, private_inputs, answer, expose, "gk2 decode")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketch::gk_bandmerge::{GkbParams, apply_batch2};
+    use crate::sketch::gk_bandmerge::apply_batch2;
 
     fn built_state(cap: usize) -> Gk2State {
         let params = GkbParams { capacity: cap, batch: 8, s: 2 };
@@ -418,5 +414,102 @@ mod tests {
         assert_eq!(prove_gk2_decode(p_hi, st.clone(), q).answer, 0);
         let p_lo = Gkb2DecodeParams { capacity: cap, release: ReleasePolicy::Threshold(raw) };
         assert_eq!(prove_gk2_decode(p_lo, st.clone(), q).answer, raw);
+    }
+
+    // ── Query statement (Property 3): exposed (Com(S), q, answer) ──────────
+
+    use crate::decode::{QueryStatement, check_query_statement, read_exposed_statement};
+    use crate::sketch::bind::Binding;
+
+    /// `Semantic` / `Bound` expose `(Com(S), q, answer)`: the statement read off
+    /// a VERIFIED proof is the queried commitment, the query and the native
+    /// estimate (identity and threshold release). `Legacy` exposes nothing.
+    #[test]
+    fn gk2_decode_exposes_commit_query_answer() {
+        let cap = 16;
+        let st = built_state(cap);
+        let commit = commit_gk2_state(&st).0;
+        for (q, release) in [
+            (0u32, ReleasePolicy::Identity),
+            (500, ReleasePolicy::Identity),
+            (950, ReleasePolicy::Identity),
+            (500, ReleasePolicy::Threshold(1000)),
+        ] {
+            let p = Gkb2DecodeParams { capacity: cap, release };
+            let want = QueryStatement::new(commit, q as u64, release.apply(native_res(&st, q)));
+            for binding in [Binding::Semantic, Binding::Bound] {
+                let dc = build_gk2_decode(p, &st, q, binding);
+                let proof = dc.prove_traces(&dc.run("gk2 decode")).expect("honest proof verifies");
+                assert_eq!(read_exposed_statement(&proof), Some(want), "{binding:?} q={q} {release:?}");
+                assert_eq!(check_query_statement(&proof, &want), Ok(()));
+            }
+            assert_eq!(prove_gk2_decode(p, st.clone(), q).statement(), Some(want));
+        }
+        let p = Gkb2DecodeParams { capacity: cap, release: ReleasePolicy::Identity };
+        let legacy = prove_gk2_decode_with(p, st.clone(), 500, Binding::Legacy);
+        assert_eq!(legacy.statement(), None, "Legacy exposes nothing");
+        assert_eq!(legacy.answer, native_res(&st, 500));
+    }
+
+    /// Tampered answers are rejected (shared checks, see
+    /// [`crate::decode::assert_tampered_answer_rejected`]).
+    #[test]
+    fn gk2_decode_tampered_answer_rejected() {
+        let cap = 16;
+        let st = built_state(cap);
+        let q = 500u32;
+        let p = Gkb2DecodeParams { capacity: cap, release: ReleasePolicy::Identity };
+        let want = QueryStatement::new(commit_gk2_state(&st).0, q as u64, native_res(&st, q));
+        for binding in [Binding::Semantic, Binding::Bound] {
+            crate::decode::assert_tampered_answer_rejected(
+                &build_gk2_decode(p, &st, q, binding),
+                &build_gk2_decode(p, &st, q, Binding::Legacy),
+                "gk2_dec_answer",
+                want,
+            );
+        }
+    }
+
+    /// The exposed query is canonical: a query Challenge with a nonzero upper
+    /// coordinate (the relation reads only coordinate 0) has no witness under
+    /// `Semantic`, while the pre-fix `Legacy` circuit runs it (control).
+    #[test]
+    fn gk2_decode_noncanonical_query_rejected() {
+        use p3_field::BasedVectorSpace;
+        let cap = 16;
+        let st = built_state(cap);
+        let p = Gkb2DecodeParams { capacity: cap, release: ReleasePolicy::Identity };
+        let bump = |dc: &mut crate::decode::StdDecodeCircuit| {
+            let q = dc.public_inputs[2].as_basis_coefficients_slice().to_vec();
+            dc.public_inputs[2] =
+                Challenge::from_basis_coefficients_slice(&[q[0], Val::ONE, q[2], q[3]]).unwrap();
+        };
+        let mut legacy = build_gk2_decode(p, &st, 500, Binding::Legacy);
+        bump(&mut legacy);
+        assert!(crate::sketch::forge::catch(|| legacy.run("gk2 decode")).is_some(), "Legacy runs it");
+        let mut sem = build_gk2_decode(p, &st, 500, Binding::Semantic);
+        bump(&mut sem);
+        assert!(crate::sketch::forge::catch(|| sem.run("gk2 decode")).is_none(), "Semantic rejects it");
+    }
+
+    /// The pinned verifier: the VK derived from public parameters (empty
+    /// state) accepts honest proofs over built states and returns their
+    /// statements; it rejects the Legacy proof and a lying fake circuit.
+    #[test]
+    fn gk2_decode_pinned_verifier() {
+        let cap = 16;
+        let st = built_state(cap);
+        let commit = commit_gk2_state(&st).0;
+        let p = Gkb2DecodeParams { capacity: cap, release: ReleasePolicy::Identity };
+        let vk = gk2_decode_vk(p, Binding::Semantic);
+        let (a, b) = (build_gk2_decode(p, &st, 500, Binding::Semantic), build_gk2_decode(p, &st, 175, Binding::Semantic));
+        crate::decode::assert_pinned_decode_verifier(
+            &vk,
+            &[
+                (&a, QueryStatement::new(commit, 500, native_res(&st, 500))),
+                (&b, QueryStatement::new(commit, 175, native_res(&st, 175))),
+            ],
+            &build_gk2_decode(p, &st, 500, Binding::Legacy),
+        );
     }
 }

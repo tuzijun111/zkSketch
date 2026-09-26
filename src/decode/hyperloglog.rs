@@ -76,13 +76,16 @@ use std::rc::Rc;
 
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
-use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_range_trace, generate_recompose_trace};
+use p3_circuit::ops::{
+    Poseidon2Config, generate_expose_trace, generate_poseidon2_trace, generate_range_trace,
+    generate_recompose_trace,
+};
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        range_air_builders, range_preprocessor, recompose_preprocessor,
+        expose_air_builders, expose_preprocessor, poseidon2_air_builders_d4, poseidon2_preprocessor,
+        range_air_builders, range_preprocessor, recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -98,6 +101,7 @@ use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
 use crate::sketch::hll_final_full::{HllFullState, commit_hll_state};
+use crate::sketch::bind::{self, Binding};
 use crate::sketch::hll_omc::commit_hll_omc;
 
 const LOG_FINAL_POLY_LEN: usize = 6;
@@ -522,7 +526,131 @@ fn constrain_release(
 /// `_query` is unused for cardinality (the answer depends only on the committed
 /// state) but kept in the signature to mirror the other decode families.
 pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u64) -> DecodeProof {
+    prove_hll_decode_with(params, state, _query, bind::default_binding())
+}
+
+/// [`prove_hll_decode`] with an explicit [`Binding`] (see
+/// [`prove_hll_decode_omc_with`] for what each mode changes).
+pub fn prove_hll_decode_with(
+    params: HllDecodeParams,
+    state: HllFullState,
+    _query: u64,
+    binding: Binding,
+) -> DecodeProof {
+    build_hll_decode(params, &state, binding).prove()
+}
+
+/// A built HLL decode circuit together with its witness and registered prover.
+struct HllDecodeCircuit {
+    circuit: p3_circuit::Circuit<Challenge>,
+    public_inputs: Vec<Challenge>,
+    private_inputs: Vec<Challenge>,
+    answer: u64,
+    prover: BatchStarkProver<ConfigWithFriParams>,
+    circuit_prover_data: CircuitProverData<ConfigWithFriParams>,
+    trace_rows: u64,
+}
+
+impl HllDecodeCircuit {
+    fn run(&self) -> p3_circuit::tables::Traces<Challenge> {
+        let mut runner = self.circuit.runner();
+        runner.set_public_inputs(&self.public_inputs).expect("set_public_inputs");
+        runner.set_private_inputs(&self.private_inputs).expect("set_private_inputs");
+        runner.run().expect("run hll decode circuit")
+    }
+
+    fn prove(self) -> DecodeProof {
+        let __t_w = std::time::Instant::now();
+        let traces = self.run();
+        let __witness = __t_w.elapsed();
+        let __t_p = std::time::Instant::now();
+        let proof = self
+            .prover
+            .prove_all_tables(&traces, &self.circuit_prover_data)
+            .expect("prove hll decode");
+        let __prove = __t_p.elapsed();
+        let __t_v = std::time::Instant::now();
+        self.prover.verify_all_tables(&proof).expect("self-verify hll decode");
+        crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
+            witness: __witness,
+            prove: __prove,
+            verify: __t_v.elapsed(),
+            trace_rows: self.trace_rows,
+        });
+        DecodeProof { output: RecursionOutput(proof, Rc::new(self.circuit_prover_data)), answer: self.answer }
+    }
+
+    #[cfg(test)]
+    fn prove_traces(
+        &self,
+        traces: &p3_circuit::tables::Traces<Challenge>,
+    ) -> Result<p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>, String> {
+        let proof = self
+            .prover
+            .prove_all_tables(traces, &self.circuit_prover_data)
+            .map_err(|e| format!("prove: {e:?}"))?;
+        self.prover.verify_all_tables(&proof).map_err(|e| format!("verify: {e:?}"))?;
+        Ok(proof)
+    }
+}
+
+/// Prover data + registered prover for a built HLL decode circuit (Poseidon2,
+/// Recompose, Range, and Expose when `expose`).
+fn finish_hll_decode(
+    circuit: p3_circuit::Circuit<Challenge>,
+    public_inputs: Vec<Challenge>,
+    private_inputs: Vec<Challenge>,
+    answer: u64,
+    expose: bool,
+) -> HllDecodeCircuit {
+    let config = make_leaf_config();
+    let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
+    let mut preprocessors =
+        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
+    let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
+    air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
+    if expose {
+        preprocessors.push(expose_preprocessor::<Val>());
+        air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
+    }
+
+    let (airs_degrees, primitive_columns, non_primitive_columns) =
+        get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
+            &circuit,
+            &table_packing,
+            &preprocessors,
+            &air_builders,
+            ConstraintProfile::Standard,
+        )
+        .expect("get_airs_and_degrees_with_prep (hll decode)");
+    let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
+    let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
+    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
+    let circuit_prover_data =
+        CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
+
+    let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
+    prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
+    prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    prover.register_range_table::<4>();
+    if expose {
+        prover.register_expose_table::<4>();
+    }
+    HllDecodeCircuit {
+        circuit,
+        public_inputs,
+        private_inputs,
+        answer,
+        prover,
+        circuit_prover_data,
+        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
+    }
+}
+
+fn build_hll_decode(params: HllDecodeParams, state: &HllFullState, binding: Binding) -> HllDecodeCircuit {
     params.validate();
+    let bound = binding.is_bound();
     let HllDecodeParams { b: blog2, release } = params;
     let m = 1usize << blog2;
     assert_eq!(state.registers.len(), m, "state shape must match params (m = 2^b)");
@@ -532,7 +660,7 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     );
 
     // ─── Native decode ───────────────────────────────────────────────────
-    let commit = commit_hll_state(&state);
+    let commit = commit_hll_state(state);
     let res = fixed_res(m, &state.registers);
     let answer = release.apply(res);
 
@@ -544,12 +672,18 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
+    if bound {
+        b.enable_expose(generate_expose_trace::<Val, Challenge>);
+    }
 
     // PIs: committed state, released answer. (No query key for cardinality.)
     let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
         b.alloc_public_input(if i == 0 { "commit_lo" } else { "commit_hi" })
     });
     let answer_pi = b.alloc_public_input("answer");
+    if bound {
+        b.add_expose(&[commit_pis[0], commit_pis[1], answer_pi]).expect("expose (commit, answer)");
+    }
 
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
@@ -557,13 +691,14 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     // Private witnesses.
     let cells_packed: Vec<ExprId> =
         (0..m).map(|_| b.alloc_private_input("cell_packed")).collect();
+    for (q, &p) in cells_packed.iter().enumerate() {
+        b.tag(p, format!("hll_dec_cell_{q}")).expect("tag");
+    }
     let wires = alloc_estimator_wires(&mut b, m);
     let flag = alloc_release_flag(&mut b, release);
 
     // ── Stage 1: open the committed state ──
-    let digest = b
-        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &cells_packed, true)
-        .expect("hash cells");
+    let digest = bind::hash_slice(&mut b, &Poseidon2Config::BABY_BEAR_D4_W16, &cells_packed, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(digest[i], commit_pis[i]);
     }
@@ -572,10 +707,13 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     // LHS (first operand) so it gets a WitnessChecks bus creator — a coeff read
     // only as an rhs (or only via `connect`) panics at prove time with
     // "GlobalCumulativeMismatch: WitnessChecks".
+    // Base pins: coeff 1..3 are connected to constants below and the register
+    // is pinned by the estimator (one-hot or gated range), so `Bound` only adds
+    // the ALU binding of the four coefficients to the hashed Challenge.
     let regs: Vec<ExprId> = cells_packed
         .iter()
         .map(|&p| {
-            let c = b.decompose_ext_to_base_coeffs::<Val>(p).unwrap();
+            let c = bind::decompose::<Val, Challenge>(&mut b, p, binding, bind::no_pin, bind::no_pin);
             // coeff[1], coeff[2] must be 0; coeff[3] must be 1 (canonical pack).
             // Put each coeff FIRST (lhs) via `mul(coeff, ·)` to seed its bus
             // creator, then `connect` the product to the expected constant.
@@ -604,60 +742,11 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
     public_inputs.extend_from_slice(&commit_packed);
     public_inputs.push(Challenge::from_u64(answer));
 
-    let mut private_inputs: Vec<Challenge> = pack_cells(&state);
+    let mut private_inputs: Vec<Challenge> = pack_cells(state);
     private_inputs.extend(estimator_witness_values(m, &state.registers));
     private_inputs.extend(release_flag_value(release, res));
 
-    // ─── Run + prove ─────────────────────────────────────────────────────
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
-        runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
-        runner.run().expect("run hll decode circuit")
-    };
-    let __witness = __t_w.elapsed();
-
-    let config = make_leaf_config();
-    let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
-    let preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
-    let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
-    air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
-    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
-
-    let (airs_degrees, primitive_columns, non_primitive_columns) =
-        get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
-            &circuit,
-            &table_packing,
-            &preprocessors,
-            &air_builders,
-            ConstraintProfile::Standard,
-        )
-        .expect("get_airs_and_degrees_with_prep (hll decode)");
-    let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
-    let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
-    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
-    let circuit_prover_data =
-        CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
-
-    let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
-    prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
-    prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
-    prover.register_range_table::<4>();
-    let __t_p = std::time::Instant::now();
-    let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove hll decode");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify hll decode");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
-    });
-
-    DecodeProof { output: RecursionOutput(proof, Rc::new(circuit_prover_data)), answer }
+    finish_hll_decode(circuit, public_inputs, private_inputs, answer, bound)
 }
 
 /// HyperLogLog cardinality decode against the **omc** committed state: the `m`
@@ -668,7 +757,30 @@ pub fn prove_hll_decode(params: HllDecodeParams, state: HllFullState, _query: u6
 /// one chains to the omc update, which `prove_hll_decode`'s `[r,0,0,1]` /
 /// `commit_hll_state` binding does not).
 pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64) -> DecodeProof {
+    prove_hll_decode_omc_with(params, regs, _query, bind::default_binding())
+}
+
+/// [`prove_hll_decode_omc`] with an explicit [`Binding`].
+///
+/// [`Binding::Legacy`] is the pre-fix circuit, unchanged. It is unsound: the
+/// registers are unbound from the commitment, so the answer is free, and it
+/// exposes nothing. [`Binding::Semantic`] / [`Binding::Bound`] surface
+/// `(commit, answer)` through the Expose NPO (8 + 4 base values). `Bound`
+/// also ALU-binds the four register coefficients of every hashed Challenge
+/// (already base-pinned by their range checks and the estimator) and hashes
+/// with a zero IV (see [`crate::sketch::bind`]).
+pub fn prove_hll_decode_omc_with(
+    params: HllDecodeParams,
+    regs: Vec<u64>,
+    _query: u64,
+    binding: Binding,
+) -> DecodeProof {
+    build_hll_decode_omc(params, &regs, binding).prove()
+}
+
+fn build_hll_decode_omc(params: HllDecodeParams, regs: &[u64], binding: Binding) -> HllDecodeCircuit {
     params.validate();
+    let bound = binding.is_bound();
     let HllDecodeParams { b: blog2, release } = params;
     let m = 1usize << blog2;
     assert_eq!(regs.len(), m, "state shape must match params (m = 2^b)");
@@ -677,7 +789,7 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
 
     // ─── Native decode ───────────────────────────────────────────────────
     let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
-    let commit = commit_hll_omc(&regs, blog2);
+    let commit = commit_hll_omc(regs, blog2);
     let res = fixed_res(m, &regs32);
     let answer = release.apply(res);
 
@@ -688,11 +800,17 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
+    if bound {
+        b.enable_expose(generate_expose_trace::<Val, Challenge>);
+    }
 
     let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
         b.alloc_public_input(if i == 0 { "commit_lo" } else { "commit_hi" })
     });
     let answer_pi = b.alloc_public_input("answer");
+    if bound {
+        b.add_expose(&[commit_pis[0], commit_pis[1], answer_pi]).expect("expose (commit, answer)");
+    }
 
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
@@ -701,21 +819,24 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
     let n_cells = m / 4;
     let cells_packed: Vec<ExprId> =
         (0..n_cells).map(|_| b.alloc_private_input("cell_packed")).collect();
+    for (q, &p) in cells_packed.iter().enumerate() {
+        b.tag(p, format!("hll_dec_cell_{q}")).expect("tag");
+    }
     let wires = alloc_estimator_wires(&mut b, m);
     let flag = alloc_release_flag(&mut b, release);
 
     // ── Stage 1: open the committed omc register state ──
-    let digest = b
-        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &cells_packed, true)
-        .expect("hash cells");
+    let digest = bind::hash_slice(&mut b, &Poseidon2Config::BABY_BEAR_D4_W16, &cells_packed, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(digest[i], commit_pis[i]);
     }
     // Extract the m registers (4 per challenge); range-check each (bus-safe
-    // consumption, the pattern that balances multi-coeff challenges).
+    // consumption, the pattern that balances multi-coeff challenges). The
+    // range check also pins each register to the base field, so `Bound` only
+    // adds the ALU binding to the hashed Challenge.
     let mut regs_expr: Vec<ExprId> = Vec::with_capacity(m);
     for &p in &cells_packed {
-        let c = b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose cell");
+        let c = bind::decompose::<Val, Challenge>(&mut b, p, binding, bind::no_pin, bind::no_pin);
         for k in 0..4 {
             let _ = b.add_range_bits::<Val>(c[k], REG_BITS).expect("reg range");
             regs_expr.push(c[k]);
@@ -736,66 +857,21 @@ pub fn prove_hll_decode_omc(params: HllDecodeParams, regs: Vec<u64>, _query: u64
     public_inputs.push(Challenge::from_u64(answer));
 
     // pack the m registers 4-per-challenge (commit_countmin / commit_hll_omc form).
-    let mut private_inputs: Vec<Challenge> = regs
-        .chunks(4)
+    let mut private_inputs: Vec<Challenge> = pack_omc_regs(regs);
+    private_inputs.extend(estimator_witness_values(m, &regs32));
+    private_inputs.extend(release_flag_value(release, res));
+
+    finish_hll_decode(circuit, public_inputs, private_inputs, answer, bound)
+}
+
+/// Pack omc registers 4-per-Challenge (the `commit_hll_omc` absorption order).
+fn pack_omc_regs(regs: &[u64]) -> Vec<Challenge> {
+    regs.chunks(4)
         .map(|ch| {
             let coeffs: Vec<Val> = ch.iter().map(|&r| Val::from_u32(r as u32)).collect();
             Challenge::from_basis_coefficients_slice(&coeffs).expect("4 base coeffs")
         })
-        .collect();
-    private_inputs.extend(estimator_witness_values(m, &regs32));
-    private_inputs.extend(release_flag_value(release, res));
-
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
-        runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
-        runner.run().expect("run hll omc decode circuit")
-    };
-    let __witness = __t_w.elapsed();
-
-    let config = make_leaf_config();
-    let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
-    let preprocessors =
-        vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
-    let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
-    air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
-    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
-
-    let (airs_degrees, primitive_columns, non_primitive_columns) =
-        get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
-            &circuit,
-            &table_packing,
-            &preprocessors,
-            &air_builders,
-            ConstraintProfile::Standard,
-        )
-        .expect("get_airs_and_degrees_with_prep (hll omc decode)");
-    let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
-    let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
-    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
-    let circuit_prover_data =
-        CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
-
-    let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
-    prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
-    prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
-    prover.register_range_table::<4>();
-    let __t_p = std::time::Instant::now();
-    let proof =
-        prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove hll omc decode");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify hll omc decode");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
-    });
-
-    DecodeProof { output: RecursionOutput(proof, Rc::new(circuit_prover_data)), answer }
+        .collect()
 }
 
 #[cfg(test)]
@@ -950,5 +1026,146 @@ mod tests {
         let p = HllDecodeParams { b: blog2, release: ReleasePolicy::Identity };
         let proof = prove_hll_decode_omc(p, regs, 0);
         assert_eq!(proof.answer, expected, "b=14 decode must match native cardinality");
+    }
+
+    // ── Binding (see `crate::sketch::bind`): legacy-vs-bound forgery tests ──
+
+    use crate::config::make_perm;
+    use crate::sketch::forge;
+    use p3_field::PrimeField64;
+
+    fn omc_regs(b: usize) -> Vec<u64> {
+        let m = 1usize << b;
+        let mut regs = vec![0u64; m];
+        crate::sketch::hll_omc::hll_omc_advance(&mut regs, &(0..40u64).collect::<Vec<_>>(), m);
+        regs
+    }
+
+    fn exposed(proof: &DecodeProof) -> Vec<Val> {
+        proof
+            .output
+            .0
+            .non_primitives
+            .iter()
+            .map(|e| e.public_values.clone())
+            .find(|v| v.len() == 12)
+            .expect("exposed (commit, answer)")
+    }
+
+    /// Every binding agrees with native; Semantic/Bound expose (commit, answer).
+    #[test]
+    fn decoders_round_trip_all_bindings() {
+        let p = HllDecodeParams { b: 4, release: ReleasePolicy::Identity };
+        let regs = omc_regs(4);
+        let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
+        for binding in [Binding::Bound, Binding::Semantic, Binding::Legacy] {
+            let pr = prove_hll_decode_omc_with(p, regs.clone(), 0, binding);
+            assert_eq!(pr.answer, fixed_res(16, &regs32), "{binding:?}");
+            if binding.is_bound() {
+                let pv = exposed(&pr);
+                assert_eq!(&pv[0..8], &commit_hll_omc(&regs, 4)[..]);
+                assert_eq!(pv[8].as_canonical_u64(), pr.answer);
+            }
+            let pf = prove_hll_decode_with(p, state(), 0, binding);
+            assert_eq!(pf.answer, fixed_res(16, &state().registers), "{binding:?}");
+        }
+    }
+
+    /// FORGED STATE (transplant), omc decoder: estimate on registers with
+    /// register 0 raised to 20, then recommit the cells to the real
+    /// registers and rehash. Returns the in-circuit answer if the forged proof
+    /// verifies. Every call first runs the positive control
+    /// ([`forge::forged_with_control`]): estimate on the real registers and
+    /// write the same cells back through the same plumbing; it must verify.
+    fn forged_omc_answer(binding: Binding) -> Option<u64> {
+        let honest = build_hll_decode_omc(
+            HllDecodeParams { b: 4, release: ReleasePolicy::Identity },
+            &omc_regs(4),
+            binding,
+        )
+        .answer;
+        forge::forged_with_control(
+            &format!("hll omc decode forged state ({binding:?})"),
+            |f| forged_omc_answer_run(binding, f),
+            |a| assert_eq!(*a, honest, "control certifies the honest answer"),
+        )
+    }
+
+    fn forged_omc_answer_run(binding: Binding, forge_it: bool) -> Option<u64> {
+        let p = HllDecodeParams { b: 4, release: ReleasePolicy::Identity };
+        let regs = omc_regs(4);
+        let mut forged = regs.clone();
+        forged[0] = 20;
+        let dc = build_hll_decode_omc(p, if forge_it { &forged } else { &regs }, binding);
+        let mut traces = dc.run();
+        for (q, (h, f)) in pack_omc_regs(&regs).iter().zip(&pack_omc_regs(&forged)).enumerate() {
+            if h != f {
+                let wid = traces.tag_to_witness[&format!("hll_dec_cell_{q}")];
+                forge::set_wid::<Val, Challenge>(&mut traces, wid, *h);
+            }
+        }
+        forge::rehash_all::<Val, Challenge, _, 16>(&mut traces, Poseidon2Config::BABY_BEAR_D4_W16, &make_perm());
+        forge::accepted(|| dc.prove_traces(&traces).map(|_| ())).then(|| dc.answer)
+    }
+
+    /// Legacy ACCEPTS an omc decode for `Com(regs)` whose answer is the estimate
+    /// of different registers; Bound rejects it.
+    #[test]
+    fn forged_omc_state_legacy_accepts_bound_rejects() {
+        if !crate::sketch::bind::probe::fork_binds_decompose() {
+            let regs32: Vec<u32> = omc_regs(4).iter().map(|&r| r as u32).collect();
+            let a = forged_omc_answer(Binding::Legacy).expect("Legacy accepts the forged decode (PoC)");
+            assert_ne!(a, fixed_res(16, &regs32), "answer is not the committed state's estimate");
+        }
+        assert!(forged_omc_answer(Binding::Bound).is_none(), "Bound must reject the forged decode");
+        // Merged soundness fork: the fork itself binds decompose coefficients, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if crate::sketch::bind::probe::fork_binds_decompose() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(forged_omc_answer(b).is_none(), "fork binds decompose coefficients: {b:?} must reject too");
+            }
+        }
+    }
+
+    /// Same forgery against the `[r, 0, 0, 1]` full-state decoder.
+    #[test]
+    fn forged_full_state_legacy_accepts_bound_rejects() {
+        let run_forger = |binding: Binding, forge_it: bool| -> Option<u64> {
+            let p = HllDecodeParams { b: 4, release: ReleasePolicy::Identity };
+            let real = state();
+            let mut forged = real.clone();
+            forged.registers[0] = 20;
+            let dc = build_hll_decode(p, if forge_it { &forged } else { &real }, binding);
+            let mut traces = dc.run();
+            for (q, (h, f)) in pack_cells(&real).iter().zip(&pack_cells(&forged)).enumerate() {
+                if h != f {
+                    let wid = traces.tag_to_witness[&format!("hll_dec_cell_{q}")];
+                    forge::set_wid::<Val, Challenge>(&mut traces, wid, *h);
+                }
+            }
+            forge::rehash_all::<Val, Challenge, _, 16>(&mut traces, Poseidon2Config::BABY_BEAR_D4_W16, &make_perm());
+            forge::accepted(|| dc.prove_traces(&traces).map(|_| ())).then(|| dc.answer)
+        };
+        // Positive control first: decode the real state and write the same
+        // cells back through the same plumbing; it must verify, honest answer.
+        let run = |binding: Binding| -> Option<u64> {
+            forge::forged_with_control(
+                &format!("hll full decode forged state ({binding:?})"),
+                |f| run_forger(binding, f),
+                |a| assert_eq!(*a, fixed_res(16, &state().registers), "control: honest answer"),
+            )
+        };
+        if !crate::sketch::bind::probe::fork_binds_decompose() {
+            let a = run(Binding::Legacy).expect("Legacy accepts the forged decode (PoC)");
+            assert_ne!(a, fixed_res(16, &state().registers));
+        }
+        assert!(run(Binding::Bound).is_none(), "Bound must reject the forged decode");
+        // Merged soundness fork: the fork itself binds decompose coefficients, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if crate::sketch::bind::probe::fork_binds_decompose() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(run(b).is_none(), "fork binds decompose coefficients: {b:?} must reject too");
+            }
+        }
     }
 }

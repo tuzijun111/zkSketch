@@ -183,6 +183,8 @@ pub fn make_recursion_config_gl(
         log_final_poly_len,
         commit_pow_bits,
         query_pow_bits,
+        // The recursive FRI verifier now requires the query count (fork 125da1e port).
+        crate::config_gl::num_queries(),
         Poseidon2Config::GOLDILOCKS_D2_W8,
     );
     ConfigWithFriParamsGl::new(leaf_config, fri_verifier_params)

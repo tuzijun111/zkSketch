@@ -9,7 +9,10 @@
 //! Stages:
 //! 1. Re-hash the `d·w` cells → bind to the committed digest (the `Θ(s)` cost).
 //! 2. Derive the `d` query positions from `Poseidon2(key)`; select each row's
-//!    cell via a one-hot selector bound to that position.
+//!    cell via a one-hot selector bound to that position. Under
+//!    `Binding::Semantic`/`Bound` the key is hashed as four exact 16-bit limbs
+//!    (as the `omc` leaf routes it), under `Legacy` as one field element
+//!    (the key mod `p`).
 //! 3. Min gadget: `mn ≤ every selected cell` (range-checked diffs) and
 //!    `∏(cell − mn) = 0` (so `mn` is one of them).
 //! 4. Apply the release policy and bind the released value to the public answer.
@@ -18,13 +21,16 @@ use std::rc::Rc;
 
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
-use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_range_trace, generate_recompose_trace};
+use p3_circuit::ops::{
+    Poseidon2Config, generate_expose_trace, generate_poseidon2_trace, generate_range_trace,
+    generate_recompose_trace,
+};
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        range_air_builders, range_preprocessor, recompose_preprocessor,
+        expose_air_builders, expose_preprocessor, poseidon2_air_builders_d4, poseidon2_preprocessor,
+        range_air_builders, range_preprocessor, recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -41,7 +47,8 @@ use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
 use crate::sketch::countmin::CountMinState;
-use crate::sketch::countmin_final::hash_cell_prf;
+use crate::sketch::bind::{self, Binding};
+use crate::sketch::countmin_final::{hash_cell_prf_with, key_hash_input};
 
 const LOG_FINAL_POLY_LEN: usize = 6;
 /// Range-check window for the min-gadget diffs. Counts fit in
@@ -105,18 +112,110 @@ fn pack_cells(state: &CountMinState) -> Vec<Challenge> {
 /// prover self-verifies and records the witness/prove/verify split via
 /// [`crate::recursion::recursive::timing`].
 pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -> DecodeProof {
+    prove_cm_decode_with(params, state, key, bind::default_binding())
+}
+
+/// [`prove_cm_decode`] with an explicit [`Binding`].
+///
+/// [`Binding::Legacy`] is the pre-fix circuit, unchanged. It is unsound: the
+/// cells are unbound from the commitment, the query-key sponge has a
+/// prover-chosen IV, and the digest limbs are unbound from the digest, so
+/// the answer and the positions are both free. It also exposes nothing, so
+/// the verifier sees no answer. [`Binding::Bound`] (see
+/// [`crate::sketch::bind`]) binds every cell (base pin + ALU recompose),
+/// hashes with a zero IV, derives each position by a canonical split of an
+/// ALU-bound digest limb, and surfaces `(commit, query_key, answer)` through
+/// the Expose NPO (16 base values: commit[8], key[4], answer[4]).
+///
+/// Key encoding. `Semantic` and `Bound` take the query key as its four
+/// exact 16-bit limbs `[k0, k1, k2, k3]` (each range-checked in-circuit, so
+/// the exposed `key[4]` is the unique encoding of one 64-bit key) and hash
+/// them, which is how the `omc` leaf routes a record under those bindings
+/// ([`crate::sketch::countmin_final::key_hash_input`]). `Legacy` hashes
+/// `[key mod p, 0, 0, 0]`, so keys congruent mod `p` read the same cells.
+/// The decoder therefore answers point queries on states built with the
+/// same binding's routing.
+pub fn prove_cm_decode_with(
+    params: CmDecodeParams,
+    state: CountMinState,
+    key: u64,
+    binding: Binding,
+) -> DecodeProof {
+    let dc = build_cm_decode(params, &state, key, binding);
+    let __t_w = std::time::Instant::now();
+    let traces = dc.run();
+    let __witness = __t_w.elapsed();
+    let __t_p = std::time::Instant::now();
+    let proof = dc
+        .prover
+        .prove_all_tables(&traces, &dc.circuit_prover_data)
+        .expect("prove cm decode");
+    let __prove = __t_p.elapsed();
+    let __t_v = std::time::Instant::now();
+    dc.prover.verify_all_tables(&proof).expect("self-verify cm decode");
+    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
+        witness: __witness,
+        prove: __prove,
+        verify: __t_v.elapsed(),
+        trace_rows: dc.trace_rows,
+    });
+
+    DecodeProof { output: RecursionOutput(proof, Rc::new(dc.circuit_prover_data)), answer: dc.answer }
+}
+
+/// A built decode circuit together with its witness and registered prover.
+struct CmDecodeCircuit {
+    circuit: p3_circuit::Circuit<Challenge>,
+    public_inputs: Vec<Challenge>,
+    private_inputs: Vec<Challenge>,
+    answer: u64,
+    prover: BatchStarkProver<ConfigWithFriParams>,
+    circuit_prover_data: CircuitProverData<ConfigWithFriParams>,
+    trace_rows: u64,
+}
+
+impl CmDecodeCircuit {
+    fn run(&self) -> p3_circuit::tables::Traces<Challenge> {
+        let mut runner = self.circuit.runner();
+        runner.set_public_inputs(&self.public_inputs).expect("set_public_inputs");
+        runner.set_private_inputs(&self.private_inputs).expect("set_private_inputs");
+        runner.run().expect("run cm decode circuit")
+    }
+
+    #[cfg(test)]
+    fn prove_traces(
+        &self,
+        traces: &p3_circuit::tables::Traces<Challenge>,
+    ) -> Result<p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>, String> {
+        let proof = self
+            .prover
+            .prove_all_tables(traces, &self.circuit_prover_data)
+            .map_err(|e| format!("prove: {e:?}"))?;
+        self.prover.verify_all_tables(&proof).map_err(|e| format!("verify: {e:?}"))?;
+        Ok(proof)
+    }
+}
+
+fn build_cm_decode(
+    params: CmDecodeParams,
+    state: &CountMinState,
+    key: u64,
+    binding: Binding,
+) -> CmDecodeCircuit {
     params.validate();
+    let bound = binding.is_bound();
     let CmDecodeParams { d, w, release } = params;
     assert_eq!((state.params.d, state.params.w), (d, w), "state shape must match params");
     let num_cells = d * w;
     let cell_packing = num_cells / 4;
     let w_log2 = w.trailing_zeros() as usize;
+    let cfg = Poseidon2Config::BABY_BEAR_D4_W16;
 
     // ─── Native decode ───────────────────────────────────────────────────
-    let commit = commit_countmin(&state);
+    let commit = commit_countmin(state);
     let mut vals_native: Vec<u32> = Vec::with_capacity(d);
     for i in 0..d {
-        vals_native.push(state.counters[i][hash_cell_prf(i, key, w)]);
+        vals_native.push(state.counters[i][hash_cell_prf_with(i, key, w, binding)]);
     }
     let mn = *vals_native.iter().min().unwrap();
     let answer = release.apply(mn as u64);
@@ -129,6 +228,9 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_range(generate_range_trace::<Val, Challenge>);
+    if bound {
+        b.enable_expose(generate_expose_trace::<Val, Challenge>);
+    }
 
     // PIs: committed state, query key, released answer.
     let commit_pis: [ExprId; DIGEST_PACKING] = std::array::from_fn(|i| {
@@ -136,6 +238,12 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
     });
     let query_key_pi = b.alloc_public_input("query_key");
     let answer_pi = b.alloc_public_input("answer");
+    if bound {
+        b.add_expose(&[commit_pis[0], commit_pis[1], query_key_pi, answer_pi])
+            .expect("expose (commit, key, answer)");
+    }
+    b.tag(query_key_pi, "cm_dec_key").expect("tag");
+    b.tag(answer_pi, "cm_dec_answer").expect("tag");
 
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
@@ -143,10 +251,14 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
         (0..w_log2).map(|j| b.alloc_const(Challenge::from_u64(1u64 << j), "2^j")).collect();
     let col_idx: Vec<ExprId> =
         (0..w).map(|j| b.alloc_const(Challenge::from_u64(j as u64), "col")).collect();
+    let split_c = bound.then(|| bind::SplitConsts::new::<Val, Challenge>(&mut b, w_log2, one, zero));
 
     // Private witnesses.
     let cells_packed: Vec<ExprId> =
         (0..cell_packing).map(|_| b.alloc_private_input("cell_packed")).collect();
+    for (q, &p) in cells_packed.iter().enumerate() {
+        b.tag(p, format!("cm_dec_cell_{q}")).expect("tag");
+    }
     let sel: Vec<Vec<ExprId>> = (0..d)
         .map(|_| (0..w).map(|_| b.alloc_private_input("sel")).collect())
         .collect();
@@ -158,22 +270,36 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
     } else {
         None
     };
+    // Bound: the canonical split `(pos, hi, dinv)` of each row's digest limb.
+    let split_w: Vec<[ExprId; 3]> = if bound {
+        (0..d).map(|_| std::array::from_fn(|_| b.alloc_private_input("split"))).collect()
+    } else {
+        Vec::new()
+    };
 
     // ── Stage 1: open the committed state ──
-    let digest = b
-        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &cells_packed, true)
-        .expect("hash cells");
+    let digest = bind::hash_slice(&mut b, &cfg, &cells_packed, zero, binding);
     for i in 0..DIGEST_PACKING {
         b.connect(digest[i], commit_pis[i]);
     }
     let cells: Vec<ExprId> = cells_packed
         .iter()
-        .flat_map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).unwrap())
+        .flat_map(|&p| {
+            bind::decompose::<Val, Challenge>(
+                &mut b,
+                p,
+                binding,
+                bind::no_pin,
+                bind::pin_all_base::<Val, Challenge>,
+            )
+        })
         .collect();
 
     // Bind `mn` to the base domain (coeffs 1..4 = 0) so the range checks below
     // are sound, and use the base coeff `mn_b` in all arithmetic (every
     // decompose output must flow through an ALU op — WitnessChecks discipline).
+    // (`mn_b` is not bound to `mn_w` here, but the min gadget below pins it:
+    // `v − mn_b` range-checked and `∏(v − mn_b) = 0` force `mn_b = min v`.)
     // The query key needs no such binding: it is a verifier-supplied public
     // input that feeds the hash directly, so the prover has no freedom there.
     let mnc = b.decompose_ext_to_base_coeffs::<Val>(mn_w).unwrap();
@@ -183,24 +309,17 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
     b.connect(mnc[3], zero);
 
     // ── Stage 2: derive positions h_i(key) and select cells ──
-    let hashed = b
-        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &[query_key_pi], true)
-        .expect("hash query key");
+    if bound {
+        // Exact-limb key: every coefficient of the public key is an exact
+        // 16-bit limb (range-checked), so it names one 64-bit key.
+        bind::assert_key_limbs::<Val, Challenge>(&mut b, query_key_pi, binding);
+    }
+    let hashed = bind::hash_slice(&mut b, &cfg, &[query_key_pi], zero, binding);
     b.connect(hashed[0], h0);
     b.connect(hashed[1], h1);
-    let c0 = b.decompose_ext_to_base_coeffs::<Val>(h0).unwrap();
-    let c1 = b.decompose_ext_to_base_coeffs::<Val>(h1).unwrap();
-    let h_vals: [ExprId; 8] = [c0[0], c0[1], c0[2], c0[3], c1[0], c1[1], c1[2], c1[3]];
-
-    let mut vals_expr: Vec<ExprId> = Vec::with_capacity(d);
-    for i in 0..d {
-        let bits = b.decompose_to_bits::<Val>(h_vals[i], Val::bits()).expect("bits h_val");
-        let mut pos = b.mul(bits[0], pow2[0]);
-        for jb in 1..w_log2 {
-            let t = b.mul(bits[jb], pow2[jb]);
-            pos = b.add(pos, t);
-        }
-        // one-hot selector over the w cells of row i.
+    // One-hot selector over the w cells of row i, bound to `pos`; returns the
+    // selected cell.
+    let select = |b: &mut CircuitBuilder<Challenge>, i: usize, pos: ExprId| -> ExprId {
         let row = &sel[i];
         let mut sum = zero;
         let mut idx_acc = zero;
@@ -219,11 +338,55 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
         }
         b.connect(sum, one);
         b.connect(idx_acc, pos);
-        vals_expr.push(val);
-    }
-    // Consume the unused digest limbs (WitnessChecks discipline).
-    for k in d..8 {
-        let _ = b.add_range_bits::<Val>(h_vals[k], Val::bits()).expect("consume h_val");
+        val
+    };
+    let mut vals_expr: Vec<ExprId> = Vec::with_capacity(d);
+    if let Some(sc) = &split_c {
+        // Limb i < d = canonical split (yields pos_i); other limbs of an
+        // ALU-bound Challenge are base-pinned. For d ≤ 4 the second digest
+        // Challenge is unused.
+        let split_limb = |b: &mut CircuitBuilder<Challenge>, t: usize, c: ExprId| {
+            if t < d {
+                let [pos, hi, dinv] = split_w[t];
+                let x = bind::canonical_split_gadget::<Val, Challenge>(b, pos, hi, dinv, sc);
+                b.connect(x, c);
+            }
+        };
+        let pin_unused = |b: &mut CircuitBuilder<Challenge>, t: usize, c: ExprId| {
+            if t >= d {
+                bind::pin_base::<Val, Challenge>(b, c);
+            }
+        };
+        let _ = bind::decompose::<Val, Challenge>(&mut b, h0, binding, split_limb, pin_unused);
+        if d > 4 {
+            let _ = bind::decompose::<Val, Challenge>(
+                &mut b,
+                h1,
+                binding,
+                |b, i, c| split_limb(b, 4 + i, c),
+                |b, i, c| pin_unused(b, 4 + i, c),
+            );
+        }
+        for (i, sw) in split_w.iter().enumerate() {
+            vals_expr.push(select(&mut b, i, sw[0]));
+        }
+    } else {
+        let c0 = b.decompose_ext_to_base_coeffs::<Val>(h0).unwrap();
+        let c1 = b.decompose_ext_to_base_coeffs::<Val>(h1).unwrap();
+        let h_vals: [ExprId; 8] = [c0[0], c0[1], c0[2], c0[3], c1[0], c1[1], c1[2], c1[3]];
+        for i in 0..d {
+            let bits = b.decompose_to_bits::<Val>(h_vals[i], Val::bits()).expect("bits h_val");
+            let mut pos = b.mul(bits[0], pow2[0]);
+            for jb in 1..w_log2 {
+                let t = b.mul(bits[jb], pow2[jb]);
+                pos = b.add(pos, t);
+            }
+            vals_expr.push(select(&mut b, i, pos));
+        }
+        // Consume the unused digest limbs (WitnessChecks discipline).
+        for k in d..8 {
+            let _ = b.add_range_bits::<Val>(h_vals[k], Val::bits()).expect("consume h_val");
+        }
     }
 
     // ── Stage 3: min gadget ──
@@ -267,19 +430,16 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
 
     // ─── Pack public + private values ────────────────────────────────────
     let commit_packed = pack_commit_to_challenge(&commit);
-    let key_val = Val::from_u64(key);
+    let key_input = key_hash_input(key, binding);
     let mut public_inputs: Vec<Challenge> = Vec::new();
     public_inputs.extend_from_slice(&commit_packed);
-    public_inputs.push(
-        Challenge::from_basis_coefficients_slice(&[key_val, Val::ZERO, Val::ZERO, Val::ZERO])
-            .expect("4 base coeffs"),
-    );
+    public_inputs.push(Challenge::from_basis_coefficients_slice(&key_input).expect("4 base coeffs"));
     public_inputs.push(Challenge::from_u64(answer));
 
-    let mut private_inputs: Vec<Challenge> = pack_cells(&state);
+    let mut private_inputs: Vec<Challenge> = pack_cells(state);
     // sel[i][j]
     for i in 0..d {
-        let pos = hash_cell_prf(i, key, w);
+        let pos = hash_cell_prf_with(i, key, w, binding);
         for j in 0..w {
             private_inputs.push(if j == pos { Challenge::ONE } else { Challenge::ZERO });
         }
@@ -287,39 +447,34 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
     // mn
     private_inputs.push(Challenge::from_u64(mn as u64));
     // h0, h1 (digest of the key)
-    {
-        let hasher = crate::config::MyHash::new(crate::config::make_perm());
-        use p3_symmetric::CryptographicHasher;
-        let input = [key_val, Val::ZERO, Val::ZERO, Val::ZERO];
-        let digest: [Val; 8] = hasher.hash_iter(input.iter().copied());
-        private_inputs
-            .push(Challenge::from_basis_coefficients_slice(&digest[0..4]).expect("4 coeffs"));
-        private_inputs
-            .push(Challenge::from_basis_coefficients_slice(&digest[4..8]).expect("4 coeffs"));
-    }
+    let digest_native: [Val; 8] = crate::sketch::countmin_final::key_digest(key, binding);
+    private_inputs
+        .push(Challenge::from_basis_coefficients_slice(&digest_native[0..4]).expect("4 coeffs"));
+    private_inputs
+        .push(Challenge::from_basis_coefficients_slice(&digest_native[4..8]).expect("4 coeffs"));
     // flag (threshold only)
     if flag.is_some() {
         let t = if let ReleasePolicy::Threshold(t) = release { t } else { 0 };
         private_inputs.push(if (mn as u64) >= t { Challenge::ONE } else { Challenge::ZERO });
     }
+    if bound {
+        for limb in digest_native.iter().take(d) {
+            private_inputs.extend(bind::canonical_split_vals::<Val>(*limb, w_log2).map(Challenge::from));
+        }
+    }
 
-    // ─── Run + prove ─────────────────────────────────────────────────────
-    let __t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).expect("set_public_inputs");
-        runner.set_private_inputs(&private_inputs).expect("set_private_inputs");
-        runner.run().expect("run cm decode circuit")
-    };
-    let __witness = __t_w.elapsed();
-
+    // ─── Prover data ─────────────────────────────────────────────────────
     let config = make_leaf_config();
     let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
-    let preprocessors =
+    let mut preprocessors =
         vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), range_preprocessor::<Val>()];
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
+    if bound {
+        preprocessors.push(expose_preprocessor::<Val>());
+        air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
+    }
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -340,19 +495,19 @@ pub fn prove_cm_decode(params: CmDecodeParams, state: CountMinState, key: u64) -
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_range_table::<4>();
-    let __t_p = std::time::Instant::now();
-    let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove cm decode");
-    let __prove = __t_p.elapsed();
-    let __t_v = std::time::Instant::now();
-    prover.verify_all_tables(&proof).expect("self-verify cm decode");
-    crate::recursion::recursive::timing::record(crate::recursion::recursive::timing::LeafTiming {
-        witness: __witness,
-        prove: __prove,
-        verify: __t_v.elapsed(),
-        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
-    });
+    if bound {
+        prover.register_expose_table::<4>();
+    }
 
-    DecodeProof { output: RecursionOutput(proof, Rc::new(circuit_prover_data)), answer }
+    CmDecodeCircuit {
+        circuit,
+        public_inputs,
+        private_inputs,
+        answer,
+        prover,
+        circuit_prover_data,
+        trace_rows: ext_degrees.iter().map(|&d| 1u64 << d).sum(),
+    }
 }
 
 #[cfg(test)]
@@ -360,14 +515,21 @@ mod tests {
     use super::*;
     use crate::sketch::Sketch;
     use crate::sketch::countmin::{CountMin, CountMinParams, CountMinUpdate};
-    use crate::sketch::countmin_final::apply_update_prf;
+    use crate::sketch::countmin_final::apply_update_prf_with;
 
-    fn state() -> CountMinState {
+    /// A `d=4, w=8` state built with `binding`'s routing (the omc leaf's
+    /// native model for that binding).
+    fn state_with(binding: Binding) -> CountMinState {
         let mut s = CountMin::new(&CountMinParams { d: 4, w: 8 });
         for k in [7u64, 7, 11, 7, 11, 3] {
-            apply_update_prf(&mut s, &CountMinUpdate { key: k, value: 1 });
+            apply_update_prf_with(&mut s, &CountMinUpdate { key: k, value: 1 }, binding);
         }
         s
+    }
+
+    /// [`state_with`] the process default binding (what `prove_cm_decode` uses).
+    fn state() -> CountMinState {
+        state_with(bind::default_binding())
     }
 
     #[test]
@@ -394,11 +556,196 @@ mod tests {
         for w in [32usize, 64] {
             let mut s = CountMin::new(&CountMinParams { d: 4, w });
             for k in [7u64, 7, 11, 7, 11, 3, 42, 99, 42] {
-                apply_update_prf(&mut s, &CountMinUpdate { key: k, value: 1 });
+                apply_update_prf_with(&mut s, &CountMinUpdate { key: k, value: 1 }, bind::default_binding());
             }
             let p = CmDecodeParams { d: 4, w, release: ReleasePolicy::Identity };
             let proof = prove_cm_decode(p, s, 7);
             assert!(proof.answer >= 3, "w={w}: estimate >= true count 3, got {}", proof.answer);
+        }
+    }
+
+    // ── Binding (see `crate::sketch::bind`): legacy-vs-bound forgery tests ──
+
+    use crate::config::make_perm;
+    use crate::sketch::forge;
+    use p3_circuit::ops::{NpoTypeId, Poseidon2Trace};
+
+    const P4: CmDecodeParams = CmDecodeParams { d: 4, w: 8, release: ReleasePolicy::Identity };
+
+    fn native_estimate(s: &CountMinState, key: u64, binding: Binding) -> u32 {
+        (0..s.params.d)
+            .map(|i| s.counters[i][hash_cell_prf_with(i, key, s.params.w, binding)])
+            .min()
+            .unwrap()
+    }
+
+    /// The 16 exposed base values `(commit[8], key[4], answer[4])`.
+    fn exposed16(proof: &DecodeProof) -> Vec<Val> {
+        proof
+            .output
+            .0
+            .non_primitives
+            .iter()
+            .map(|e| e.public_values.clone())
+            .find(|v| v.len() == 16)
+            .expect("exposed (commit, key, answer)")
+    }
+
+    /// Bound exposes `(commit, key, answer)`, the key as its exact 16-bit
+    /// limbs; honest runs agree with native under every binding.
+    #[test]
+    fn bound_decode_exposes_commit_key_answer() {
+        let s = state_with(Binding::Bound);
+        let proof = prove_cm_decode_with(P4, s.clone(), 7, Binding::Bound);
+        let pv = exposed16(&proof);
+        assert_eq!(&pv[0..8], &commit_countmin(&s).0[..]);
+        assert_eq!(&pv[8..12], &[Val::from_u64(7), Val::ZERO, Val::ZERO, Val::ZERO]);
+        assert_eq!(pv[12].as_canonical_u64(), native_estimate(&s, 7, Binding::Bound) as u64);
+        assert_eq!(proof.answer, native_estimate(&s, 7, Binding::Bound) as u64);
+        for binding in [Binding::Semantic, Binding::Legacy] {
+            let sb = state_with(binding);
+            let other = prove_cm_decode_with(P4, sb.clone(), 7, binding);
+            assert_eq!(other.answer, native_estimate(&sb, 7, binding) as u64, "{binding:?}");
+            assert!(other.answer >= 3, "{binding:?}: estimate >= true count 3");
+        }
+        // d > 4: the second digest Challenge (split rows 4..d); a 64-bit key
+        // fills every exposed limb.
+        let key = 0x0123_4567_89AB_CDEF_u64;
+        for binding in [Binding::Bound, Binding::Semantic] {
+            let mut s7 = CountMin::new(&CountMinParams { d: 7, w: 16 });
+            for k in [key, key, 11, 3] {
+                apply_update_prf_with(&mut s7, &CountMinUpdate { key: k, value: 1 }, binding);
+            }
+            let p7 = CmDecodeParams { d: 7, w: 16, release: ReleasePolicy::Identity };
+            let pr = prove_cm_decode_with(p7, s7.clone(), key, binding);
+            assert_eq!(pr.answer, native_estimate(&s7, key, binding) as u64);
+            assert_eq!(&exposed16(&pr)[8..12], &bind::key_limbs::<Val>(key)[..]);
+            assert_eq!(&exposed16(&pr)[8..12], &[0xCDEF, 0x89AB, 0x4567, 0x0123].map(Val::from_u64)[..]);
+        }
+    }
+
+    /// Keys congruent mod `p`: decode `k` on a state holding one occurrence of
+    /// `k + p` only (both 32-bit keys). `Legacy` hashes the key mod `p` and
+    /// reads `k + p`'s cells, a verified false positive (answer 1, the
+    /// documented control). `Semantic`/`Bound` hash the exact limbs and
+    /// answer 0; they also expose different key limbs for the two keys.
+    #[test]
+    fn congruent_keys_decode_legacy_collides_semantic_bound_separate() {
+        let p = <Val as p3_field::PrimeField64>::ORDER_U64;
+        let (k, k_twin) = (12_345u64, 12_345 + p);
+        assert!(k_twin < 1 << 32);
+        let params = CmDecodeParams { d: 4, w: 64, release: ReleasePolicy::Identity };
+        for binding in [Binding::Legacy, Binding::Semantic, Binding::Bound] {
+            let mut s = CountMin::new(&CountMinParams { d: 4, w: 64 });
+            apply_update_prf_with(&mut s, &CountMinUpdate { key: k_twin, value: 1 }, binding);
+            let proof = prove_cm_decode_with(params, s.clone(), k, binding);
+            let want = if binding.is_bound() { 0 } else { 1 };
+            assert_eq!(proof.answer, want, "{binding:?}");
+            if binding.is_bound() {
+                let twin = prove_cm_decode_with(params, s, k_twin, binding);
+                assert_eq!(twin.answer, 1, "{binding:?}: the twin itself is counted");
+                assert_ne!(exposed16(&proof)[8..12], exposed16(&twin)[8..12]);
+            }
+        }
+    }
+
+    /// FORGED STATE (transplant): decode key 7 honestly on `S'`, where every
+    /// cell key 7 routes to is raised by 100, then recommit the cells to the
+    /// real state `S` and rehash. Returns the in-circuit answer if the forged
+    /// proof verifies. Every call first runs the positive control
+    /// ([`forge::forged_with_control`]): decode on `S` itself and write the
+    /// same cells back through the same plumbing; it must verify with the
+    /// honest answer.
+    fn forged_state_answer(binding: Binding) -> Option<u64> {
+        let want = native_estimate(&state_with(binding), 7, binding) as u64;
+        forge::forged_with_control(
+            &format!("cm decode forged state ({binding:?})"),
+            |f| forged_state_answer_run(binding, f),
+            |a| assert_eq!(*a, want, "control certifies the honest answer"),
+        )
+    }
+
+    fn forged_state_answer_run(binding: Binding, forge_it: bool) -> Option<u64> {
+        let s = state_with(binding);
+        let mut s_forged = s.clone();
+        for i in 0..P4.d {
+            s_forged.counters[i][hash_cell_prf_with(i, 7, P4.w, binding)] += 100;
+        }
+        let honest_packed = pack_cells(&s);
+        let forged_packed = pack_cells(&s_forged);
+        let dc = build_cm_decode(P4, if forge_it { &s_forged } else { &s }, 7, binding);
+        let mut traces = dc.run();
+        for (q, (h, f)) in honest_packed.iter().zip(&forged_packed).enumerate() {
+            if h != f {
+                let wid = traces.tag_to_witness[&format!("cm_dec_cell_{q}")];
+                forge::set_wid::<Val, Challenge>(&mut traces, wid, *h);
+            }
+        }
+        forge::rehash_all::<Val, Challenge, _, 16>(&mut traces, Poseidon2Config::BABY_BEAR_D4_W16, &make_perm());
+        let ok = forge::accepted(|| dc.prove_traces(&traces).map(|_| ()));
+        ok.then(|| dc.answer)
+    }
+
+    /// Legacy ACCEPTS a decode proof for `Com(S)` whose answer is the estimate
+    /// of a different state (true + 100): the cells are unbound from the
+    /// commitment. Bound rejects it.
+    #[test]
+    fn forged_state_legacy_accepts_bound_rejects() {
+        if !bind::probe::fork_binds_decompose() {
+            let s = state_with(Binding::Legacy);
+            let forged =
+                forged_state_answer(Binding::Legacy).expect("Legacy accepts the forged decode (PoC)");
+            assert_eq!(forged, native_estimate(&s, 7, Binding::Legacy) as u64 + 100, "answer inflated by 100");
+        }
+        assert!(forged_state_answer(Binding::Bound).is_none(), "Bound must reject the forged decode");
+        // Merged soundness fork: the fork itself binds decompose coefficients, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if bind::probe::fork_binds_decompose() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(forged_state_answer(b).is_none(), "fork binds decompose coefficients: {b:?} must reject too");
+            }
+        }
+    }
+
+    /// FREE SPONGE IV on the query-key hash (bump a capacity input, rehash).
+    /// Legacy accepts positions that are not those of `MyHash(key)`; Bound
+    /// feeds the zero constant into the capacity, so the CTL read fails.
+    #[test]
+    fn forged_query_iv_legacy_accepts_bound_rejects() {
+        let run_iv = |binding: Binding, forge_it: bool| -> bool {
+            let dc = build_cm_decode(P4, &state_with(binding), 7, binding);
+            let mut traces = dc.run();
+            let kw = traces.tag_to_witness["cm_dec_key"].0;
+            let key = NpoTypeId::poseidon2_perm(Poseidon2Config::BABY_BEAR_D4_W16);
+            let mut pt = traces.non_primitive_trace::<Poseidon2Trace<Val>>(&key).expect("p2").clone();
+            let row = pt
+                .operations
+                .iter_mut()
+                .find(|r| r.new_start && r.in_ctl[0] && r.input_indices[0] == kw)
+                .expect("query hash row");
+            if forge_it {
+                row.input_values[8] += Val::ONE;
+            }
+            traces.non_primitive_traces.insert(key, Box::new(pt));
+            forge::rehash_all::<Val, Challenge, _, 16>(&mut traces, Poseidon2Config::BABY_BEAR_D4_W16, &make_perm());
+            forge::accepted(|| dc.prove_traces(&traces).map(|_| ()))
+        };
+        // Positive control first: the same row edit with a zero bump.
+        let run = |binding: Binding| -> bool {
+            forge::accepted_with_control(&format!("cm decode forged IV ({binding:?})"), |forge_it| {
+                run_iv(binding, forge_it)
+            })
+        };
+        if !bind::probe::fork_binds_iv() && !bind::probe::fork_binds_decompose() {
+            assert!(run(Binding::Legacy), "Legacy accepts the free-IV query digest (PoC)");
+        }
+        assert!(!run(Binding::Bound), "Bound must reject the IV forgery");
+        // Merged soundness fork: the fork itself binds the sponge IV, so the
+        // DEFAULT `Semantic` mode (and even `Legacy`) must reject as well.
+        if bind::probe::fork_binds_iv() {
+            for b in [Binding::Semantic, Binding::Legacy] {
+                assert!(!run(b), "fork binds the sponge IV: {b:?} must reject too");
+            }
         }
     }
 }
