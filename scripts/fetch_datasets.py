@@ -112,9 +112,10 @@ def aol_key(url_bytes: bytes) -> int:
 def write_keys(name: str, keys) -> int:
     os.makedirs(DATA, exist_ok=True)
     path = os.path.join(DATA, f"{name}.keys")
+    tmp = path + ".part"  # renamed over `path` only once complete
     n = 0
     try:
-        with open(path, "wb") as f:
+        with open(tmp, "wb") as f:
             buf = bytearray()
             for k in keys:
                 buf += struct.pack("<I", k & MASK)
@@ -123,9 +124,12 @@ def write_keys(name: str, keys) -> int:
                     f.write(buf)
                     buf.clear()
             f.write(buf)
+        if n == 0:
+            raise RuntimeError(f"{name}: no keys read")
+        os.replace(tmp, path)
     except BaseException:
-        if n == 0 and os.path.exists(path):
-            os.remove(path)  # don't leave a partial/empty file behind
+        if os.path.exists(tmp):
+            os.remove(tmp)  # never leave a partial file behind
         raise
     print(f"  wrote {n:,} keys -> {os.path.relpath(path, ROOT)} ({n * 4:,} bytes)")
     return n

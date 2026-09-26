@@ -95,7 +95,7 @@ echo "results -> results/$FINAL_CSV"
 # Cap the pretty-print so a full sweep doesn't flood the terminal (rows beyond
 # the first 200 are still in the CSV).
 if [[ -f "results/$FINAL_CSV" ]]; then
-  column -t -s, "results/$FINAL_CSV" | sed -n '1,200p'
+  if command -v column >/dev/null; then column -t -s, "results/$FINAL_CSV"; else cat "results/$FINAL_CSV"; fi | sed -n '1,200p'
   rows=$(($(wc -l < "results/$FINAL_CSV") - 1))
   [[ "$rows" -gt 200 ]] && echo "… ($rows data rows total; see results/$FINAL_CSV)"
 fi

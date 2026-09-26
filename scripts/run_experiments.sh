@@ -241,5 +241,7 @@ if [[ -n "$OUT_CSV" && -f "results/$CSV" ]]; then
 fi
 
 echo "combined -> results/$FINAL_CSV"
-[[ -f "results/$FINAL_CSV" ]] && column -t -s, "results/$FINAL_CSV" | sed -n '1,40p'
+if [[ -f "results/$FINAL_CSV" ]]; then
+  if command -v column >/dev/null; then column -t -s, "results/$FINAL_CSV"; else cat "results/$FINAL_CSV"; fi | sed -n '1,40p'
+fi
 echo "env.json: results/env.json (plonky3), plonky2/results/env.json (plonky2)"

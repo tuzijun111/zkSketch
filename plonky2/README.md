@@ -2,7 +2,7 @@
 
 This directory is the **in-tree plonky2 implementation** of zkSketch, living inside the original
 repo (the parent dir, `..`) as a self-contained crate **alongside — not replacing — the original
-plonky3 sources**. An identical standalone copy also lives at `../../zkSketch_SNARK`.
+plonky3 sources**.
 
 It re-implements zkSketch — non-interactive, verifiable, privacy-preserving sketch-based analytics
 with recursive proof aggregation.
@@ -11,10 +11,11 @@ The original (in `..`) is built on **plonky3 + plonky3-recursion** (recursive **
 over the BabyBear field). This crate rebuilds the same architecture on **[plonky2]**, whose
 first-class recursion is the natural SNARK analog of plonky3-recursion's in-circuit verifier.
 
-> **Build note:** this crate is its own Cargo workspace (`[workspace]` in `Cargo.toml`) and builds
-> on **nightly** (plonky2 needs `#![feature(specialization)]`), fully decoupled from the parent's
-> stable/plonky3 build. It does inherit the parent's `.cargo/config.toml`, whose plonky3-fork
-> `[patch]` entries are unused here — that's the only (harmless) "patch not used" warning at build.
+> **Build note:** this crate is a separate package with its own `Cargo.lock` (the root
+> `Cargo.toml` has no `[workspace]`, so the two never share a build) and builds on the dated
+> nightly pinned in `rust-toolchain.toml` (plonky2 needs `#![feature(specialization)]`); rustup
+> installs it automatically. A local `../.cargo/config.toml` (git-ignored, optional) would be
+> inherited, but its plonky3-fork `[patch]` entries are unused here.
 
 [plonky2]: https://github.com/0xPolygonZero/plonky2
 

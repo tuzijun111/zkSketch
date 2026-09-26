@@ -12,12 +12,12 @@ All numbers below are **measured** — each stack run once as a combined
 benchmark). Reproduce:
 
 ```bash
-# plonky3 baseline
-cd ../zkSketch && cargo test --release --lib countmin_final::tests \
+# plonky3 baseline (repo root)
+cargo test --release --lib countmin_final::tests \
   -- --ignored --nocapture --test-threads=1
 # plonky2
-cd ../zkSketch_SNARK && cargo test --release leaf::countmin_final::tests \
-  -- --ignored --nocapture --test-threads=1
+(cd plonky2 && cargo test --release leaf::countmin_final::tests \
+  -- --ignored --nocapture --test-threads=1)
 ```
 
 ## What's comparable, and the one big caveat

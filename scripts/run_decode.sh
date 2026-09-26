@@ -38,7 +38,7 @@ run_tests() {
   # The filtered summary must not hide a failure: pipefail keeps cargo's status.
   local rc=0
   cargo test --release --lib decode:: 2>&1 \
-    | { grep -E "running [0-9]+ tests|test result|FAILED|panicked" || true; } || rc=$?
+    | { grep -E "^error|running [0-9]+ tests|test result|FAILED|panicked" || true; } || rc=$?
   echo
   if (( rc != 0 )); then echo "decode unit tests FAILED (cargo exit $rc)" >&2; exit "$rc"; fi
 }

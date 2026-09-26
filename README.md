@@ -106,9 +106,13 @@ scripts/run_experiments.sh e1
 - **External baselines (optional):** the zk-Analytics and zkStream comparisons
   under `scripts/baselines/` need their own toolchains. `scripts/baselines/fetch_baselines.sh`
   clones both systems at the paper's revisions and installs ZoKrates 0.8.8; it
-  also prints the RISC Zero (`rzup`, `r0vm` 3.0.6) setup. The zkStream drivers
-  need a systemd user session; the zk-Analytics HLL/SS/GK harness needs `numpy`.
-  See `scripts/baselines/{zka,zkstream}/README.md`.
+  also prints the RISC Zero (`rzup`, `r0vm` 3.0.6) setup. Both harnesses need
+  `curl`, GNU time at `/usr/bin/time` (package `time`), `taskset`, and `python3`
+  with `numpy`; zk-Analytics' bindgen needs `libclang` (`libclang-dev`); the
+  zkStream drivers need a systemd user session (without a login session:
+  `loginctl enable-linger $USER` and `export XDG_RUNTIME_DIR=/run/user/$(id -u)`).
+  Use a git clone, not a ZIP download (`sketch_run.sh` exports sources with
+  `git archive`). See `scripts/baselines/{zka,zkstream}/README.md`.
 - **Paper result CSVs:** `results/` is git-ignored, so a clone has no measured
   CSVs; the commands in [Reproducing the paper's results](#reproducing-the-papers-results)
   regenerate them.

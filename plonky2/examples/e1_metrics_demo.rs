@@ -9,7 +9,7 @@
 //! `plonky2/results/e1_circuit.csv` plus an `env.json`. The schema matches the
 //! plonky3 runner (`../examples/exp_e1.rs`) so the two CSVs merge directly.
 //!
-//! Run (small slice, default): `cargo +nightly run --release --example e1_metrics_demo`
+//! Run (small slice, default): `cargo run --release --example e1_metrics_demo` (from plonky2/; the pinned nightly is auto-selected)
 //! Configure (env): EXP_DATASET=uniform|gaussian|zipf|aol|netflix
 //!   EXP_M=4,8,16,32   EXP_TRIALS=5   EXP_WARMUP=1
 //! Real datasets need `python3 ../scripts/fetch_datasets.py` first (shared

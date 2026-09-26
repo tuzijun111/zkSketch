@@ -177,6 +177,6 @@ esac
 
 if [[ -f "$FINAL_CSV" ]]; then
   echo "results -> $FINAL_CSV"
-  column -t -s, "$FINAL_CSV" | sed -n '1,200p'
+  if command -v column >/dev/null; then column -t -s, "$FINAL_CSV"; else cat "$FINAL_CSV"; fi | sed -n '1,200p'
 fi
 echo "env.json: $ENV_JSON"

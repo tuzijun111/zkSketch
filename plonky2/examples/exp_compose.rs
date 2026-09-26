@@ -177,6 +177,7 @@ fn main() -> anyhow::Result<()> {
     .collect();
     let out_name = std::env::var("EXP_OUT")
         .ok()
+        .filter(|s| !s.is_empty())
         .or_else(|| std::env::args().nth(1))
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "stream_compose_p2".into());

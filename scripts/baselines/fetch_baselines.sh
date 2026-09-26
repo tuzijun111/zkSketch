@@ -35,7 +35,9 @@ clone_at "$ZKSTREAM_URL" "$ZKSTREAM_REV" zkstream-repo
 # scripts/baselines/zkstream/common.sh looks for it. Official release asset, x86-64 Linux.
 ZOK_URL=https://github.com/Zokrates/ZoKrates/releases/download/0.8.8/zokrates-0.8.8-x86_64-unknown-linux-gnu.tar.gz
 ZOK_SHA256=da2e1062526acebdcff613a713f177db3bd1443d41f2ea74044026eb96979fb9
-if [ -x "$DEST/zok/zokrates" ] && [ -d "$DEST/zok/stdlib" ]; then
+if [ "$(uname -m)" != x86_64 ]; then
+  echo "zok: the ZoKrates release binary is x86-64 only; install ZoKrates 0.8.8 into $DEST/zok by hand" >&2
+elif [ -d "$DEST/zok/stdlib" ] && "$DEST/zok/zokrates" --version >/dev/null 2>&1; then
   echo "zok @ $("$DEST/zok/zokrates" --version)"
 else
   mkdir -p "$DEST/zok"
@@ -52,14 +54,17 @@ Build notes (no sudo required):
                   curl -L https://risczero.com/install | bash      # installs rzup
                   rzup install cargo-risczero 3.0.6 && rzup install r0vm 3.0.6
                   rzup install rust 1.97.0 && rzup install cpp 2024.1.5
-                plus LIBCLANG_PATH, BINDGEN_EXTRA_CLANG_ARGS=-I$(gcc -print-file-name=include)
+                plus libclang (e.g. libclang-dev) with LIBCLANG_PATH,
+                BINDGEN_EXTRA_CLANG_ARGS=-I$(gcc -print-file-name=include)
                 and CXXFLAGS='-include cstdint'. Only `bench_queries` and
                 `native_baseline` are needed; the full pipeline (Kafka/RocksDB/
                 FoundationDB/Trillian/Docker) is NOT required for any experiment here.
-                The HLL/SS/GK harness also needs python3 with numpy.
   zkStream      ZoKrates 0.8.8 is installed above. Its drivers cap every compile with
                 `systemd-run --user --scope`, so they need a systemd user session
-                (not docker/cron/su; or `loginctl enable-linger $USER`).
+                (not docker/cron/su; or `loginctl enable-linger $USER` and
+                `export XDG_RUNTIME_DIR=/run/user/$(id -u)`).
+  Both          curl, GNU time at /usr/bin/time (package `time`), taskset, and
+                python3 with numpy.
 
 Run the zk-Analytics experiments with scripts/baselines/zka/*.sh (see its README.md).
 They read the same BASELINE_DIR; zk-Analytics-side builds go under it (build/, nb-target-*, zka/target).

@@ -316,7 +316,8 @@ ours_build() {
     git -C "$ZKS" archive "$rev" | tar -x -C "$OURS_DIR/src_rs" || return 1
     echo "$rev" > "$OURS_DIR/src_rs/.rev"
   fi
-  ( cd "$OURS_DIR/src_rs" && CARGO_TARGET_DIR="$OURS_DIR/target" cargo build --release --example exp_compose 2>&1 | tail -2 )
+  ( cd "$OURS_DIR/src_rs" && CARGO_TARGET_DIR="$OURS_DIR/target" cargo build --release --example exp_compose 2>&1 | tail -2
+    exit "${PIPESTATUS[0]}" ) || { say "ours: build failed (rev $rev)"; return 1; }
   OURS_BIN="$OURS_DIR/target/release/examples/exp_compose"
   [[ -x $OURS_BIN ]] || { say "ours: build failed"; return 1; }
 }

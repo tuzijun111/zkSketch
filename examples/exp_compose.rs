@@ -917,6 +917,7 @@ fn main() {
     // per-row interleaving that corrupted a shared file is gone.)
     let out = std::env::var("EXP_OUT")
         .ok()
+        .filter(|s| !s.is_empty())
         .or_else(|| std::env::args().nth(1))
         .filter(|s| !s.is_empty());
     let final_csv = match out {

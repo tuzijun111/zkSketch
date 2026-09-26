@@ -30,7 +30,8 @@ require_tools() {
   [[ -x /usr/bin/time ]] || { echo "missing /usr/bin/time (needed for peak RSS)" >&2; return 2; }
   # every compile and zkSketch run is capped by `systemd-run --user --scope`
   systemd-run --user --scope -q true 2>/dev/null \
-    || { echo "systemd-run --user --scope unavailable: needs a systemd user session (see README)" >&2; return 2; }
+    || { echo "systemd-run --user --scope unavailable: needs a systemd user session (log in normally, or" \
+              "loginctl enable-linger \$USER and export XDG_RUNTIME_DIR=/run/user/\$(id -u))" >&2; return 2; }
 }
 
 # Refuse to start next to another prover of this user: timings would be contended.
