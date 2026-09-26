@@ -1,0 +1,9 @@
+# Host-side workspace: the core library, the methods crate that embeds the guest
+# ELFs, and the host driver. The guests live in their own workspace (guests/) so
+# they resolve from a lock seeded from the zk-Analytics clone's Cargo.lock
+# (risc0-zkvm 3.0.5, as their guests), while the host resolves like cyc/
+# (risc0-zkvm 3.0.6).
+[workspace]
+members = ["core", "methods", "host"]
+exclude = ["guests"]
+resolver = "2"

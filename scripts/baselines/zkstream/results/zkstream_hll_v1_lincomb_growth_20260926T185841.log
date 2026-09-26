@@ -1,0 +1,3 @@
+run=20260926T185841 load1=4.98 pin=0-31 s=[16384] k=[256, 1024] chunks=4 tamper=True build=/home/binbin/ext-baselines/build/zkstream_hll -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_hll.csv
+cmd: /home/binbin/zkSketch/scripts/baselines/zkstream/hll/run_hll.py --s 16384 --k 256 1024 --chunks 4 --tamper --prune --allow-busy
+  s=16384  k=256   chunk=    compile_op                     constraints=618320 wall_s=508.6427 peak_rss_mb=17614.5039 bytes=4097801884 load1=5.63 ok=1 note=r1cs_bytes=3271523328

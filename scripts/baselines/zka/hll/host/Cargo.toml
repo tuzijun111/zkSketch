@@ -1,0 +1,16 @@
+[package]
+name = "zka-hll-host"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hll"
+path = "src/main.rs"
+
+[dependencies]
+zka-hll-core = { path = "../core" }
+zka-hll-methods = { path = "../methods" }
+zkvm-common = { path = "../../.zka/zkvm-common" }
+risc0-zkvm = "3"
+serde = "1"
+bincode = "1"

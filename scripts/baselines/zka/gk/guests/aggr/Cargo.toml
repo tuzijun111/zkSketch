@@ -1,0 +1,9 @@
+[package]
+name = "aggr_gk"
+version = "0.1.0"
+edition = "2021"
+
+# Mirrors aggregator/methods/guest_histogram/Cargo.toml.
+[dependencies]
+risc0-zkvm = { version = "3", default-features = false }
+gk-zka-core = { path = "../../core", default-features = false }

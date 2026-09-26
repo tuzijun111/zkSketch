@@ -1,0 +1,484 @@
+run=20260926T184440 load1=2.80 pin=0-31 s=[16, 64, 256, 1024, 4096] k=[4, 16, 64] chunks=4 tamper=True build=/home/binbin/ext-baselines/build/zkstream_hll -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_hll.csv
+cmd: /home/binbin/zkSketch/scripts/baselines/zkstream/hll/run_hll.py --s 16 64 256 1024 4096 --k 4 16 64 --chunks 4 --tamper --prune --allow-busy
+  s=16     k=4     chunk=    compile_op                     constraints=5189 wall_s=1.4238 peak_rss_mb=160.8164 bytes=4479420 load1=2.80 ok=1 note=r1cs_bytes=3191620
+  s=16     k=4     chunk=    compile_helper                 constraints=5190 wall_s=1.4331 peak_rss_mb=160.1875 bytes=4479421 load1=2.90 ok=1 note=r1cs_bytes=3191892
+  s=16     k=4     chunk=    setup                          constraints=5189 wall_s=0.0636 peak_rss_mb=33.8320 bytes=2182768 load1=2.90 note=vk_bytes=1917 concurrent_zokrates=compile
+  s=16     k=4     chunk=0   witness_helper                 wall_s=0.0238 peak_rss_mb=18.0938 load1=2.90 ok=1 note=helper state+commitments == native reference (3 ms incl. Python Poseidon)
+  s=16     k=4     chunk=0   witness_op                     constraints=5189 wall_s=0.0213 peak_rss_mb=15.7969 load1=2.90 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=4     chunk=0   prove                          constraints=5189 wall_s=0.0708 peak_rss_mb=35.3359 bytes=997 load1=2.90 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=16     k=4     chunk=0   verify                         wall_s=0.0067 peak_rss_mb=11.4297 load1=2.90 ok=1 note=CLI, includes process start
+  s=16     k=4     chunk=1   witness_helper                 wall_s=0.0252 peak_rss_mb=17.2539 load1=2.90 ok=1 note=helper state+commitments == native reference (3 ms incl. Python Poseidon)
+  s=16     k=4     chunk=1   witness_op                     constraints=5189 wall_s=0.0216 peak_rss_mb=16.4062 load1=2.90 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=4     chunk=1   prove                          constraints=5189 wall_s=0.0663 peak_rss_mb=35.1992 bytes=997 load1=2.90 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=16     k=4     chunk=1   verify                         wall_s=0.0062 peak_rss_mb=10.9492 load1=2.90 ok=1 note=CLI, includes process start
+  s=16     k=4     chunk=2   witness_helper                 wall_s=0.0233 peak_rss_mb=17.8828 load1=2.90 ok=1 note=helper state+commitments == native reference (3 ms incl. Python Poseidon)
+  s=16     k=4     chunk=2   witness_op                     constraints=5189 wall_s=0.0221 peak_rss_mb=16.2461 load1=2.90 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=4     chunk=2   prove                          constraints=5189 wall_s=0.0708 peak_rss_mb=36.2891 bytes=997 load1=2.90 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=16     k=4     chunk=2   verify                         wall_s=0.0063 peak_rss_mb=11.6016 load1=2.90 ok=1 note=CLI, includes process start
+  s=16     k=4     chunk=3   witness_helper                 wall_s=0.0225 peak_rss_mb=17.2422 load1=2.90 ok=1 note=helper state+commitments == native reference (3 ms incl. Python Poseidon)
+  s=16     k=4     chunk=3   witness_op                     constraints=5189 wall_s=0.0219 peak_rss_mb=16.3750 load1=2.90 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=4     chunk=3   prove                          constraints=5189 wall_s=0.0758 peak_rss_mb=35.8789 bytes=997 load1=2.90 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=16     k=4     chunk=3   verify                         wall_s=0.0067 peak_rss_mb=10.5000 load1=2.90 ok=1 note=CLI, includes process start
+  s=16     k=4     chunk=    chain                          constraints=5189 load1=2.90 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.2 vs 13 distinct keys (+1.7%)
+  s=16     k=4     chunk=1   tamper_wrong_update_one_slot   wall_s=0.0223 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_dropped_record_state    wall_s=0.0208 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_dropped_record_keys     wall_s=0.0083 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_stale_state             wall_s=0.0062 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_altered_state_register  wall_s=0.0064 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_key_not_in_digest       wall_s=0.0086 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_replace_not_max         wall_s=0.0195 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_com_out_equals_com_in   wall_s=0.0207 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_com_in_plus1            wall_s=0.0063 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_batch_com_plus1         wall_s=0.0085 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_salt_out_plus1          wall_s=0.0198 load1=2.90 ok=1 note=rejected by compute-witness
+  s=16     k=4     chunk=1   tamper_verify_public_com_out   wall_s=0.0056 load1=2.90 ok=1 note=verification failed
+  s=16     k=16    chunk=    compile_op                     constraints=17426 wall_s=3.2800 peak_rss_mb=313.5156 bytes=13402404 load1=2.90 ok=1 note=r1cs_bytes=9146680
+  s=16     k=16    chunk=    compile_helper                 constraints=17427 wall_s=3.3079 peak_rss_mb=314.5625 bytes=13402759 load1=2.90 ok=1 note=r1cs_bytes=9147384
+  s=16     k=16    chunk=    setup                          constraints=17426 wall_s=0.1722 peak_rss_mb=71.7383 bytes=7659952 load1=2.90 note=vk_bytes=1917 concurrent_zokrates=compile
+  s=16     k=16    chunk=0   witness_helper                 wall_s=0.0622 peak_rss_mb=20.2539 load1=2.90 ok=1 note=helper state+commitments == native reference (7 ms incl. Python Poseidon)
+  s=16     k=16    chunk=0   witness_op                     constraints=17426 wall_s=0.0556 peak_rss_mb=17.3828 load1=2.90 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=16    chunk=0   prove                          constraints=17426 wall_s=0.2029 peak_rss_mb=81.9727 bytes=997 load1=2.90 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=16     k=16    chunk=0   verify                         wall_s=0.0067 peak_rss_mb=10.9805 load1=2.90 ok=1 note=CLI, includes process start
+  s=16     k=16    chunk=1   witness_helper                 wall_s=0.0632 peak_rss_mb=20.4375 load1=2.90 ok=1 note=helper state+commitments == native reference (8 ms incl. Python Poseidon)
+  s=16     k=16    chunk=1   witness_op                     constraints=17426 wall_s=0.0565 peak_rss_mb=17.8516 load1=2.90 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=16    chunk=1   prove                          constraints=17426 wall_s=0.1919 peak_rss_mb=81.5000 bytes=997 load1=2.90 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=16     k=16    chunk=1   verify                         wall_s=0.0071 peak_rss_mb=10.5469 load1=2.99 ok=1 note=CLI, includes process start
+  s=16     k=16    chunk=2   witness_helper                 wall_s=0.0629 peak_rss_mb=20.7500 load1=2.99 ok=1 note=helper state+commitments == native reference (7 ms incl. Python Poseidon)
+  s=16     k=16    chunk=2   witness_op                     constraints=17426 wall_s=0.0567 peak_rss_mb=16.9492 load1=2.99 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=16    chunk=2   prove                          constraints=17426 wall_s=0.1923 peak_rss_mb=82.1914 bytes=997 load1=2.99 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=16     k=16    chunk=2   verify                         wall_s=0.0061 peak_rss_mb=11.6289 load1=2.99 ok=1 note=CLI, includes process start
+  s=16     k=16    chunk=3   witness_helper                 wall_s=0.0688 peak_rss_mb=19.8789 load1=2.99 ok=1 note=helper state+commitments == native reference (8 ms incl. Python Poseidon)
+  s=16     k=16    chunk=3   witness_op                     constraints=17426 wall_s=0.0566 peak_rss_mb=17.1797 load1=2.99 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=16    chunk=3   prove                          constraints=17426 wall_s=0.1911 peak_rss_mb=80.7734 bytes=997 load1=2.99 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=16     k=16    chunk=3   verify                         wall_s=0.0070 peak_rss_mb=10.9883 load1=2.99 ok=1 note=CLI, includes process start
+  s=16     k=16    chunk=    chain                          constraints=17426 load1=2.99 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 52.3 vs 46 distinct keys (+13.6%)
+  s=16     k=16    chunk=1   tamper_wrong_update_one_slot   wall_s=0.0562 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_dropped_record_state    wall_s=0.0549 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_dropped_record_keys     wall_s=0.0156 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_stale_state             wall_s=0.0073 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_altered_state_register  wall_s=0.0061 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_key_not_in_digest       wall_s=0.0134 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_replace_not_max         wall_s=0.0568 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_com_out_equals_com_in   wall_s=0.0552 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_com_in_plus1            wall_s=0.0071 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_batch_com_plus1         wall_s=0.0131 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_salt_out_plus1          wall_s=0.0550 load1=2.99 ok=1 note=rejected by compute-witness
+  s=16     k=16    chunk=1   tamper_verify_public_com_out   wall_s=0.0061 load1=2.99 ok=1 note=verification failed
+  s=16     k=64    chunk=    compile_op                     constraints=65357 wall_s=10.7083 peak_rss_mb=861.1055 bytes=48542085 load1=2.99 ok=1 note=r1cs_bytes=31870252
+  s=16     k=64    chunk=    compile_helper                 constraints=65358 wall_s=10.8165 peak_rss_mb=859.2422 bytes=48544716 load1=3.00 ok=1 note=r1cs_bytes=31872684
+  s=16     k=64    chunk=    setup                          constraints=65357 wall_s=0.6362 peak_rss_mb=205.7695 bytes=25048944 load1=3.00 note=vk_bytes=1917 concurrent_zokrates=compute-witness
+  s=16     k=64    chunk=0   witness_helper                 wall_s=0.2476 peak_rss_mb=33.6602 load1=3.00 ok=1 note=helper state+commitments == native reference (28 ms incl. Python Poseidon)
+  s=16     k=64    chunk=0   witness_op                     constraints=65357 wall_s=0.2225 peak_rss_mb=20.8086 load1=3.00 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=64    chunk=0   prove                          constraints=65357 wall_s=0.6482 peak_rss_mb=240.9141 bytes=997 load1=2.92 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out)
+  s=16     k=64    chunk=0   verify                         wall_s=0.0083 peak_rss_mb=10.9570 load1=2.92 ok=1 note=CLI, includes process start
+  s=16     k=64    chunk=1   witness_helper                 wall_s=0.2456 peak_rss_mb=33.3203 load1=2.92 ok=1 note=helper state+commitments == native reference (28 ms incl. Python Poseidon)
+  s=16     k=64    chunk=1   witness_op                     constraints=65357 wall_s=0.2290 peak_rss_mb=20.7812 load1=2.92 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=64    chunk=1   prove                          constraints=65357 wall_s=0.6285 peak_rss_mb=241.9336 bytes=997 load1=2.92 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out)
+  s=16     k=64    chunk=1   verify                         wall_s=0.0075 peak_rss_mb=10.5078 load1=2.92 ok=1 note=CLI, includes process start
+  s=16     k=64    chunk=2   witness_helper                 wall_s=0.2459 peak_rss_mb=34.1992 load1=2.92 ok=1 note=helper state+commitments == native reference (28 ms incl. Python Poseidon)
+  s=16     k=64    chunk=2   witness_op                     constraints=65357 wall_s=0.2230 peak_rss_mb=20.1992 load1=2.92 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=64    chunk=2   prove                          constraints=65357 wall_s=0.6349 peak_rss_mb=239.7188 bytes=997 load1=2.92 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out)
+  s=16     k=64    chunk=2   verify                         wall_s=0.0085 peak_rss_mb=11.5312 load1=2.92 ok=1 note=CLI, includes process start
+  s=16     k=64    chunk=3   witness_helper                 wall_s=0.2473 peak_rss_mb=33.8516 load1=2.92 ok=1 note=helper state+commitments == native reference (28 ms incl. Python Poseidon)
+  s=16     k=64    chunk=3   witness_op                     constraints=65357 wall_s=0.2204 peak_rss_mb=21.3828 load1=2.92 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16     k=64    chunk=3   prove                          constraints=65357 wall_s=0.6301 peak_rss_mb=237.3672 bytes=997 load1=2.92 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out)
+  s=16     k=64    chunk=3   verify                         wall_s=0.0079 peak_rss_mb=10.5156 load1=2.92 ok=1 note=CLI, includes process start
+  s=16     k=64    chunk=    chain                          constraints=65357 load1=2.92 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 273.3 vs 174 distinct keys (+57.1%)
+  s=16     k=64    chunk=1   tamper_wrong_update_one_slot   wall_s=0.2150 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_dropped_record_state    wall_s=0.2144 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_dropped_record_keys     wall_s=0.0321 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_stale_state             wall_s=0.0071 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_altered_state_register  wall_s=0.0079 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_key_not_in_digest       wall_s=0.0320 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_replace_not_max         wall_s=0.2137 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_com_out_equals_com_in   wall_s=0.2134 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_com_in_plus1            wall_s=0.0085 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_batch_com_plus1         wall_s=0.0330 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_salt_out_plus1          wall_s=0.2095 load1=2.92 ok=1 note=rejected by compute-witness
+  s=16     k=64    chunk=1   tamper_verify_public_com_out   wall_s=0.0063 load1=2.92 ok=1 note=verification failed
+  s=64     k=4     chunk=    compile_op                     constraints=5647 wall_s=1.6232 peak_rss_mb=146.9062 bytes=4667096 load1=2.92 ok=1 note=r1cs_bytes=3296836
+  s=64     k=4     chunk=    compile_helper                 constraints=5649 wall_s=1.5225 peak_rss_mb=148.9023 bytes=4667581 load1=2.92 ok=1 note=r1cs_bytes=3297524
+  s=64     k=4     chunk=    setup                          constraints=5647 wall_s=0.0739 peak_rss_mb=33.8359 bytes=2329648 load1=2.85 note=vk_bytes=1917 waited=2s concurrent_zokrates=compile
+  s=64     k=4     chunk=0   witness_helper                 wall_s=0.0286 peak_rss_mb=16.7656 load1=2.85 ok=1 note=helper state+commitments == native reference (4 ms incl. Python Poseidon)
+  s=64     k=4     chunk=0   witness_op                     constraints=5647 wall_s=0.0250 peak_rss_mb=16.3906 load1=2.85 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=4     chunk=0   prove                          constraints=5647 wall_s=0.0761 peak_rss_mb=38.3320 bytes=997 load1=2.85 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=64     k=4     chunk=0   verify                         wall_s=0.0070 peak_rss_mb=11.5039 load1=2.85 ok=1 note=CLI, includes process start
+  s=64     k=4     chunk=1   witness_helper                 wall_s=0.0281 peak_rss_mb=17.8828 load1=2.85 ok=1 note=helper state+commitments == native reference (4 ms incl. Python Poseidon)
+  s=64     k=4     chunk=1   witness_op                     constraints=5647 wall_s=0.0253 peak_rss_mb=16.3672 load1=2.85 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=4     chunk=1   prove                          constraints=5647 wall_s=0.0803 peak_rss_mb=36.3438 bytes=997 load1=2.85 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=64     k=4     chunk=1   verify                         wall_s=0.0070 peak_rss_mb=11.4453 load1=2.85 ok=1 note=CLI, includes process start
+  s=64     k=4     chunk=2   witness_helper                 wall_s=0.0269 peak_rss_mb=17.2852 load1=2.85 ok=1 note=helper state+commitments == native reference (4 ms incl. Python Poseidon)
+  s=64     k=4     chunk=2   witness_op                     constraints=5647 wall_s=0.0254 peak_rss_mb=16.7852 load1=2.85 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=4     chunk=2   prove                          constraints=5647 wall_s=0.0818 peak_rss_mb=36.9023 bytes=997 load1=2.85 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=64     k=4     chunk=2   verify                         wall_s=0.0073 peak_rss_mb=11.0430 load1=2.85 ok=1 note=CLI, includes process start
+  s=64     k=4     chunk=3   witness_helper                 wall_s=0.0277 peak_rss_mb=18.3047 load1=2.85 ok=1 note=helper state+commitments == native reference (4 ms incl. Python Poseidon)
+  s=64     k=4     chunk=3   witness_op                     constraints=5647 wall_s=0.0248 peak_rss_mb=15.6797 load1=2.85 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=4     chunk=3   prove                          constraints=5647 wall_s=0.0837 peak_rss_mb=37.3945 bytes=997 load1=2.85 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=64     k=4     chunk=3   verify                         wall_s=0.0063 peak_rss_mb=10.9453 load1=2.85 ok=1 note=CLI, includes process start
+  s=64     k=4     chunk=    chain                          constraints=5647 load1=2.85 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.3 vs 13 distinct keys (+2.2%)
+  s=64     k=4     chunk=1   tamper_wrong_update_one_slot   wall_s=0.0250 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_dropped_record_state    wall_s=0.0240 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_dropped_record_keys     wall_s=0.0089 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_stale_state             wall_s=0.0073 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_altered_state_register  wall_s=0.0073 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_key_not_in_digest       wall_s=0.0091 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_register_decreased      wall_s=0.0252 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_com_out_equals_com_in   wall_s=0.0246 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_com_in_plus1            wall_s=0.0071 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_batch_com_plus1         wall_s=0.0093 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_salt_out_plus1          wall_s=0.0255 load1=2.85 ok=1 note=rejected by compute-witness
+  s=64     k=4     chunk=1   tamper_verify_public_com_out   wall_s=0.0066 load1=2.85 ok=1 note=verification failed
+  s=64     k=16    chunk=    compile_op                     constraints=19240 wall_s=3.7332 peak_rss_mb=324.0820 bytes=14213808 load1=2.85 ok=1 note=r1cs_bytes=9570400
+  s=64     k=16    chunk=    compile_helper                 constraints=19242 wall_s=3.5886 peak_rss_mb=325.4180 bytes=14215842 load1=3.02 ok=1 note=r1cs_bytes=9572384
+  s=64     k=16    chunk=    setup                          constraints=19240 wall_s=0.1804 peak_rss_mb=72.6523 bytes=8240752 load1=3.02 note=vk_bytes=1917 concurrent_zokrates=compile,compile
+  s=64     k=16    chunk=0   witness_helper                 wall_s=0.0696 peak_rss_mb=20.3203 load1=3.02 ok=1 note=helper state+commitments == native reference (8 ms incl. Python Poseidon)
+  s=64     k=16    chunk=0   witness_op                     constraints=19240 wall_s=0.0695 peak_rss_mb=17.8242 load1=3.02 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=16    chunk=0   prove                          constraints=19240 wall_s=0.2165 peak_rss_mb=83.9062 bytes=997 load1=3.02 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=64     k=16    chunk=0   verify                         wall_s=0.0067 peak_rss_mb=12.0547 load1=3.02 ok=1 note=CLI, includes process start
+  s=64     k=16    chunk=1   witness_helper                 wall_s=0.0732 peak_rss_mb=20.7969 load1=3.02 ok=1 note=helper state+commitments == native reference (9 ms incl. Python Poseidon)
+  s=64     k=16    chunk=1   witness_op                     constraints=19240 wall_s=0.0623 peak_rss_mb=16.1758 load1=3.02 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=16    chunk=1   prove                          constraints=19240 wall_s=0.1957 peak_rss_mb=83.6875 bytes=997 load1=3.02 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=64     k=16    chunk=1   verify                         wall_s=0.0066 peak_rss_mb=11.6797 load1=3.02 ok=1 note=CLI, includes process start
+  s=64     k=16    chunk=2   witness_helper                 wall_s=0.0685 peak_rss_mb=20.4570 load1=3.02 ok=1 note=helper state+commitments == native reference (8 ms incl. Python Poseidon)
+  s=64     k=16    chunk=2   witness_op                     constraints=19240 wall_s=0.0608 peak_rss_mb=17.7461 load1=3.02 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=16    chunk=2   prove                          constraints=19240 wall_s=0.1912 peak_rss_mb=83.1367 bytes=997 load1=4.14 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=64     k=16    chunk=2   verify                         wall_s=0.0064 peak_rss_mb=10.5430 load1=4.14 ok=1 note=CLI, includes process start
+  s=64     k=16    chunk=3   witness_helper                 wall_s=0.0685 peak_rss_mb=20.8203 load1=4.14 ok=1 note=helper state+commitments == native reference (8 ms incl. Python Poseidon)
+  s=64     k=16    chunk=3   witness_op                     constraints=19240 wall_s=0.0683 peak_rss_mb=17.2695 load1=4.14 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=16    chunk=3   prove                          constraints=19240 wall_s=0.2006 peak_rss_mb=84.0312 bytes=997 load1=4.14 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=64     k=16    chunk=3   verify                         wall_s=0.0068 peak_rss_mb=10.9766 load1=4.14 ok=1 note=CLI, includes process start
+  s=64     k=16    chunk=    chain                          constraints=19240 load1=4.14 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 48.5 vs 46 distinct keys (+5.4%)
+  s=64     k=16    chunk=1   tamper_wrong_update_one_slot   wall_s=0.0618 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_dropped_record_state    wall_s=0.0598 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_dropped_record_keys     wall_s=0.0141 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_stale_state             wall_s=0.0068 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_altered_state_register  wall_s=0.0066 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_key_not_in_digest       wall_s=0.0133 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_replace_not_max         wall_s=0.0604 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_com_out_equals_com_in   wall_s=0.0582 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_com_in_plus1            wall_s=0.0065 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_batch_com_plus1         wall_s=0.0134 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_salt_out_plus1          wall_s=0.0578 load1=4.14 ok=1 note=rejected by compute-witness
+  s=64     k=16    chunk=1   tamper_verify_public_com_out   wall_s=0.0054 load1=4.14 ok=1 note=verification failed
+  s=64     k=64    chunk=    compile_op                     constraints=72595 wall_s=11.5002 peak_rss_mb=904.1445 bytes=51919463 load1=4.11 ok=1 note=r1cs_bytes=33723508
+  s=64     k=64    chunk=    compile_helper                 constraints=72597 wall_s=11.7849 peak_rss_mb=904.5508 bytes=51927864 load1=3.94 ok=1 note=r1cs_bytes=33730676
+  s=64     k=64    chunk=    setup                          constraints=72595 wall_s=0.6423 peak_rss_mb=232.2188 bytes=31559728 load1=3.95 note=vk_bytes=1917 concurrent_zokrates=compile,compile
+  s=64     k=64    chunk=0   witness_helper                 wall_s=0.2325 peak_rss_mb=35.1875 load1=3.95 ok=1 note=helper state+commitments == native reference (23 ms incl. Python Poseidon)
+  s=64     k=64    chunk=0   witness_op                     constraints=72595 wall_s=0.2096 peak_rss_mb=21.3672 load1=3.95 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=64    chunk=0   prove                          constraints=72595 wall_s=0.6490 peak_rss_mb=265.3867 bytes=997 load1=3.95 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=64     k=64    chunk=0   verify                         wall_s=0.0074 peak_rss_mb=11.4414 load1=3.95 ok=1 note=CLI, includes process start
+  s=64     k=64    chunk=1   witness_helper                 wall_s=0.2310 peak_rss_mb=35.7891 load1=3.95 ok=1 note=helper state+commitments == native reference (26 ms incl. Python Poseidon)
+  s=64     k=64    chunk=1   witness_op                     constraints=72595 wall_s=0.2136 peak_rss_mb=20.2109 load1=3.95 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=64    chunk=1   prove                          constraints=72595 wall_s=0.6182 peak_rss_mb=265.8281 bytes=997 load1=3.95 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=64     k=64    chunk=1   verify                         wall_s=0.0071 peak_rss_mb=10.6172 load1=3.95 ok=1 note=CLI, includes process start
+  s=64     k=64    chunk=2   witness_helper                 wall_s=0.2338 peak_rss_mb=35.3633 load1=3.95 ok=1 note=helper state+commitments == native reference (22 ms incl. Python Poseidon)
+  s=64     k=64    chunk=2   witness_op                     constraints=72595 wall_s=0.2056 peak_rss_mb=20.8047 load1=3.95 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=64    chunk=2   prove                          constraints=72595 wall_s=0.6569 peak_rss_mb=266.6289 bytes=997 load1=3.95 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,?
+  s=64     k=64    chunk=2   verify                         wall_s=0.0071 peak_rss_mb=9.9961 load1=3.95 ok=1 note=CLI, includes process start
+  s=64     k=64    chunk=3   witness_helper                 wall_s=0.2376 peak_rss_mb=35.3984 load1=3.95 ok=1 note=helper state+commitments == native reference (24 ms incl. Python Poseidon)
+  s=64     k=64    chunk=3   witness_op                     constraints=72595 wall_s=0.2215 peak_rss_mb=20.8711 load1=3.95 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=64     k=64    chunk=3   prove                          constraints=72595 wall_s=0.6283 peak_rss_mb=266.4297 bytes=997 load1=3.95 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=64     k=64    chunk=3   verify                         wall_s=0.0083 peak_rss_mb=10.3906 load1=3.95 ok=1 note=CLI, includes process start
+  s=64     k=64    chunk=    chain                          constraints=72595 load1=3.95 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 206.2 vs 174 distinct keys (+18.5%)
+  s=64     k=64    chunk=1   tamper_wrong_update_one_slot   wall_s=0.1998 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_dropped_record_state    wall_s=0.1983 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_dropped_record_keys     wall_s=0.0310 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_stale_state             wall_s=0.0069 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_altered_state_register  wall_s=0.0064 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_key_not_in_digest       wall_s=0.0295 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_replace_not_max         wall_s=0.1972 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_com_out_equals_com_in   wall_s=0.1979 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_com_in_plus1            wall_s=0.0068 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_batch_com_plus1         wall_s=0.0290 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_salt_out_plus1          wall_s=0.2074 load1=3.95 ok=1 note=rejected by compute-witness
+  s=64     k=64    chunk=1   tamper_verify_public_com_out   wall_s=0.0068 load1=3.95 ok=1 note=verification failed
+  s=256    k=4     chunk=    compile_op                     constraints=6401 wall_s=1.9691 peak_rss_mb=198.8633 bytes=5695647 load1=3.95 ok=1 note=r1cs_bytes=4095468
+  s=256    k=4     chunk=    compile_helper                 constraints=6409 wall_s=2.0239 peak_rss_mb=198.9688 bytes=5699895 load1=3.95 ok=1 note=r1cs_bytes=4098652
+  s=256    k=4     chunk=    setup                          constraints=6401 wall_s=0.0732 peak_rss_mb=36.5117 bytes=2572848 load1=3.95 note=vk_bytes=1917 concurrent_zokrates=compile,compute-witness
+  s=256    k=4     chunk=0   witness_helper                 wall_s=0.0314 peak_rss_mb=17.7852 load1=3.95 ok=1 note=helper state+commitments == native reference (5 ms incl. Python Poseidon)
+  s=256    k=4     chunk=0   witness_op                     constraints=6401 wall_s=0.0280 peak_rss_mb=15.2891 load1=3.95 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=4     chunk=0   prove                          constraints=6401 wall_s=0.0768 peak_rss_mb=41.2070 bytes=997 load1=3.95 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=256    k=4     chunk=0   verify                         wall_s=0.0065 peak_rss_mb=11.5586 load1=3.95 ok=1 note=CLI, includes process start
+  s=256    k=4     chunk=1   witness_helper                 wall_s=0.0277 peak_rss_mb=18.4570 load1=3.95 ok=1 note=helper state+commitments == native reference (5 ms incl. Python Poseidon)
+  s=256    k=4     chunk=1   witness_op                     constraints=6401 wall_s=0.0275 peak_rss_mb=16.2930 load1=3.95 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=4     chunk=1   prove                          constraints=6401 wall_s=0.0864 peak_rss_mb=39.5039 bytes=997 load1=3.95 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=256    k=4     chunk=1   verify                         wall_s=0.0060 peak_rss_mb=11.5156 load1=3.95 ok=1 note=CLI, includes process start
+  s=256    k=4     chunk=2   witness_helper                 wall_s=0.0316 peak_rss_mb=18.7930 load1=3.95 ok=1 note=helper state+commitments == native reference (4 ms incl. Python Poseidon)
+  s=256    k=4     chunk=2   witness_op                     constraints=6401 wall_s=0.0266 peak_rss_mb=15.3008 load1=3.95 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=4     chunk=2   prove                          constraints=6401 wall_s=0.0751 peak_rss_mb=40.2969 bytes=997 load1=3.95 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=256    k=4     chunk=2   verify                         wall_s=0.0063 peak_rss_mb=11.5195 load1=3.95 ok=1 note=CLI, includes process start
+  s=256    k=4     chunk=3   witness_helper                 wall_s=0.0284 peak_rss_mb=18.6836 load1=3.95 ok=1 note=helper state+commitments == native reference (4 ms incl. Python Poseidon)
+  s=256    k=4     chunk=3   witness_op                     constraints=6401 wall_s=0.0265 peak_rss_mb=16.7891 load1=3.95 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=4     chunk=3   prove                          constraints=6401 wall_s=0.0770 peak_rss_mb=40.3203 bytes=997 load1=3.95 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=256    k=4     chunk=3   verify                         wall_s=0.0053 peak_rss_mb=11.4766 load1=3.95 ok=1 note=CLI, includes process start
+  s=256    k=4     chunk=    chain                          constraints=6401 load1=3.95 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.3 vs 13 distinct keys (+2.6%)
+  s=256    k=4     chunk=1   tamper_wrong_update_one_slot   wall_s=0.0267 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_dropped_record_state    wall_s=0.0262 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_dropped_record_keys     wall_s=0.0093 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_stale_state             wall_s=0.0083 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_altered_state_register  wall_s=0.0082 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_key_not_in_digest       wall_s=0.0096 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_register_decreased      wall_s=0.0257 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_com_out_equals_com_in   wall_s=0.0252 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_com_in_plus1            wall_s=0.0094 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_batch_com_plus1         wall_s=0.0098 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_salt_out_plus1          wall_s=0.0254 load1=3.95 ok=1 note=rejected by compute-witness
+  s=256    k=4     chunk=1   tamper_verify_public_com_out   wall_s=0.0056 load1=3.95 ok=1 note=verification failed
+  s=256    k=16    chunk=    compile_op                     constraints=20114 wall_s=4.1857 peak_rss_mb=367.5898 bytes=15481475 load1=3.96 ok=1 note=r1cs_bytes=10512696
+  s=256    k=16    chunk=    compile_helper                 constraints=20122 wall_s=4.1488 peak_rss_mb=369.3594 bytes=15493503 load1=3.96 ok=1 note=r1cs_bytes=10522360
+  s=256    k=16    chunk=    setup                          constraints=20114 wall_s=0.1884 peak_rss_mb=77.0625 bytes=8522352 load1=6.44 note=vk_bytes=1917 concurrent_zokrates=compile,compile
+  s=256    k=16    chunk=0   witness_helper                 wall_s=0.0703 peak_rss_mb=22.8164 load1=6.44 ok=1 note=helper state+commitments == native reference (8 ms incl. Python Poseidon)
+  s=256    k=16    chunk=0   witness_op                     constraints=20114 wall_s=0.0647 peak_rss_mb=18.3750 load1=6.44 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=16    chunk=0   prove                          constraints=20114 wall_s=0.2075 peak_rss_mb=89.0508 bytes=997 load1=6.44 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=256    k=16    chunk=0   verify                         wall_s=0.0080 peak_rss_mb=11.5391 load1=6.44 ok=1 note=CLI, includes process start
+  s=256    k=16    chunk=1   witness_helper                 wall_s=0.0760 peak_rss_mb=20.6641 load1=6.44 ok=1 note=helper state+commitments == native reference (9 ms incl. Python Poseidon)
+  s=256    k=16    chunk=1   witness_op                     constraints=20114 wall_s=0.0637 peak_rss_mb=17.2695 load1=6.44 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=16    chunk=1   prove                          constraints=20114 wall_s=0.2163 peak_rss_mb=89.8516 bytes=997 load1=6.44 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=256    k=16    chunk=1   verify                         wall_s=0.0070 peak_rss_mb=10.5430 load1=6.44 ok=1 note=CLI, includes process start
+  s=256    k=16    chunk=2   witness_helper                 wall_s=0.0713 peak_rss_mb=22.2930 load1=6.44 ok=1 note=helper state+commitments == native reference (9 ms incl. Python Poseidon)
+  s=256    k=16    chunk=2   witness_op                     constraints=20114 wall_s=0.0670 peak_rss_mb=17.8047 load1=6.44 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=16    chunk=2   prove                          constraints=20114 wall_s=0.2197 peak_rss_mb=90.4805 bytes=997 load1=6.44 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=256    k=16    chunk=2   verify                         wall_s=0.0144 peak_rss_mb=11.5391 load1=6.44 ok=1 note=CLI, includes process start
+  s=256    k=16    chunk=3   witness_helper                 wall_s=0.0732 peak_rss_mb=21.2578 load1=6.44 ok=1 note=helper state+commitments == native reference (9 ms incl. Python Poseidon)
+  s=256    k=16    chunk=3   witness_op                     constraints=20114 wall_s=0.0648 peak_rss_mb=17.8516 load1=6.44 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=16    chunk=3   prove                          constraints=20114 wall_s=0.1979 peak_rss_mb=90.1445 bytes=997 load1=6.44 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=256    k=16    chunk=3   verify                         wall_s=0.0066 peak_rss_mb=10.9883 load1=6.44 ok=1 note=CLI, includes process start
+  s=256    k=16    chunk=    chain                          constraints=20114 load1=6.44 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 47.1 vs 46 distinct keys (+2.3%)
+  s=256    k=16    chunk=1   tamper_wrong_update_one_slot   wall_s=0.0633 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_dropped_record_state    wall_s=0.0616 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_dropped_record_keys     wall_s=0.0161 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_stale_state             wall_s=0.0095 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_altered_state_register  wall_s=0.0093 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_key_not_in_digest       wall_s=0.0158 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_replace_not_max         wall_s=0.0637 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_com_out_equals_com_in   wall_s=0.0621 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_com_in_plus1            wall_s=0.0081 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_batch_com_plus1         wall_s=0.0151 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_salt_out_plus1          wall_s=0.0662 load1=6.44 ok=1 note=rejected by compute-witness
+  s=256    k=16    chunk=1   tamper_verify_public_com_out   wall_s=0.0081 load1=6.44 ok=1 note=verification failed
+  s=256    k=64    chunk=    compile_op                     constraints=73949 wall_s=12.4225 peak_rss_mb=955.0273 bytes=55772386 load1=6.22 ok=1 note=r1cs_bytes=36588300
+  s=256    k=64    chunk=    compile_helper                 constraints=73957 wall_s=12.6755 peak_rss_mb=955.0117 bytes=55816339 load1=5.80 ok=1 note=r1cs_bytes=36623884
+  s=256    k=64    chunk=    setup                          constraints=73949 wall_s=0.6609 peak_rss_mb=244.1406 bytes=31994928 load1=5.80 note=vk_bytes=1917 concurrent_zokrates=compile,compute-witness
+  s=256    k=64    chunk=0   witness_helper                 wall_s=0.2469 peak_rss_mb=35.1133 load1=5.80 ok=1 note=helper state+commitments == native reference (24 ms incl. Python Poseidon)
+  s=256    k=64    chunk=0   witness_op                     constraints=73949 wall_s=0.2203 peak_rss_mb=20.3203 load1=5.80 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=64    chunk=0   prove                          constraints=73949 wall_s=0.6683 peak_rss_mb=277.5977 bytes=997 load1=5.80 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=256    k=64    chunk=0   verify                         wall_s=0.0071 peak_rss_mb=11.4258 load1=5.80 ok=1 note=CLI, includes process start
+  s=256    k=64    chunk=1   witness_helper                 wall_s=0.2701 peak_rss_mb=34.3867 load1=5.80 ok=1 note=helper state+commitments == native reference (25 ms incl. Python Poseidon)
+  s=256    k=64    chunk=1   witness_op                     constraints=73949 wall_s=0.2511 peak_rss_mb=20.7539 load1=5.66 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=64    chunk=1   prove                          constraints=73949 wall_s=0.7230 peak_rss_mb=277.7344 bytes=997 load1=5.66 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=256    k=64    chunk=1   verify                         wall_s=0.0079 peak_rss_mb=11.0234 load1=5.66 ok=1 note=CLI, includes process start
+  s=256    k=64    chunk=2   witness_helper                 wall_s=0.2475 peak_rss_mb=36.2578 load1=5.66 ok=1 note=helper state+commitments == native reference (25 ms incl. Python Poseidon)
+  s=256    k=64    chunk=2   witness_op                     constraints=73949 wall_s=0.2212 peak_rss_mb=20.7734 load1=5.66 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=64    chunk=2   prove                          constraints=73949 wall_s=0.6670 peak_rss_mb=278.3750 bytes=997 load1=5.66 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=256    k=64    chunk=2   verify                         wall_s=0.0075 peak_rss_mb=11.4219 load1=5.66 ok=1 note=CLI, includes process start
+  s=256    k=64    chunk=3   witness_helper                 wall_s=0.2499 peak_rss_mb=35.8125 load1=5.66 ok=1 note=helper state+commitments == native reference (27 ms incl. Python Poseidon)
+  s=256    k=64    chunk=3   witness_op                     constraints=73949 wall_s=0.2165 peak_rss_mb=21.8398 load1=5.66 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=256    k=64    chunk=3   prove                          constraints=73949 wall_s=0.7034 peak_rss_mb=278.2344 bytes=997 load1=5.66 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=256    k=64    chunk=3   verify                         wall_s=0.0068 peak_rss_mb=12.1797 load1=5.66 ok=1 note=CLI, includes process start
+  s=256    k=64    chunk=    chain                          constraints=73949 load1=5.66 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 173.5 vs 174 distinct keys (-0.3%)
+  s=256    k=64    chunk=1   tamper_wrong_update_one_slot   wall_s=0.2119 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_dropped_record_state    wall_s=0.2073 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_dropped_record_keys     wall_s=0.0294 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_stale_state             wall_s=0.0083 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_altered_state_register  wall_s=0.0088 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_key_not_in_digest       wall_s=0.0293 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_replace_not_max         wall_s=0.2096 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_com_out_equals_com_in   wall_s=0.2069 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_com_in_plus1            wall_s=0.0086 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_batch_com_plus1         wall_s=0.0347 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_salt_out_plus1          wall_s=0.2413 load1=5.66 ok=1 note=rejected by compute-witness
+  s=256    k=64    chunk=1   tamper_verify_public_com_out   wall_s=0.0074 load1=5.66 ok=1 note=verification failed
+  s=1024   k=4     chunk=    compile_op                     constraints=10119 wall_s=4.3394 peak_rss_mb=428.5898 bytes=10895501 load1=5.61 ok=1 note=r1cs_bytes=8065652
+  s=1024   k=4     chunk=    compile_helper                 constraints=10151 wall_s=4.2728 peak_rss_mb=427.7461 bytes=10914138 load1=5.48 ok=1 note=r1cs_bytes=8078820
+  s=1024   k=4     chunk=    setup                          constraints=10119 wall_s=0.1221 peak_rss_mb=54.7188 bytes=4294576 load1=5.48 note=vk_bytes=1917 concurrent_zokrates=compile
+  s=1024   k=4     chunk=0   witness_helper                 wall_s=0.0474 peak_rss_mb=18.4062 load1=5.48 ok=1 note=helper state+commitments == native reference (11 ms incl. Python Poseidon)
+  s=1024   k=4     chunk=0   witness_op                     constraints=10119 wall_s=0.0422 peak_rss_mb=16.2891 load1=5.48 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=4     chunk=0   prove                          constraints=10119 wall_s=0.1459 peak_rss_mb=61.0898 bytes=997 load1=5.48 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=1024   k=4     chunk=0   verify                         wall_s=0.0063 peak_rss_mb=11.3984 load1=5.48 ok=1 note=CLI, includes process start
+  s=1024   k=4     chunk=1   witness_helper                 wall_s=0.0535 peak_rss_mb=18.2891 load1=5.48 ok=1 note=helper state+commitments == native reference (11 ms incl. Python Poseidon)
+  s=1024   k=4     chunk=1   witness_op                     constraints=10119 wall_s=0.0470 peak_rss_mb=15.9531 load1=5.48 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=4     chunk=1   prove                          constraints=10119 wall_s=0.1437 peak_rss_mb=61.2539 bytes=997 load1=5.48 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=1024   k=4     chunk=1   verify                         wall_s=0.0063 peak_rss_mb=11.4453 load1=5.48 ok=1 note=CLI, includes process start
+  s=1024   k=4     chunk=2   witness_helper                 wall_s=0.0558 peak_rss_mb=18.5898 load1=5.48 ok=1 note=helper state+commitments == native reference (11 ms incl. Python Poseidon)
+  s=1024   k=4     chunk=2   witness_op                     constraints=10119 wall_s=0.0499 peak_rss_mb=16.9570 load1=5.48 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=4     chunk=2   prove                          constraints=10119 wall_s=0.1612 peak_rss_mb=61.7422 bytes=997 load1=5.48 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=1024   k=4     chunk=2   verify                         wall_s=0.0065 peak_rss_mb=11.4375 load1=5.48 ok=1 note=CLI, includes process start
+  s=1024   k=4     chunk=3   witness_helper                 wall_s=0.0549 peak_rss_mb=18.9375 load1=5.48 ok=1 note=helper state+commitments == native reference (12 ms incl. Python Poseidon)
+  s=1024   k=4     chunk=3   witness_op                     constraints=10119 wall_s=0.0514 peak_rss_mb=16.3320 load1=5.48 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=4     chunk=3   prove                          constraints=10119 wall_s=0.1427 peak_rss_mb=61.1562 bytes=997 load1=5.48 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness
+  s=1024   k=4     chunk=3   verify                         wall_s=0.0070 peak_rss_mb=10.9844 load1=5.48 ok=1 note=CLI, includes process start
+  s=1024   k=4     chunk=    chain                          constraints=10119 load1=5.48 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.1 vs 13 distinct keys (+0.6%)
+  s=1024   k=4     chunk=1   tamper_wrong_update_one_slot   wall_s=0.0488 load1=5.48 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_dropped_record_state    wall_s=0.0490 load1=5.48 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_dropped_record_keys     wall_s=0.0215 load1=5.48 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_stale_state             wall_s=0.0185 load1=5.48 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_altered_state_register  wall_s=0.0191 load1=5.48 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_key_not_in_digest       wall_s=0.0208 load1=5.36 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_register_decreased      wall_s=0.0482 load1=5.36 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_com_out_equals_com_in   wall_s=0.0483 load1=5.36 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_com_in_plus1            wall_s=0.0186 load1=5.36 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_batch_com_plus1         wall_s=0.0197 load1=5.36 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_salt_out_plus1          wall_s=0.0486 load1=5.36 ok=1 note=rejected by compute-witness
+  s=1024   k=4     chunk=1   tamper_verify_public_com_out   wall_s=0.0060 load1=5.36 ok=1 note=verification failed
+  s=1024   k=16    chunk=    compile_op                     constraints=24384 wall_s=6.5003 peak_rss_mb=607.7695 bytes=21670029 load1=5.25 ok=1 note=r1cs_bytes=15128960
+  s=1024   k=16    chunk=    compile_helper                 constraints=24416 wall_s=6.4724 peak_rss_mb=610.0312 bytes=21721958 load1=5.31 ok=1 note=r1cs_bytes=15169344
+  s=1024   k=16    chunk=    setup                          constraints=24384 wall_s=0.2683 peak_rss_mb=97.3750 bytes=9896432 load1=5.31 note=vk_bytes=1917 concurrent_zokrates=compile,compile
+  s=1024   k=16    chunk=0   witness_helper                 wall_s=0.0923 peak_rss_mb=22.6797 load1=5.31 ok=1 note=helper state+commitments == native reference (16 ms incl. Python Poseidon)
+  s=1024   k=16    chunk=0   witness_op                     constraints=24384 wall_s=0.0911 peak_rss_mb=17.6914 load1=5.31 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=16    chunk=0   prove                          constraints=24384 wall_s=0.2624 peak_rss_mb=111.2969 bytes=997 load1=5.31 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,inspect
+  s=1024   k=16    chunk=0   verify                         wall_s=0.0080 peak_rss_mb=11.5625 load1=5.31 ok=1 note=CLI, includes process start
+  s=1024   k=16    chunk=1   witness_helper                 wall_s=0.0937 peak_rss_mb=23.1523 load1=5.31 ok=1 note=helper state+commitments == native reference (17 ms incl. Python Poseidon)
+  s=1024   k=16    chunk=1   witness_op                     constraints=24384 wall_s=0.0832 peak_rss_mb=18.3047 load1=5.31 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=16    chunk=1   prove                          constraints=24384 wall_s=0.2596 peak_rss_mb=112.3398 bytes=997 load1=5.31 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,inspect
+  s=1024   k=16    chunk=1   verify                         wall_s=0.0079 peak_rss_mb=11.6250 load1=5.31 ok=1 note=CLI, includes process start
+  s=1024   k=16    chunk=2   witness_helper                 wall_s=0.0921 peak_rss_mb=22.8594 load1=5.31 ok=1 note=helper state+commitments == native reference (15 ms incl. Python Poseidon)
+  s=1024   k=16    chunk=2   witness_op                     constraints=24384 wall_s=0.0844 peak_rss_mb=17.6328 load1=5.31 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=16    chunk=2   prove                          constraints=24384 wall_s=0.2657 peak_rss_mb=111.6367 bytes=997 load1=5.28 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,inspect
+  s=1024   k=16    chunk=2   verify                         wall_s=0.0072 peak_rss_mb=12.0586 load1=5.28 ok=1 note=CLI, includes process start
+  s=1024   k=16    chunk=3   witness_helper                 wall_s=0.0974 peak_rss_mb=22.3828 load1=5.28 ok=1 note=helper state+commitments == native reference (15 ms incl. Python Poseidon)
+  s=1024   k=16    chunk=3   witness_op                     constraints=24384 wall_s=0.0845 peak_rss_mb=18.4375 load1=5.28 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=16    chunk=3   prove                          constraints=24384 wall_s=0.2657 peak_rss_mb=114.8672 bytes=997 load1=5.28 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=1024   k=16    chunk=3   verify                         wall_s=0.0101 peak_rss_mb=11.1367 load1=5.28 ok=1 note=CLI, includes process start
+  s=1024   k=16    chunk=    chain                          constraints=24384 load1=5.28 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 47.1 vs 46 distinct keys (+2.3%)
+  s=1024   k=16    chunk=1   tamper_wrong_update_one_slot   wall_s=0.0885 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_dropped_record_state    wall_s=0.0822 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_dropped_record_keys     wall_s=0.0238 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_stale_state             wall_s=0.0169 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_altered_state_register  wall_s=0.0169 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_key_not_in_digest       wall_s=0.0227 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_register_decreased      wall_s=0.0809 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_com_out_equals_com_in   wall_s=0.0849 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_com_in_plus1            wall_s=0.0168 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_batch_com_plus1         wall_s=0.0234 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_salt_out_plus1          wall_s=0.0828 load1=5.28 ok=1 note=rejected by compute-witness
+  s=1024   k=16    chunk=1   tamper_verify_public_com_out   wall_s=0.0062 load1=5.28 ok=1 note=verification failed
+  s=1024   k=64    chunk=    compile_op                     constraints=80427 wall_s=15.5279 peak_rss_mb=1208.5156 bytes=72914736 load1=5.22 ok=1 note=r1cs_bytes=49802324
+  s=1024   k=64    chunk=    compile_helper                 constraints=80459 wall_s=15.7708 peak_rss_mb=1208.8906 bytes=73099794 load1=9.25 ok=1 note=r1cs_bytes=49951572
+  s=1024   k=64    chunk=    setup                          constraints=80427 wall_s=0.7715 peak_rss_mb=288.1992 bytes=34075568 load1=8.67 note=vk_bytes=1917 waited=4s concurrent_zokrates=compute-witness
+  s=1024   k=64    chunk=0   witness_helper                 wall_s=0.3521 peak_rss_mb=37.8867 load1=8.67 ok=1 note=helper state+commitments == native reference (36 ms incl. Python Poseidon)
+  s=1024   k=64    chunk=0   witness_op                     constraints=80427 wall_s=0.3171 peak_rss_mb=21.8281 load1=8.67 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=64    chunk=0   prove                          constraints=80427 wall_s=0.8720 peak_rss_mb=331.1250 bytes=997 load1=8.67 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out)
+  s=1024   k=64    chunk=0   verify                         wall_s=0.0078 peak_rss_mb=10.9141 load1=8.67 ok=1 note=CLI, includes process start
+  s=1024   k=64    chunk=1   witness_helper                 wall_s=0.3579 peak_rss_mb=37.2891 load1=8.14 ok=1 note=helper state+commitments == native reference (36 ms incl. Python Poseidon)
+  s=1024   k=64    chunk=1   witness_op                     constraints=80427 wall_s=0.3246 peak_rss_mb=22.2930 load1=8.14 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=64    chunk=1   prove                          constraints=80427 wall_s=0.8422 peak_rss_mb=332.3711 bytes=997 load1=8.14 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out)
+  s=1024   k=64    chunk=1   verify                         wall_s=0.0077 peak_rss_mb=11.0742 load1=8.14 ok=1 note=CLI, includes process start
+  s=1024   k=64    chunk=2   witness_helper                 wall_s=0.2992 peak_rss_mb=37.8086 load1=8.14 ok=1 note=helper state+commitments == native reference (31 ms incl. Python Poseidon)
+  s=1024   k=64    chunk=2   witness_op                     constraints=80427 wall_s=0.3171 peak_rss_mb=21.7266 load1=8.14 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=64    chunk=2   prove                          constraints=80427 wall_s=0.8186 peak_rss_mb=332.7148 bytes=997 load1=8.14 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out)
+  s=1024   k=64    chunk=2   verify                         wall_s=0.0080 peak_rss_mb=11.0742 load1=8.14 ok=1 note=CLI, includes process start
+  s=1024   k=64    chunk=3   witness_helper                 wall_s=0.3005 peak_rss_mb=37.9062 load1=8.14 ok=1 note=helper state+commitments == native reference (33 ms incl. Python Poseidon)
+  s=1024   k=64    chunk=3   witness_op                     constraints=80427 wall_s=0.2714 peak_rss_mb=21.8594 load1=8.14 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=1024   k=64    chunk=3   prove                          constraints=80427 wall_s=0.7841 peak_rss_mb=332.7930 bytes=997 load1=8.14 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out)
+  s=1024   k=64    chunk=3   verify                         wall_s=0.0081 peak_rss_mb=11.0898 load1=8.14 ok=1 note=CLI, includes process start
+  s=1024   k=64    chunk=    chain                          constraints=80427 load1=8.14 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 169.2 vs 174 distinct keys (-2.7%)
+  s=1024   k=64    chunk=1   tamper_wrong_update_one_slot   wall_s=0.2725 load1=8.14 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_dropped_record_state    wall_s=0.2657 load1=7.73 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_dropped_record_keys     wall_s=0.0397 load1=7.73 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_stale_state             wall_s=0.0174 load1=7.73 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_altered_state_register  wall_s=0.0175 load1=7.73 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_key_not_in_digest       wall_s=0.0400 load1=7.73 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_replace_not_max         wall_s=0.2635 load1=7.73 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_com_out_equals_com_in   wall_s=0.2673 load1=7.73 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_com_in_plus1            wall_s=0.0177 load1=7.73 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_batch_com_plus1         wall_s=0.0404 load1=7.73 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_salt_out_plus1          wall_s=0.2654 load1=7.73 ok=1 note=rejected by compute-witness
+  s=1024   k=64    chunk=1   tamper_verify_public_com_out   wall_s=0.0063 load1=7.73 ok=1 note=verification failed
+  s=4096   k=4     chunk=    compile_op                     constraints=24337 wall_s=13.1187 peak_rss_mb=1222.8477 bytes=31172572 load1=7.00 ok=1 note=r1cs_bytes=23190700
+  s=4096   k=4     chunk=    compile_helper                 constraints=24465 wall_s=13.2696 peak_rss_mb=1225.6445 bytes=31251744 load1=6.11 ok=1 note=r1cs_bytes=23243804
+  s=4096   k=4     chunk=    setup                          constraints=24337 wall_s=0.2939 peak_rss_mb=126.6406 bytes=9923632 load1=6.11 note=vk_bytes=1917 concurrent_zokrates=compute-witness
+  s=4096   k=4     chunk=0   witness_helper                 wall_s=0.1359 peak_rss_mb=22.8828 load1=6.11 ok=1 note=helper state+commitments == native reference (36 ms incl. Python Poseidon)
+  s=4096   k=4     chunk=0   witness_op                     constraints=24337 wall_s=0.1126 peak_rss_mb=16.3438 load1=6.11 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=4     chunk=0   prove                          constraints=24337 wall_s=0.3236 peak_rss_mb=142.5078 bytes=997 load1=6.11 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out)
+  s=4096   k=4     chunk=0   verify                         wall_s=0.0060 peak_rss_mb=11.5625 load1=6.11 ok=1 note=CLI, includes process start
+  s=4096   k=4     chunk=1   witness_helper                 wall_s=0.1258 peak_rss_mb=23.2734 load1=6.11 ok=1 note=helper state+commitments == native reference (34 ms incl. Python Poseidon)
+  s=4096   k=4     chunk=1   witness_op                     constraints=24337 wall_s=0.1125 peak_rss_mb=16.8203 load1=6.11 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=4     chunk=1   prove                          constraints=24337 wall_s=0.3352 peak_rss_mb=140.0820 bytes=997 load1=6.11 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness
+  s=4096   k=4     chunk=1   verify                         wall_s=0.0071 peak_rss_mb=12.0898 load1=6.11 ok=1 note=CLI, includes process start
+  s=4096   k=4     chunk=2   witness_helper                 wall_s=0.1247 peak_rss_mb=22.3047 load1=6.11 ok=1 note=helper state+commitments == native reference (34 ms incl. Python Poseidon)
+  s=4096   k=4     chunk=2   witness_op                     constraints=24337 wall_s=0.1152 peak_rss_mb=18.3281 load1=6.11 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=4     chunk=2   prove                          constraints=24337 wall_s=0.3272 peak_rss_mb=140.9727 bytes=997 load1=6.11 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness
+  s=4096   k=4     chunk=2   verify                         wall_s=0.0068 peak_rss_mb=11.5195 load1=6.11 ok=1 note=CLI, includes process start
+  s=4096   k=4     chunk=3   witness_helper                 wall_s=0.1186 peak_rss_mb=23.2773 load1=8.27 ok=1 note=helper state+commitments == native reference (34 ms incl. Python Poseidon)
+  s=4096   k=4     chunk=3   witness_op                     constraints=24337 wall_s=0.1098 peak_rss_mb=17.7344 load1=8.27 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=4     chunk=3   prove                          constraints=24337 wall_s=0.3194 peak_rss_mb=140.3477 bytes=997 load1=8.27 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness
+  s=4096   k=4     chunk=3   verify                         wall_s=0.0065 peak_rss_mb=10.9570 load1=8.27 ok=1 note=CLI, includes process start
+  s=4096   k=4     chunk=    chain                          constraints=24337 load1=8.27 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.0 vs 13 distinct keys (+0.2%)
+  s=4096   k=4     chunk=1   tamper_wrong_update_one_slot   wall_s=0.1110 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_dropped_record_state    wall_s=0.1086 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_dropped_record_keys     wall_s=0.0501 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_stale_state             wall_s=0.0500 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_altered_state_register  wall_s=0.0507 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_key_not_in_digest       wall_s=0.0577 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_register_decreased      wall_s=0.1240 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_com_out_equals_com_in   wall_s=0.1255 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_com_in_plus1            wall_s=0.0570 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_batch_com_plus1         wall_s=0.0581 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_salt_out_plus1          wall_s=0.1246 load1=8.27 ok=1 note=rejected by compute-witness
+  s=4096   k=4     chunk=1   tamper_verify_public_com_out   wall_s=0.0074 load1=8.27 ok=1 note=verification failed
+  s=4096   k=16    chunk=    compile_op                     constraints=40882 wall_s=16.9482 peak_rss_mb=1439.2188 bytes=45499297 load1=9.50 ok=1 note=r1cs_bytes=32909752
+  s=4096   k=16    chunk=    compile_helper                 constraints=41010 wall_s=16.2109 peak_rss_mb=1439.7305 bytes=45713075 load1=7.86 ok=1 note=r1cs_bytes=33073016
+  s=4096   k=16    chunk=    setup                          constraints=40882 wall_s=0.4638 peak_rss_mb=182.3242 bytes=17303664 load1=7.86 note=vk_bytes=1917 concurrent_zokrates=compile
+  s=4096   k=16    chunk=0   witness_helper                 wall_s=0.1771 peak_rss_mb=25.7344 load1=7.86 ok=1 note=helper state+commitments == native reference (39 ms incl. Python Poseidon)
+  s=4096   k=16    chunk=0   witness_op                     constraints=40882 wall_s=0.1642 peak_rss_mb=19.1055 load1=7.86 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=16    chunk=0   prove                          constraints=40882 wall_s=0.5188 peak_rss_mb=216.5117 bytes=997 load1=7.86 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=4096   k=16    chunk=0   verify                         wall_s=0.0079 peak_rss_mb=11.5703 load1=7.86 ok=1 note=CLI, includes process start
+  s=4096   k=16    chunk=1   witness_helper                 wall_s=0.1845 peak_rss_mb=27.7266 load1=7.86 ok=1 note=helper state+commitments == native reference (40 ms incl. Python Poseidon)
+  s=4096   k=16    chunk=1   witness_op                     constraints=40882 wall_s=0.1638 peak_rss_mb=18.3516 load1=7.86 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=16    chunk=1   prove                          constraints=40882 wall_s=0.4668 peak_rss_mb=212.0000 bytes=997 load1=7.86 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=4096   k=16    chunk=1   verify                         wall_s=0.0072 peak_rss_mb=11.5000 load1=7.86 ok=1 note=CLI, includes process start
+  s=4096   k=16    chunk=2   witness_helper                 wall_s=0.1814 peak_rss_mb=28.3477 load1=7.86 ok=1 note=helper state+commitments == native reference (42 ms incl. Python Poseidon)
+  s=4096   k=16    chunk=2   witness_op                     constraints=40882 wall_s=0.1672 peak_rss_mb=18.3047 load1=7.86 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=16    chunk=2   prove                          constraints=40882 wall_s=0.5088 peak_rss_mb=210.4805 bytes=997 load1=7.86 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=4096   k=16    chunk=2   verify                         wall_s=0.0076 peak_rss_mb=12.0156 load1=7.86 ok=1 note=CLI, includes process start
+  s=4096   k=16    chunk=3   witness_helper                 wall_s=0.1819 peak_rss_mb=27.3828 load1=7.86 ok=1 note=helper state+commitments == native reference (38 ms incl. Python Poseidon)
+  s=4096   k=16    chunk=3   witness_op                     constraints=40882 wall_s=0.1631 peak_rss_mb=19.3125 load1=7.86 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=16    chunk=3   prove                          constraints=40882 wall_s=0.4692 peak_rss_mb=211.7344 bytes=997 load1=7.86 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=inspect
+  s=4096   k=16    chunk=3   verify                         wall_s=0.0076 peak_rss_mb=11.0898 load1=7.86 ok=1 note=CLI, includes process start
+  s=4096   k=16    chunk=    chain                          constraints=40882 load1=7.86 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 46.3 vs 46 distinct keys (+0.6%)
+  s=4096   k=16    chunk=1   tamper_wrong_update_one_slot   wall_s=0.1652 load1=7.86 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_dropped_record_state    wall_s=0.1637 load1=7.86 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_dropped_record_keys     wall_s=0.0574 load1=7.86 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_stale_state             wall_s=0.0498 load1=7.86 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_altered_state_register  wall_s=0.0513 load1=7.86 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_key_not_in_digest       wall_s=0.0559 load1=7.47 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_register_decreased      wall_s=0.1716 load1=7.47 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_com_out_equals_com_in   wall_s=0.1875 load1=7.47 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_com_in_plus1            wall_s=0.0582 load1=7.47 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_batch_com_plus1         wall_s=0.0640 load1=7.47 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_salt_out_plus1          wall_s=0.1657 load1=7.47 ok=1 note=rejected by compute-witness
+  s=4096   k=16    chunk=1   tamper_verify_public_com_out   wall_s=0.0065 load1=7.47 ok=1 note=verification failed
+  s=4096   k=64    chunk=    compile_op                     constraints=106045 wall_s=28.2555 peak_rss_mb=2151.6367 bytes=141195125 load1=6.49 ok=1 note=r1cs_bytes=102881932
+  s=4096   k=64    chunk=    compile_helper                 constraints=106173 wall_s=27.2453 peak_rss_mb=2149.8047 bytes=141947217 load1=5.56 ok=1 note=r1cs_bytes=103485836
+  s=4096   k=64    chunk=    setup                          constraints=106045 wall_s=1.1744 peak_rss_mb=496.3164 bytes=42304048 load1=5.56 note=vk_bytes=1917 concurrent_zokrates=compile,inspect
+  s=4096   k=64    chunk=0   witness_helper                 wall_s=0.5327 peak_rss_mb=44.6914 load1=5.56 ok=1 note=helper state+commitments == native reference (56 ms incl. Python Poseidon)
+  s=4096   k=64    chunk=0   witness_op                     constraints=106045 wall_s=0.5014 peak_rss_mb=23.7500 load1=5.56 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=64    chunk=0   prove                          constraints=106045 wall_s=1.1235 peak_rss_mb=549.8164 bytes=997 load1=5.36 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=4096   k=64    chunk=0   verify                         wall_s=0.0078 peak_rss_mb=11.5469 load1=5.36 ok=1 note=CLI, includes process start
+  s=4096   k=64    chunk=1   witness_helper                 wall_s=0.5462 peak_rss_mb=44.8828 load1=5.36 ok=1 note=helper state+commitments == native reference (53 ms incl. Python Poseidon)
+  s=4096   k=64    chunk=1   witness_op                     constraints=106045 wall_s=0.5030 peak_rss_mb=23.9961 load1=5.36 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=64    chunk=1   prove                          constraints=106045 wall_s=1.1377 peak_rss_mb=550.2070 bytes=997 load1=5.36 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=4096   k=64    chunk=1   verify                         wall_s=0.0076 peak_rss_mb=12.0117 load1=5.36 ok=1 note=CLI, includes process start
+  s=4096   k=64    chunk=2   witness_helper                 wall_s=0.5369 peak_rss_mb=45.0977 load1=5.36 ok=1 note=helper state+commitments == native reference (55 ms incl. Python Poseidon)
+  s=4096   k=64    chunk=2   witness_op                     constraints=106045 wall_s=0.5035 peak_rss_mb=24.2305 load1=5.36 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=64    chunk=2   prove                          constraints=106045 wall_s=1.1516 peak_rss_mb=549.2969 bytes=997 load1=5.17 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=4096   k=64    chunk=2   verify                         wall_s=0.0072 peak_rss_mb=11.6367 load1=5.17 ok=1 note=CLI, includes process start
+  s=4096   k=64    chunk=3   witness_helper                 wall_s=0.5372 peak_rss_mb=45.0547 load1=5.17 ok=1 note=helper state+commitments == native reference (57 ms incl. Python Poseidon)
+  s=4096   k=64    chunk=3   witness_op                     constraints=106045 wall_s=0.5132 peak_rss_mb=24.4102 load1=5.17 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=4096   k=64    chunk=3   prove                          constraints=106045 wall_s=1.1249 peak_rss_mb=548.8594 bytes=997 load1=5.17 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile
+  s=4096   k=64    chunk=3   verify                         wall_s=0.0086 peak_rss_mb=10.5156 load1=5.17 ok=1 note=CLI, includes process start
+  s=4096   k=64    chunk=    chain                          constraints=106045 load1=5.17 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 175.7 vs 174 distinct keys (+1.0%)
+  s=4096   k=64    chunk=1   tamper_wrong_update_one_slot   wall_s=0.4898 load1=5.17 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_dropped_record_state    wall_s=0.4901 load1=5.17 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_dropped_record_keys     wall_s=0.0690 load1=5.17 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_stale_state             wall_s=0.0508 load1=5.17 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_altered_state_register  wall_s=0.0497 load1=5.17 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_key_not_in_digest       wall_s=0.0705 load1=5.17 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_register_decreased      wall_s=0.4912 load1=5.17 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_com_out_equals_com_in   wall_s=0.4909 load1=4.99 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_com_in_plus1            wall_s=0.0543 load1=4.99 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_batch_com_plus1         wall_s=0.0725 load1=4.99 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_salt_out_plus1          wall_s=0.4874 load1=4.99 ok=1 note=rejected by compute-witness
+  s=4096   k=64    chunk=1   tamper_verify_public_com_out   wall_s=0.0072 load1=4.99 ok=1 note=verification failed
+summary: s=16 k=4:ok, s=16 k=16:ok, s=16 k=64:ok, s=64 k=4:ok, s=64 k=16:ok, s=64 k=64:ok, s=256 k=4:ok, s=256 k=16:ok, s=256 k=64:ok, s=1024 k=4:ok, s=1024 k=16:ok, s=1024 k=64:ok, s=4096 k=4:ok, s=4096 k=16:ok, s=4096 k=64:ok
+done -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_hll.csv

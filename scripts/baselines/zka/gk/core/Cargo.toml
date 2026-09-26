@@ -1,0 +1,20 @@
+[package]
+name = "gk-zka-core"
+version = "0.1.0"
+edition = "2021"
+
+# Same dependency set and features as zk-Analytics' aggregator-core
+# (aggregator/core/Cargo.toml @ d4a5a9a), plus their querier-core for MIN_SUPPORT.
+# No Poseidon, no sorting certificates, no memory checking: plain Rust.
+[dependencies]
+rust_crypto = { package = "sha2", version = "0.10", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+hashbrown = { version = "0.14", default-features = false, features = ["ahash", "inline-more", "alloc"] }
+risc0-zkvm = { version = "3", default-features = false }
+zkvm-common = { path = "../../.zka/zkvm-common", default-features = false }
+aggregator-core = { path = "../../.zka/aggregator/core", default-features = false }
+querier-core = { path = "../../.zka/querier/core", default-features = false }
+
+[features]
+default = ["std"]
+std = ["serde/std", "zkvm-common/std", "aggregator-core/std", "querier-core/std"]

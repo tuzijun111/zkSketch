@@ -1,0 +1,17 @@
+[package]
+name = "gk-host"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "gk"
+path = "src/main.rs"
+
+[dependencies]
+gk-zka-core = { path = "../core" }
+gk-methods = { path = "../methods" }
+aggregator-core = { path = "../../.zka/aggregator/core" }
+zkvm-common = { path = "../../.zka/zkvm-common" }
+risc0-zkvm = "3"
+serde = "1"
+bincode = "1"

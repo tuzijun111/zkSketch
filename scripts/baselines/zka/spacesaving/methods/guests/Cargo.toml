@@ -1,0 +1,8 @@
+# Guest workspace. Its Cargo.lock was seeded from the zk-Analytics clone's
+# Cargo.lock (d4a5a9a) and pruned by cargo, so every crate shared with their
+# guests (risc0-zkvm 3.0.5, sha2, serde, hashbrown, ...) is the same version.
+# No [profile] section: like the clone's root workspace, guests build with
+# cargo's default release profile (risc0-build passes --release).
+[workspace]
+members = ["aggr_ss", "query_ss", "aggr_ss_prof", "query_ss_prof", "aggr_ss_rootvar"]
+resolver = "2"

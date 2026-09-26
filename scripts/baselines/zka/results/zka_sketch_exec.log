@@ -1,0 +1,32 @@
+# sketch_exec.sh 20260926T175012 host=SPRL6201019991 load=[1.57 1.81 6.93] nproc=64 families=[hll ss gk] build=1 exec=1 prove=0 max_load=24 dry_run=0
+# zka=d4a5a9a90 dirty=[0] r0vm=risc0-r0vm 3.0.6 zkSketch=bf713f7a4 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# executor only: nothing is proved (pass --prove for the anchors)
+[build] HLL
+[build] SpaceSaving
+[build] GK
+[exec ] HLL -> staged in /home/binbin/zkSketch/scripts/baselines/zka/results/sketch_exec.20260926T175012.968853.tmp
+  seed_spread: n= 1 exact=   8433 guest-seed err=+0.46%  10 seeds: min -1.01% max +1.14% mean -0.09% sd 0.70%  (theory 0.81%)
+  seed_spread: n= 4 exact=  29390 guest-seed err=-0.20%  10 seeds: min -1.45% max +2.09% mean -0.06% sd 1.08%  (theory 0.81%)
+  seed_spread: n=16 exact=  87540 guest-seed err=-0.27%  10 seeds: min -1.95% max +1.27% mean -0.27% sd 1.00%  (theory 0.81%)
+  seed_spread: n=64 exact= 245620 guest-seed err=-1.82%  10 seeds: min -2.21% max +1.28% mean +0.02% sd 1.15%  (theory 0.81%)
+  seed_spread: wrote /home/binbin/zkSketch/scripts/baselines/zka/results/sketch_exec.20260926T175012.968853.tmp/zka_hll_seed_spread.csv
+  zka_hll_exec: 9 rows, all checks pass
+  zka_hll_exec_datadep: 3 rows, all checks pass
+  zka_hll_seed_spread: 40 rows, all checks pass
+  zka_hll_exec: 9/9 rows identical to the previous CSV in every column except exec_s, r0vm_peak_rss_mb
+  zka_hll_exec_datadep: 3/3 rows identical to the previous CSV in every column except exec_s, r0vm_peak_rss_mb
+  zka_hll_seed_spread: 40/40 rows identical to the previous CSV in every column except exec_s, r0vm_peak_rss_mb
+[done ] HLL: regenerated
+[exec ] SpaceSaving -> staged in /home/binbin/zkSketch/scripts/baselines/zka/results/sketch_exec.20260926T175012.968853.tmp
+  zka_ss_exec: 70 rows, all checks pass
+  zka_ss_exec: 70/70 rows identical to the previous CSV in every column except exec_s, r0vm_peak_rss_mb
+[done ] SpaceSaving: regenerated
+[exec ] GK -> staged in /home/binbin/zkSketch/scripts/baselines/zka/results/sketch_exec.20260926T175012.968853.tmp
+  zka_gk_exec: 21 rows, all checks pass
+  zka_gk_exec: 21/21 rows identical to the previous CSV in every column except exec_s, r0vm_peak_rss_mb
+  zka_gk_exec: carried over proved row (guest aggr_gk, arm proved, prove_s 414.525, records 2048): same ELF as the regenerated rows
+[done ] GK: regenerated
+# summary (20260926T175012):
+  HLL: exec=regenerated
+  SpaceSaving: exec=regenerated
+  GK: exec=regenerated

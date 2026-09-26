@@ -1,0 +1,9 @@
+[package]
+name = "hll_query"
+version = "0.1.0"
+edition = "2021"
+
+# Same risc0-zkvm feature set as their query guests (querier/methods/guest_cm).
+[dependencies]
+risc0-zkvm = { version = "3", default-features = false, features = ["std"] }
+zka-hll-core = { path = "../../core", default-features = false }

@@ -1,0 +1,559 @@
+run,system,s,k,cb,chunk,step,constraints,wall_s,peak_rss_mb,bytes,public_inputs,ok,load1,foreign,note
+20260926T184033,zokrates_ss_op,8,4,21,,compile_op,3809,1.5784,196.0312,4116043,,1,2.89,1/-,r1cs_bytes=2994684
+20260926T184033,zokrates_ss_op,8,4,21,,compile_helper,2181,1.4512,183.8633,3058275,,1,2.89,1/-,r1cs_bytes=2382588
+20260926T184033,zokrates_ss_op,8,4,21,,setup,3809,0.0540,31.8164,1462064,,1,2.89,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,8,4,21,0,native_reference,,0.0000,,,,1,2.89,,hits=0 inserts=4 evicts=0 occupied=4
+20260926T184033,zokrates_ss_op,8,4,21,0,witness_helper,,0.0164,17.3086,,,,2.89,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,4,21,0,witness_op,3809,0.0224,16.8711,,,1,2.89,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,4,21,0,prove,3809,0.0578,33.3242,997,3,1,2.90,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,4,21,0,verify,,0.0061,10.9844,,,1,2.90,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,4,21,0,tamper_verify_com_out_plus1,,0.0057,,,,1,2.90,,rejected
+20260926T184033,zokrates_ss_op,8,4,21,1,native_reference,,0.0000,,,,1,2.90,,hits=1 inserts=3 evicts=0 occupied=7
+20260926T184033,zokrates_ss_op,8,4,21,1,witness_helper,,0.0150,16.9258,,,,2.90,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,4,21,1,witness_op,3809,0.0209,17.8828,,,1,2.90,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,4,21,1,prove,3809,0.0597,32.2930,997,3,1,2.90,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,4,21,1,verify,,0.0064,11.0625,,,1,2.90,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,4,21,2,native_reference,,0.0000,,,,1,2.90,,hits=2 inserts=1 evicts=1 occupied=8
+20260926T184033,zokrates_ss_op,8,4,21,2,witness_helper,,0.0155,16.7305,,,,2.90,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,4,21,2,witness_op,3809,0.0207,17.1953,,,1,2.90,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,4,21,2,prove,3809,0.0613,33.2070,997,3,1,2.90,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,4,21,2,verify,,0.0069,11.5664,,,1,2.90,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,4,21,3,native_reference,,0.0000,,,,1,2.90,,hits=0 inserts=0 evicts=4 occupied=8
+20260926T184033,zokrates_ss_op,8,4,21,3,witness_helper,,0.0157,16.7812,,,,2.90,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,4,21,3,witness_op,3809,0.0211,16.7422,,,1,2.90,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,4,21,3,prove,3809,0.0637,32.5703,997,3,1,2.90,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,4,21,3,verify,,0.0065,11.0898,,,1,2.90,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,4,21,0,tamper_com_in_plus1,,0.0105,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,8,4,21,0,tamper_batch_com_plus1,,0.0120,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,8,4,21,0,tamper_salt_in_plus1,,0.0102,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,8,4,21,0,tamper_key_not_in_digest,,0.0115,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,8,4,21,0,tamper_dropped_record,,0.0110,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,8,4,21,1,tamper_stale_state,,0.0102,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,8,4,21,1,tamper_hit_updates_min_slot,,0.0115,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,8,4,21,0,tamper_miss_evicts_nonmin,,0.0125,,,,1,2.90,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,4,21,0,tamper_miss_tie_not_lowest,,0.0116,,,,1,2.90,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,4,21,0,tamper_selector_two_hot,,0.0118,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,8,4,21,1,tamper_alias_key_count,,0.0035,,,,1,2.90,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,4,21,1,tamper_alias_count_error,,0.0035,,,,1,2.90,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,4,21,1,tamper_alias_error_absorbs_count,,0.0034,,,,1,2.90,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,16,21,,compile_op,7874,2.4953,264.6094,7882641,,1,2.90,1/-,r1cs_bytes=5427336
+20260926T184033,zokrates_ss_op,8,16,21,,compile_helper,3234,2.1494,269.0312,4550666,,1,2.90,1/-,r1cs_bytes=3546168
+20260926T184033,zokrates_ss_op,8,16,21,,setup,7874,0.0941,44.5625,2963568,,1,2.90,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,8,16,21,0,native_reference,,0.0000,,,,1,2.90,,hits=3 inserts=8 evicts=5 occupied=8
+20260926T184033,zokrates_ss_op,8,16,21,0,witness_helper,,0.0221,17.2344,,,,2.90,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,16,21,0,witness_op,7874,0.0388,18.2383,,,1,2.90,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,16,21,0,prove,7874,0.0973,48.3320,997,3,1,2.90,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,16,21,0,verify,,0.0064,11.4570,,,1,2.90,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,16,21,0,tamper_verify_com_out_plus1,,0.0062,,,,1,2.90,,rejected
+20260926T184033,zokrates_ss_op,8,16,21,1,native_reference,,0.0000,,,,1,2.90,,hits=3 inserts=0 evicts=13 occupied=8
+20260926T184033,zokrates_ss_op,8,16,21,1,witness_helper,,0.0215,17.2461,,,,2.90,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,16,21,1,witness_op,7874,0.0361,18.9453,,,1,2.90,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,16,21,1,prove,7874,0.0959,49.1484,997,3,1,2.90,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,16,21,1,verify,,0.0072,11.4922,,,1,2.90,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,16,21,2,native_reference,,0.0000,,,,1,2.90,,hits=2 inserts=0 evicts=14 occupied=8
+20260926T184033,zokrates_ss_op,8,16,21,2,witness_helper,,0.0212,16.3281,,,,2.90,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,16,21,2,witness_op,7874,0.0364,17.7617,,,1,2.90,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,16,21,2,prove,7874,0.0990,48.7773,997,3,1,2.90,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,16,21,2,verify,,0.0063,12.1172,,,1,2.90,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,16,21,3,native_reference,,0.0000,,,,1,2.90,,hits=8 inserts=0 evicts=8 occupied=8
+20260926T184033,zokrates_ss_op,8,16,21,3,witness_helper,,0.0235,16.2188,,,,2.90,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,16,21,3,witness_op,7874,0.0383,17.7812,,,1,2.90,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,16,21,3,prove,7874,0.0853,48.3203,997,3,1,2.90,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,16,21,3,verify,,0.0069,11.4453,,,1,2.90,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,16,21,0,tamper_com_in_plus1,,0.0091,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,8,16,21,0,tamper_batch_com_plus1,,0.0176,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,8,16,21,0,tamper_salt_in_plus1,,0.0098,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,8,16,21,0,tamper_key_not_in_digest,,0.0159,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,8,16,21,0,tamper_dropped_record,,0.0167,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,8,16,21,1,tamper_stale_state,,0.0100,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,8,16,21,0,tamper_hit_updates_min_slot,,0.0195,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,8,16,21,0,tamper_miss_evicts_nonmin,,0.0169,,,,1,2.90,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,16,21,0,tamper_miss_tie_not_lowest,,0.0175,,,,1,2.90,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,16,21,0,tamper_selector_two_hot,,0.0164,,,,1,2.90,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,8,16,21,1,tamper_alias_key_count,,0.0049,,,,1,2.90,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,16,21,1,tamper_alias_count_error,,0.0038,,,,1,2.90,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,16,21,1,tamper_alias_error_absorbs_count,,0.0036,,,,1,2.90,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,64,21,,compile_op,23117,5.4768,514.4375,24301067,,1,2.91,1/-,r1cs_bytes=15668316
+20260926T184033,zokrates_ss_op,8,64,21,,compile_helper,6429,4.1125,461.3906,9106264,,1,2.92,1/-,r1cs_bytes=7051980
+20260926T184033,zokrates_ss_op,8,64,21,,setup,23117,0.2469,100.6211,9168432,,1,2.92,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,8,64,21,0,native_reference,,0.0000,,,,1,2.92,,hits=16 inserts=8 evicts=40 occupied=8
+20260926T184033,zokrates_ss_op,8,64,21,0,witness_helper,,0.0388,17.8281,,,,2.92,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,64,21,0,witness_op,23117,0.1042,19.6914,,,1,2.92,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,64,21,0,prove,23117,0.2573,113.3281,997,3,1,2.92,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,64,21,0,verify,,0.0067,11.5664,,,1,2.92,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,64,21,0,tamper_verify_com_out_plus1,,0.0071,,,,1,2.92,,rejected
+20260926T184033,zokrates_ss_op,8,64,21,1,native_reference,,0.0000,,,,1,2.92,,hits=9 inserts=0 evicts=55 occupied=8
+20260926T184033,zokrates_ss_op,8,64,21,1,witness_helper,,0.0392,17.8828,,,,2.92,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,64,21,1,witness_op,23117,0.1019,22.1953,,,1,2.92,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,64,21,1,prove,23117,0.2585,113.9258,997,3,1,2.92,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,64,21,1,verify,,0.0060,11.4102,,,1,2.92,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,64,21,2,native_reference,,0.0000,,,,1,2.92,,hits=17 inserts=0 evicts=47 occupied=8
+20260926T184033,zokrates_ss_op,8,64,21,2,witness_helper,,0.0389,17.8867,,,,2.92,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,64,21,2,witness_op,23117,0.1051,20.3594,,,1,2.92,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,64,21,2,prove,23117,0.2491,114.4609,997,3,1,2.92,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,64,21,2,verify,,0.0069,10.9688,,,1,2.92,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,64,21,3,native_reference,,0.0000,,,,1,2.92,,hits=26 inserts=0 evicts=38 occupied=8
+20260926T184033,zokrates_ss_op,8,64,21,3,witness_helper,,0.0394,17.8242,,,,2.92,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,8,64,21,3,witness_op,23117,0.1041,21.7969,,,1,2.92,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,8,64,21,3,prove,23117,0.2453,113.7070,997,3,1,2.92,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,8,64,21,3,verify,,0.0067,11.5195,,,1,2.92,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,8,64,21,0,tamper_com_in_plus1,,0.0110,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,8,64,21,0,tamper_batch_com_plus1,,0.0319,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,8,64,21,0,tamper_salt_in_plus1,,0.0108,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,8,64,21,0,tamper_key_not_in_digest,,0.0335,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,8,64,21,0,tamper_dropped_record,,0.0319,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,8,64,21,1,tamper_stale_state,,0.0095,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,8,64,21,0,tamper_hit_updates_min_slot,,0.0391,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,8,64,21,0,tamper_miss_evicts_nonmin,,0.0414,,,,1,2.92,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,64,21,0,tamper_miss_tie_not_lowest,,0.0327,,,,1,2.92,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,64,21,0,tamper_selector_two_hot,,0.0340,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,8,64,21,1,tamper_alias_key_count,,0.0045,,,,1,2.92,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,64,21,1,tamper_alias_count_error,,0.0057,,,,1,2.92,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,8,64,21,1,tamper_alias_error_absorbs_count,,0.0049,,,,1,2.92,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,4,21,,compile_op,6829,2.7332,272.2812,7238567,,1,2.93,1/-,r1cs_bytes=5209244
+20260926T184033,zokrates_ss_op,16,4,21,,compile_helper,3585,2.4781,290.8086,5055304,,1,2.93,1/-,r1cs_bytes=3937740
+20260926T184033,zokrates_ss_op,16,4,21,,setup,6829,0.0815,43.2188,2670128,,1,2.93,2/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,16,4,21,0,native_reference,,0.0000,,,,1,2.93,,hits=0 inserts=4 evicts=0 occupied=4
+20260926T184033,zokrates_ss_op,16,4,21,0,witness_helper,,0.0250,16.7812,,,,2.93,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,4,21,0,witness_op,6829,0.0347,18.3672,,,1,2.93,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,4,21,0,prove,6829,0.0913,45.2148,997,3,1,2.93,2/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,4,21,0,verify,,0.0067,11.5156,,,1,2.93,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,4,21,0,tamper_verify_com_out_plus1,,0.0066,,,,1,2.93,,rejected
+20260926T184033,zokrates_ss_op,16,4,21,1,native_reference,,0.0000,,,,1,2.93,,hits=1 inserts=3 evicts=0 occupied=7
+20260926T184033,zokrates_ss_op,16,4,21,1,witness_helper,,0.0226,17.3633,,,,2.93,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,4,21,1,witness_op,6829,0.0354,18.3320,,,1,2.93,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,4,21,1,prove,6829,0.0938,45.9453,997,3,1,2.93,2/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,4,21,1,verify,,0.0065,11.5547,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,4,21,2,native_reference,,0.0000,,,,1,3.81,,hits=2 inserts=2 evicts=0 occupied=9
+20260926T184033,zokrates_ss_op,16,4,21,2,witness_helper,,0.0244,16.2109,,,,3.81,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,4,21,2,witness_op,6829,0.0342,17.1914,,,1,3.81,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,4,21,2,prove,6829,0.0817,45.8828,997,3,1,3.81,2/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,4,21,2,verify,,0.0060,10.9492,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,4,21,3,native_reference,,0.0000,,,,1,3.81,,hits=0 inserts=4 evicts=0 occupied=13
+20260926T184033,zokrates_ss_op,16,4,21,3,witness_helper,,0.0235,17.3359,,,,3.81,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,4,21,3,witness_op,6829,0.0339,17.7617,,,1,3.81,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,4,21,3,prove,6829,0.0856,47.2930,997,3,1,3.81,2/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,4,21,3,verify,,0.0066,10.9258,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,4,21,0,tamper_com_in_plus1,,0.0148,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,16,4,21,0,tamper_batch_com_plus1,,0.0163,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,16,4,21,0,tamper_salt_in_plus1,,0.0149,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,16,4,21,0,tamper_key_not_in_digest,,0.0159,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,16,4,21,0,tamper_dropped_record,,0.0159,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,16,4,21,1,tamper_stale_state,,0.0138,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,16,4,21,1,tamper_hit_updates_min_slot,,0.0165,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,16,4,21,0,tamper_miss_evicts_nonmin,,0.0186,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,4,21,0,tamper_miss_tie_not_lowest,,0.0178,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,4,21,0,tamper_selector_two_hot,,0.0159,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,16,4,21,1,tamper_alias_key_count,,0.0041,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,4,21,1,tamper_alias_count_error,,0.0038,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,4,21,1,tamper_alias_error_absorbs_count,,0.0037,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,16,21,,compile_op,13870,3.8832,370.7305,13644029,,1,3.81,2/-,r1cs_bytes=9045992
+20260926T184033,zokrates_ss_op,16,16,21,,compile_helper,4638,3.1377,316.9375,6547705,,1,3.83,2/-,r1cs_bytes=5101320
+20260926T184033,zokrates_ss_op,16,16,21,,setup,13870,0.1539,64.2109,5324656,,1,3.83,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,16,16,21,0,native_reference,,0.0000,,,,1,3.83,,hits=3 inserts=13 evicts=0 occupied=13
+20260926T184033,zokrates_ss_op,16,16,21,0,witness_helper,,0.0279,17.3945,,,,3.83,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,16,21,0,witness_op,13870,0.0579,19.6406,,,1,3.83,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,16,21,0,prove,13870,0.1554,73.2773,997,3,1,3.83,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,16,21,0,verify,,0.0066,11.0039,,,1,3.83,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,16,21,0,tamper_verify_com_out_plus1,,0.0066,,,,1,3.83,,rejected
+20260926T184033,zokrates_ss_op,16,16,21,1,native_reference,,0.0000,,,,1,3.83,,hits=3 inserts=3 evicts=10 occupied=16
+20260926T184033,zokrates_ss_op,16,16,21,1,witness_helper,,0.0289,16.2852,,,,3.83,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,16,21,1,witness_op,13870,0.0590,19.7422,,,1,3.83,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,16,21,1,prove,13870,0.1530,71.7891,997,3,1,3.83,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,16,21,1,verify,,0.0063,11.4531,,,1,3.83,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,16,21,2,native_reference,,0.0000,,,,1,3.83,,hits=3 inserts=0 evicts=13 occupied=16
+20260926T184033,zokrates_ss_op,16,16,21,2,witness_helper,,0.0279,17.8203,,,,3.83,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,16,21,2,witness_op,13870,0.0595,19.8984,,,1,3.83,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,16,21,2,prove,13870,0.1487,72.7461,997,3,1,3.83,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,16,21,2,verify,,0.0063,10.9492,,,1,3.83,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,16,21,3,native_reference,,0.0000,,,,1,3.83,,hits=8 inserts=0 evicts=8 occupied=16
+20260926T184033,zokrates_ss_op,16,16,21,3,witness_helper,,0.0290,17.2930,,,,3.83,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,16,21,3,witness_op,13870,0.0601,19.1211,,,1,3.83,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,16,21,3,prove,13870,0.1590,73.2383,997,3,1,3.83,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,16,21,3,verify,,0.0061,11.0898,,,1,3.83,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,16,21,0,tamper_com_in_plus1,,0.0169,,,,1,3.83,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,16,16,21,0,tamper_batch_com_plus1,,0.0216,,,,1,3.83,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,16,16,21,0,tamper_salt_in_plus1,,0.0157,,,,1,3.83,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,16,16,21,0,tamper_key_not_in_digest,,0.0204,,,,1,3.83,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,16,16,21,0,tamper_dropped_record,,0.0218,,,,1,3.83,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,16,16,21,1,tamper_stale_state,,0.0153,,,,1,3.83,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,16,16,21,0,tamper_hit_updates_min_slot,,0.0285,,,,1,3.83,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,16,16,21,0,tamper_miss_evicts_nonmin,,0.0227,,,,1,3.83,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,16,21,0,tamper_miss_tie_not_lowest,,0.0221,,,,1,3.83,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,16,21,0,tamper_selector_two_hot,,0.0210,,,,1,3.83,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,16,16,21,1,tamper_alias_key_count,,0.0040,,,,1,3.83,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,16,21,1,tamper_alias_count_error,,0.0041,,,,1,3.83,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,16,21,1,tamper_alias_error_absorbs_count,,0.0040,,,,1,3.83,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,64,21,,compile_op,41017,9.0936,700.3672,42748607,,1,3.86,1/-,r1cs_bytes=26562236
+20260926T184033,zokrates_ss_op,16,64,21,,compile_helper,7833,5.2477,557.9141,11185291,,1,3.79,1/-,r1cs_bytes=8607132
+20260926T184033,zokrates_ss_op,16,64,21,,setup,41017,0.4340,164.6719,16665904,,1,3.79,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,16,64,21,0,native_reference,,0.0000,,,,1,3.79,,hits=17 inserts=16 evicts=31 occupied=16
+20260926T184033,zokrates_ss_op,16,64,21,0,witness_helper,,0.0489,18.0039,,,,3.79,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,64,21,0,witness_op,41017,0.1803,25.7344,,,1,3.79,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,64,21,0,prove,41017,0.4168,190.6797,997,3,1,3.81,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,64,21,0,verify,,0.0074,10.9141,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,64,21,0,tamper_verify_com_out_plus1,,0.0060,,,,1,3.81,,rejected
+20260926T184033,zokrates_ss_op,16,64,21,1,native_reference,,0.0000,,,,1,3.81,,hits=11 inserts=0 evicts=53 occupied=16
+20260926T184033,zokrates_ss_op,16,64,21,1,witness_helper,,0.0469,17.1758,,,,3.81,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,64,21,1,witness_op,41017,0.1784,24.7852,,,1,3.81,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,64,21,1,prove,41017,0.4293,192.5391,997,3,1,3.81,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,64,21,1,verify,,0.0078,11.1758,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,64,21,2,native_reference,,0.0000,,,,1,3.81,,hits=18 inserts=0 evicts=46 occupied=16
+20260926T184033,zokrates_ss_op,16,64,21,2,witness_helper,,0.0474,18.7461,,,,3.81,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,64,21,2,witness_op,41017,0.1837,24.7070,,,1,3.81,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,64,21,2,prove,41017,0.4436,195.3555,997,3,1,3.81,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,64,21,2,verify,,0.0067,11.5273,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,64,21,3,native_reference,,0.0000,,,,1,3.81,,hits=28 inserts=0 evicts=36 occupied=16
+20260926T184033,zokrates_ss_op,16,64,21,3,witness_helper,,0.0487,18.3242,,,,3.81,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,16,64,21,3,witness_op,41017,0.1838,24.1836,,,1,3.81,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,16,64,21,3,prove,41017,0.4051,194.4961,997,3,1,3.81,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,16,64,21,3,verify,,0.0077,11.4805,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,16,64,21,0,tamper_com_in_plus1,,0.0164,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,16,64,21,0,tamper_batch_com_plus1,,0.0368,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,16,64,21,0,tamper_salt_in_plus1,,0.0147,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,16,64,21,0,tamper_key_not_in_digest,,0.0377,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,16,64,21,0,tamper_dropped_record,,0.0374,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,16,64,21,1,tamper_stale_state,,0.0159,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,16,64,21,0,tamper_hit_updates_min_slot,,0.0444,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,16,64,21,0,tamper_miss_evicts_nonmin,,0.0399,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,64,21,0,tamper_miss_tie_not_lowest,,0.0385,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,64,21,0,tamper_selector_two_hot,,0.0363,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,16,64,21,1,tamper_alias_key_count,,0.0042,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,64,21,1,tamper_alias_count_error,,0.0053,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,16,64,21,1,tamper_alias_error_absorbs_count,,0.0045,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,4,21,,compile_op,12191,4.2327,459.7188,12921635,,1,3.91,1/-,r1cs_bytes=9017844
+20260926T184033,zokrates_ss_op,32,4,21,,compile_helper,5715,3.7400,422.1016,8075300,,1,4.47,1/-,r1cs_bytes=6282372
+20260926T184033,zokrates_ss_op,32,4,21,,setup,12191,0.1405,63.6211,4869296,,1,4.47,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,32,4,21,0,native_reference,,0.0000,,,,1,4.47,,hits=0 inserts=4 evicts=0 occupied=4
+20260926T184033,zokrates_ss_op,32,4,21,0,witness_helper,,0.0362,17.0938,,,,4.47,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,4,21,0,witness_op,12191,0.0551,19.3828,,,1,4.47,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,4,21,0,prove,12191,0.1408,68.2188,997,3,1,4.47,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,4,21,0,verify,,0.0066,11.4570,,,1,4.47,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,4,21,0,tamper_verify_com_out_plus1,,0.0073,,,,1,4.47,,rejected
+20260926T184033,zokrates_ss_op,32,4,21,1,native_reference,,0.0000,,,,1,4.47,,hits=1 inserts=3 evicts=0 occupied=7
+20260926T184033,zokrates_ss_op,32,4,21,1,witness_helper,,0.0355,17.6797,,,,4.47,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,4,21,1,witness_op,12191,0.0556,19.3633,,,1,4.47,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,4,21,1,prove,12191,0.1305,69.2461,997,3,1,4.47,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,4,21,1,verify,,0.0066,11.5352,,,1,4.47,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,4,21,2,native_reference,,0.0000,,,,1,4.47,,hits=2 inserts=2 evicts=0 occupied=9
+20260926T184033,zokrates_ss_op,32,4,21,2,witness_helper,,0.0350,17.3828,,,,4.47,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,4,21,2,witness_op,12191,0.0565,18.7305,,,1,4.47,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,4,21,2,prove,12191,0.1386,69.6758,997,3,1,4.47,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,4,21,2,verify,,0.0074,11.4688,,,1,4.47,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,4,21,3,native_reference,,0.0000,,,,1,4.47,,hits=0 inserts=4 evicts=0 occupied=13
+20260926T184033,zokrates_ss_op,32,4,21,3,witness_helper,,0.0353,17.6680,,,,4.47,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,4,21,3,witness_op,12191,0.0556,18.2383,,,1,4.47,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,4,21,3,prove,12191,0.1429,69.7773,997,3,1,4.47,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,4,21,3,verify,,0.0070,11.5117,,,1,4.47,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,4,21,0,tamper_com_in_plus1,,0.0223,,,,1,4.47,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,32,4,21,0,tamper_batch_com_plus1,,0.0253,,,,1,4.47,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,32,4,21,0,tamper_salt_in_plus1,,0.0223,,,,1,4.47,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,32,4,21,0,tamper_key_not_in_digest,,0.0239,,,,1,4.47,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,32,4,21,0,tamper_dropped_record,,0.0236,,,,1,4.47,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,32,4,21,1,tamper_stale_state,,0.0215,,,,1,4.47,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,32,4,21,1,tamper_hit_updates_min_slot,,0.0227,,,,1,4.47,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,32,4,21,0,tamper_miss_evicts_nonmin,,0.0280,,,,1,4.47,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,4,21,0,tamper_miss_tie_not_lowest,,0.0253,,,,1,4.47,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,4,21,0,tamper_selector_two_hot,,0.0250,,,,1,4.47,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,32,4,21,1,tamper_alias_key_count,,0.0041,,,,1,4.47,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,4,21,1,tamper_alias_count_error,,0.0042,,,,1,4.47,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,4,21,1,tamper_alias_error_absorbs_count,,0.0034,,,,1,4.47,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,16,21,,compile_op,25184,5.9134,594.8438,25053801,,1,4.36,1/-,r1cs_bytes=16077504
+20260926T184033,zokrates_ss_op,32,16,21,,compile_helper,6768,4.3467,486.8789,9628855,,1,4.25,1/-,r1cs_bytes=7445952
+20260926T184033,zokrates_ss_op,32,16,21,,setup,25184,0.2748,106.2227,9829872,,1,4.25,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,32,16,21,0,native_reference,,0.0000,,,,1,4.25,,hits=3 inserts=13 evicts=0 occupied=13
+20260926T184033,zokrates_ss_op,32,16,21,0,witness_helper,,0.0414,17.2891,,,,4.25,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,16,21,0,witness_op,25184,0.1107,21.7891,,,1,4.25,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,16,21,0,prove,25184,0.2641,119.7148,997,3,1,4.25,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,16,21,0,verify,,0.0071,11.4492,,,1,4.25,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,16,21,0,tamper_verify_com_out_plus1,,0.0065,,,,1,4.25,,rejected
+20260926T184033,zokrates_ss_op,32,16,21,1,native_reference,,0.0000,,,,1,4.25,,hits=3 inserts=13 evicts=0 occupied=26
+20260926T184033,zokrates_ss_op,32,16,21,1,witness_helper,,0.0391,17.8086,,,,4.25,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,16,21,1,witness_op,25184,0.1073,21.8438,,,1,4.25,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,16,21,1,prove,25184,0.2865,118.5039,997,3,1,4.25,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,16,21,1,verify,,0.0109,11.5898,,,1,4.25,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,16,21,2,native_reference,,0.0000,,,,1,4.25,,hits=3 inserts=6 evicts=7 occupied=32
+20260926T184033,zokrates_ss_op,32,16,21,2,witness_helper,,0.0432,17.1875,,,,4.25,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,16,21,2,witness_op,25184,0.1071,21.7695,,,1,4.25,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,16,21,2,prove,25184,0.2560,119.3008,997,3,1,4.23,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,16,21,2,verify,,0.0065,11.4609,,,1,4.23,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,16,21,3,native_reference,,0.0000,,,,1,4.23,,hits=9 inserts=0 evicts=7 occupied=32
+20260926T184033,zokrates_ss_op,32,16,21,3,witness_helper,,0.0429,17.6875,,,,4.23,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,16,21,3,witness_op,25184,0.1103,22.2656,,,1,4.23,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,16,21,3,prove,25184,0.2589,117.7031,997,3,1,4.23,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,16,21,3,verify,,0.0070,11.4531,,,1,4.23,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,16,21,0,tamper_com_in_plus1,,0.0228,,,,1,4.23,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,32,16,21,0,tamper_batch_com_plus1,,0.0330,,,,1,4.23,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,32,16,21,0,tamper_salt_in_plus1,,0.0249,,,,1,4.23,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,32,16,21,0,tamper_key_not_in_digest,,0.0290,,,,1,4.23,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,32,16,21,0,tamper_dropped_record,,0.0287,,,,1,4.23,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,32,16,21,1,tamper_stale_state,,0.0227,,,,1,4.23,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,32,16,21,0,tamper_hit_updates_min_slot,,0.0439,,,,1,4.23,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,32,16,21,0,tamper_miss_evicts_nonmin,,0.0324,,,,1,4.23,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,16,21,0,tamper_miss_tie_not_lowest,,0.0321,,,,1,4.23,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,16,21,0,tamper_selector_two_hot,,0.0299,,,,1,4.23,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,32,16,21,1,tamper_alias_key_count,,0.0041,,,,1,4.23,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,16,21,1,tamper_alias_count_error,,0.0040,,,,1,4.23,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,16,21,1,tamper_alias_error_absorbs_count,,0.0039,,,,1,4.23,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,64,21,,compile_op,76139,15.3255,1035.7852,82276971,,1,3.95,1/-,r1cs_bytes=49803156
+20260926T184033,zokrates_ss_op,32,64,21,,compile_helper,9963,6.3531,677.3789,14322484,,1,3.88,1/-,r1cs_bytes=10951764
+20260926T184033,zokrates_ss_op,32,64,21,,setup,76139,0.7756,299.6836,31443888,,1,3.88,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,32,64,21,0,native_reference,,0.0000,,,,1,3.88,,hits=18 inserts=32 evicts=14 occupied=32
+20260926T184033,zokrates_ss_op,32,64,21,0,witness_helper,,0.0620,19.2930,,,,3.88,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,64,21,0,witness_op,76139,0.3372,35.1914,,,1,3.88,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,64,21,0,prove,76139,0.7471,341.8438,997,3,1,3.81,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,64,21,0,verify,,0.0070,11.0977,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,64,21,0,tamper_verify_com_out_plus1,,0.0068,,,,1,3.81,,rejected
+20260926T184033,zokrates_ss_op,32,64,21,1,native_reference,,0.0000,,,,1,3.81,,hits=13 inserts=0 evicts=51 occupied=32
+20260926T184033,zokrates_ss_op,32,64,21,1,witness_helper,,0.0562,17.8594,,,,3.81,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,64,21,1,witness_op,76139,0.3353,34.2344,,,1,3.81,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,64,21,1,prove,76139,0.7463,342.9219,997,3,1,3.81,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,64,21,1,verify,,0.0075,11.5078,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,64,21,2,native_reference,,0.0000,,,,1,3.81,,hits=19 inserts=0 evicts=45 occupied=32
+20260926T184033,zokrates_ss_op,32,64,21,2,witness_helper,,0.0571,18.2227,,,,3.81,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,64,21,2,witness_op,76139,0.3494,34.7031,,,1,3.81,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,64,21,2,prove,76139,0.7793,340.3086,997,3,1,3.81,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,64,21,2,verify,,0.0074,10.8984,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,64,21,3,native_reference,,0.0000,,,,1,3.81,,hits=29 inserts=0 evicts=35 occupied=32
+20260926T184033,zokrates_ss_op,32,64,21,3,witness_helper,,0.0598,19.2734,,,,3.81,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,32,64,21,3,witness_op,76139,0.3377,34.3438,,,1,3.81,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,32,64,21,3,prove,76139,0.7805,340.1875,997,3,1,3.81,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,32,64,21,3,verify,,0.0069,11.5312,,,1,3.81,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,32,64,21,0,tamper_com_in_plus1,,0.0248,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,32,64,21,0,tamper_batch_com_plus1,,0.0472,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,32,64,21,0,tamper_salt_in_plus1,,0.0239,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,32,64,21,0,tamper_key_not_in_digest,,0.0472,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,32,64,21,0,tamper_dropped_record,,0.0473,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,32,64,21,1,tamper_stale_state,,0.0237,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,32,64,21,0,tamper_hit_updates_min_slot,,0.0582,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,32,64,21,0,tamper_miss_evicts_nonmin,,0.0506,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,64,21,0,tamper_miss_tie_not_lowest,,0.0507,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,64,21,0,tamper_selector_two_hot,,0.0486,,,,1,3.81,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,32,64,21,1,tamper_alias_key_count,,0.0064,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,64,21,1,tamper_alias_count_error,,0.0055,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,32,64,21,1,tamper_alias_error_absorbs_count,,0.0052,,,,1,3.81,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,4,21,,compile_op,22915,7.6567,700.8789,25224143,,1,4.08,1/-,r1cs_bytes=17215652
+20260926T184033,zokrates_ss_op,64,4,21,,compile_helper,9975,6.5356,686.1016,14348800,,1,3.99,1/-,r1cs_bytes=10971636
+20260926T184033,zokrates_ss_op,64,4,21,,setup,22915,0.2602,107.0938,9267632,,1,3.99,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,64,4,21,0,native_reference,,0.0000,,,,1,3.99,,hits=0 inserts=4 evicts=0 occupied=4
+20260926T184033,zokrates_ss_op,64,4,21,0,witness_helper,,0.0588,19.1680,,,,3.99,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,4,21,0,witness_op,22915,0.1028,21.7266,,,1,3.99,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,4,21,0,prove,22915,0.2625,119.1836,997,3,1,3.99,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,4,21,0,verify,,0.0070,11.5625,,,1,3.99,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,4,21,0,tamper_verify_com_out_plus1,,0.0071,,,,1,3.99,,rejected
+20260926T184033,zokrates_ss_op,64,4,21,1,native_reference,,0.0000,,,,1,3.99,,hits=1 inserts=3 evicts=0 occupied=7
+20260926T184033,zokrates_ss_op,64,4,21,1,witness_helper,,0.0577,18.6914,,,,3.99,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,4,21,1,witness_op,22915,0.1037,21.7461,,,1,3.99,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,4,21,1,prove,22915,0.2612,120.6797,997,3,1,3.91,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,4,21,1,verify,,0.0084,10.0234,,,1,3.91,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,4,21,2,native_reference,,0.0000,,,,1,3.91,,hits=2 inserts=2 evicts=0 occupied=9
+20260926T184033,zokrates_ss_op,64,4,21,2,witness_helper,,0.0582,18.1562,,,,3.91,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,4,21,2,witness_op,22915,0.1068,22.1992,,,1,3.91,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,4,21,2,prove,22915,0.2588,120.1719,997,3,1,3.91,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,4,21,2,verify,,0.0073,10.5391,,,1,3.91,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,4,21,3,native_reference,,0.0000,,,,1,3.91,,hits=0 inserts=4 evicts=0 occupied=13
+20260926T184033,zokrates_ss_op,64,4,21,3,witness_helper,,0.0609,17.3555,,,,3.91,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,4,21,3,witness_op,22915,0.1013,21.5859,,,1,3.91,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,4,21,3,prove,22915,0.2596,119.4258,997,3,1,3.91,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,4,21,3,verify,,0.0070,10.9258,,,1,3.91,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,4,21,0,tamper_com_in_plus1,,0.0374,,,,1,3.91,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,64,4,21,0,tamper_batch_com_plus1,,0.0404,,,,1,3.91,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,64,4,21,0,tamper_salt_in_plus1,,0.0391,,,,1,3.91,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,64,4,21,0,tamper_key_not_in_digest,,0.0388,,,,1,3.91,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,64,4,21,0,tamper_dropped_record,,0.0418,,,,1,3.91,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,64,4,21,1,tamper_stale_state,,0.0398,,,,1,3.91,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,64,4,21,1,tamper_hit_updates_min_slot,,0.0390,,,,1,3.91,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,64,4,21,0,tamper_miss_evicts_nonmin,,0.0474,,,,1,3.91,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,4,21,0,tamper_miss_tie_not_lowest,,0.0425,,,,1,3.91,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,4,21,0,tamper_selector_two_hot,,0.0412,,,,1,3.91,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,64,4,21,1,tamper_alias_key_count,,0.0058,,,,1,3.91,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,4,21,1,tamper_alias_count_error,,0.0048,,,,1,3.91,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,4,21,1,tamper_alias_error_absorbs_count,,0.0042,,,,1,3.91,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,16,21,,compile_op,47812,11.1381,909.7656,51627449,,1,3.77,1/-,r1cs_bytes=32380016
+20260926T184033,zokrates_ss_op,64,16,21,,compile_helper,11028,7.3680,760.2578,15911598,,1,3.65,1/-,r1cs_bytes=12135216
+20260926T184033,zokrates_ss_op,64,16,21,,setup,47812,0.5102,198.5820,18840304,,1,3.65,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,64,16,21,0,native_reference,,0.0000,,,,1,3.65,,hits=3 inserts=13 evicts=0 occupied=13
+20260926T184033,zokrates_ss_op,64,16,21,0,witness_helper,,0.0636,19.1992,,,,3.65,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,16,21,0,witness_op,47812,0.2025,27.3008,,,1,3.65,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,16,21,0,prove,47812,0.4897,230.7305,997,3,1,3.65,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,16,21,0,verify,,0.0072,11.5547,,,1,3.65,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,16,21,0,tamper_verify_com_out_plus1,,0.0061,,,,1,3.65,,rejected
+20260926T184033,zokrates_ss_op,64,16,21,1,native_reference,,0.0000,,,,1,3.65,,hits=3 inserts=13 evicts=0 occupied=26
+20260926T184033,zokrates_ss_op,64,16,21,1,witness_helper,,0.0671,19.2812,,,,3.65,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,16,21,1,witness_op,47812,0.2064,28.2109,,,1,3.65,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,16,21,1,prove,47812,0.4816,228.9219,997,3,1,3.65,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,16,21,1,verify,,0.0071,10.9805,,,1,3.65,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,16,21,2,native_reference,,0.0000,,,,1,3.65,,hits=3 inserts=13 evicts=0 occupied=39
+20260926T184033,zokrates_ss_op,64,16,21,2,witness_helper,,0.0629,18.2539,,,,3.65,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,16,21,2,witness_op,47812,0.2056,27.2461,,,1,3.65,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,16,21,2,prove,47812,0.4962,226.4766,997,3,1,3.65,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,16,21,2,verify,,0.0073,10.8594,,,1,3.65,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,16,21,3,native_reference,,0.0000,,,,1,3.65,,hits=9 inserts=7 evicts=0 occupied=46
+20260926T184033,zokrates_ss_op,64,16,21,3,witness_helper,,0.0637,18.2578,,,,3.65,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,16,21,3,witness_op,47812,0.2042,28.1289,,,1,3.65,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,16,21,3,prove,47812,0.4949,229.2148,997,3,1,3.65,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,16,21,3,verify,,0.0070,10.9414,,,1,3.65,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,16,21,0,tamper_com_in_plus1,,0.0391,,,,1,3.65,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,64,16,21,0,tamper_batch_com_plus1,,0.0472,,,,1,3.65,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,64,16,21,0,tamper_salt_in_plus1,,0.0376,,,,1,3.65,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,64,16,21,0,tamper_key_not_in_digest,,0.0452,,,,1,3.65,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,64,16,21,0,tamper_dropped_record,,0.0461,,,,1,3.65,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,64,16,21,1,tamper_stale_state,,0.0395,,,,1,3.65,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,64,16,21,0,tamper_hit_updates_min_slot,,0.0716,,,,1,3.65,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,64,16,21,0,tamper_miss_evicts_nonmin,,0.0541,,,,1,3.65,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,16,21,0,tamper_miss_tie_not_lowest,,0.0467,,,,1,3.65,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,16,21,0,tamper_selector_two_hot,,0.0479,,,,1,3.65,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,64,16,21,1,tamper_alias_key_count,,0.0047,,,,1,3.65,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,16,21,1,tamper_alias_count_error,,0.0047,,,,1,3.65,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,16,21,1,tamper_alias_error_absorbs_count,,0.0042,,,,1,3.65,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,64,21,,compile_op,146383,35.5822,1786.5625,176004046,,1,3.33,1/-,r1cs_bytes=105160004
+20260926T184033,zokrates_ss_op,64,64,21,,compile_helper,14223,9.4430,941.3672,20596068,,1,3.13,1/-,r1cs_bytes=15641028
+20260926T184033,zokrates_ss_op,64,64,21,,setup,146383,1.5537,608.7070,60999856,,1,3.13,0/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,64,64,21,0,native_reference,,0.0001,,,,1,3.13,,hits=18 inserts=46 evicts=0 occupied=46
+20260926T184033,zokrates_ss_op,64,64,21,0,witness_helper,,0.0788,19.1914,,,,3.13,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,64,21,0,witness_op,146383,0.6868,53.3398,,,1,3.13,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,64,21,0,prove,146383,1.5024,691.7812,997,3,1,3.04,0/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,64,21,0,verify,,0.0078,10.9453,,,1,3.04,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,64,21,0,tamper_verify_com_out_plus1,,0.0062,,,,1,3.04,,rejected
+20260926T184033,zokrates_ss_op,64,64,21,1,native_reference,,0.0001,,,,1,3.04,,hits=13 inserts=18 evicts=33 occupied=64
+20260926T184033,zokrates_ss_op,64,64,21,1,witness_helper,,0.0800,18.7031,,,,3.04,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,64,21,1,witness_op,146383,0.7872,52.1523,,,1,3.04,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,64,21,1,prove,146383,1.6197,687.1172,997,3,1,3.04,0/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,64,21,1,verify,,0.0082,11.7227,,,1,3.04,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,64,21,2,native_reference,,0.0001,,,,1,3.04,,hits=19 inserts=0 evicts=45 occupied=64
+20260926T184033,zokrates_ss_op,64,64,21,2,witness_helper,,0.0924,19.7383,,,,3.04,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,64,21,2,witness_op,146383,0.8409,51.3320,,,1,3.04,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,64,21,2,prove,146383,1.7068,686.2148,997,3,1,3.11,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,64,21,2,verify,,0.0080,10.6602,,,1,3.11,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,64,21,3,native_reference,,0.0001,,,,1,3.11,,hits=31 inserts=0 evicts=33 occupied=64
+20260926T184033,zokrates_ss_op,64,64,21,3,witness_helper,,0.0970,18.8320,,,,3.11,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,64,64,21,3,witness_op,146383,0.7638,51.7070,,,1,3.11,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,64,64,21,3,prove,146383,1.5213,687.7578,997,3,1,3.11,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,64,64,21,3,verify,,0.0079,11.6289,,,1,3.11,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,64,64,21,0,tamper_com_in_plus1,,0.0419,,,,1,3.11,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,64,64,21,0,tamper_batch_com_plus1,,0.0633,,,,1,3.11,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,64,64,21,0,tamper_salt_in_plus1,,0.0391,,,,1,3.11,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,64,64,21,0,tamper_key_not_in_digest,,0.0626,,,,1,3.11,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,64,64,21,0,tamper_dropped_record,,0.0651,,,,1,3.11,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,64,64,21,1,tamper_stale_state,,0.0387,,,,1,3.11,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,64,64,21,0,tamper_hit_updates_min_slot,,0.0878,,,,1,3.11,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,64,64,21,0,tamper_miss_evicts_nonmin,,0.0689,,,,1,3.11,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,64,21,0,tamper_miss_tie_not_lowest,,0.0663,,,,1,3.11,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,64,21,0,tamper_selector_two_hot,,0.0836,,,,1,3.11,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,64,64,21,1,tamper_alias_key_count,,0.0078,,,,1,3.11,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,64,21,1,tamper_alias_count_error,,0.0085,,,,1,3.11,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,64,64,21,1,tamper_alias_error_absorbs_count,,0.0077,,,,1,3.11,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,4,21,,compile_op,45041,15.1178,1335.7539,54557549,,1,3.01,1/-,r1cs_bytes=36699372
+20260926T184033,zokrates_ss_op,128,4,21,,compile_helper,19173,12.6301,1296.1562,27925242,,1,2.86,0/-,r1cs_bytes=21115836
+20260926T184033,zokrates_ss_op,128,4,21,,setup,45041,0.5741,208.6836,18281264,,1,2.86,0/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,128,4,21,0,native_reference,,0.0000,,,,1,2.86,,hits=0 inserts=4 evicts=0 occupied=4
+20260926T184033,zokrates_ss_op,128,4,21,0,witness_helper,,0.1250,20.7695,,,,2.86,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,4,21,0,witness_op,45041,0.2432,26.8320,,,1,2.86,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,4,21,0,prove,45041,0.5539,238.7539,997,3,1,2.86,0/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,4,21,0,verify,,0.0084,10.4766,,,1,2.86,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,4,21,0,tamper_verify_com_out_plus1,,0.0065,,,,1,2.86,,rejected
+20260926T184033,zokrates_ss_op,128,4,21,1,native_reference,,0.0000,,,,1,2.86,,hits=1 inserts=3 evicts=0 occupied=7
+20260926T184033,zokrates_ss_op,128,4,21,1,witness_helper,,0.1059,20.6602,,,,2.86,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,4,21,1,witness_op,45041,0.2131,27.1836,,,1,2.86,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,4,21,1,prove,45041,0.5129,236.5859,997,3,1,2.86,0/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,4,21,1,verify,,0.0076,11.0742,,,1,2.86,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,4,21,2,native_reference,,0.0000,,,,1,2.86,,hits=2 inserts=2 evicts=0 occupied=9
+20260926T184033,zokrates_ss_op,128,4,21,2,witness_helper,,0.1091,20.1992,,,,2.86,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,4,21,2,witness_op,45041,0.2133,27.8672,,,1,2.86,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,4,21,2,prove,45041,0.5384,238.9609,997,3,1,2.87,0/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,4,21,2,verify,,0.0073,11.5586,,,1,2.87,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,4,21,3,native_reference,,0.0000,,,,1,2.87,,hits=0 inserts=4 evicts=0 occupied=13
+20260926T184033,zokrates_ss_op,128,4,21,3,witness_helper,,0.1066,21.7578,,,,2.87,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,4,21,3,witness_op,45041,0.2117,27.6562,,,1,2.87,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,4,21,3,prove,45041,0.4981,238.9258,997,3,1,2.87,0/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,4,21,3,verify,,0.0074,11.0273,,,1,2.87,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,4,21,0,tamper_com_in_plus1,,0.0716,,,,1,2.87,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,128,4,21,0,tamper_batch_com_plus1,,0.0724,,,,1,2.87,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,128,4,21,0,tamper_salt_in_plus1,,0.0698,,,,1,2.87,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,128,4,21,0,tamper_key_not_in_digest,,0.0770,,,,1,2.87,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,128,4,21,0,tamper_dropped_record,,0.0748,,,,1,2.87,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,128,4,21,1,tamper_stale_state,,0.0711,,,,1,2.87,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,128,4,21,1,tamper_hit_updates_min_slot,,0.0738,,,,1,2.87,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,128,4,21,0,tamper_miss_evicts_nonmin,,0.0915,,,,1,2.87,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,4,21,0,tamper_miss_tie_not_lowest,,0.0802,,,,1,2.87,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,4,21,0,tamper_selector_two_hot,,0.0789,,,,1,2.87,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,128,4,21,1,tamper_alias_key_count,,0.0052,,,,1,2.87,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,4,21,1,tamper_alias_count_error,,0.0044,,,,1,2.87,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,4,21,1,tamper_alias_error_absorbs_count,,0.0045,,,,1,2.87,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,16,21,,compile_op,93746,23.9875,1685.3359,120581537,,1,2.99,0/-,r1cs_bytes=74708664
+20260926T184033,zokrates_ss_op,128,16,21,,compile_helper,20226,13.3302,1365.6055,29478828,,1,3.00,1/-,r1cs_bytes=22279416
+20260926T184033,zokrates_ss_op,128,16,21,,setup,93746,1.0570,414.1836,37078128,,1,3.00,1/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,128,16,21,0,native_reference,,0.0000,,,,1,3.00,,hits=3 inserts=13 evicts=0 occupied=13
+20260926T184033,zokrates_ss_op,128,16,21,0,witness_helper,,0.1151,22.2539,,,,3.00,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,16,21,0,witness_op,93746,0.4538,38.3438,,,1,3.00,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,16,21,0,prove,93746,0.9774,461.1172,997,3,1,3.00,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,16,21,0,verify,,0.0072,11.0078,,,1,3.00,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,16,21,0,tamper_verify_com_out_plus1,,0.0085,,,,1,3.00,,rejected
+20260926T184033,zokrates_ss_op,128,16,21,1,native_reference,,0.0000,,,,1,3.00,,hits=3 inserts=13 evicts=0 occupied=26
+20260926T184033,zokrates_ss_op,128,16,21,1,witness_helper,,0.1099,22.3320,,,,3.00,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,16,21,1,witness_op,93746,0.5126,39.1875,,,1,3.00,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,16,21,1,prove,93746,1.1056,461.4531,997,3,1,2.92,0/0 waited=5s,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,16,21,1,verify,,0.0070,10.9844,,,1,2.92,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,16,21,2,native_reference,,0.0000,,,,1,2.92,,hits=3 inserts=13 evicts=0 occupied=39
+20260926T184033,zokrates_ss_op,128,16,21,2,witness_helper,,0.1102,21.2422,,,,2.92,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,16,21,2,witness_op,93746,0.5247,39.2891,,,1,2.92,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,16,21,2,prove,93746,1.0225,462.4102,997,3,1,2.92,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,16,21,2,verify,,0.0073,11.6250,,,1,2.92,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,16,21,3,native_reference,,0.0000,,,,1,2.92,,hits=9 inserts=7 evicts=0 occupied=46
+20260926T184033,zokrates_ss_op,128,16,21,3,witness_helper,,0.1100,20.7773,,,,2.92,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,16,21,3,witness_op,93746,0.4575,37.1992,,,1,2.92,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,16,21,3,prove,93746,0.9991,460.2344,997,3,1,2.92,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,16,21,3,verify,,0.0071,10.9453,,,1,2.92,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,16,21,0,tamper_com_in_plus1,,0.0723,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,128,16,21,0,tamper_batch_com_plus1,,0.0791,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,128,16,21,0,tamper_salt_in_plus1,,0.0702,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,128,16,21,0,tamper_key_not_in_digest,,0.0807,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,128,16,21,0,tamper_dropped_record,,0.0784,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,128,16,21,1,tamper_stale_state,,0.0720,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,128,16,21,0,tamper_hit_updates_min_slot,,0.1407,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,128,16,21,0,tamper_miss_evicts_nonmin,,0.1006,,,,1,2.92,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,16,21,0,tamper_miss_tie_not_lowest,,0.0845,,,,1,2.92,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,16,21,0,tamper_selector_two_hot,,0.0882,,,,1,2.92,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,128,16,21,1,tamper_alias_key_count,,0.0057,,,,1,2.92,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,16,21,1,tamper_alias_count_error,,0.0057,,,,1,2.92,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,16,21,1,tamper_alias_error_absorbs_count,,0.0058,,,,1,2.92,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,64,21,,compile_op,287549,114.6840,3751.5664,423862382,,1,5.28,0/-,r1cs_bytes=252139404
+20260926T184033,zokrates_ss_op,128,64,21,,compile_helper,23421,15.6162,1552.2852,34163520,,1,5.22,2/-,r1cs_bytes=25785228
+20260926T184033,zokrates_ss_op,128,64,21,,setup,287549,3.4020,1349.1836,120328752,,1,7.61,2/0,vk_bytes=1917
+20260926T184033,zokrates_ss_op,128,64,21,0,native_reference,,0.0001,,,,1,7.61,,hits=18 inserts=46 evicts=0 occupied=46
+20260926T184033,zokrates_ss_op,128,64,21,0,witness_helper,,0.1284,23.2734,,,,7.61,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,64,21,0,witness_op,287549,1.6257,87.2695,,,1,7.61,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,64,21,0,prove,287549,3.2135,1500.7773,997,3,1,9.80,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,64,21,0,verify,,0.0068,11.5039,,,1,9.80,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,64,21,0,tamper_verify_com_out_plus1,,0.0065,,,,1,9.80,,rejected
+20260926T184033,zokrates_ss_op,128,64,21,1,native_reference,,0.0001,,,,1,9.80,,hits=13 inserts=51 evicts=0 occupied=97
+20260926T184033,zokrates_ss_op,128,64,21,1,witness_helper,,0.1323,22.7148,,,,9.80,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,64,21,1,witness_op,287549,1.6792,86.1836,,,1,9.80,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,64,21,1,prove,287549,3.2157,1499.7734,997,3,1,9.25,2/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,64,21,1,verify,,0.0075,10.9219,,,1,9.25,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,64,21,2,native_reference,,0.0001,,,,1,9.25,,hits=19 inserts=31 evicts=14 occupied=128
+20260926T184033,zokrates_ss_op,128,64,21,2,witness_helper,,0.1365,21.6484,,,,9.25,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,64,21,2,witness_op,287549,1.6071,86.7227,,,1,9.25,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,64,21,2,prove,287549,3.2520,1501.9453,997,3,1,8.67,1/0,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,64,21,2,verify,,0.0078,10.5938,,,1,8.67,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,64,21,3,native_reference,,0.0001,,,,1,8.67,,hits=32 inserts=0 evicts=32 occupied=128
+20260926T184033,zokrates_ss_op,128,64,21,3,witness_helper,,0.1318,22.2109,,,,8.67,,Poseidon commitments for the driver
+20260926T184033,zokrates_ss_op,128,64,21,3,witness_op,287549,1.7140,87.7344,,,1,8.67,,circuit out == helper com_out(reference) and com_in == prev com_out
+20260926T184033,zokrates_ss_op,128,64,21,3,prove,287549,3.1922,1502.6914,997,3,1,7.35,1/0 waited=10s,"JSON proof; public = (com_in, batch_com, com_out)"
+20260926T184033,zokrates_ss_op,128,64,21,3,verify,,0.0071,11.0234,,,1,7.35,,CLI incl. process start; and proof.com_in == previous proof.com_out
+20260926T184033,zokrates_ss_op,128,64,21,0,tamper_com_in_plus1,,0.0781,,,,1,7.35,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,128,64,21,0,tamper_batch_com_plus1,,0.0969,,,,1,7.35,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,128,64,21,0,tamper_salt_in_plus1,,0.0783,,,,1,7.35,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,128,64,21,0,tamper_key_not_in_digest,,0.0986,,,,1,7.35,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,128,64,21,0,tamper_dropped_record,,0.0944,,,,1,7.35,,rejected: Execution failed: Assertion failed at ss_op.zok:70:5
+20260926T184033,zokrates_ss_op,128,64,21,1,tamper_stale_state,,0.0767,,,,1,7.35,,rejected: Execution failed: Assertion failed at ss_op.zok:69:5
+20260926T184033,zokrates_ss_op,128,64,21,0,tamper_hit_updates_min_slot,,0.1608,,,,1,7.35,,rejected: Execution failed: Assertion failed at ss_op.zok:82:13
+20260926T184033,zokrates_ss_op,128,64,21,0,tamper_miss_evicts_nonmin,,0.1199,,,,1,7.35,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,64,21,0,tamper_miss_tie_not_lowest,,0.0995,,,,1,7.35,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,64,21,0,tamper_selector_two_hot,,0.0996,,,,1,7.35,,rejected: Execution failed: Assertion failed at ss_op.zok:89:9
+20260926T184033,zokrates_ss_op,128,64,21,1,tamper_alias_key_count,,0.0097,,,,1,7.35,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,64,21,1,tamper_alias_count_error,,0.0088,,,,1,7.35,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184033,zokrates_ss_op,128,64,21,1,tamper_alias_error_absorbs_count,,0.0088,,,,1,7.35,,rejected: Execution failed: Sum check failed (range-check recomposition)
+20260926T184848,zokrates_ss_op,256,1,21,,compile_op,65467,27.7770,2472.5664,82114746,,1,7.86,1/-,r1cs_bytes=58512800; compile-scaling probe
+20260926T184848,zokrates_ss_op,1024,1,21,,compile_op,257521,121.4635,9425.0977,439844412,,1,4.43,1/-,r1cs_bytes=314217032; compile-scaling probe
+20260926T184848,zokrates_ss_op,4096,1,21,,compile_op,1027771,765.4860,39893.5664,3631498392,,1,5.64,2/-,r1cs_bytes=2613350816; compile-scaling probe

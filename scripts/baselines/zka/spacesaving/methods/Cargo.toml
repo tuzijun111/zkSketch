@@ -1,0 +1,19 @@
+[package]
+name = "ss-methods"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+# aggr_ss / query_ss are the measured guests. The *_prof guests run the same
+# ss-core code with env::cycle_count() markers between phases; they are used
+# only for the phase breakdown, never for a headline number. aggr_ss_rootvar
+# runs the same aggregation with a run-time choice of Merkle-root construction,
+# for the root sensitivity rows only.
+[package.metadata.risc0]
+methods = ["guests/aggr_ss", "guests/query_ss", "guests/aggr_ss_prof", "guests/query_ss_prof", "guests/aggr_ss_rootvar"]
+
+[build-dependencies]
+risc0-build = "3"
+
+[dependencies]
+risc0-zkvm = "3"

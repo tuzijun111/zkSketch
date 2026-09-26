@@ -1,0 +1,7 @@
+# Host workspace (driver + native reference). The guests live in their own workspace
+# under guests/ with a lock derived from zk-Analytics' Cargo.lock; this lock was derived
+# from ../cyc/Cargo.lock (host risc0-zkvm 3.0.6, like the other drivers here).
+[workspace]
+resolver = "2"
+members = ["core", "methods", "host"]
+exclude = ["guests"]

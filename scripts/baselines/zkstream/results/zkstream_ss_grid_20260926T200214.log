@@ -1,0 +1,594 @@
+### ZoKrates SpaceSaving operator chain (our circuit, zkStream replay design), final layout: spe=3, any-min, materialized sums 20260926T200214
+ 20:02:14 up 12 days,  9:30, 14 users,  load average: 4.79, 4.83, 4.44
+64
+CPU(s):                                  64
+Model name:                              AMD Ryzen Threadripper PRO 9975WX 32-Cores
+Thread(s) per core:                      2
+CPU(s) scaling MHz:                      37%
+run=20260926T200214 load1=4.79 pin=0-31 s=[8, 16, 32, 64, 128] k=[4, 16, 64] cb=21 spe=3 chunks=4 cap=45m/150G -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_ss.csv
+  s=8    k=4   chunk=   compile_op               constraints=3106 wall_s=1.2578 peak_rss_mb=138.4922 bytes=3087946 ok=1 load1=4.79 foreign=3/- note=r1cs_bytes=2196976
+  s=8    k=4   chunk=   compile_helper           constraints=1473 wall_s=1.1212 peak_rss_mb=123.2383 bytes=2061692 ok=1 load1=4.79 foreign=3/- note=r1cs_bytes=1605516
+  s=8    k=4   chunk=   setup                    constraints=3106 wall_s=0.0456 peak_rss_mb=28.7539 bytes=1237104 ok=1 load1=4.79 foreign=3/0 note=vk_bytes=1917
+  s=8    k=4   chunk=0  native_reference         wall_s=0.0000 ok=1 load1=4.79 note=hits=0 inserts=4 evicts=0 occupied=4
+  s=8    k=4   chunk=0  witness_helper           wall_s=0.0126 peak_rss_mb=16.5078 load1=4.79 note=Poseidon commitments for the driver
+  s=8    k=4   chunk=0  witness_op               constraints=3106 wall_s=0.0177 peak_rss_mb=17.3164 ok=1 load1=4.79 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=4   chunk=0  prove                    constraints=3106 wall_s=0.0537 peak_rss_mb=28.2812 bytes=997 ok=1 load1=4.79 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=4   chunk=0  verify                   wall_s=0.0067 peak_rss_mb=10.9648 ok=1 load1=4.79 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=4   chunk=0  tamper_verify_com_out_plus1 wall_s=0.0056 ok=1 load1=4.79 note=rejected
+  s=8    k=4   chunk=1  native_reference         wall_s=0.0000 ok=1 load1=4.79 note=hits=1 inserts=3 evicts=0 occupied=7
+  s=8    k=4   chunk=1  witness_helper           wall_s=0.0122 peak_rss_mb=16.2305 load1=4.79 note=Poseidon commitments for the driver
+  s=8    k=4   chunk=1  witness_op               constraints=3106 wall_s=0.0165 peak_rss_mb=17.3555 ok=1 load1=4.79 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=4   chunk=1  prove                    constraints=3106 wall_s=0.0495 peak_rss_mb=29.2188 bytes=997 ok=1 load1=4.79 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=4   chunk=1  verify                   wall_s=0.0072 peak_rss_mb=11.1953 ok=1 load1=4.79 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=4   chunk=2  native_reference         wall_s=0.0000 ok=1 load1=4.79 note=hits=2 inserts=1 evicts=1 occupied=8
+  s=8    k=4   chunk=2  witness_helper           wall_s=0.0119 peak_rss_mb=16.7539 load1=4.79 note=Poseidon commitments for the driver
+  s=8    k=4   chunk=2  witness_op               constraints=3106 wall_s=0.0165 peak_rss_mb=17.3398 ok=1 load1=4.79 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=4   chunk=2  prove                    constraints=3106 wall_s=0.0504 peak_rss_mb=28.4570 bytes=997 ok=1 load1=4.79 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=4   chunk=2  verify                   wall_s=0.0072 peak_rss_mb=10.5820 ok=1 load1=4.79 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=4   chunk=3  native_reference         wall_s=0.0000 ok=1 load1=4.79 note=hits=0 inserts=0 evicts=4 occupied=8
+  s=8    k=4   chunk=3  witness_helper           wall_s=0.0121 peak_rss_mb=16.2891 load1=4.79 note=Poseidon commitments for the driver
+  s=8    k=4   chunk=3  witness_op               constraints=3106 wall_s=0.0172 peak_rss_mb=17.7930 ok=1 load1=4.79 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=4   chunk=3  prove                    constraints=3106 wall_s=0.0495 peak_rss_mb=29.2500 bytes=997 ok=1 load1=4.79 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=4   chunk=3  verify                   wall_s=0.0062 peak_rss_mb=12.0625 ok=1 load1=4.79 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=4   chunk=0  semantics_other_min_accepted wall_s=0.0168 ok=1 load1=4.79 note=a later equal-count slot is a valid SpaceSaving choice
+  s=8    k=4   chunk=0  tamper_com_in_plus1      wall_s=0.0091 ok=1 load1=4.79 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=8    k=4   chunk=0  tamper_batch_com_plus1   wall_s=0.0103 ok=1 load1=4.79 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=8    k=4   chunk=0  tamper_salt_in_plus1     wall_s=0.0081 ok=1 load1=4.79 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=8    k=4   chunk=0  tamper_key_not_in_digest wall_s=0.0093 ok=1 load1=4.79 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=8    k=4   chunk=0  tamper_dropped_record    wall_s=0.0100 ok=1 load1=4.79 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=8    k=4   chunk=1  tamper_stale_state       wall_s=0.0077 ok=1 load1=4.81 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=8    k=4   chunk=1  tamper_hit_updates_min_slot wall_s=0.0098 ok=1 load1=4.81 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=8    k=4   chunk=0  tamper_miss_evicts_nonmin wall_s=0.0105 ok=1 load1=4.81 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=8    k=4   chunk=0  tamper_selector_two_hot  wall_s=0.0090 ok=1 load1=4.81 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=8    k=4   chunk=0  tamper_materializer_not_one wall_s=0.0035 ok=1 load1=4.81 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=8    k=4   chunk=1  tamper_alias_key_count   wall_s=0.0035 ok=1 load1=4.81 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=4   chunk=1  tamper_alias_count_error wall_s=0.0036 ok=1 load1=4.81 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=4   chunk=1  tamper_alias_error_absorbs_count wall_s=0.0043 ok=1 load1=4.81 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=4   chunk=1  tamper_alias_across_slots wall_s=0.0045 ok=1 load1=4.81 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=16  chunk=   compile_op               constraints=7199 wall_s=2.3072 peak_rss_mb=216.3828 bytes=6695756 ok=1 load1=4.81 foreign=3/- note=r1cs_bytes=4524780
+  s=8    k=16  chunk=   compile_helper           constraints=2526 wall_s=1.8834 peak_rss_mb=200.7070 bytes=3554078 ok=1 load1=4.81 foreign=3/- note=r1cs_bytes=2769096
+  s=8    k=16  chunk=   setup                    constraints=7199 wall_s=0.0871 peak_rss_mb=40.7734 bytes=2747568 ok=1 load1=4.81 foreign=3/0 note=vk_bytes=1917
+  s=8    k=16  chunk=0  native_reference         wall_s=0.0000 ok=1 load1=4.81 note=hits=3 inserts=8 evicts=5 occupied=8
+  s=8    k=16  chunk=0  witness_helper           wall_s=0.0190 peak_rss_mb=16.7305 load1=4.81 note=Poseidon commitments for the driver
+  s=8    k=16  chunk=0  witness_op               constraints=7199 wall_s=0.0326 peak_rss_mb=17.2305 ok=1 load1=4.81 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=16  chunk=0  prove                    constraints=7199 wall_s=0.0957 peak_rss_mb=44.6133 bytes=997 ok=1 load1=4.81 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=16  chunk=0  verify                   wall_s=0.0064 peak_rss_mb=11.4922 ok=1 load1=4.81 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=16  chunk=0  tamper_verify_com_out_plus1 wall_s=0.0059 ok=1 load1=4.81 note=rejected
+  s=8    k=16  chunk=1  native_reference         wall_s=0.0000 ok=1 load1=4.81 note=hits=3 inserts=0 evicts=13 occupied=8
+  s=8    k=16  chunk=1  witness_helper           wall_s=0.0183 peak_rss_mb=16.7695 load1=4.81 note=Poseidon commitments for the driver
+  s=8    k=16  chunk=1  witness_op               constraints=7199 wall_s=0.0338 peak_rss_mb=17.7148 ok=1 load1=4.81 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=16  chunk=1  prove                    constraints=7199 wall_s=0.0916 peak_rss_mb=44.4258 bytes=997 ok=1 load1=5.30 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=16  chunk=1  verify                   wall_s=0.0073 peak_rss_mb=11.0273 ok=1 load1=5.30 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=16  chunk=2  native_reference         wall_s=0.0000 ok=1 load1=5.30 note=hits=2 inserts=0 evicts=14 occupied=8
+  s=8    k=16  chunk=2  witness_helper           wall_s=0.0188 peak_rss_mb=15.6992 load1=5.30 note=Poseidon commitments for the driver
+  s=8    k=16  chunk=2  witness_op               constraints=7199 wall_s=0.0335 peak_rss_mb=17.6641 ok=1 load1=5.30 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=16  chunk=2  prove                    constraints=7199 wall_s=0.0916 peak_rss_mb=44.2812 bytes=997 ok=1 load1=5.30 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=16  chunk=2  verify                   wall_s=0.0067 peak_rss_mb=11.4766 ok=1 load1=5.30 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=16  chunk=3  native_reference         wall_s=0.0000 ok=1 load1=5.30 note=hits=8 inserts=0 evicts=8 occupied=8
+  s=8    k=16  chunk=3  witness_helper           wall_s=0.0182 peak_rss_mb=16.3633 load1=5.30 note=Poseidon commitments for the driver
+  s=8    k=16  chunk=3  witness_op               constraints=7199 wall_s=0.0333 peak_rss_mb=17.2148 ok=1 load1=5.30 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=16  chunk=3  prove                    constraints=7199 wall_s=0.0925 peak_rss_mb=43.8438 bytes=997 ok=1 load1=5.30 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=16  chunk=3  verify                   wall_s=0.0063 peak_rss_mb=11.5234 ok=1 load1=5.30 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=16  chunk=0  semantics_other_min_accepted wall_s=0.0346 ok=1 load1=5.30 note=a later equal-count slot is a valid SpaceSaving choice
+  s=8    k=16  chunk=0  tamper_com_in_plus1      wall_s=0.0092 ok=1 load1=5.30 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=8    k=16  chunk=0  tamper_batch_com_plus1   wall_s=0.0150 ok=1 load1=5.30 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=8    k=16  chunk=0  tamper_salt_in_plus1     wall_s=0.0087 ok=1 load1=5.30 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=8    k=16  chunk=0  tamper_key_not_in_digest wall_s=0.0165 ok=1 load1=5.30 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=8    k=16  chunk=0  tamper_dropped_record    wall_s=0.0152 ok=1 load1=5.30 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=8    k=16  chunk=1  tamper_stale_state       wall_s=0.0096 ok=1 load1=5.30 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=8    k=16  chunk=0  tamper_hit_updates_min_slot wall_s=0.0182 ok=1 load1=5.30 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=8    k=16  chunk=0  tamper_miss_evicts_nonmin wall_s=0.0160 ok=1 load1=5.30 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=8    k=16  chunk=0  tamper_selector_two_hot  wall_s=0.0155 ok=1 load1=5.30 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=8    k=16  chunk=0  tamper_materializer_not_one wall_s=0.0042 ok=1 load1=5.30 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=8    k=16  chunk=1  tamper_alias_key_count   wall_s=0.0043 ok=1 load1=5.30 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=16  chunk=1  tamper_alias_count_error wall_s=0.0041 ok=1 load1=5.30 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=16  chunk=1  tamper_alias_error_absorbs_count wall_s=0.0079 ok=1 load1=5.30 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=16  chunk=1  tamper_alias_across_slots wall_s=0.0053 ok=1 load1=5.30 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=64  chunk=   compile_op               constraints=22538 wall_s=5.6530 peak_rss_mb=477.1914 bytes=17561150 ok=1 load1=5.36 foreign=3/- note=r1cs_bytes=11109504
+  s=8    k=64  chunk=   compile_helper           constraints=5721 wall_s=4.0512 peak_rss_mb=431.8320 bytes=8059159 ok=1 load1=5.33 foreign=3/- note=r1cs_bytes=6274908
+  s=8    k=64  chunk=   setup                    constraints=22538 wall_s=0.2381 peak_rss_mb=84.2305 bytes=8983152 ok=1 load1=5.33 foreign=3/0 note=vk_bytes=1917
+  s=8    k=64  chunk=0  native_reference         wall_s=0.0000 ok=1 load1=5.33 note=hits=16 inserts=8 evicts=40 occupied=8
+  s=8    k=64  chunk=0  witness_helper           wall_s=0.0365 peak_rss_mb=16.9375 load1=5.33 note=Poseidon commitments for the driver
+  s=8    k=64  chunk=0  witness_op               constraints=22538 wall_s=0.0842 peak_rss_mb=21.6445 ok=1 load1=5.33 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=64  chunk=0  prove                    constraints=22538 wall_s=0.2299 peak_rss_mb=97.9414 bytes=997 ok=1 load1=5.33 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=64  chunk=0  verify                   wall_s=0.0070 peak_rss_mb=11.5859 ok=1 load1=5.33 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=64  chunk=0  tamper_verify_com_out_plus1 wall_s=0.0070 ok=1 load1=5.33 note=rejected
+  s=8    k=64  chunk=1  native_reference         wall_s=0.0000 ok=1 load1=5.33 note=hits=9 inserts=0 evicts=55 occupied=8
+  s=8    k=64  chunk=1  witness_helper           wall_s=0.0362 peak_rss_mb=17.0977 load1=5.33 note=Poseidon commitments for the driver
+  s=8    k=64  chunk=1  witness_op               constraints=22538 wall_s=0.0834 peak_rss_mb=20.7070 ok=1 load1=5.33 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=64  chunk=1  prove                    constraints=22538 wall_s=0.2262 peak_rss_mb=99.1680 bytes=997 ok=1 load1=5.33 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=64  chunk=1  verify                   wall_s=0.0070 peak_rss_mb=11.5000 ok=1 load1=5.33 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=64  chunk=2  native_reference         wall_s=0.0000 ok=1 load1=5.33 note=hits=17 inserts=0 evicts=47 occupied=8
+  s=8    k=64  chunk=2  witness_helper           wall_s=0.0371 peak_rss_mb=18.4258 load1=5.33 note=Poseidon commitments for the driver
+  s=8    k=64  chunk=2  witness_op               constraints=22538 wall_s=0.0840 peak_rss_mb=21.2070 ok=1 load1=5.33 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=64  chunk=2  prove                    constraints=22538 wall_s=0.2219 peak_rss_mb=95.2109 bytes=997 ok=1 load1=5.33 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=64  chunk=2  verify                   wall_s=0.0074 peak_rss_mb=10.9844 ok=1 load1=5.33 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=64  chunk=3  native_reference         wall_s=0.0000 ok=1 load1=5.33 note=hits=26 inserts=0 evicts=38 occupied=8
+  s=8    k=64  chunk=3  witness_helper           wall_s=0.0369 peak_rss_mb=16.6758 load1=5.33 note=Poseidon commitments for the driver
+  s=8    k=64  chunk=3  witness_op               constraints=22538 wall_s=0.0838 peak_rss_mb=21.1758 ok=1 load1=5.33 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=8    k=64  chunk=3  prove                    constraints=22538 wall_s=0.2279 peak_rss_mb=95.5859 bytes=997 ok=1 load1=5.33 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=8    k=64  chunk=3  verify                   wall_s=0.0072 peak_rss_mb=11.4805 ok=1 load1=5.33 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=8    k=64  chunk=0  semantics_other_min_accepted wall_s=0.0823 ok=1 load1=5.33 note=a later equal-count slot is a valid SpaceSaving choice
+  s=8    k=64  chunk=0  tamper_com_in_plus1      wall_s=0.0097 ok=1 load1=5.33 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=8    k=64  chunk=0  tamper_batch_com_plus1   wall_s=0.0315 ok=1 load1=5.33 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=8    k=64  chunk=0  tamper_salt_in_plus1     wall_s=0.0083 ok=1 load1=5.33 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=8    k=64  chunk=0  tamper_key_not_in_digest wall_s=0.0306 ok=1 load1=5.33 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=8    k=64  chunk=0  tamper_dropped_record    wall_s=0.0313 ok=1 load1=5.33 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=8    k=64  chunk=1  tamper_stale_state       wall_s=0.0082 ok=1 load1=5.33 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=8    k=64  chunk=0  tamper_hit_updates_min_slot wall_s=0.0330 ok=1 load1=5.33 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=8    k=64  chunk=0  tamper_miss_evicts_nonmin wall_s=0.0316 ok=1 load1=5.33 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=8    k=64  chunk=0  tamper_selector_two_hot  wall_s=0.0309 ok=1 load1=5.33 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=8    k=64  chunk=0  tamper_materializer_not_one wall_s=0.0038 ok=1 load1=5.33 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=8    k=64  chunk=1  tamper_alias_key_count   wall_s=0.0051 ok=1 load1=5.33 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=64  chunk=1  tamper_alias_count_error wall_s=0.0049 ok=1 load1=5.33 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=64  chunk=1  tamper_alias_error_absorbs_count wall_s=0.0040 ok=1 load1=5.33 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=8    k=64  chunk=1  tamper_alias_across_slots wall_s=0.0046 ok=1 load1=5.33 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=4   chunk=   compile_op               constraints=5418 wall_s=1.8946 peak_rss_mb=191.9414 bytes=5106638 ok=1 load1=5.38 foreign=3/- note=r1cs_bytes=3564660
+  s=16   k=4   chunk=   compile_helper           constraints=2169 wall_s=1.6483 peak_rss_mb=184.1016 bytes=3062281 ok=1 load1=5.38 foreign=3/- note=r1cs_bytes=2383596
+  s=16   k=4   chunk=   setup                    constraints=5418 wall_s=0.0780 peak_rss_mb=37.4453 bytes=2218608 ok=1 load1=5.38 foreign=3/0 note=vk_bytes=1917
+  s=16   k=4   chunk=0  native_reference         wall_s=0.0000 ok=1 load1=5.38 note=hits=0 inserts=4 evicts=0 occupied=4
+  s=16   k=4   chunk=0  witness_helper           wall_s=0.0174 peak_rss_mb=16.6719 load1=5.38 note=Poseidon commitments for the driver
+  s=16   k=4   chunk=0  witness_op               constraints=5418 wall_s=0.0271 peak_rss_mb=16.3555 ok=1 load1=5.38 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=4   chunk=0  prove                    constraints=5418 wall_s=0.0778 peak_rss_mb=37.7031 bytes=997 ok=1 load1=5.38 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=4   chunk=0  verify                   wall_s=0.0072 peak_rss_mb=10.9922 ok=1 load1=5.38 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=4   chunk=0  tamper_verify_com_out_plus1 wall_s=0.0054 ok=1 load1=5.38 note=rejected
+  s=16   k=4   chunk=1  native_reference         wall_s=0.0000 ok=1 load1=5.38 note=hits=1 inserts=3 evicts=0 occupied=7
+  s=16   k=4   chunk=1  witness_helper           wall_s=0.0162 peak_rss_mb=16.2148 load1=5.38 note=Poseidon commitments for the driver
+  s=16   k=4   chunk=1  witness_op               constraints=5418 wall_s=0.0259 peak_rss_mb=17.6914 ok=1 load1=5.38 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=4   chunk=1  prove                    constraints=5418 wall_s=0.0784 peak_rss_mb=38.4023 bytes=997 ok=1 load1=5.38 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=4   chunk=1  verify                   wall_s=0.0070 peak_rss_mb=11.5273 ok=1 load1=5.38 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=4   chunk=2  native_reference         wall_s=0.0000 ok=1 load1=5.38 note=hits=2 inserts=2 evicts=0 occupied=9
+  s=16   k=4   chunk=2  witness_helper           wall_s=0.0167 peak_rss_mb=15.8828 load1=5.38 note=Poseidon commitments for the driver
+  s=16   k=4   chunk=2  witness_op               constraints=5418 wall_s=0.0255 peak_rss_mb=17.7227 ok=1 load1=5.38 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=4   chunk=2  prove                    constraints=5418 wall_s=0.0739 peak_rss_mb=38.8203 bytes=997 ok=1 load1=5.38 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=4   chunk=2  verify                   wall_s=0.0063 peak_rss_mb=11.4219 ok=1 load1=5.38 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=4   chunk=3  native_reference         wall_s=0.0000 ok=1 load1=5.38 note=hits=0 inserts=4 evicts=0 occupied=13
+  s=16   k=4   chunk=3  witness_helper           wall_s=0.0174 peak_rss_mb=16.3789 load1=5.38 note=Poseidon commitments for the driver
+  s=16   k=4   chunk=3  witness_op               constraints=5418 wall_s=0.0272 peak_rss_mb=16.7812 ok=1 load1=5.38 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=4   chunk=3  prove                    constraints=5418 wall_s=0.0765 peak_rss_mb=38.3828 bytes=997 ok=1 load1=5.38 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=4   chunk=3  verify                   wall_s=0.0064 peak_rss_mb=10.5352 ok=1 load1=5.38 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=4   chunk=0  semantics_other_min_accepted wall_s=0.0265 ok=1 load1=5.38 note=a later equal-count slot is a valid SpaceSaving choice
+  s=16   k=4   chunk=0  tamper_com_in_plus1      wall_s=0.0111 ok=1 load1=5.38 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=16   k=4   chunk=0  tamper_batch_com_plus1   wall_s=0.0136 ok=1 load1=5.38 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=16   k=4   chunk=0  tamper_salt_in_plus1     wall_s=0.0112 ok=1 load1=5.38 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=16   k=4   chunk=0  tamper_key_not_in_digest wall_s=0.0123 ok=1 load1=5.38 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=16   k=4   chunk=0  tamper_dropped_record    wall_s=0.0129 ok=1 load1=5.38 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=16   k=4   chunk=1  tamper_stale_state       wall_s=0.0126 ok=1 load1=5.38 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=16   k=4   chunk=1  tamper_hit_updates_min_slot wall_s=0.0124 ok=1 load1=5.38 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=16   k=4   chunk=0  tamper_miss_evicts_nonmin wall_s=0.0144 ok=1 load1=5.38 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=16   k=4   chunk=0  tamper_selector_two_hot  wall_s=0.0135 ok=1 load1=5.38 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=16   k=4   chunk=0  tamper_materializer_not_one wall_s=0.0037 ok=1 load1=5.38 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=16   k=4   chunk=1  tamper_alias_key_count   wall_s=0.0034 ok=1 load1=5.38 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=4   chunk=1  tamper_alias_count_error wall_s=0.0041 ok=1 load1=5.38 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=4   chunk=1  tamper_alias_error_absorbs_count wall_s=0.0044 ok=1 load1=5.38 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=4   chunk=1  tamper_alias_across_slots wall_s=0.0039 ok=1 load1=5.38 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=16  chunk=   compile_op               constraints=12503 wall_s=2.9949 peak_rss_mb=295.6406 bytes=10927306 ok=1 load1=5.35 foreign=3/- note=r1cs_bytes=7051504
+  s=16   k=16  chunk=   compile_helper           constraints=3222 wall_s=2.3494 peak_rss_mb=270.5625 bytes=4554685 ok=1 load1=5.35 foreign=3/- note=r1cs_bytes=3547176
+  s=16   k=16  chunk=   setup                    constraints=12503 wall_s=0.1375 peak_rss_mb=57.8164 bytes=4887216 ok=1 load1=5.35 foreign=3/0 note=vk_bytes=1917
+  s=16   k=16  chunk=0  native_reference         wall_s=0.0000 ok=1 load1=5.35 note=hits=3 inserts=13 evicts=0 occupied=13
+  s=16   k=16  chunk=0  witness_helper           wall_s=0.0243 peak_rss_mb=17.3281 load1=5.35 note=Poseidon commitments for the driver
+  s=16   k=16  chunk=0  witness_op               constraints=12503 wall_s=0.0509 peak_rss_mb=18.7461 ok=1 load1=5.35 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=16  chunk=0  prove                    constraints=12503 wall_s=0.1476 peak_rss_mb=63.6797 bytes=997 ok=1 load1=5.35 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=16  chunk=0  verify                   wall_s=0.0066 peak_rss_mb=10.5195 ok=1 load1=5.35 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=16  chunk=0  tamper_verify_com_out_plus1 wall_s=0.0065 ok=1 load1=5.35 note=rejected
+  s=16   k=16  chunk=1  native_reference         wall_s=0.0000 ok=1 load1=5.35 note=hits=3 inserts=3 evicts=10 occupied=16
+  s=16   k=16  chunk=1  witness_helper           wall_s=0.0205 peak_rss_mb=16.8125 load1=5.35 note=Poseidon commitments for the driver
+  s=16   k=16  chunk=1  witness_op               constraints=12503 wall_s=0.0541 peak_rss_mb=17.8242 ok=1 load1=5.35 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=16  chunk=1  prove                    constraints=12503 wall_s=0.1436 peak_rss_mb=64.2461 bytes=997 ok=1 load1=5.35 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=16  chunk=1  verify                   wall_s=0.0073 peak_rss_mb=9.9375 ok=1 load1=5.35 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=16  chunk=2  native_reference         wall_s=0.0000 ok=1 load1=5.35 note=hits=3 inserts=0 evicts=13 occupied=16
+  s=16   k=16  chunk=2  witness_helper           wall_s=0.0224 peak_rss_mb=16.8008 load1=5.35 note=Poseidon commitments for the driver
+  s=16   k=16  chunk=2  witness_op               constraints=12503 wall_s=0.0527 peak_rss_mb=18.7656 ok=1 load1=5.35 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=16  chunk=2  prove                    constraints=12503 wall_s=0.1459 peak_rss_mb=64.4180 bytes=997 ok=1 load1=5.35 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=16  chunk=2  verify                   wall_s=0.0066 peak_rss_mb=11.5781 ok=1 load1=5.35 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=16  chunk=3  native_reference         wall_s=0.0000 ok=1 load1=5.35 note=hits=8 inserts=0 evicts=8 occupied=16
+  s=16   k=16  chunk=3  witness_helper           wall_s=0.0233 peak_rss_mb=16.1797 load1=5.35 note=Poseidon commitments for the driver
+  s=16   k=16  chunk=3  witness_op               constraints=12503 wall_s=0.0543 peak_rss_mb=19.3359 ok=1 load1=5.35 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=16  chunk=3  prove                    constraints=12503 wall_s=0.1539 peak_rss_mb=63.3320 bytes=997 ok=1 load1=5.35 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=16  chunk=3  verify                   wall_s=0.0074 peak_rss_mb=11.5039 ok=1 load1=5.35 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=16  chunk=0  semantics_other_min_accepted wall_s=0.0530 ok=1 load1=5.35 note=a later equal-count slot is a valid SpaceSaving choice
+  s=16   k=16  chunk=0  tamper_com_in_plus1      wall_s=0.0119 ok=1 load1=5.35 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=16   k=16  chunk=0  tamper_batch_com_plus1   wall_s=0.0184 ok=1 load1=5.35 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=16   k=16  chunk=0  tamper_salt_in_plus1     wall_s=0.0118 ok=1 load1=5.35 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=16   k=16  chunk=0  tamper_key_not_in_digest wall_s=0.0175 ok=1 load1=5.35 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=16   k=16  chunk=0  tamper_dropped_record    wall_s=0.0186 ok=1 load1=5.35 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=16   k=16  chunk=1  tamper_stale_state       wall_s=0.0114 ok=1 load1=5.35 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=16   k=16  chunk=0  tamper_hit_updates_min_slot wall_s=0.0226 ok=1 load1=5.32 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=16   k=16  chunk=0  tamper_miss_evicts_nonmin wall_s=0.0204 ok=1 load1=5.32 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=16   k=16  chunk=0  tamper_selector_two_hot  wall_s=0.0183 ok=1 load1=5.32 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=16   k=16  chunk=0  tamper_materializer_not_one wall_s=0.0041 ok=1 load1=5.32 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=16   k=16  chunk=1  tamper_alias_key_count   wall_s=0.0050 ok=1 load1=5.32 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=16  chunk=1  tamper_alias_count_error wall_s=0.0046 ok=1 load1=5.32 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=16  chunk=1  tamper_alias_error_absorbs_count wall_s=0.0044 ok=1 load1=5.32 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=16  chunk=1  tamper_alias_across_slots wall_s=0.0045 ok=1 load1=5.32 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=64  chunk=   compile_op               constraints=39794 wall_s=8.2824 peak_rss_mb=620.1797 bytes=28026834 ok=1 load1=5.30 foreign=3/- note=r1cs_bytes=16694404
+  s=16   k=64  chunk=   compile_helper           constraints=6417 wall_s=4.5651 peak_rss_mb=462.0938 bytes=9110414 ok=1 load1=5.27 foreign=3/- note=r1cs_bytes=7052988
+  s=16   k=64  chunk=   setup                    constraints=39794 wall_s=0.3671 peak_rss_mb=130.7422 bytes=16274544 ok=1 load1=5.27 foreign=3/0 note=vk_bytes=1917
+  s=16   k=64  chunk=0  native_reference         wall_s=0.0000 ok=1 load1=5.27 note=hits=17 inserts=16 evicts=31 occupied=16
+  s=16   k=64  chunk=0  witness_helper           wall_s=0.0405 peak_rss_mb=17.8984 load1=5.27 note=Poseidon commitments for the driver
+  s=16   k=64  chunk=0  witness_op               constraints=39794 wall_s=0.1386 peak_rss_mb=25.6719 ok=1 load1=5.27 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=64  chunk=0  prove                    constraints=39794 wall_s=0.3666 peak_rss_mb=151.5742 bytes=997 ok=1 load1=5.27 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=64  chunk=0  verify                   wall_s=0.0074 peak_rss_mb=10.9844 ok=1 load1=5.27 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=64  chunk=0  tamper_verify_com_out_plus1 wall_s=0.0081 ok=1 load1=5.27 note=rejected
+  s=16   k=64  chunk=1  native_reference         wall_s=0.0000 ok=1 load1=5.27 note=hits=11 inserts=0 evicts=53 occupied=16
+  s=16   k=64  chunk=1  witness_helper           wall_s=0.0413 peak_rss_mb=17.7734 load1=5.27 note=Poseidon commitments for the driver
+  s=16   k=64  chunk=1  witness_op               constraints=39794 wall_s=0.1357 peak_rss_mb=25.8633 ok=1 load1=5.27 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=64  chunk=1  prove                    constraints=39794 wall_s=0.3948 peak_rss_mb=154.6992 bytes=997 ok=1 load1=7.73 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=64  chunk=1  verify                   wall_s=0.0072 peak_rss_mb=11.4375 ok=1 load1=7.73 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=64  chunk=2  native_reference         wall_s=0.0000 ok=1 load1=7.73 note=hits=18 inserts=0 evicts=46 occupied=16
+  s=16   k=64  chunk=2  witness_helper           wall_s=0.0403 peak_rss_mb=18.3047 load1=7.73 note=Poseidon commitments for the driver
+  s=16   k=64  chunk=2  witness_op               constraints=39794 wall_s=0.1420 peak_rss_mb=24.8594 ok=1 load1=7.73 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=64  chunk=2  prove                    constraints=39794 wall_s=0.3645 peak_rss_mb=154.5781 bytes=997 ok=1 load1=7.73 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=64  chunk=2  verify                   wall_s=0.0069 peak_rss_mb=10.5664 ok=1 load1=7.73 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=64  chunk=3  native_reference         wall_s=0.0000 ok=1 load1=7.73 note=hits=28 inserts=0 evicts=36 occupied=16
+  s=16   k=64  chunk=3  witness_helper           wall_s=0.0398 peak_rss_mb=17.7109 load1=7.73 note=Poseidon commitments for the driver
+  s=16   k=64  chunk=3  witness_op               constraints=39794 wall_s=0.1331 peak_rss_mb=25.7461 ok=1 load1=7.73 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=16   k=64  chunk=3  prove                    constraints=39794 wall_s=0.3728 peak_rss_mb=156.2852 bytes=997 ok=1 load1=7.73 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=16   k=64  chunk=3  verify                   wall_s=0.0083 peak_rss_mb=11.5195 ok=1 load1=7.73 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=16   k=64  chunk=0  semantics_other_min_accepted wall_s=0.1358 ok=1 load1=7.73 note=a later equal-count slot is a valid SpaceSaving choice
+  s=16   k=64  chunk=0  tamper_com_in_plus1      wall_s=0.0135 ok=1 load1=7.73 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=16   k=64  chunk=0  tamper_batch_com_plus1   wall_s=0.0357 ok=1 load1=7.73 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=16   k=64  chunk=0  tamper_salt_in_plus1     wall_s=0.0122 ok=1 load1=7.73 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=16   k=64  chunk=0  tamper_key_not_in_digest wall_s=0.0352 ok=1 load1=7.73 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=16   k=64  chunk=0  tamper_dropped_record    wall_s=0.0347 ok=1 load1=7.73 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=16   k=64  chunk=1  tamper_stale_state       wall_s=0.0122 ok=1 load1=7.73 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=16   k=64  chunk=0  tamper_hit_updates_min_slot wall_s=0.0398 ok=1 load1=7.73 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=16   k=64  chunk=0  tamper_miss_evicts_nonmin wall_s=0.0350 ok=1 load1=7.73 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=16   k=64  chunk=0  tamper_selector_two_hot  wall_s=0.0347 ok=1 load1=7.73 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=16   k=64  chunk=0  tamper_materializer_not_one wall_s=0.0048 ok=1 load1=7.73 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=16   k=64  chunk=1  tamper_alias_key_count   wall_s=0.0047 ok=1 load1=7.73 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=64  chunk=1  tamper_alias_count_error wall_s=0.0050 ok=1 load1=7.73 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=64  chunk=1  tamper_alias_error_absorbs_count wall_s=0.0050 ok=1 load1=7.73 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=16   k=64  chunk=1  tamper_alias_across_slots wall_s=0.0050 ok=1 load1=7.73 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=4   chunk=   compile_op               constraints=9358 wall_s=2.7290 peak_rss_mb=275.6367 bytes=8236587 ok=1 load1=7.73 foreign=3/- note=r1cs_bytes=5531968
+  s=32   k=4   chunk=   compile_helper           constraints=2877 wall_s=2.0968 peak_rss_mb=228.6055 bytes=4080552 ok=1 load1=7.52 foreign=3/- note=r1cs_bytes=3171804
+  s=32   k=4   chunk=   setup                    constraints=9358 wall_s=0.1142 peak_rss_mb=49.9141 bytes=3962736 ok=1 load1=7.52 foreign=3/0 note=vk_bytes=1917
+  s=32   k=4   chunk=0  native_reference         wall_s=0.0000 ok=1 load1=7.52 note=hits=0 inserts=4 evicts=0 occupied=4
+  s=32   k=4   chunk=0  witness_helper           wall_s=0.0206 peak_rss_mb=16.7812 load1=7.52 note=Poseidon commitments for the driver
+  s=32   k=4   chunk=0  witness_op               constraints=9358 wall_s=0.0419 peak_rss_mb=18.0664 ok=1 load1=7.52 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=4   chunk=0  prove                    constraints=9358 wall_s=0.1109 peak_rss_mb=53.3359 bytes=997 ok=1 load1=7.52 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=4   chunk=0  verify                   wall_s=0.0064 peak_rss_mb=11.4883 ok=1 load1=7.52 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=4   chunk=0  tamper_verify_com_out_plus1 wall_s=0.0066 ok=1 load1=7.52 note=rejected
+  s=32   k=4   chunk=1  native_reference         wall_s=0.0000 ok=1 load1=7.52 note=hits=1 inserts=3 evicts=0 occupied=7
+  s=32   k=4   chunk=1  witness_helper           wall_s=0.0196 peak_rss_mb=16.8047 load1=7.52 note=Poseidon commitments for the driver
+  s=32   k=4   chunk=1  witness_op               constraints=9358 wall_s=0.0423 peak_rss_mb=17.7148 ok=1 load1=7.52 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=4   chunk=1  prove                    constraints=9358 wall_s=0.1217 peak_rss_mb=52.6289 bytes=997 ok=1 load1=7.52 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=4   chunk=1  verify                   wall_s=0.0067 peak_rss_mb=11.5781 ok=1 load1=7.52 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=4   chunk=2  native_reference         wall_s=0.0000 ok=1 load1=7.52 note=hits=2 inserts=2 evicts=0 occupied=9
+  s=32   k=4   chunk=2  witness_helper           wall_s=0.0195 peak_rss_mb=17.2461 load1=7.52 note=Poseidon commitments for the driver
+  s=32   k=4   chunk=2  witness_op               constraints=9358 wall_s=0.0423 peak_rss_mb=18.2422 ok=1 load1=7.52 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=4   chunk=2  prove                    constraints=9358 wall_s=0.1115 peak_rss_mb=51.5820 bytes=997 ok=1 load1=7.52 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=4   chunk=2  verify                   wall_s=0.0060 peak_rss_mb=11.5352 ok=1 load1=7.52 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=4   chunk=3  native_reference         wall_s=0.0000 ok=1 load1=7.52 note=hits=0 inserts=4 evicts=0 occupied=13
+  s=32   k=4   chunk=3  witness_helper           wall_s=0.0198 peak_rss_mb=16.6758 load1=7.52 note=Poseidon commitments for the driver
+  s=32   k=4   chunk=3  witness_op               constraints=9358 wall_s=0.0393 peak_rss_mb=17.8828 ok=1 load1=7.52 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=4   chunk=3  prove                    constraints=9358 wall_s=0.1133 peak_rss_mb=53.2695 bytes=997 ok=1 load1=7.52 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=4   chunk=3  verify                   wall_s=0.0066 peak_rss_mb=11.0156 ok=1 load1=7.52 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=4   chunk=0  semantics_other_min_accepted wall_s=0.0453 ok=1 load1=7.52 note=a later equal-count slot is a valid SpaceSaving choice
+  s=32   k=4   chunk=0  tamper_com_in_plus1      wall_s=0.0176 ok=1 load1=7.52 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=32   k=4   chunk=0  tamper_batch_com_plus1   wall_s=0.0169 ok=1 load1=7.52 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=32   k=4   chunk=0  tamper_salt_in_plus1     wall_s=0.0161 ok=1 load1=7.52 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=32   k=4   chunk=0  tamper_key_not_in_digest wall_s=0.0203 ok=1 load1=7.52 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=32   k=4   chunk=0  tamper_dropped_record    wall_s=0.0180 ok=1 load1=7.52 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=32   k=4   chunk=1  tamper_stale_state       wall_s=0.0155 ok=1 load1=7.52 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=32   k=4   chunk=1  tamper_hit_updates_min_slot wall_s=0.0178 ok=1 load1=7.52 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=32   k=4   chunk=0  tamper_miss_evicts_nonmin wall_s=0.0215 ok=1 load1=7.52 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=32   k=4   chunk=0  tamper_selector_two_hot  wall_s=0.0187 ok=1 load1=7.52 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=32   k=4   chunk=0  tamper_materializer_not_one wall_s=0.0037 ok=1 load1=7.52 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=32   k=4   chunk=1  tamper_alias_key_count   wall_s=0.0043 ok=1 load1=7.52 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=4   chunk=1  tamper_alias_count_error wall_s=0.0054 ok=1 load1=7.52 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=4   chunk=1  tamper_alias_error_absorbs_count wall_s=0.0040 ok=1 load1=7.52 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=4   chunk=1  tamper_alias_across_slots wall_s=0.0044 ok=1 load1=7.52 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=16  chunk=   compile_op               constraints=22427 wall_s=4.6391 peak_rss_mb=392.4023 bytes=18368438 ok=1 load1=7.39 foreign=3/- note=r1cs_bytes=11336892
+  s=32   k=16  chunk=   compile_helper           constraints=3930 wall_s=2.8549 peak_rss_mb=299.2500 bytes=5572805 ok=1 load1=7.20 foreign=3/- note=r1cs_bytes=4335384
+  s=32   k=16  chunk=   setup                    constraints=22427 wall_s=0.2440 peak_rss_mb=83.0156 bytes=8947632 ok=1 load1=7.20 foreign=3/0 note=vk_bytes=1917
+  s=32   k=16  chunk=0  native_reference         wall_s=0.0000 ok=1 load1=7.20 note=hits=3 inserts=13 evicts=0 occupied=13
+  s=32   k=16  chunk=0  witness_helper           wall_s=0.0278 peak_rss_mb=17.7383 load1=7.20 note=Poseidon commitments for the driver
+  s=32   k=16  chunk=0  witness_op               constraints=22427 wall_s=0.0853 peak_rss_mb=21.2656 ok=1 load1=7.20 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=16  chunk=0  prove                    constraints=22427 wall_s=0.2278 peak_rss_mb=98.2031 bytes=997 ok=1 load1=7.20 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=16  chunk=0  verify                   wall_s=0.0073 peak_rss_mb=11.5000 ok=1 load1=7.20 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=16  chunk=0  tamper_verify_com_out_plus1 wall_s=0.0066 ok=1 load1=7.20 note=rejected
+  s=32   k=16  chunk=1  native_reference         wall_s=0.0000 ok=1 load1=7.20 note=hits=3 inserts=13 evicts=0 occupied=26
+  s=32   k=16  chunk=1  witness_helper           wall_s=0.0258 peak_rss_mb=17.3789 load1=7.20 note=Poseidon commitments for the driver
+  s=32   k=16  chunk=1  witness_op               constraints=22427 wall_s=0.0849 peak_rss_mb=21.2227 ok=1 load1=7.20 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=16  chunk=1  prove                    constraints=22427 wall_s=0.2241 peak_rss_mb=97.3086 bytes=997 ok=1 load1=7.20 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=16  chunk=1  verify                   wall_s=0.0067 peak_rss_mb=11.4609 ok=1 load1=7.20 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=16  chunk=2  native_reference         wall_s=0.0000 ok=1 load1=7.20 note=hits=3 inserts=6 evicts=7 occupied=32
+  s=32   k=16  chunk=2  witness_helper           wall_s=0.0256 peak_rss_mb=17.3828 load1=7.20 note=Poseidon commitments for the driver
+  s=32   k=16  chunk=2  witness_op               constraints=22427 wall_s=0.0868 peak_rss_mb=21.0586 ok=1 load1=7.20 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=16  chunk=2  prove                    constraints=22427 wall_s=0.2334 peak_rss_mb=97.8320 bytes=997 ok=1 load1=7.20 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=16  chunk=2  verify                   wall_s=0.0073 peak_rss_mb=10.6094 ok=1 load1=7.20 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=16  chunk=3  native_reference         wall_s=0.0000 ok=1 load1=7.20 note=hits=9 inserts=0 evicts=7 occupied=32
+  s=32   k=16  chunk=3  witness_helper           wall_s=0.0267 peak_rss_mb=17.2734 load1=7.20 note=Poseidon commitments for the driver
+  s=32   k=16  chunk=3  witness_op               constraints=22427 wall_s=0.0855 peak_rss_mb=21.8125 ok=1 load1=7.20 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=16  chunk=3  prove                    constraints=22427 wall_s=0.2329 peak_rss_mb=96.6680 bytes=997 ok=1 load1=7.20 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=16  chunk=3  verify                   wall_s=0.0068 peak_rss_mb=10.9492 ok=1 load1=7.20 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=16  chunk=0  semantics_other_min_accepted wall_s=0.0907 ok=1 load1=7.20 note=a later equal-count slot is a valid SpaceSaving choice
+  s=32   k=16  chunk=0  tamper_com_in_plus1      wall_s=0.0167 ok=1 load1=7.20 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=32   k=16  chunk=0  tamper_batch_com_plus1   wall_s=0.0243 ok=1 load1=7.20 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=32   k=16  chunk=0  tamper_salt_in_plus1     wall_s=0.0159 ok=1 load1=7.20 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=32   k=16  chunk=0  tamper_key_not_in_digest wall_s=0.0225 ok=1 load1=7.20 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=32   k=16  chunk=0  tamper_dropped_record    wall_s=0.0251 ok=1 load1=7.20 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=32   k=16  chunk=1  tamper_stale_state       wall_s=0.0158 ok=1 load1=7.20 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=32   k=16  chunk=0  tamper_hit_updates_min_slot wall_s=0.0368 ok=1 load1=7.20 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=32   k=16  chunk=0  tamper_miss_evicts_nonmin wall_s=0.0259 ok=1 load1=7.20 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=32   k=16  chunk=0  tamper_selector_two_hot  wall_s=0.0241 ok=1 load1=7.20 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=32   k=16  chunk=0  tamper_materializer_not_one wall_s=0.0049 ok=1 load1=7.20 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=32   k=16  chunk=1  tamper_alias_key_count   wall_s=0.0040 ok=1 load1=7.20 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=16  chunk=1  tamper_alias_count_error wall_s=0.0048 ok=1 load1=7.20 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=16  chunk=1  tamper_alias_error_absorbs_count wall_s=0.0046 ok=1 load1=7.20 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=16  chunk=1  tamper_alias_across_slots wall_s=0.0041 ok=1 load1=7.20 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=64  chunk=   compile_op               constraints=73622 wall_s=14.7904 peak_rss_mb=876.5703 bytes=47921358 ok=1 load1=6.78 foreign=3/- note=r1cs_bytes=27096144
+  s=32   k=64  chunk=   compile_helper           constraints=7125 wall_s=5.0506 peak_rss_mb=514.2266 bytes=10168942 ok=1 load1=6.64 foreign=3/- note=r1cs_bytes=7841196
+  s=32   k=64  chunk=   setup                    constraints=73622 wall_s=0.6767 peak_rss_mb=222.8359 bytes=30638448 ok=1 load1=6.64 foreign=3/0 note=vk_bytes=1917
+  s=32   k=64  chunk=0  native_reference         wall_s=0.0001 ok=1 load1=6.64 note=hits=18 inserts=32 evicts=14 occupied=32
+  s=32   k=64  chunk=0  witness_helper           wall_s=0.0461 peak_rss_mb=17.2852 load1=6.64 note=Poseidon commitments for the driver
+  s=32   k=64  chunk=0  witness_op               constraints=73622 wall_s=0.2499 peak_rss_mb=34.3633 ok=1 load1=6.64 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=64  chunk=0  prove                    constraints=73622 wall_s=0.6344 peak_rss_mb=249.2031 bytes=997 ok=1 load1=7.15 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=64  chunk=0  verify                   wall_s=0.0072 peak_rss_mb=12.1953 ok=1 load1=7.15 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=64  chunk=0  tamper_verify_com_out_plus1 wall_s=0.0066 ok=1 load1=7.15 note=rejected
+  s=32   k=64  chunk=1  native_reference         wall_s=0.0000 ok=1 load1=7.15 note=hits=13 inserts=0 evicts=51 occupied=32
+  s=32   k=64  chunk=1  witness_helper           wall_s=0.0415 peak_rss_mb=18.2148 load1=7.15 note=Poseidon commitments for the driver
+  s=32   k=64  chunk=1  witness_op               constraints=73622 wall_s=0.2326 peak_rss_mb=34.8320 ok=1 load1=7.15 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=64  chunk=1  prove                    constraints=73622 wall_s=0.6197 peak_rss_mb=251.5039 bytes=997 ok=1 load1=7.15 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=64  chunk=1  verify                   wall_s=0.0076 peak_rss_mb=11.5156 ok=1 load1=7.15 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=64  chunk=2  native_reference         wall_s=0.0000 ok=1 load1=7.15 note=hits=19 inserts=0 evicts=45 occupied=32
+  s=32   k=64  chunk=2  witness_helper           wall_s=0.0462 peak_rss_mb=17.6758 load1=7.15 note=Poseidon commitments for the driver
+  s=32   k=64  chunk=2  witness_op               constraints=73622 wall_s=0.2349 peak_rss_mb=33.7383 ok=1 load1=7.15 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=64  chunk=2  prove                    constraints=73622 wall_s=0.6125 peak_rss_mb=250.2969 bytes=997 ok=1 load1=7.15 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=64  chunk=2  verify                   wall_s=0.0079 peak_rss_mb=11.0977 ok=1 load1=7.15 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=64  chunk=3  native_reference         wall_s=0.0000 ok=1 load1=7.15 note=hits=29 inserts=0 evicts=35 occupied=32
+  s=32   k=64  chunk=3  witness_helper           wall_s=0.0458 peak_rss_mb=18.3047 load1=7.15 note=Poseidon commitments for the driver
+  s=32   k=64  chunk=3  witness_op               constraints=73622 wall_s=0.2343 peak_rss_mb=33.7383 ok=1 load1=7.15 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=32   k=64  chunk=3  prove                    constraints=73622 wall_s=0.6416 peak_rss_mb=250.0391 bytes=997 ok=1 load1=7.15 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=32   k=64  chunk=3  verify                   wall_s=0.0082 peak_rss_mb=10.8438 ok=1 load1=7.15 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=32   k=64  chunk=0  semantics_other_min_accepted wall_s=0.2366 ok=1 load1=7.15 note=a later equal-count slot is a valid SpaceSaving choice
+  s=32   k=64  chunk=0  tamper_com_in_plus1      wall_s=0.0189 ok=1 load1=7.15 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=32   k=64  chunk=0  tamper_batch_com_plus1   wall_s=0.0405 ok=1 load1=7.15 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=32   k=64  chunk=0  tamper_salt_in_plus1     wall_s=0.0168 ok=1 load1=7.15 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=32   k=64  chunk=0  tamper_key_not_in_digest wall_s=0.0435 ok=1 load1=7.15 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=32   k=64  chunk=0  tamper_dropped_record    wall_s=0.0409 ok=1 load1=7.15 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=32   k=64  chunk=1  tamper_stale_state       wall_s=0.0171 ok=1 load1=7.15 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=32   k=64  chunk=0  tamper_hit_updates_min_slot wall_s=0.0505 ok=1 load1=7.15 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=32   k=64  chunk=0  tamper_miss_evicts_nonmin wall_s=0.0450 ok=1 load1=7.15 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=32   k=64  chunk=0  tamper_selector_two_hot  wall_s=0.0421 ok=1 load1=7.15 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=32   k=64  chunk=0  tamper_materializer_not_one wall_s=0.0063 ok=1 load1=7.15 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=32   k=64  chunk=1  tamper_alias_key_count   wall_s=0.0059 ok=1 load1=7.15 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=64  chunk=1  tamper_alias_count_error wall_s=0.0064 ok=1 load1=7.15 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=64  chunk=1  tamper_alias_error_absorbs_count wall_s=0.0056 ok=1 load1=7.15 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=32   k=64  chunk=1  tamper_alias_across_slots wall_s=0.0057 ok=1 load1=7.15 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=4   chunk=   compile_op               constraints=17264 wall_s=4.2690 peak_rss_mb=378.0000 bytes=14491328 ok=1 load1=6.98 foreign=3/- note=r1cs_bytes=9444460
+  s=64   k=4   chunk=   compile_helper           constraints=4299 wall_s=3.1044 peak_rss_mb=321.8594 bytes=6117566 ok=1 load1=6.82 foreign=3/- note=r1cs_bytes=4750500
+  s=64   k=4   chunk=   setup                    constraints=17264 wall_s=0.1838 peak_rss_mb=71.9492 bytes=7459312 ok=1 load1=6.82 foreign=3/0 note=vk_bytes=1917
+  s=64   k=4   chunk=0  native_reference         wall_s=0.0000 ok=1 load1=6.82 note=hits=0 inserts=4 evicts=0 occupied=4
+  s=64   k=4   chunk=0  witness_helper           wall_s=0.0293 peak_rss_mb=17.3008 load1=6.82 note=Poseidon commitments for the driver
+  s=64   k=4   chunk=0  witness_op               constraints=17264 wall_s=0.0680 peak_rss_mb=19.7695 ok=1 load1=6.82 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=4   chunk=0  prove                    constraints=17264 wall_s=0.1954 peak_rss_mb=83.5625 bytes=997 ok=1 load1=6.82 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=4   chunk=0  verify                   wall_s=0.0066 peak_rss_mb=10.8867 ok=1 load1=6.82 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=4   chunk=0  tamper_verify_com_out_plus1 wall_s=0.0074 ok=1 load1=6.82 note=rejected
+  s=64   k=4   chunk=1  native_reference         wall_s=0.0000 ok=1 load1=6.82 note=hits=1 inserts=3 evicts=0 occupied=7
+  s=64   k=4   chunk=1  witness_helper           wall_s=0.0284 peak_rss_mb=17.2969 load1=6.82 note=Poseidon commitments for the driver
+  s=64   k=4   chunk=1  witness_op               constraints=17264 wall_s=0.0664 peak_rss_mb=19.8750 ok=1 load1=6.82 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=4   chunk=1  prove                    constraints=17264 wall_s=0.1863 peak_rss_mb=82.7305 bytes=997 ok=1 load1=6.82 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=4   chunk=1  verify                   wall_s=0.0079 peak_rss_mb=10.3945 ok=1 load1=6.82 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=4   chunk=2  native_reference         wall_s=0.0000 ok=1 load1=6.82 note=hits=2 inserts=2 evicts=0 occupied=9
+  s=64   k=4   chunk=2  witness_helper           wall_s=0.0270 peak_rss_mb=16.8164 load1=6.82 note=Poseidon commitments for the driver
+  s=64   k=4   chunk=2  witness_op               constraints=17264 wall_s=0.0706 peak_rss_mb=20.8711 ok=1 load1=6.82 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=4   chunk=2  prove                    constraints=17264 wall_s=0.1945 peak_rss_mb=81.6250 bytes=997 ok=1 load1=6.82 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=4   chunk=2  verify                   wall_s=0.0071 peak_rss_mb=10.9883 ok=1 load1=6.82 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=4   chunk=3  native_reference         wall_s=0.0000 ok=1 load1=6.82 note=hits=0 inserts=4 evicts=0 occupied=13
+  s=64   k=4   chunk=3  witness_helper           wall_s=0.0294 peak_rss_mb=17.1797 load1=6.82 note=Poseidon commitments for the driver
+  s=64   k=4   chunk=3  witness_op               constraints=17264 wall_s=0.0685 peak_rss_mb=19.7188 ok=1 load1=6.82 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=4   chunk=3  prove                    constraints=17264 wall_s=0.1854 peak_rss_mb=83.2227 bytes=997 ok=1 load1=6.82 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=4   chunk=3  verify                   wall_s=0.0068 peak_rss_mb=11.5000 ok=1 load1=6.82 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=4   chunk=0  semantics_other_min_accepted wall_s=0.0669 ok=1 load1=6.82 note=a later equal-count slot is a valid SpaceSaving choice
+  s=64   k=4   chunk=0  tamper_com_in_plus1      wall_s=0.0259 ok=1 load1=6.82 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=64   k=4   chunk=0  tamper_batch_com_plus1   wall_s=0.0255 ok=1 load1=6.82 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=64   k=4   chunk=0  tamper_salt_in_plus1     wall_s=0.0239 ok=1 load1=6.82 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=64   k=4   chunk=0  tamper_key_not_in_digest wall_s=0.0261 ok=1 load1=6.82 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=64   k=4   chunk=0  tamper_dropped_record    wall_s=0.0247 ok=1 load1=6.82 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=64   k=4   chunk=1  tamper_stale_state       wall_s=0.0241 ok=1 load1=6.82 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=64   k=4   chunk=1  tamper_hit_updates_min_slot wall_s=0.0252 ok=1 load1=6.82 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=64   k=4   chunk=0  tamper_miss_evicts_nonmin wall_s=0.0340 ok=1 load1=6.82 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=64   k=4   chunk=0  tamper_selector_two_hot  wall_s=0.0326 ok=1 load1=6.82 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=64   k=4   chunk=0  tamper_materializer_not_one wall_s=0.0041 ok=1 load1=6.82 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=64   k=4   chunk=1  tamper_alias_key_count   wall_s=0.0053 ok=1 load1=6.82 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=4   chunk=1  tamper_alias_count_error wall_s=0.0054 ok=1 load1=6.82 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=4   chunk=1  tamper_alias_error_absorbs_count wall_s=0.0036 ok=1 load1=6.82 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=4   chunk=1  tamper_alias_across_slots wall_s=0.0051 ok=1 load1=6.82 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=16  chunk=   compile_op               constraints=42361 wall_s=7.8827 peak_rss_mb=587.1953 bytes=33188780 ok=1 load1=6.54 foreign=3/- note=r1cs_bytes=19812008
+  s=64   k=16  chunk=   compile_helper           constraints=5352 wall_s=3.7192 peak_rss_mb=386.1016 bytes=7609862 ok=1 load1=6.41 foreign=3/- note=r1cs_bytes=5914080
+  s=64   k=16  chunk=   setup                    constraints=42361 wall_s=0.4033 peak_rss_mb=142.7656 bytes=17095984 ok=1 load1=6.41 foreign=3/0 note=vk_bytes=1917
+  s=64   k=16  chunk=0  native_reference         wall_s=0.0000 ok=1 load1=6.41 note=hits=3 inserts=13 evicts=0 occupied=13
+  s=64   k=16  chunk=0  witness_helper           wall_s=0.0361 peak_rss_mb=16.7109 load1=6.41 note=Poseidon commitments for the driver
+  s=64   k=16  chunk=0  witness_op               constraints=42361 wall_s=0.1591 peak_rss_mb=25.3320 ok=1 load1=6.41 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=16  chunk=0  prove                    constraints=42361 wall_s=0.3993 peak_rss_mb=170.7227 bytes=997 ok=1 load1=6.41 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=16  chunk=0  verify                   wall_s=0.0070 peak_rss_mb=11.4102 ok=1 load1=6.41 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=16  chunk=0  tamper_verify_com_out_plus1 wall_s=0.0068 ok=1 load1=6.41 note=rejected
+  s=64   k=16  chunk=1  native_reference         wall_s=0.0000 ok=1 load1=6.41 note=hits=3 inserts=13 evicts=0 occupied=26
+  s=64   k=16  chunk=1  witness_helper           wall_s=0.0346 peak_rss_mb=17.7812 load1=6.41 note=Poseidon commitments for the driver
+  s=64   k=16  chunk=1  witness_op               constraints=42361 wall_s=0.1561 peak_rss_mb=27.1914 ok=1 load1=6.41 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=16  chunk=1  prove                    constraints=42361 wall_s=0.4002 peak_rss_mb=169.9883 bytes=997 ok=1 load1=6.41 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=16  chunk=1  verify                   wall_s=0.0077 peak_rss_mb=11.5742 ok=1 load1=6.41 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=16  chunk=2  native_reference         wall_s=0.0000 ok=1 load1=6.41 note=hits=3 inserts=13 evicts=0 occupied=39
+  s=64   k=16  chunk=2  witness_helper           wall_s=0.0332 peak_rss_mb=17.9336 load1=6.41 note=Poseidon commitments for the driver
+  s=64   k=16  chunk=2  witness_op               constraints=42361 wall_s=0.1500 peak_rss_mb=25.8320 ok=1 load1=6.41 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=16  chunk=2  prove                    constraints=42361 wall_s=0.4006 peak_rss_mb=172.7812 bytes=997 ok=1 load1=6.41 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=16  chunk=2  verify                   wall_s=0.0070 peak_rss_mb=11.5391 ok=1 load1=6.41 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=16  chunk=3  native_reference         wall_s=0.0000 ok=1 load1=6.41 note=hits=9 inserts=7 evicts=0 occupied=46
+  s=64   k=16  chunk=3  witness_helper           wall_s=0.0353 peak_rss_mb=17.3242 load1=6.41 note=Poseidon commitments for the driver
+  s=64   k=16  chunk=3  witness_op               constraints=42361 wall_s=0.1558 peak_rss_mb=27.2891 ok=1 load1=6.41 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=16  chunk=3  prove                    constraints=42361 wall_s=0.3929 peak_rss_mb=170.3047 bytes=997 ok=1 load1=6.41 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=16  chunk=3  verify                   wall_s=0.0069 peak_rss_mb=11.0234 ok=1 load1=6.41 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=16  chunk=0  semantics_other_min_accepted wall_s=0.1563 ok=1 load1=6.41 note=a later equal-count slot is a valid SpaceSaving choice
+  s=64   k=16  chunk=0  tamper_com_in_plus1      wall_s=0.0275 ok=1 load1=6.41 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=64   k=16  chunk=0  tamper_batch_com_plus1   wall_s=0.0324 ok=1 load1=6.41 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=64   k=16  chunk=0  tamper_salt_in_plus1     wall_s=0.0252 ok=1 load1=6.41 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=64   k=16  chunk=0  tamper_key_not_in_digest wall_s=0.0317 ok=1 load1=6.41 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=64   k=16  chunk=0  tamper_dropped_record    wall_s=0.0312 ok=1 load1=6.41 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=64   k=16  chunk=1  tamper_stale_state       wall_s=0.0245 ok=1 load1=6.41 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=64   k=16  chunk=0  tamper_hit_updates_min_slot wall_s=0.0551 ok=1 load1=6.41 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=64   k=16  chunk=0  tamper_miss_evicts_nonmin wall_s=0.0420 ok=1 load1=6.41 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=64   k=16  chunk=0  tamper_selector_two_hot  wall_s=0.0358 ok=1 load1=6.41 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=64   k=16  chunk=0  tamper_materializer_not_one wall_s=0.0052 ok=1 load1=6.41 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=64   k=16  chunk=1  tamper_alias_key_count   wall_s=0.0051 ok=1 load1=6.41 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=16  chunk=1  tamper_alias_count_error wall_s=0.0044 ok=1 load1=6.41 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=16  chunk=1  tamper_alias_error_absorbs_count wall_s=0.0057 ok=1 load1=6.41 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=16  chunk=1  tamper_alias_across_slots wall_s=0.0046 ok=1 load1=6.41 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=64  chunk=   compile_op               constraints=141604 wall_s=36.4483 peak_rss_mb=1392.4805 bytes=87288272 ok=1 load1=6.56 foreign=3/- note=r1cs_bytes=47509820
+  s=64   k=64  chunk=   compile_helper           constraints=8547 wall_s=5.9220 peak_rss_mb=577.0781 bytes=12288852 ok=1 load1=6.43 foreign=3/- note=r1cs_bytes=9419892
+  s=64   k=64  chunk=   setup                    constraints=141604 wall_s=1.1683 peak_rss_mb=383.9883 bytes=59470576 ok=1 load1=6.43 foreign=3/0 note=vk_bytes=1917
+  s=64   k=64  chunk=0  native_reference         wall_s=0.0001 ok=1 load1=6.43 note=hits=18 inserts=46 evicts=0 occupied=46
+  s=64   k=64  chunk=0  witness_helper           wall_s=0.0527 peak_rss_mb=18.2617 load1=6.43 note=Poseidon commitments for the driver
+  s=64   k=64  chunk=0  witness_op               constraints=141604 wall_s=0.4304 peak_rss_mb=51.2539 ok=1 load1=6.43 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=64  chunk=0  prove                    constraints=141604 wall_s=1.1058 peak_rss_mb=450.7891 bytes=997 ok=1 load1=6.32 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=64  chunk=0  verify                   wall_s=0.0072 peak_rss_mb=11.5195 ok=1 load1=6.32 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=64  chunk=0  tamper_verify_com_out_plus1 wall_s=0.0072 ok=1 load1=6.32 note=rejected
+  s=64   k=64  chunk=1  native_reference         wall_s=0.0001 ok=1 load1=6.32 note=hits=13 inserts=18 evicts=33 occupied=64
+  s=64   k=64  chunk=1  witness_helper           wall_s=0.0506 peak_rss_mb=17.0977 load1=6.32 note=Poseidon commitments for the driver
+  s=64   k=64  chunk=1  witness_op               constraints=141604 wall_s=0.4400 peak_rss_mb=51.8633 ok=1 load1=6.32 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=64  chunk=1  prove                    constraints=141604 wall_s=1.1027 peak_rss_mb=452.0703 bytes=997 ok=1 load1=6.32 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=64  chunk=1  verify                   wall_s=0.0077 peak_rss_mb=12.0469 ok=1 load1=6.32 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=64  chunk=2  native_reference         wall_s=0.0001 ok=1 load1=6.32 note=hits=19 inserts=0 evicts=45 occupied=64
+  s=64   k=64  chunk=2  witness_helper           wall_s=0.0585 peak_rss_mb=17.1875 load1=6.32 note=Poseidon commitments for the driver
+  s=64   k=64  chunk=2  witness_op               constraints=141604 wall_s=0.4427 peak_rss_mb=50.2422 ok=1 load1=6.32 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=64  chunk=2  prove                    constraints=141604 wall_s=1.0945 peak_rss_mb=453.4766 bytes=997 ok=1 load1=6.32 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=64  chunk=2  verify                   wall_s=0.0073 peak_rss_mb=11.0039 ok=1 load1=6.32 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=64  chunk=3  native_reference         wall_s=0.0001 ok=1 load1=6.32 note=hits=31 inserts=0 evicts=33 occupied=64
+  s=64   k=64  chunk=3  witness_helper           wall_s=0.0540 peak_rss_mb=17.6484 load1=6.32 note=Poseidon commitments for the driver
+  s=64   k=64  chunk=3  witness_op               constraints=141604 wall_s=0.4468 peak_rss_mb=51.1406 ok=1 load1=6.32 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=64   k=64  chunk=3  prove                    constraints=141604 wall_s=1.0817 peak_rss_mb=453.9023 bytes=997 ok=1 load1=6.21 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=64   k=64  chunk=3  verify                   wall_s=0.0075 peak_rss_mb=11.6406 ok=1 load1=6.21 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=64   k=64  chunk=0  semantics_other_min_accepted wall_s=0.4377 ok=1 load1=6.21 note=a later equal-count slot is a valid SpaceSaving choice
+  s=64   k=64  chunk=0  tamper_com_in_plus1      wall_s=0.0286 ok=1 load1=6.21 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=64   k=64  chunk=0  tamper_batch_com_plus1   wall_s=0.0486 ok=1 load1=6.21 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=64   k=64  chunk=0  tamper_salt_in_plus1     wall_s=0.0292 ok=1 load1=6.21 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=64   k=64  chunk=0  tamper_key_not_in_digest wall_s=0.0488 ok=1 load1=6.21 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=64   k=64  chunk=0  tamper_dropped_record    wall_s=0.0513 ok=1 load1=6.21 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=64   k=64  chunk=1  tamper_stale_state       wall_s=0.0274 ok=1 load1=6.21 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=64   k=64  chunk=0  tamper_hit_updates_min_slot wall_s=0.0703 ok=1 load1=6.21 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=64   k=64  chunk=0  tamper_miss_evicts_nonmin wall_s=0.0581 ok=1 load1=6.21 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=64   k=64  chunk=0  tamper_selector_two_hot  wall_s=0.0540 ok=1 load1=6.21 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=64   k=64  chunk=0  tamper_materializer_not_one wall_s=0.0081 ok=1 load1=6.21 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=64   k=64  chunk=1  tamper_alias_key_count   wall_s=0.0070 ok=1 load1=6.21 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=64  chunk=1  tamper_alias_count_error wall_s=0.0067 ok=1 load1=6.21 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=64  chunk=1  tamper_alias_error_absorbs_count wall_s=0.0068 ok=1 load1=6.21 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=64   k=64  chunk=1  tamper_alias_across_slots wall_s=0.0072 ok=1 load1=6.21 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=4   chunk=   compile_op               constraints=33050 wall_s=7.7285 peak_rss_mb=616.6953 bytes=27162948 ok=1 load1=6.11 foreign=3/- note=r1cs_bytes=17291136
+  s=128  k=4   chunk=   compile_helper           constraints=7137 wall_s=5.1113 peak_rss_mb=501.0039 bytes=10279730 ok=1 load1=6.10 foreign=3/- note=r1cs_bytes=7905612
+  s=128  k=4   chunk=   setup                    constraints=33050 wall_s=0.3250 peak_rss_mb=121.6758 bytes=14444144 ok=1 load1=6.50 foreign=3/0 note=vk_bytes=1917
+  s=128  k=4   chunk=0  native_reference         wall_s=0.0000 ok=1 load1=6.50 note=hits=0 inserts=4 evicts=0 occupied=4
+  s=128  k=4   chunk=0  witness_helper           wall_s=0.0448 peak_rss_mb=18.2578 load1=6.50 note=Poseidon commitments for the driver
+  s=128  k=4   chunk=0  witness_op               constraints=33050 wall_s=0.1278 peak_rss_mb=24.3242 ok=1 load1=6.50 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=4   chunk=0  prove                    constraints=33050 wall_s=0.3345 peak_rss_mb=143.8359 bytes=997 ok=1 load1=6.50 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=4   chunk=0  verify                   wall_s=0.0085 peak_rss_mb=11.5039 ok=1 load1=6.50 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=4   chunk=0  tamper_verify_com_out_plus1 wall_s=0.0065 ok=1 load1=6.50 note=rejected
+  s=128  k=4   chunk=1  native_reference         wall_s=0.0000 ok=1 load1=6.50 note=hits=1 inserts=3 evicts=0 occupied=7
+  s=128  k=4   chunk=1  witness_helper           wall_s=0.0455 peak_rss_mb=17.1758 load1=6.50 note=Poseidon commitments for the driver
+  s=128  k=4   chunk=1  witness_op               constraints=33050 wall_s=0.1224 peak_rss_mb=23.6719 ok=1 load1=6.50 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=4   chunk=1  prove                    constraints=33050 wall_s=0.3155 peak_rss_mb=143.6797 bytes=997 ok=1 load1=6.50 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=4   chunk=1  verify                   wall_s=0.0075 peak_rss_mb=12.0938 ok=1 load1=6.50 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=4   chunk=2  native_reference         wall_s=0.0000 ok=1 load1=6.50 note=hits=2 inserts=2 evicts=0 occupied=9
+  s=128  k=4   chunk=2  witness_helper           wall_s=0.0453 peak_rss_mb=18.2148 load1=6.50 note=Poseidon commitments for the driver
+  s=128  k=4   chunk=2  witness_op               constraints=33050 wall_s=0.1225 peak_rss_mb=24.7578 ok=1 load1=6.50 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=4   chunk=2  prove                    constraints=33050 wall_s=0.3404 peak_rss_mb=145.9727 bytes=997 ok=1 load1=6.50 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=4   chunk=2  verify                   wall_s=0.0071 peak_rss_mb=11.0234 ok=1 load1=6.50 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=4   chunk=3  native_reference         wall_s=0.0000 ok=1 load1=6.50 note=hits=0 inserts=4 evicts=0 occupied=13
+  s=128  k=4   chunk=3  witness_helper           wall_s=0.0477 peak_rss_mb=18.2852 load1=6.50 note=Poseidon commitments for the driver
+  s=128  k=4   chunk=3  witness_op               constraints=33050 wall_s=0.1244 peak_rss_mb=24.2773 ok=1 load1=6.50 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=4   chunk=3  prove                    constraints=33050 wall_s=0.3245 peak_rss_mb=143.6445 bytes=997 ok=1 load1=6.50 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=4   chunk=3  verify                   wall_s=0.0070 peak_rss_mb=10.8867 ok=1 load1=6.50 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=4   chunk=0  semantics_other_min_accepted wall_s=0.1205 ok=1 load1=6.50 note=a later equal-count slot is a valid SpaceSaving choice
+  s=128  k=4   chunk=0  tamper_com_in_plus1      wall_s=0.0439 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=128  k=4   chunk=0  tamper_batch_com_plus1   wall_s=0.0468 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=128  k=4   chunk=0  tamper_salt_in_plus1     wall_s=0.0427 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=128  k=4   chunk=0  tamper_key_not_in_digest wall_s=0.0426 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=128  k=4   chunk=0  tamper_dropped_record    wall_s=0.0452 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=128  k=4   chunk=1  tamper_stale_state       wall_s=0.0425 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=128  k=4   chunk=1  tamper_hit_updates_min_slot wall_s=0.0441 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=128  k=4   chunk=0  tamper_miss_evicts_nonmin wall_s=0.0601 ok=1 load1=6.50 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=128  k=4   chunk=0  tamper_selector_two_hot  wall_s=0.0512 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=128  k=4   chunk=0  tamper_materializer_not_one wall_s=0.0057 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=128  k=4   chunk=1  tamper_alias_key_count   wall_s=0.0039 ok=1 load1=6.50 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=4   chunk=1  tamper_alias_count_error wall_s=0.0042 ok=1 load1=6.50 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=4   chunk=1  tamper_alias_error_absorbs_count wall_s=0.0051 ok=1 load1=6.50 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=4   chunk=1  tamper_alias_across_slots wall_s=0.0047 ok=1 load1=6.50 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=16  chunk=   compile_op               constraints=82143 wall_s=16.8908 peak_rss_mb=996.8359 bytes=63114996 ok=1 load1=6.59 foreign=3/- note=r1cs_bytes=36856172
+  s=128  k=16  chunk=   compile_helper           constraints=8190 wall_s=5.4969 peak_rss_mb=573.6094 bytes=11833478 ok=1 load1=6.54 foreign=3/- note=r1cs_bytes=9069192
+  s=128  k=16  chunk=   setup                    constraints=82143 wall_s=0.7464 peak_rss_mb=258.1562 bytes=33365168 ok=1 load1=6.54 foreign=3/0 note=vk_bytes=1917
+  s=128  k=16  chunk=0  native_reference         wall_s=0.0000 ok=1 load1=6.54 note=hits=3 inserts=13 evicts=0 occupied=13
+  s=128  k=16  chunk=0  witness_helper           wall_s=0.0498 peak_rss_mb=17.2734 load1=6.54 note=Poseidon commitments for the driver
+  s=128  k=16  chunk=0  witness_op               constraints=82143 wall_s=0.2919 peak_rss_mb=36.3008 ok=1 load1=6.54 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=16  chunk=0  prove                    constraints=82143 wall_s=0.6564 peak_rss_mb=302.1875 bytes=997 ok=1 load1=6.54 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=16  chunk=0  verify                   wall_s=0.0073 peak_rss_mb=10.9492 ok=1 load1=6.54 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=16  chunk=0  tamper_verify_com_out_plus1 wall_s=0.0068 ok=1 load1=6.54 note=rejected
+  s=128  k=16  chunk=1  native_reference         wall_s=0.0000 ok=1 load1=6.54 note=hits=3 inserts=13 evicts=0 occupied=26
+  s=128  k=16  chunk=1  witness_helper           wall_s=0.0491 peak_rss_mb=17.3320 load1=6.54 note=Poseidon commitments for the driver
+  s=128  k=16  chunk=1  witness_op               constraints=82143 wall_s=0.2902 peak_rss_mb=35.7070 ok=1 load1=6.54 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=16  chunk=1  prove                    constraints=82143 wall_s=0.6909 peak_rss_mb=302.2109 bytes=997 ok=1 load1=6.54 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=16  chunk=1  verify                   wall_s=0.0075 peak_rss_mb=11.0391 ok=1 load1=6.54 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=16  chunk=2  native_reference         wall_s=0.0000 ok=1 load1=6.54 note=hits=3 inserts=13 evicts=0 occupied=39
+  s=128  k=16  chunk=2  witness_helper           wall_s=0.0508 peak_rss_mb=17.8164 load1=6.54 note=Poseidon commitments for the driver
+  s=128  k=16  chunk=2  witness_op               constraints=82143 wall_s=0.2940 peak_rss_mb=34.2188 ok=1 load1=6.54 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=16  chunk=2  prove                    constraints=82143 wall_s=0.6816 peak_rss_mb=302.1250 bytes=997 ok=1 load1=6.50 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=16  chunk=2  verify                   wall_s=0.0069 peak_rss_mb=11.4141 ok=1 load1=6.50 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=16  chunk=3  native_reference         wall_s=0.0000 ok=1 load1=6.50 note=hits=9 inserts=7 evicts=0 occupied=46
+  s=128  k=16  chunk=3  witness_helper           wall_s=0.0504 peak_rss_mb=18.2070 load1=6.50 note=Poseidon commitments for the driver
+  s=128  k=16  chunk=3  witness_op               constraints=82143 wall_s=0.2943 peak_rss_mb=36.2344 ok=1 load1=6.50 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=16  chunk=3  prove                    constraints=82143 wall_s=0.7136 peak_rss_mb=302.3945 bytes=997 ok=1 load1=6.50 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=16  chunk=3  verify                   wall_s=0.0074 peak_rss_mb=10.9258 ok=1 load1=6.50 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=16  chunk=0  semantics_other_min_accepted wall_s=0.2924 ok=1 load1=6.50 note=a later equal-count slot is a valid SpaceSaving choice
+  s=128  k=16  chunk=0  tamper_com_in_plus1      wall_s=0.0446 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=128  k=16  chunk=0  tamper_batch_com_plus1   wall_s=0.0515 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=128  k=16  chunk=0  tamper_salt_in_plus1     wall_s=0.0411 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=128  k=16  chunk=0  tamper_key_not_in_digest wall_s=0.0522 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=128  k=16  chunk=0  tamper_dropped_record    wall_s=0.0520 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=128  k=16  chunk=1  tamper_stale_state       wall_s=0.0432 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=128  k=16  chunk=0  tamper_hit_updates_min_slot wall_s=0.0979 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=128  k=16  chunk=0  tamper_miss_evicts_nonmin wall_s=0.0700 ok=1 load1=6.50 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=128  k=16  chunk=0  tamper_selector_two_hot  wall_s=0.0536 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=128  k=16  chunk=0  tamper_materializer_not_one wall_s=0.0063 ok=1 load1=6.50 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=128  k=16  chunk=1  tamper_alias_key_count   wall_s=0.0060 ok=1 load1=6.50 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=16  chunk=1  tamper_alias_count_error wall_s=0.0065 ok=1 load1=6.50 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=16  chunk=1  tamper_alias_error_absorbs_count wall_s=0.0061 ok=1 load1=6.50 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=16  chunk=1  tamper_alias_across_slots wall_s=0.0062 ok=1 load1=6.50 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=64  chunk=   compile_op               constraints=277242 wall_s=127.0877 peak_rss_mb=2409.4219 bytes=166606494 ok=1 load1=5.74 foreign=3/- note=r1cs_bytes=88720064
+  s=128  k=64  chunk=   compile_helper           constraints=11385 wall_s=8.0766 peak_rss_mb=758.0898 bytes=16525486 ok=1 load1=5.68 foreign=3/- note=r1cs_bytes=12575004
+  s=128  k=64  chunk=   setup                    constraints=277242 wall_s=2.2014 peak_rss_mb=715.8633 bytes=117030512 ok=1 load1=5.62 foreign=3/0 note=vk_bytes=1917
+  s=128  k=64  chunk=0  native_reference         wall_s=0.0001 ok=1 load1=5.62 note=hits=18 inserts=46 evicts=0 occupied=46
+  s=128  k=64  chunk=0  witness_helper           wall_s=0.0678 peak_rss_mb=18.8320 load1=5.62 note=Poseidon commitments for the driver
+  s=128  k=64  chunk=0  witness_op               constraints=277242 wall_s=0.8804 peak_rss_mb=84.7305 ok=1 load1=5.62 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=64  chunk=0  prove                    constraints=277242 wall_s=2.0798 peak_rss_mb=856.5977 bytes=997 ok=1 load1=5.62 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=64  chunk=0  verify                   wall_s=0.0073 peak_rss_mb=11.5547 ok=1 load1=5.62 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=64  chunk=0  tamper_verify_com_out_plus1 wall_s=0.0069 ok=1 load1=5.62 note=rejected
+  s=128  k=64  chunk=1  native_reference         wall_s=0.0002 ok=1 load1=5.62 note=hits=13 inserts=51 evicts=0 occupied=97
+  s=128  k=64  chunk=1  witness_helper           wall_s=0.0674 peak_rss_mb=19.2578 load1=5.62 note=Poseidon commitments for the driver
+  s=128  k=64  chunk=1  witness_op               constraints=277242 wall_s=0.9033 peak_rss_mb=84.7617 ok=1 load1=5.57 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=64  chunk=1  prove                    constraints=277242 wall_s=2.0665 peak_rss_mb=857.2578 bytes=997 ok=1 load1=5.57 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=64  chunk=1  verify                   wall_s=0.0070 peak_rss_mb=11.3984 ok=1 load1=5.57 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=64  chunk=2  native_reference         wall_s=0.0001 ok=1 load1=5.57 note=hits=19 inserts=31 evicts=14 occupied=128
+  s=128  k=64  chunk=2  witness_helper           wall_s=0.0680 peak_rss_mb=18.8320 load1=5.57 note=Poseidon commitments for the driver
+  s=128  k=64  chunk=2  witness_op               constraints=277242 wall_s=0.8901 peak_rss_mb=83.7148 ok=1 load1=5.57 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=64  chunk=2  prove                    constraints=277242 wall_s=2.0928 peak_rss_mb=855.8750 bytes=997 ok=1 load1=6.09 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=64  chunk=2  verify                   wall_s=0.0071 peak_rss_mb=11.5430 ok=1 load1=6.09 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=64  chunk=3  native_reference         wall_s=0.0001 ok=1 load1=6.09 note=hits=32 inserts=0 evicts=32 occupied=128
+  s=128  k=64  chunk=3  witness_helper           wall_s=0.0679 peak_rss_mb=19.2930 load1=6.09 note=Poseidon commitments for the driver
+  s=128  k=64  chunk=3  witness_op               constraints=277242 wall_s=0.8899 peak_rss_mb=84.3438 ok=1 load1=6.09 note=circuit out == helper com_out(reference) and com_in == prev com_out
+  s=128  k=64  chunk=3  prove                    constraints=277242 wall_s=2.0512 peak_rss_mb=857.8203 bytes=997 ok=1 load1=6.09 foreign=3/0 note=JSON proof; public = (com_in, batch_com, com_out)
+  s=128  k=64  chunk=3  verify                   wall_s=0.0073 peak_rss_mb=11.5430 ok=1 load1=6.09 note=CLI incl. process start; and proof.com_in == previous proof.com_out
+  s=128  k=64  chunk=0  semantics_other_min_accepted wall_s=0.8661 ok=1 load1=6.09 note=a later equal-count slot is a valid SpaceSaving choice
+  s=128  k=64  chunk=0  tamper_com_in_plus1      wall_s=0.0496 ok=1 load1=6.09 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=128  k=64  chunk=0  tamper_batch_com_plus1   wall_s=0.0730 ok=1 load1=6.00 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=128  k=64  chunk=0  tamper_salt_in_plus1     wall_s=0.0462 ok=1 load1=6.00 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=128  k=64  chunk=0  tamper_key_not_in_digest wall_s=0.0707 ok=1 load1=6.00 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=128  k=64  chunk=0  tamper_dropped_record    wall_s=0.0725 ok=1 load1=6.00 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5
+  s=128  k=64  chunk=1  tamper_stale_state       wall_s=0.0500 ok=1 load1=6.00 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5
+  s=128  k=64  chunk=0  tamper_hit_updates_min_slot wall_s=0.1147 ok=1 load1=6.00 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13
+  s=128  k=64  chunk=0  tamper_miss_evicts_nonmin wall_s=0.0868 ok=1 load1=6.00 note=rejected: Execution failed: Sum check failed (range-check recomposition)
+  s=128  k=64  chunk=0  tamper_selector_two_hot  wall_s=0.0772 ok=1 load1=6.00 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9
+  s=128  k=64  chunk=0  tamper_materializer_not_one wall_s=0.0096 ok=1 load1=6.00 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5
+  s=128  k=64  chunk=1  tamper_alias_key_count   wall_s=0.0093 ok=1 load1=6.00 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=64  chunk=1  tamper_alias_count_error wall_s=0.0101 ok=1 load1=6.00 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=64  chunk=1  tamper_alias_error_absorbs_count wall_s=0.0093 ok=1 load1=6.00 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+  s=128  k=64  chunk=1  tamper_alias_across_slots wall_s=0.0102 ok=1 load1=6.00 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1
+done -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_ss.csv

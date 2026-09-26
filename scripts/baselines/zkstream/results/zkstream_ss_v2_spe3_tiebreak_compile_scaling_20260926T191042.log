@@ -1,0 +1,7 @@
+### SS operator compile-scaling probes (compile only, k=1), layout spe=3 20260926T191042
+ 19:10:42 up 12 days,  8:38, 12 users,  load average: 4.25, 4.94, 4.62
+run=20260926T191042 load1=4.25 pin=0-31 s=[256, 1024, 4096] k=[1] cb=21 spe=3 chunks=4 cap=45m/150G -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_ss.csv
+  s=256  k=1   chunk=   compile_op               constraints=41395 wall_s=11.8317 peak_rss_mb=1015.4727 bytes=44104752 ok=1 load1=3.75 foreign=0/- note=r1cs_bytes=29751452; compile-scaling probe
+  s=1024 k=1   chunk=   compile_op               constraints=161221 wall_s=50.4171 peak_rss_mb=3733.8281 bytes=254765802 ok=1 load1=3.33 foreign=0/- note=r1cs_bytes=170855636; compile-scaling probe
+  s=4096 k=1   chunk=   compile_op               constraints=641203 wall_s=341.3567 peak_rss_mb=21593.0547 bytes=2360653326 ok=1 load1=5.68 foreign=1/- note=r1cs_bytes=1585384604; compile-scaling probe
+done -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_ss.csv

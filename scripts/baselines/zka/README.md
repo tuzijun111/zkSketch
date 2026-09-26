@@ -35,6 +35,7 @@ worktree measures its own sources.
 | `a234.sh` | yes | `a2_anchor.csv`, `a4_native.log`, `a3_n*.log` | prove-time anchors, their native baseline, query slope |
 | `rss_watch.sh` | no | stdout | wraps a command and reports r0vm peak RSS |
 | `shipped_exec.sh` | no | `zka_shipped_exec.csv`, `zka_shipped_exec.log` | their three shipped epoch summaries on real AOL epochs, executor only (see below) |
+| `sketch_exec.sh` | no (`--prove`: yes) | `zka_{hll,ss,gk}_*.csv` / `.log`, `zka_sketch_exec.log` | OUR HLL, SpaceSaving and GK guests (†) in their architecture; builds and regenerates all executor CSVs (see "Sketch-family guests") |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -257,3 +258,336 @@ path is compiled but has **not** been run.
 - **Timing and hardware.** `exec_s` is wall-clock on a shared box and is not a
   metric. Cycles and segments are deterministic. All MODELED seconds assume
   CPU-only r0vm on this Threadripper.
+
+## Sketch-family guests (HLL, SpaceSaving, Greenwald-Khanna): zk-Analytics method, our implementation (†)
+
+zk-Analytics ships three epoch summaries (samples, histogram, cm; see the
+shipped-structure arm above). None is a distinct-count, bounded-space
+heavy-hitter or rank-quantile sketch. `hll/`, `spacesaving/` and `gk/` add those
+three families to **their** pipeline with **their** general-purpose method: the
+textbook plaintext algorithm, written in ordinary Rust and executed as a RISC
+Zero guest. The rest of the pipeline is theirs, mostly copied verbatim:
+- a per-epoch aggregation guest that verifies the source's SHA-256 batch hash
+  chain, builds the epoch summary from scratch, commits to it with an unsalted
+  SHA-256 and links the commitment into their epoch hash chain;
+- a query guest that re-verifies the epoch chain links, recomputes every epoch's
+  state commitment, merges the per-epoch summaries at query time and answers.
+
+None of zkSketch's circuit techniques is used: no oblivious padding, memory
+checking, sorting certificates or Poseidon.
+
+**These are OUR implementations of zk-Analytics' per-epoch design, not
+zk-Analytics code.** Every row is marked † below. Cite them as "our HLL / SS / GK
+instantiation of zk-Analytics' per-epoch / query-time-merge architecture (†)",
+never as "zk-Analytics' HLL / SS / GK". The per-family READMEs
+(`hll/README.md`, `spacesaving/README.md`, `gk/README.md`) have the full detail:
+algorithm, tests, phase profiles and every sensitivity row.
+
+### Running
+
+```bash
+scripts/baselines/zka/sketch_exec.sh                    # build + executor sweep of all three; regenerates the CSVs; proves nothing
+scripts/baselines/zka/sketch_exec.sh --only gk          # one family (hll, ss, gk; comma-separated)
+scripts/baselines/zka/sketch_exec.sh --dry-run --prove  # print the plan and every command; writes nothing
+scripts/baselines/zka/sketch_exec.sh --skip-build --no-exec --prove   # the three proved anchors only, in a quiet window
+```
+
+- **Executor sweep.** It builds each family (`--locked`,
+  `RISC0_BUILD_LOCKED=1`, into `$BASELINE_DIR/build/{hll,zka-ss,zka-gk}`).
+  It then runs the family scripts with the configuration pinned to the values
+  below: `hll/run_exec.sh` (twice: main rows, then data-dependence rows),
+  `hll/seed_spread.py`, `spacesaving/ss_exec.sh` and `gk/gk_exec.sh`. With
+  cached builds the whole sweep took 7.5 minutes on this box; SpaceSaving
+  accounts for 6.8 of them, mostly its n=64 queries.
+- **Staged regeneration.** Every family writes into
+  `results/sketch_exec.<ts>.<pid>.tmp/` (gitignored). A family replaces its CSVs
+  only when all its runs succeed and every row passes validation:
+  - `journal_eq_native=true`;
+  - the family's checks: `ref_check=ok` (HLL); `ref_eq` and `invariants_ok`
+    (SS); `q_ok`, `min_kept`, `exact_in_cert` and both error-vs-eps N columns
+    (GK);
+  - the expected row count;
+  - no proved row.
+
+  After a successful family:
+  - the previous CSV is kept as `<name>.csv.prev` (gitignored);
+  - the staged raw log is appended to the family's log, which therefore keeps
+    every earlier run, including the raw record of each proved anchor;
+  - proved rows of the previous CSV are carried over verbatim after the new rows,
+    with a check that the ELF they proved is still the current one (GK keeps its
+    anchor inside `zka_gk_exec.csv`);
+  - the deterministic columns (all but `exec_s` and `r0vm_peak_rss_mb`) are
+    compared with the previous CSV, and the result is logged.
+
+  A failing family leaves its canonical files untouched and its staged files in
+  place. Each run's record goes to `results/zka_sketch_exec.log`.
+- **Proving only with `--prove`.** After the executor phase it runs each
+  family's one small anchor (`hll/prove_anchor.sh`, `spacesaving/ss_anchor.sh`,
+  `gk/gk_prove_anchor.sh`: the aggregation guest on the first 2,048 AOL records,
+  `ProverOpts::succinct()`, CPU), one at a time.
+  - Before each anchor it waits, up to `WAIT_S` (1,800 s), until the 1-minute
+    load average is at most `MAX_LOAD` (24, the families' default) and no `r0vm`
+    of any user is running.
+  - The anchor scripts re-check `MAX_LOAD` themselves and refuse above it
+    (exit 3). `sketch_exec.sh` never raises it, and it removes `EPOCH_SIZE`,
+    `CAP` and `OUT` from the anchors' environment, so the executor settings
+    cannot leak into a proof.
+  - Anchors append to `zka_hll_anchor.csv`, `zka_ss_anchor.csv` and
+    `zka_gk_exec.csv` (each family's own convention).
+- **Safety.** `RISC0_DEV_MODE` is refused. A lock in `$BASELINE_DIR/build/`
+  stops two sweeps running at once. Nothing is signalled, and
+  `rss_watch.sh` is not used (it pkills every `r0vm` of this account).
+- **Verified on 2026-09-26.** A full `sketch_exec.sh` run from this directory
+  (17:50-17:57; 1-minute load 1.6-4.1 where sampled) passed validation for all three
+  families. It reproduced every executor row in every deterministic column
+  (HLL 9 + 3 + 40, SS 70, GK 21) and carried the GK anchor row over byte for
+  byte, with the same ELF. The builds were no-ops, and every guest ELF md5 is
+  unchanged. The anchor CSVs were not touched.
+
+| results file | rows | produced by | notes |
+|---|---|---|---|
+| `zka_hll_exec.csv` / `.log` | 9 | `hll/run_exec.sh` | aggregation, epoch 0; `hll_query` and `hll_query_words` at n = 1, 4, 16, 64 |
+| `zka_hll_exec_datadep.csv` / `.log` | 3 | `hll/run_exec.sh` | aggregation on epochs 1, 31, 63 |
+| `zka_hll_seed_spread.csv` | 40 | `hll/seed_spread.py` | numpy re-implementation, 10 hash seeds; must reproduce every committed estimate |
+| `zka_hll_seed_spread_200.csv` | 800 | `hll/seed_spread.py` with 200 seeds (command in `hll/README.md`) | the same check over the guest seed plus 199 seeds from `numpy.random.default_rng(200)`; not part of the sweep |
+| `zka_hll_anchor.csv` / `.log` | 1 proved | `hll/prove_anchor.sh` | separate anchor CSV; not regenerated without `--prove` |
+| `zka_ss_exec.csv` / `.log` | 70 | `spacesaving/ss_exec.sh` | s = 2^14 and 1,024; aggregation, profiling twins, root variants, epoch 63; topk / estimate / estimate_merged |
+| `zka_ss_anchor.csv` / `.log` | 3 proved | `spacesaving/ss_anchor.sh` | separate anchor CSV with a `prove_condition` column. Two rows come from the superseded first build (per-key root, image `1e73f3f3...`), one of them `contended`; only the `clean` `buckets64` row of the current `aggr_ss` image (`0aff21e3...`) is a valid anchor |
+| `zka_gk_exec.csv` / `.log` | 21 + 1 proved | `gk/gk_exec.sh`, `gk/gk_prove_anchor.sh` | GK keeps its anchor inside the executor CSV (HLL and SS use separate anchor CSVs): the proved row has `arm=proved` and a `contention` column |
+| `zka_{ss,gk}_exec_v1_before_fix.*` | - | first builds | superseded by review fixes; kept for side-by-side comparison only; **do not use** |
+| `zka_sketch_exec.log` | - | `sketch_exec.sh` | one record per sweep: validation, comparison, carry-over and anchor outcomes |
+
+### Exact configuration
+
+Common to all three families:
+
+- **Code and toolchain.**
+  - zk-Analytics `d4a5a9a90f74`, read-only through `.zka`.
+  - Guests link risc0-zkvm **3.0.5**, as theirs do: each guest lockfile was
+    seeded from the clone's `Cargo.lock`, and no version changed.
+  - The hosts use risc0-zkvm 3.0.6, with lockfiles seeded from `cyc/Cargo.lock`.
+  - The executor and prover are r0vm 3.0.6 on CPU.
+  - ELF md5s are in each log header; HLL and SS also record the `image_id` in
+    their CSVs.
+- **Records.** Identical to `cyc/src/bin/shipped.rs`:
+  - source: `data/aol.keys` (md5 `01dd7d5c8a73`); epoch e is keys
+    `[e*16384, (e+1)*16384)`, so epoch 0 is the matched CM epoch (16,384
+    records, 8,433 distinct keys);
+  - `key_id = Event::make_key_id(0, key)` and `ts` = the global index;
+  - one source, batches of 8;
+  - the batch chain, `source_batch_seq` and tips carry across epochs, and epoch
+    e-1's `final_chain_hash` links into epoch e.
+
+  The aggregation input is their `Event`-batch format, 1.41 MB per epoch, byte
+  for byte what their `aggr_*` guests read (`input_bytes` = 1,409,160 on epoch 0;
+  SS adds its 4-byte capacity).
+- **Queries.** They run over the first n epochs, n in {1, 4, 16, 64}; n = 64 is
+  all 2^20 records. Every answer, its keys or bounds included, is in the
+  committed journal, together with the chain boundaries and the n state commits.
+  Their `MIN_SUPPORT = 10` suppression applies. There is one guest run (one
+  proof) per query, as in their query guests.
+- **Prove-time model.** MODELED = segments x 30.1 s, with an envelope of
+  segments x 29.73 to x 30.79, from the four CM-guest CPU anchors above.
+
+| | HLL † | SpaceSaving † | GK † |
+|---|---|---|---|
+| parameters | b = 14 (2^14 u8 registers) | s = 2^14 (matched; exact per AOL epoch, no eviction) and s = 1,024 (eviction exercised) | eps = 1/51, COMPRESS every 25 records |
+| update (plain Rust) | textbook HLL, Flajolet et al. 2007 | Metwally et al., unit weight, Stream-Summary buckets (O(1) per record) | Greenwald-Khanna SIGMOD'01 INSERT / band COMPRESS; t_0 (the minimum) always kept, per the paper's section 2.1 invariant |
+| hash / value | their FNV-1a `key_to_u64` (`aggregator/core/src/lib.rs:342`) + the seeded splitmix64 finaliser of their `cm_bucket_index` (`:1055-1063`, without `% CM_COLS`), CM row-0 seed `0x6d0f27bd` | the same mix without the seed, for the key-to-counter map; keys are compared in full | `value = key & 0x1FFFFF` (21 bits; the task text said 22-bit, the histogram arm's mask is the authority); `key_id` only enters the batch chain |
+| epoch state, unsalted SHA-256 commit | `total_count` + 16 KB of registers | capacity, `total_count`, <= s `(key_id, count, error)` sorted by key | `total_count` + tuples `(v, g, Delta)` |
+| per-type Merkle root in the aggregation journal (no query reads it) | **none** (dropped; cheaper than a literal port) | their samples pattern: 64 hash buckets (their benchmark `SAMPLES_HT_BUCKETS=64`), folded by their `samples_buckets_root_from_leaves` | their `hist_per_key_root` pattern over tuples, their `MerkleTree` |
+| query-time merge | elementwise max of registers | top-k: sum equal keys, keep the top s (sum-and-truncate, as specified; not Agarwal's MG merge). Point: their `SumExactKey` scan, no merge | one-shot k-way GK COMBINE under one total order (value, epoch, position), summed rank bounds, no recompression |
+| queries | cardinality: HLL estimator with small-range (linear counting) correction, f64 in the guest (`libm`) | top-10 `(key, count, error)` (**keys in the journal**, unlike their CM `Topk` / samples `SumTopk`); point frequency of the rank-1 and rank-100 keys | rank(2^20); p50, p90, p99 (answer + certified bounds + N) |
+
+### Reused from upstream vs written by us
+
+| item (upstream `d4a5a9a`) | HLL † | SS † | GK † |
+|---|---|---|---|
+| `verify_and_compute_chain` (`aggregator/core/src/lib.rs:499-603`) | copied verbatim | copied verbatim | copied verbatim |
+| `verify_epoch_chain_integrity` (`querier/core/src/lib.rs:98-136`) | copied verbatim | copied verbatim | copied verbatim |
+| `events_commit`, `chain_tips_to_sorted_vec`, `sha256_bytes`, `TAG_SHARD_CHAIN`, `TAG_EPOCH_CHAIN` | copied verbatim | copied verbatim (+ `next_pow2_ge`) | copied verbatim (+ `next_pow2_ge`) |
+| `Event`, `make_key_id` (`zkvm-common/src/lib.rs:76`), `BatchInput`, `EpochChainLink::new`, `batch_chain_hash`, `MIN_SUPPORT` | path dependency | path dependency | path dependency |
+| `key_to_u64`, `CM_SEEDS` | path dependency | `key_to_u64` | - |
+| aggregation input type | `CmAggrInput` as is (field-for-field their samples/histogram input) | own type, same fields + `capacity` | own type, `HistogramAggrInput` shape |
+| Merkle helpers | - | `samples_buckets_root_from_leaves`; `samples_bucket_index` copied verbatim with the mask as a parameter; `MerkleTree` (per-key sensitivity variant only) | `MerkleTree` |
+| structure mirrored step for step | `process_cm_aggr_with_state`, `run_cm_query` | `process_cm_aggr_with_state`, `run_samples_query`, `SumTopk`, `SumExactKey` | `process_histogram_aggr_with_state`, `run_histogram_query` |
+| **written by us** | the HLL update, register merge, estimator, state type and tag, the `hll_query_words` variant, cycle probes, host driver | Stream-Summary SpaceSaving, merge, point-query glue, state type, root variants, profiling twins, host driver and references | GK INSERT / COMPRESS, total-order COMBINE, rank/quantile answers, state type, profiling guest, host driver and tests |
+
+The verbatim copies were re-checked against the clone during integration:
+`hll/gen_upstream.sh --check` passes, and an extractor diff of each copied
+function in `spacesaving/core/src/lib.rs` and `gk/core/src/lib.rs` finds them
+identical. The clone is clean at `d4a5a9a90f74`.
+
+### Results (executor unless stated; MODELED = segments x 30.1 s, NOT measured)
+
+**Aggregation guest, one AOL epoch** (epoch 0: 16,384 records, 8,433 distinct keys):
+
+| guest | config | user cycles | cycles/rec | segments | MODELED prove | sketch update share | data dependence (other epochs) |
+|---|---|---|---|---|---|---|---|
+| `hll_aggr` † | b = 14 | 82,646,548 | 5,044 | 85 | 2,558 s | 3.27M (4.0%, 200/rec) | epochs 1, 31, 63: 82.65M, 85 segments each (0.01%) |
+| `aggr_ss` † | s = 2^14 | 113,584,313 | 6,933 | 124 | 3,732 s | 10.3M (9.1%, 629/rec); + canonical sort 13.3%, root 5.1% | epoch 63: 127 segments |
+| `aggr_ss` † | s = 1,024 | 97,874,942 | 5,974 | 101 | 3,040 s | 15.8M (16.2%, 966/rec) | epoch 63: 102 segments |
+| `aggr_gk` † | eps = 1/51 | 103,407,361 | 6,311 | 107 | 3,221 s | 24.5M (23.5%: INSERT 12.1%, COMPRESS 11.4%) | epochs 1, 16, 63: 102.10-103.11M, 105-106 segments |
+| their `aggr_cm`, T=1 | 3x1024 | 100,439,836 | 6,130 | 104 | 3,130 s (proved on synthetic keys: 3,202 s) | - | - |
+| their `aggr_samples` | exact table | 131,981,406 | 8,056 | 152 | 4,575 s | - | - |
+| their `aggr_histogram`, key_id=const | 32 log2 bins | 86,498,951 | 5,280 | 89 | 2,679 s | - | - |
+
+- **Their framework dominates.** Reading their `Event` batches costs 60.8M
+  cycles (risc0 serde, one word per `key_id` byte), and verifying the batch
+  chain 17.8-18.0M. Together that is about 78.7M cycles for any summary type:
+  69-95% of each † row, measured with each family's profiling marks. The sketch
+  update itself is 4-24%. Do not read these totals as sketch cost.
+- **SS root sensitivity** (`aggr_ss_rootvar`, s = 2^14): no root 117 segments,
+  64 buckets 124 (headline), 1,024 buckets 128, per-key 176. At s = 1,024 the
+  range is 100-105.
+
+**Query guest over n epochs** (segments, with MODELED prove time in parentheses):
+
+| query | n=1 | n=4 | n=16 | n=64 (2^20 records) | user-cycle fit (R^2) |
+|---|---|---|---|---|---|
+| HLL cardinality † (packed registers, headline) | 1 (30 s) | 2 (60 s) | 5 (151 s) | 16 (482 s) | 214,812 n + 156,500 (0.999995) |
+| HLL cardinality †, one word per register (sensitivity) | 3 (90 s) | 11 (331 s) | 43 (1,294 s) | 172 (5,177 s) | 2,670,816 n + 156,518 (1.0) |
+| SS top-10 †, s = 2^14 | 48 (1,445 s) | 208 (6,261 s) | 820 (24,682 s) | 3,288 (98,969 s = 27.5 h) | 47.67M n + 3.7M (0.99999) |
+| SS top-10 †, s = 1,024 | 6 (181 s) | 23 (692 s) | 98 (2,950 s) | 405 (12,191 s = 3.4 h) | 5.94M n - 1.5M (0.99999) |
+| SS point frequency †, s = 2^14 | 29 (873 s) | 118 (3,552 s) | 456 (13,726 s) | 1,838 (55,324 s = 15.4 h) | 28.58M n - 0.4M (0.99999) |
+| SS point frequency †, s = 1,024 | 4 (120 s) | 14 (421 s) | 56 (1,686 s) | 222 (6,682 s) | 3.45M n + 0.02M (1.0) |
+| GK rank(2^20) † | 1 (30 s) | 1 (30 s) | 2 (60 s) | 5 (151 s) | 65,544 n + 15,958 (0.99998) |
+| GK p50 † (p90 and p99 within 0.2%) | 1 (30 s) | 1 (30 s) | 2 (60 s) | 6 (181 s) | 86,928 n + 2,976 (0.999997) |
+| their samples `SumTopk` (T=100) | 91 | 385 | 1,538 | 6,356 | 96.24M n - 20.2M |
+| their histogram P90, key_id=const | 1 | 1 | 1 | 3 | 37,968 n + 13,616 |
+| their cm `Estimate` (T=1) | 1 | 4 | 14 | 55 | 830,861 n + 14,581 |
+
+The fits were recomputed from the CSVs during integration. Query cost scales
+with the stored state that the guest re-hashes and merges:
+- HLL: 16 KB per epoch;
+- SS: n x min(s, distinct keys per epoch) entries (8,433 to 546,948 at s = 2^14);
+- GK: about 54 tuples per epoch.
+
+**Proved anchors** (aggregation guest, first 2,048 AOL records, `ProverOpts::succinct()`, CPU r0vm 3.0.6):
+
+| guest | segments | prove_s | s/segment | MODELED | conditions | receipt | verify | r0vm peak RSS |
+|---|---|---|---|---|---|---|---|---|
+| `hll_aggr` † | 11 | 332.1 | 30.19 | 331.1 s | 1-min load 11.4 at start; the driver has no contention sampler, and no other family's prover overlapped (by the logs' timestamps) | 224,554 B | 9.8 ms | 9,383 MB |
+| `aggr_ss` † (64-bucket root, current image `0aff21e3...`) | 16 | 473.4 | 29.59 | 481.6 s | `clean`: foreign r0vm in 0 of 470 samples | 224,818 B | 10.2 ms | 9,401 MB |
+| `aggr_gk` † (fixed build, ELF `d0f88f7b...`) | 14 | 414.5 | 29.61 | 421.4 s | `contention=none`: 0 foreign r0vm in 1,607 samples; the builder's own nice-19 test build overlapped the first minute | 224,810 B | 11.6 ms | 9,389 MB |
+
+- All three proved journals were asserted equal to the native output.
+- The three non-CM guests land at 29.59-30.19 s/segment, within 2% of MODELED,
+  against the CM envelope of 29.73-30.79.
+- `zka_ss_anchor.csv` also holds two rows from the superseded first build
+  (v1 image `1e73f3f3...`, per-key root): 672.4 s `clean` and 958.8 s
+  `contended`. Neither is the current guest, and the contended one must never be
+  used. Only the `clean` row for the current image (`0aff21e3...`) is a valid
+  anchor.
+
+**Accuracy against exact answers:**
+
+| family | measure | n=1 | n=4 | n=16 | n=64 |
+|---|---|---|---|---|---|
+| HLL † | estimate / exact distinct | 8,472 / 8,433 (+0.46%, LC) | 29,330 / 29,390 (-0.20%, LC) | 87,301 / 87,540 (-0.27%) | 241,155 / 245,620 (-1.82%) |
+| SS † s = 2^14 | top-10 and both point keys | exact | exact | exact | exact |
+| SS † s = 1,024 | top-10 recall; max abs (rel) count error | 10/10; 10 (12.3%) | 10/10; 9 (3.4%) | 10/10; 41 (4.9%) | 10/10; 160 (5.9%) |
+| SS † s = 1,024 | rank-100 point answer (count / exact) | suppressed (no epoch tracks it) | 50 / 41 | 162 / 134 | 511 / 489 |
+| GK † | p50 actual / certified rank error | 241 / 241 | 113 / 931 | 462 / 4,003 | 159 / 16,257 |
+| GK † | worst certified error over 1,001 phis / eps N | 321 / 321.25 | 1,240 / 1,285 | 4,561 / 5,140 | 17,739 / 20,560 |
+
+- **HLL.** `seed_spread.py` reproduces every committed estimate bit for bit.
+  Its 10 seeds are too few to compare the spread with theory. The same numpy
+  code over 200 seeds (the guest's plus 199 from `default_rng(200)`; saved in
+  `zka_hll_seed_spread_200.csv`, command in `hll/README.md`) gives sd
+  0.60 / 0.70 / 0.71 / 0.80% at n = 1 / 4 / 16 / 64. Theory is 0.60% and 0.78%
+  for the linear-counting rows and 0.81% for the raw rows, and every mean is
+  within ±0.04%. So the hash is fine, and -1.82% at n = 64 is a -2.3 sigma
+  draw of this one seed (third-lowest of the 200), chosen before seeing results.
+- **SS.** One merged top-10 count at s = 1,024 is below the truth (n = 4, key
+  3630187757: 158 vs 160). The specified sum-and-truncate merge adds nothing for
+  epochs that did not track a key. Every answer satisfies
+  count - error <= f <= count + slack (see `spacesaving/README.md`).
+- **GK.** Every row has the exact answer inside the certified interval, and
+  actual <= certified <= eps N, on the named quantiles and over 1,001 phis. The
+  provable bound is eps N + 1/2 (the paper's INSERT slack); every measured value
+  is <= eps N.
+
+### Caveats
+
+- **These are ours (†).** They instantiate zk-Analytics' per-epoch
+  architecture with our own guests. zk-Analytics ships none of these sketches.
+  Mark them † in any table, and never call them "zk-Analytics' HLL / SS / GK".
+  The comparison mostly measures a zkVM running plain code against an AIR
+  circuit, which their paper concedes. The guests are also a data point for the
+  zkVM's programmability.
+- **Cycle counts are data-dependent.** There is no oblivious padding, matching
+  their design, so cycles, segments and prove time leak properties of the input,
+  exactly as their own guests do.
+  - HLL moves 0.01% across epochs and GK 1.3% (105-107 segments). SS epoch 63
+    is +1.9% at s = 2^14 (127 vs 124 segments) and +0.8% at s = 1,024.
+  - SS aggregation depends on the hit/miss/eviction mix; its queries scale with
+    the number of tracked keys.
+  - Every number is exact only for these AOL epochs, this batch size and these
+    parameters.
+- **MODELED prove times rest on the four CM-guest anchors.** Each family has one
+  proved anchor, for the aggregation guest at 2,048 records only. Those anchors
+  agree with the model within 2%, but every full-epoch and every query prove
+  time is an extrapolation. No query guest was proved.
+  - The whole-segment model overstates rows whose last segment is partial.
+    `padded_cycles / 2^20 x 30.1 s` is the lower sensitivity bound, and the gap
+    matters only for small query guests. With the model value first and the
+    bound second:
+    - GK: n = 1, 30 s vs 3.8 s (po2 17); n = 4, 30 s vs 15 s; n = 16, 60 s vs
+      34-45 s; rank at n = 64, 151 s vs 136 s.
+    - HLL: n = 1, 30 s vs 15 s; n = 4, 60 s vs 38 s; n = 16, 151 s vs 124 s.
+    - SS at s = 1,024, n = 1: 8-12%.
+
+    Every other row is overstated by 2% or less.
+  - The anchors ran on a shared box. The SS and GK drivers sample for foreign
+    `r0vm` processes; the HLL driver does not.
+- **CPU-only r0vm 3.0.6** on this 64-thread Threadripper. The GPU prover was not
+  used. All MODELED seconds are CPU seconds.
+- **zkSketch-side numbers must be re-measured after the soundness fixes.** Do
+  not pair these rows with zkSketch HLL / SS / GK numbers measured before the
+  pending circuit soundness fixes. Re-run zkSketch's side first, and state which
+  build each ratio uses.
+- **Design choices that move the cost are disclosed, and the conservative
+  (cheaper-baseline) choice is the headline.**
+  - HLL packs registers 4 per word. A literal `CmEpochState`-style port (one
+    word per register) makes the query about 12x dearer (`hll_query_words`
+    rows).
+  - HLL drops the per-type Merkle root. Not measured, but hashing the 16 KB of
+    registers costs about 44K cycles in the query guest, so a root would add on
+    the order of 0.1% to `hll_aggr`.
+  - SS roots its entries the samples way (5.1% of the guest). The first build's
+    per-key root was 42% dearer and was dropped after review.
+  - SS answers point queries with their `SumExactKey` scan. The first build's
+    merge-then-lookup overstated them 1.5-1.8x; those rows are kept as
+    `estimate_merged`.
+  - GK's root costs 0.2%.
+  - About 1% of SS's cycles depend on how the root code is written, for the same
+    work (see `spacesaving/README.md`).
+- **Their framework's fixed costs are inherited unchanged.**
+  - Input deserialisation plus chain verification is about 78.7M cycles per
+    epoch.
+  - Each query needs the n per-epoch aggregation receipts, verified separately:
+    their tree has no `env::verify`, so the aggregation cost recurs once per
+    epoch.
+  - Commitments are unsalted SHA-256, as in their code. Their paper's hiding
+    commitment with fresh randomness does not exist in the code or in these
+    ports.
+- **Semantics.**
+  - SS top-10 keys are committed in the journal. This does not replicate their
+    CM top-K, whose keys are attached outside the proof.
+  - SS's merge is the specified sum-and-truncate. It is not Agarwal et al.'s
+    MG merge, and its bound is looser.
+  - GK's guarantee is eps N + 1/2.
+  - HLL answers carry the estimator branch taken.
+- **Provenance.**
+  - Each family was built, then reviewed independently.
+  - SS and GK had blocking review findings, which were fixed and re-measured:
+    - SS: the root pattern, the point-query path and the anchor hygiene;
+    - GK: the lost minimum and a certificate that could exceed eps N.
+  - HLL was accepted with non-blocking nits, still open: the `make_key_id` line
+    cited as `:88` in `hll/host/src/main.rs:7` should be `:76`; `hll_dirty` does
+    not pin the sources. (The 10-seed spread nit is answered by the saved 200-seed
+    file above.)
+  - ELF md5s and image IDs depend on the absolute source path (panic strings);
+    cycle counts do not.
+  - `exec_s` is wall-clock on a shared box and is not a metric.

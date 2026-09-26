@@ -1,0 +1,15 @@
+[package]
+name = "zka-hll-methods"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+# Mirrors zk-Analytics' aggregator/methods and querier/methods crates.
+[package.metadata.risc0]
+methods = ["../guests/aggr", "../guests/query"]
+
+[build-dependencies]
+risc0-build = "3"
+
+[dependencies]
+risc0-zkvm = "3"

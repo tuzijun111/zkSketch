@@ -1,0 +1,46 @@
+run=20260926T194040 load1=3.48 pin=0-31 s=[16384] k=[256, 1024] chunks=4 tamper=True build=/home/binbin/ext-baselines/build/zkstream_hll -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_hll.csv
+cmd: /home/binbin/zkSketch/scripts/baselines/zkstream/hll/run_hll.py --ck 8 --s 16384 --k 256 1024 --chunks 4 --tamper --prune --allow-busy
+  s=16384  k=256   chunk=    compile_op                     constraints=634705 wall_s=453.0647 peak_rss_mb=10662.4961 bytes=521010875 load1=3.30 ok=1 note=r1cs_bytes=354378880
+  s=16384  k=256   chunk=    compile_helper                 constraints=635216 wall_s=466.9922 peak_rss_mb=10663.1602 bytes=521150934 load1=5.30 ok=1 note=r1cs_bytes=354444296
+  s=16384  k=256   chunk=    setup                          constraints=634705 wall_s=5.8480 peak_rss_mb=2078.6445 bytes=270134064 load1=5.35 note=vk_bytes=1917 concurrent_zokrates=compile,compile,compile,compile
+  s=16384  k=256   chunk=0   witness_helper                 wall_s=2.2551 peak_rss_mb=189.7539 load1=5.33 ok=1 note=helper state+commitments == native reference (211 ms incl. Python Poseidon)
+  s=16384  k=256   chunk=0   witness_op                     constraints=634705 wall_s=2.0110 peak_rss_mb=64.7695 load1=5.33 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16384  k=256   chunk=0   prove                          constraints=634705 wall_s=5.6253 peak_rss_mb=2404.4961 bytes=997 load1=5.30 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile,compile
+  s=16384  k=256   chunk=0   verify                         wall_s=0.0069 peak_rss_mb=11.4922 load1=5.30 ok=1 note=CLI, includes process start
+  s=16384  k=256   chunk=1   witness_helper                 wall_s=2.2940 peak_rss_mb=189.1523 load1=5.27 ok=1 note=helper state+commitments == native reference (205 ms incl. Python Poseidon)
+  s=16384  k=256   chunk=1   witness_op                     constraints=634705 wall_s=2.0292 peak_rss_mb=62.7422 load1=5.27 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16384  k=256   chunk=1   prove                          constraints=634705 wall_s=5.4505 peak_rss_mb=2403.9141 bytes=997 load1=5.25 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=16384  k=256   chunk=1   verify                         wall_s=0.0090 peak_rss_mb=11.5781 load1=5.25 ok=1 note=CLI, includes process start
+  s=16384  k=256   chunk=2   witness_helper                 wall_s=2.2736 peak_rss_mb=190.2266 load1=5.15 ok=1 note=helper state+commitments == native reference (204 ms incl. Python Poseidon)
+  s=16384  k=256   chunk=2   witness_op                     constraints=634705 wall_s=2.0275 peak_rss_mb=64.1992 load1=5.15 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16384  k=256   chunk=2   prove                          constraints=634705 wall_s=5.5384 peak_rss_mb=2403.3008 bytes=997 load1=5.06 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=16384  k=256   chunk=2   verify                         wall_s=0.0066 peak_rss_mb=11.4688 load1=5.06 ok=1 note=CLI, includes process start
+  s=16384  k=256   chunk=3   witness_helper                 wall_s=2.2720 peak_rss_mb=192.2266 load1=4.97 ok=1 note=helper state+commitments == native reference (206 ms incl. Python Poseidon)
+  s=16384  k=256   chunk=3   witness_op                     constraints=634705 wall_s=2.0096 peak_rss_mb=64.3164 load1=4.97 ok=1 note=op accepts helper statement; com_in==prev.com_out
+  s=16384  k=256   chunk=3   prove                          constraints=634705 wall_s=5.5159 peak_rss_mb=2399.5781 bytes=997 load1=4.98 ok=1 note=JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile
+  s=16384  k=256   chunk=3   verify                         wall_s=0.0071 peak_rss_mb=10.9844 load1=4.98 ok=1 note=CLI, includes process start
+  s=16384  k=256   chunk=    chain                          constraints=634705 load1=4.98 ok=1 note=4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 624.8 vs 624 distinct keys (+0.1%)
+  s=16384  k=256   chunk=1   tamper_wrong_update_one_slot   wall_s=1.9396 load1=4.90 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_dropped_record_state    wall_s=1.9067 load1=4.90 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_dropped_record_keys     wall_s=0.2648 load1=4.90 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_stale_state             wall_s=0.1798 load1=4.90 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_altered_state_register  wall_s=0.1738 load1=4.90 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_key_not_in_digest       wall_s=0.2656 load1=4.90 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_replace_not_max         wall_s=1.9398 load1=4.83 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_com_out_equals_com_in   wall_s=1.9187 load1=4.83 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_com_in_plus1            wall_s=0.1839 load1=4.83 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_batch_com_plus1         wall_s=0.2662 load1=4.83 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_salt_out_plus1          wall_s=1.9076 load1=4.84 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_refresh_one_is_2        wall_s=0.0068 load1=4.84 ok=1 note=rejected by compute-witness
+  s=16384  k=256   chunk=1   tamper_verify_public_com_out   wall_s=0.0061 load1=4.84 ok=1 note=verification failed
+  s=16384  k=1024  chunk=    compile_op                     wall_s=2700.7349 peak_rss_mb=19851.0352 load1=2.18 ok=0 note=REFUSED: timeout 45m;  context switches: 22281
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 124
+summary: s=16384 k=256:ok, s=16384 k=1024:refused
+done -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_hll.csv

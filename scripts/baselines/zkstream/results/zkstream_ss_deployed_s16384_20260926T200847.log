@@ -1,0 +1,7 @@
+### SS operator at the deployed state size s=2^14, k=1, final layout (compile under timeout 45m / MemoryMax=150G; full 5-chunk chain if it compiles) 20260926T200847
+ 20:08:47 up 12 days,  9:36, 14 users,  load average: 5.49, 5.71, 5.05
+               total        used        free      shared  buff/cache   available
+Mem:             559         102         240          42         262         457
+run=20260926T200847 load1=5.49 pin=0-31 s=[16384] k=[1] cb=21 spe=3 chunks=5 cap=45m/150G -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_ss.csv
+  s=16384 k=1   chunk=   compile_op               wall_s=2701.8230 peak_rss_mb=56922.1836 ok=0 load1=1.18 foreign=3/- note=REFUSED/OVER BUDGET: timeout 45m; deployed state size s=2^14
+done -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_ss.csv

@@ -1,0 +1,77 @@
+# gk_exec.sh 2026-09-26T15:53:10+08:00 host=SPRL6201019991 load=[60.01 30.14 14.19] args=[exec 1 4 16 64]
+# zka=d4a5a9a90 dirty=[0] r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# gk sources: 69e66f324437 (md5 of per-file md5s)
+# elf aggr_gk md5=e34f62c6f5e09749307389b1175f314c
+# elf querier_gk md5=2d0165a92ed33bc6941284381e33a300
+# elf aggr_gk_prof md5=4c27a92d83c7c2355f5df8ca44e29bdf
+[run ] gk --mode aggr
+zka,exec,aggr,aggr_gk,gk,-,1/51,25,1,0,16384,16384,8,key&0x1FFFFF,54,1409160,103286355,111411200,107,20,2.625,792,1,true,tuples=54;max_g_plus_delta=643;floor_2eps_n=642,distinct_values=8414;max_rank_err_over_all_values=321,321,321,321.25,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,3220.7,3181.1,3294.5,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode aggr --profile
+zka,profile,aggr,aggr_gk_prof,gk,-,1/51,25,1,0,16384,16384,8,key&0x1FFFFF,54,1409160,103868506,112197632,107,20,2.442,872,1,true,tuples=54;max_g_plus_delta=643;floor_2eps_n=642;PHASES startup=293 input_read=60792980 chain_verify=17836327 flatten=581074 gk_insert=12653934 gk_compress=11696157 merkle_root=238632 state_commit=15944 epoch_link=1468 unaccounted=51697 compress_calls=656,distinct_values=8414;max_rank_err_over_all_values=321,321,321,321.25,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,3220.7,3181.1,3294.5,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode aggr --epoch-index 1
+zka,exec,aggr,aggr_gk,gk,-,1/51,25,1,1,16384,16384,8,key&0x1FFFFF,51,1409300,102985463,111149056,106,20,2.653,792,1,true,tuples=51;max_g_plus_delta=643;floor_2eps_n=642,distinct_values=9151;max_rank_err_over_all_values=321,321,321,321.25,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,3190.6,3151.4,3263.7,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode aggr --epoch-index 16
+zka,exec,aggr,aggr_gk,gk,-,1/51,25,1,16,16384,16384,8,key&0x1FFFFF,51,1409300,102622115,110624768,106,20,2.374,792,1,true,tuples=51;max_g_plus_delta=643;floor_2eps_n=642,distinct_values=8982;max_rank_err_over_all_values=321,321,321,321.25,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,3190.6,3151.4,3263.7,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode aggr --epoch-index 63
+zka,exec,aggr,aggr_gk,gk,-,1/51,25,1,63,16384,16384,8,key&0x1FFFFF,51,1409300,101977711,110100480,105,20,1.352,792,1,true,tuples=51;max_g_plus_delta=643;floor_2eps_n=642,distinct_values=9074;max_rank_err_over_all_values=321,321,321,321.25,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,3160.5,3121.7,3232.9,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 1 --query rank
+zka,exec,query,querier_gk,gk,rank,1/51,25,1,-,16384,16384,8,key&0x1FFFFF,54,1060,78005,131072,1,17,0.022,440,1,true,rank(1048576) est=8689;lo=8433;hi=8946,rank(1048576)=8435,254,257,321.25,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,30.1,29.7,30.8,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 1 --query p50
+zka,exec,query,querier_gk,gk,p50,1/51,25,1,-,16384,16384,8,key&0x1FFFFF,54,1064,95983,131072,1,17,0.022,448,1,true,q(1/2) r=8192;value=1048304;rmin=8433;rmax=8433,q=1010463;returned_value_true_ranks=[8433..8433],241,241,321.25,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,30.1,29.7,30.8,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 1 --query p90
+zka,exec,query,querier_gk,gk,p90,1/51,25,1,-,16384,16384,8,key&0x1FFFFF,54,1064,96165,131072,1,17,0.021,448,1,true,q(9/10) r=14746;value=1851069;rmin=14594;rmax=14679,q=1864631;returned_value_true_ranks=[14597..14631],115,152,321.25,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,30.1,29.7,30.8,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 1 --query p99
+zka,exec,query,querier_gk,gk,p99,1/51,25,1,-,16384,16384,8,key&0x1FFFFF,54,1064,96183,131072,1,17,0.026,448,1,true,q(99/100) r=16221;value=2097041;rmin=16384;rmax=16384,q=2073464;returned_value_true_ranks=[16382..16384],161,163,321.25,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,30.1,29.7,30.8,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 4 --query rank
+zka,exec,query,querier_gk,gk,rank,1/51,25,4,-,16384,65536,8,key&0x1FFFFF,209,4108,269113,524288,1,19,0.049,824,4,true,rank(1048576) est=33918;lo=32957;hi=34879,rank(1048576)=33907,11,961,1285.02,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,30.1,29.7,30.8,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 4 --query p50
+zka,exec,query,querier_gk,gk,p50,1/51,25,4,-,16384,65536,8,key&0x1FFFFF,209,4112,355869,524288,1,19,0.029,832,4,true,q(1/2) r=32768;value=1005899;rmin=31837;rmax=33379,q=1008521;returned_value_true_ranks=[32521..32655],113,931,1285.02,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,30.1,29.7,30.8,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 4 --query p90
+zka,exec,query,querier_gk,gk,p90,1/51,25,4,-,16384,65536,8,key&0x1FFFFF,209,4112,356322,524288,1,19,0.028,832,4,true,q(9/10) r=58983;value=1871747;rmin=58063;rmax=59861,q=1882375;returned_value_true_ranks=[58710..58710],273,920,1285.02,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,30.1,29.7,30.8,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 4 --query p99
+zka,exec,query,querier_gk,gk,p99,1/51,25,4,-,16384,65536,8,key&0x1FFFFF,209,4112,356411,524288,1,19,0.027,832,4,true,q(99/100) r=64881;value=2083632;rmin=64702;rmax=65383,q=2076752;returned_value_true_ranks=[65086..65088],205,502,1285.02,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,30.1,29.7,30.8,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 16 --query rank
+zka,exec,query,querier_gk,gk,rank,1/51,25,16,-,16384,262144,8,key&0x1FFFFF,869,16780,1064017,1179648,2,20,0.038,2360,16,true,rank(1048576) est=135308;lo=131637;hi=138979,rank(1048576)=134699,609,3671,5140.08,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,60.2,59.5,61.6,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 16 --query p50
+zka,exec,query,querier_gk,gk,p50,1/51,25,16,-,16384,262144,8,key&0x1FFFFF,869,16784,1447946,1572864,2,20,0.040,2368,16,true,q(1/2) r=131072;value=1020596;rmin=127219;rmax=135075,q=1017139;returned_value_true_ranks=[131534..131706],462,4003,5140.08,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,60.2,59.5,61.6,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 16 --query p90
+zka,exec,query,querier_gk,gk,p90,1/51,25,16,-,16384,262144,8,key&0x1FFFFF,869,16784,1449752,1572864,2,20,0.065,2368,16,true,q(9/10) r=235930;value=1864631;rmin=232089;rmax=239441,q=1871077;returned_value_true_ranks=[235051..235307],623,3841,5140.08,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,60.2,59.5,61.6,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 16 --query p99
+zka,exec,query,querier_gk,gk,p99,1/51,25,16,-,16384,262144,8,key&0x1FFFFF,869,16784,1450114,2097152,2,20,0.063,2368,16,true,q(99/100) r=259523;value=2095692;rmin=257473;rmax=261813,q=2079366;returned_value_true_ranks=[261386..261386],1863,2290,5140.08,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,60.2,59.5,61.6,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 64 --query rank
+zka,exec,query,querier_gk,gk,rank,1/51,25,64,-,16384,1048576,8,key&0x1FFFFF,3396,66112,4156332,4456448,5,20,0.151,8504,64,true,rank(1048576) est=546979;lo=531040;hi=562919,rank(1048576)=546637,342,15940,20560.31,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,150.5,148.7,153.9,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 64 --query p50
+zka,exec,query,querier_gk,gk,p50,1/51,25,64,-,16384,1048576,8,key&0x1FFFFF,3396,66116,5738987,6291456,6,20,0.144,8512,64,true,q(1/2) r=524288;value=1005899;rmin=507032;rmax=541590,q=1005621;returned_value_true_ranks=[524447..526343],159,17302,20560.31,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,180.6,178.4,184.7,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 64 --query p90
+zka,exec,query,querier_gk,gk,p90,1/51,25,64,-,16384,1048576,8,key&0x1FFFFF,3396,66116,5745467,6291456,6,20,0.104,8512,64,true,q(9/10) r=943719;value=1867961;rmin=928807;rmax=958954,q=1870757;returned_value_true_ranks=[942793..942797],922,15235,20560.31,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,180.6,178.4,184.7,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+[run ] gk --mode query --epochs 64 --query p99
+zka,exec,query,querier_gk,gk,p99,1/51,25,64,-,16384,1048576,8,key&0x1FFFFF,3396,66116,5746960,6291456,6,20,0.150,8512,64,true,q(99/100) r=1038091;value=2095785;rmin=1028974;rmax=1048246,q=2079774;returned_value_true_ranks=[1045691..1048028],7600,10155,20560.31,true,true,true,NaN,NaN,0,NaN,0,0,0,NaN,180.6,178.4,184.7,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+# gk_prove_anchor.sh 2026-09-26T15:56:59+08:00 host=SPRL6201019991 load=[17.59 32.03 19.13] args=[prove epoch_size=2048 load1=17.59]
+# zka=d4a5a9a90 dirty=[0] r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# gk sources: 69e66f324437 (md5 of per-file md5s)
+# elf aggr_gk md5=e34f62c6f5e09749307389b1175f314c
+# elf querier_gk md5=2d0165a92ed33bc6941284381e33a300
+# elf aggr_gk_prof md5=4c27a92d83c7c2355f5df8ca44e29bdf
+[run ] gk --mode aggr --epoch-size 2048 --prove
+[FAIL] rc=143: --mode aggr --epoch-size 2048 --prove
+# gk_prove_anchor.sh 2026-09-26T16:01:26+08:00 host=SPRL6201019991 load=[20.77 35.90 25.34] args=[prove epoch_size=2048 load1=20.77]
+# zka=d4a5a9a90 dirty=[0] r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# gk sources: 69e66f324437 (md5 of per-file md5s)
+# elf aggr_gk md5=e34f62c6f5e09749307389b1175f314c
+# elf querier_gk md5=2d0165a92ed33bc6941284381e33a300
+# elf aggr_gk_prof md5=4c27a92d83c7c2355f5df8ca44e29bdf
+[run ] gk --mode aggr --epoch-size 2048 --prove
+gk: proved in 766.9 s, 14 segments, total_cycles=14680064 user_cycles=13398092 paging=694318 reserved=587654; r0vm peak RSS 9406.8 MB; driver VmHWM 14.2 MB
+zka,proved,aggr,aggr_gk,gk,-,1/51,25,1,0,2048,2048,8,key&0x1FFFFF,67,176264,13398092,14680064,14,20,0.505,792,1,true,tuples=67;max_g_plus_delta=81;floor_2eps_n=80,distinct_values=1233;max_rank_err_over_all_values=40,40,40,40.16,true,true,true,766.901,9.717,224810,54.779,14,14680064,13398092,9406.8,421.4,416.2,431.1,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+# NOTE 2026-09-26T16:14:33+08:00: the proved row above (prove_s=766.901) ran concurrently with another 64-core r0vm prover for its whole duration (zka-ss anchor, started 12 s earlier; 1-min load 101-120). Its prove_s and s_per_segment are CONTAMINATED; segments, cycles, receipt_bytes, journal equality and peak RSS are not. The CSV row's arm was relabelled proved -> proved_contended. An earlier attempt (16:00) was stopped by me after 6 s for the same reason (the [FAIL] rc=143 line).
+# gk_prove_anchor.sh 2026-09-26T16:19:06+08:00 host=SPRL6201019991 load=[11.93 53.50 62.17] args=[prove epoch_size=2048 load1=11.93]
+# zka=d4a5a9a90 dirty=[0] r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# gk sources: 69e66f324437 (md5 of per-file md5s)
+# elf aggr_gk md5=e34f62c6f5e09749307389b1175f314c
+# elf querier_gk md5=2d0165a92ed33bc6941284381e33a300
+# elf aggr_gk_prof md5=4c27a92d83c7c2355f5df8ca44e29bdf
+[run ] gk --mode aggr --epoch-size 2048 --prove
+gk: proved in 432.0 s, 14 segments, total_cycles=14680064 user_cycles=13398092 paging=694318 reserved=587654; r0vm peak RSS 9390.3 MB; driver VmHWM 13.9 MB
+zka,proved,aggr,aggr_gk,gk,-,1/51,25,1,0,2048,2048,8,key&0x1FFFFF,67,176264,13398092,14680064,14,20,0.219,792,1,true,tuples=67;max_g_plus_delta=81;floor_2eps_n=80,distinct_values=1233;max_rank_err_over_all_values=40,40,40,40.16,true,true,true,432.034,9.703,224810,30.860,14,14680064,13398092,9390.3,421.4,416.2,431.1,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+# NOTE 2026-09-26T16:27:34+08:00: the proved row above (prove_s=432.034, arm=proved) was launched after 60 s with no r0vm and load <= 20, but the SS anchor's prover had started ~6 s earlier and ran alongside for its first ~40 s, until its operator stopped it at 16:19:49 (zka_ss_exec.log). No other prover overlapped; the watcher saw max 1-min load 64.2, i.e. one prover. prove_s is therefore inflated by at most ~40 s: uncontended prove time lies in [392, 432] s, i.e. [28.0, 30.86] s/segment. segments/cycles/receipt/verify/RSS are unaffected.
+# NOTE 2026-09-26T16:53:15+08:00: SUPERSEDED. This file (and zka_gk_exec_v1_before_fix.csv) holds the rows of the pre-fix build (gk sources 69e66f324437, aggr_gk ELF e34f62c6...). That build (a) let COMPRESS merge t_0 away, so per-epoch summaries could lose the minimum (60 of 64 AOL epochs) and low-phi quantiles could exceed eps n, and (b) bounded the k-way union quantile under any tie order, so its certificate could exceed eps N. Both fixed; current rows are in zka_gk_exec.csv/.log. The row labelled proved_contended in the CSV was relabelled by hand (disclosed in the NOTE above); the fixed driver labels contention itself.

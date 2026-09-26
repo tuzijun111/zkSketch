@@ -1,0 +1,28 @@
+# Host workspace: the driver binary, the shared no_std summary crate (core/) and the
+# RISC Zero methods crate (methods/). The guest crates under methods/guests/ form
+# their own workspace (their own Cargo.lock, seeded from the zk-Analytics clone's
+# lock) so the guest ELFs build against the same crate versions as zk-Analytics'
+# own guests (risc0-zkvm 3.0.5). Path dependencies reach the read-only clone
+# through ../.zka, the untracked symlink that ../common.sh maintains.
+[workspace]
+members = ["core", "methods"]
+exclude = ["methods/guests"]
+resolver = "2"
+
+[package]
+name = "zka-ss"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ss-core = { path = "core" }
+ss-methods = { path = "methods" }
+aggregator-core = { path = "../.zka/aggregator/core" }
+zkvm-common = { path = "../.zka/zkvm-common" }
+risc0-zkvm = "3"
+bincode = "1"
+serde = "1"
+
+[[bin]]
+name = "ss"
+path = "src/bin/ss.rs"

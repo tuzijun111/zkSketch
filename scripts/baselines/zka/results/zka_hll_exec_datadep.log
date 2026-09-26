@@ -1,0 +1,25 @@
+# run_exec.sh 2026-09-26T15:49:12+08:00 host=SPRL6201019991 load=[7.24 4.59 4.19] nproc=64
+# zka=d4a5a9a90 r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# zkSketch=bf713f7a4 hll_dirty=1
+# elf hll_aggr md5=019bdd3e9b3cd0e9b77873ba7394882d bytes=206504
+# elf hll_query md5=48f786aca606731a8708c9346dce80df bytes=308728
+# elf hll_query_words md5=74afe8356388cf84fe9a65f0fdd5c5f9 bytes=309120
+[run ] hll --mode aggr --epoch-index 1
+zka-arch,hll,hll,aggr,hll_aggr,-,14,16384,1,1,16384,16384,8,1,fnv1a+splitmix64,9167,1409300,82654215,88604672,85,20,5044.8,82654215.0,1.179,664,1,true,ok,journal=commits_only;native_epoch_estimate=9127;raw=16818;m=16384;zero_registers=9386;linear_counting=true,distinct=9167,-0.004363,pre=347;read=60799166;chain=17906426;flatten=581151;update=3275898;commit=45202;journal=16823;post=29202,NaN,NaN,0,NaN,0,0,0,2558.5,2527.1,2617.2,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured),8f7be6879507795bf79b784d326f7f5fc8e398f12a9648cf335421491986ed55
+[run ] hll --mode aggr --epoch-index 31
+zka-arch,hll,hll,aggr,hll_aggr,-,14,16384,1,31,16384,16384,8,1,fnv1a+splitmix64,8479,1409300,82653343,88604672,85,20,5044.8,82653343.0,1.171,664,1,true,ok,journal=commits_only;native_epoch_estimate=8504;raw=16395;m=16384;zero_registers=9750;linear_counting=true,distinct=8479,0.002948,pre=347;read=60799166;chain=17906426;flatten=581151;update=3275026;commit=45202;journal=16823;post=29202,NaN,NaN,0,NaN,0,0,0,2558.5,2527.1,2617.2,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured),8f7be6879507795bf79b784d326f7f5fc8e398f12a9648cf335421491986ed55
+[run ] hll --mode aggr --epoch-index 63
+zka-arch,hll,hll,aggr,hll_aggr,-,14,16384,1,63,16384,16384,8,1,fnv1a+splitmix64,9099,1409300,82654153,88604672,85,20,5044.8,82654153.0,1.190,664,1,true,ok,journal=commits_only;native_epoch_estimate=9162;raw=16799;m=16384;zero_registers=9366;linear_counting=true,distinct=9099,0.006924,pre=347;read=60799166;chain=17906426;flatten=581151;update=3275836;commit=45202;journal=16823;post=29202,NaN,NaN,0,NaN,0,0,0,2558.5,2527.1,2617.2,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured),8f7be6879507795bf79b784d326f7f5fc8e398f12a9648cf335421491986ed55
+# ===== sketch_exec.sh 20260926T175012: the run below regenerated zka_hll_exec_datadep.csv (the previous CSV is kept as zka_hll_exec_datadep.csv.prev; proved rows, if any, carried over verbatim) =====
+# run_exec.sh 2026-09-26T17:50:21+08:00 host=SPRL6201019991 load=[1.63 1.82 6.87] nproc=64
+# zka=d4a5a9a90 r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# zkSketch=bf713f7a4 hll_dirty=1
+# elf hll_aggr md5=019bdd3e9b3cd0e9b77873ba7394882d bytes=206504
+# elf hll_query md5=48f786aca606731a8708c9346dce80df bytes=308728
+# elf hll_query_words md5=74afe8356388cf84fe9a65f0fdd5c5f9 bytes=309120
+[run ] hll --mode aggr --epoch-index 1
+zka-arch,hll,hll,aggr,hll_aggr,-,14,16384,1,1,16384,16384,8,1,fnv1a+splitmix64,9167,1409300,82654215,88604672,85,20,5044.8,82654215.0,1.164,664,1,true,ok,journal=commits_only;native_epoch_estimate=9127;raw=16818;m=16384;zero_registers=9386;linear_counting=true,distinct=9167,-0.004363,pre=347;read=60799166;chain=17906426;flatten=581151;update=3275898;commit=45202;journal=16823;post=29202,NaN,NaN,0,NaN,0,0,0,2558.5,2527.1,2617.2,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured),8f7be6879507795bf79b784d326f7f5fc8e398f12a9648cf335421491986ed55
+[run ] hll --mode aggr --epoch-index 31
+zka-arch,hll,hll,aggr,hll_aggr,-,14,16384,1,31,16384,16384,8,1,fnv1a+splitmix64,8479,1409300,82653343,88604672,85,20,5044.8,82653343.0,1.173,664,1,true,ok,journal=commits_only;native_epoch_estimate=8504;raw=16395;m=16384;zero_registers=9750;linear_counting=true,distinct=8479,0.002948,pre=347;read=60799166;chain=17906426;flatten=581151;update=3275026;commit=45202;journal=16823;post=29202,NaN,NaN,0,NaN,0,0,0,2558.5,2527.1,2617.2,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured),8f7be6879507795bf79b784d326f7f5fc8e398f12a9648cf335421491986ed55
+[run ] hll --mode aggr --epoch-index 63
+zka-arch,hll,hll,aggr,hll_aggr,-,14,16384,1,63,16384,16384,8,1,fnv1a+splitmix64,9099,1409300,82654153,88604672,85,20,5044.8,82654153.0,1.142,664,1,true,ok,journal=commits_only;native_epoch_estimate=9162;raw=16799;m=16384;zero_registers=9366;linear_counting=true,distinct=9099,0.006924,pre=347;read=60799166;chain=17906426;flatten=581151;update=3275836;commit=45202;journal=16823;post=29202,NaN,NaN,0,NaN,0,0,0,2558.5,2527.1,2617.2,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured),8f7be6879507795bf79b784d326f7f5fc8e398f12a9648cf335421491986ed55

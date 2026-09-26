@@ -1,0 +1,15 @@
+# Compile-only probe of the wire refresh (hll_lib.zok.tpl: every CK-th updated state is multiplied by a private
+# input fixed to 1, so ZoKrates allocates fresh wires instead of carrying ever longer linear combinations).
+# ZoKrates 0.8.8 bn128, /usr/bin/time wall and peak RSS, 2026-09-26, shared box (load1 ~4-6).
+# CK=none rows: the v1 encoding without refresh, copied from zkstream_hll_v1_lincomb_growth.csv (driver runs).
+# CK=1 rows: prototype templates equal to the final ones at CK=1 (scratch build dir v2probe_*).
+# The two k=64 CK=1/CK=8 compiles ran concurrently (one core each).
+s,P,CK,k,constraints,compile_s,peak_rss_mb,out_bytes,note
+16384,32,none,4,81911,51.73,4535.4,113243154,v1 driver run 20260926T185028
+16384,32,none,16,107648,61.70,4841.9,141828940,v1 driver run 20260926T185028
+16384,32,none,64,209579,94.81,5999.3,416093152,v1 driver run 20260926T185028
+16384,32,none,256,618320,508.64,17614.5,4097801884,v1 driver run 20260926T185841 (run stopped after this compile)
+16384,32,1,4,83960,52.31,4539.0,112804639,prototype
+16384,32,1,16,115841,59.46,4847.2,129306001,prototype
+16384,32,1,64,242348,115.24,6010.9,193781761,concurrent with the CK=8 compile
+16384,32,8,64,213676,115.85,5995.5,210717207,concurrent with the CK=1 compile

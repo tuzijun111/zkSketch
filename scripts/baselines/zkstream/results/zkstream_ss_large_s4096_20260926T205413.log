@@ -1,0 +1,48 @@
+### SS operator, largest proven state: s=4096, k=1, final layout, 5-chunk chain 20260926T205413
+ 20:54:13 up 12 days, 10:22, 12 users,  load average: 0.92, 1.24, 2.14
+run=20260926T205413 load1=0.92 pin=0-31 s=[4096] k=[1] cb=21 spe=3 chunks=5 cap=45m/150G -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_ss.csv
+  s=4096 k=1   chunk=   compile_op               constraints=641525 wall_s=313.4313 peak_rss_mb=14301.6953 bytes=564808267 ok=1 load1=1.52 foreign=0/- note=r1cs_bytes=377026456; large-state proven point
+  s=4096 k=1   chunk=   compile_helper           constraints=194736 wall_s=176.5340 peak_rss_mb=12996.1836 bytes=290407874 ok=1 load1=1.51 foreign=0/- note=r1cs_bytes=216583092; large-state proven point
+  s=4096 k=1   chunk=   setup                    constraints=641525 wall_s=5.8447 peak_rss_mb=2217.6094 bytes=269776944 ok=1 load1=1.43 foreign=0/0 note=vk_bytes=1917; large-state proven point
+  s=4096 k=1   chunk=0  native_reference         wall_s=0.0001 ok=1 load1=1.43 note=hits=0 inserts=1 evicts=0 occupied=1; large-state proven point
+  s=4096 k=1   chunk=0  witness_helper           wall_s=1.2737 peak_rss_mb=83.8359 load1=1.43 note=Poseidon commitments for the driver; large-state proven point
+  s=4096 k=1   chunk=0  witness_op               constraints=641525 wall_s=2.6625 peak_rss_mb=192.1797 ok=1 load1=1.43 note=circuit out == helper com_out(reference) and com_in == prev com_out; large-state proven point
+  s=4096 k=1   chunk=0  prove                    constraints=641525 wall_s=5.9711 peak_rss_mb=2541.7656 bytes=997 ok=1 load1=1.36 foreign=0/0 note=JSON proof; public = (com_in, batch_com, com_out); large-state proven point
+  s=4096 k=1   chunk=0  verify                   wall_s=0.0085 peak_rss_mb=11.0625 ok=1 load1=1.36 note=CLI incl. process start; and proof.com_in == previous proof.com_out; large-state proven point
+  s=4096 k=1   chunk=0  tamper_verify_com_out_plus1 wall_s=0.0072 ok=1 load1=1.36 note=rejected; large-state proven point
+  s=4096 k=1   chunk=1  native_reference         wall_s=0.0000 ok=1 load1=1.36 note=hits=0 inserts=1 evicts=0 occupied=2; large-state proven point
+  s=4096 k=1   chunk=1  witness_helper           wall_s=1.2541 peak_rss_mb=83.6914 load1=1.36 note=Poseidon commitments for the driver; large-state proven point
+  s=4096 k=1   chunk=1  witness_op               constraints=641525 wall_s=2.5774 peak_rss_mb=190.6133 ok=1 load1=1.36 note=circuit out == helper com_out(reference) and com_in == prev com_out; large-state proven point
+  s=4096 k=1   chunk=1  prove                    constraints=641525 wall_s=5.8293 peak_rss_mb=2541.5898 bytes=997 ok=1 load1=1.31 foreign=0/0 note=JSON proof; public = (com_in, batch_com, com_out); large-state proven point
+  s=4096 k=1   chunk=1  verify                   wall_s=0.0080 peak_rss_mb=11.4297 ok=1 load1=1.31 note=CLI incl. process start; and proof.com_in == previous proof.com_out; large-state proven point
+  s=4096 k=1   chunk=2  native_reference         wall_s=0.0000 ok=1 load1=1.31 note=hits=0 inserts=1 evicts=0 occupied=3; large-state proven point
+  s=4096 k=1   chunk=2  witness_helper           wall_s=1.2465 peak_rss_mb=84.9023 load1=1.31 note=Poseidon commitments for the driver; large-state proven point
+  s=4096 k=1   chunk=2  witness_op               constraints=641525 wall_s=2.8127 peak_rss_mb=189.5781 ok=1 load1=1.31 note=circuit out == helper com_out(reference) and com_in == prev com_out; large-state proven point
+  s=4096 k=1   chunk=2  prove                    constraints=641525 wall_s=6.2149 peak_rss_mb=2540.2109 bytes=997 ok=1 load1=1.26 foreign=0/0 note=JSON proof; public = (com_in, batch_com, com_out); large-state proven point
+  s=4096 k=1   chunk=2  verify                   wall_s=0.0078 peak_rss_mb=12.0781 ok=1 load1=1.26 note=CLI incl. process start; and proof.com_in == previous proof.com_out; large-state proven point
+  s=4096 k=1   chunk=3  native_reference         wall_s=0.0000 ok=1 load1=1.26 note=hits=0 inserts=1 evicts=0 occupied=4; large-state proven point
+  s=4096 k=1   chunk=3  witness_helper           wall_s=1.1483 peak_rss_mb=83.8359 load1=1.26 note=Poseidon commitments for the driver; large-state proven point
+  s=4096 k=1   chunk=3  witness_op               constraints=641525 wall_s=2.6334 peak_rss_mb=191.0352 ok=1 load1=1.24 note=circuit out == helper com_out(reference) and com_in == prev com_out; large-state proven point
+  s=4096 k=1   chunk=3  prove                    constraints=641525 wall_s=6.1607 peak_rss_mb=2541.0898 bytes=997 ok=1 load1=1.22 foreign=0/0 note=JSON proof; public = (com_in, batch_com, com_out); large-state proven point
+  s=4096 k=1   chunk=3  verify                   wall_s=0.0078 peak_rss_mb=10.5352 ok=1 load1=1.22 note=CLI incl. process start; and proof.com_in == previous proof.com_out; large-state proven point
+  s=4096 k=1   chunk=4  native_reference         wall_s=0.0000 ok=1 load1=1.22 note=hits=1 inserts=0 evicts=0 occupied=4; large-state proven point
+  s=4096 k=1   chunk=4  witness_helper           wall_s=1.2589 peak_rss_mb=84.0469 load1=1.22 note=Poseidon commitments for the driver; large-state proven point
+  s=4096 k=1   chunk=4  witness_op               constraints=641525 wall_s=2.5416 peak_rss_mb=190.6172 ok=1 load1=1.20 note=circuit out == helper com_out(reference) and com_in == prev com_out; large-state proven point
+  s=4096 k=1   chunk=4  prove                    constraints=641525 wall_s=6.1616 peak_rss_mb=2540.6484 bytes=997 ok=1 load1=1.19 foreign=0/0 note=JSON proof; public = (com_in, batch_com, com_out); large-state proven point
+  s=4096 k=1   chunk=4  verify                   wall_s=0.0077 peak_rss_mb=11.6406 ok=1 load1=1.19 note=CLI incl. process start; and proof.com_in == previous proof.com_out; large-state proven point
+  s=4096 k=1   chunk=   tamper_dropped_record    load1=1.19 note=n/a: no suitable record/state in this chain; large-state proven point
+  s=4096 k=1   chunk=0  semantics_other_min_accepted wall_s=2.6328 ok=1 load1=1.19 note=a later equal-count slot is a valid SpaceSaving choice; large-state proven point
+  s=4096 k=1   chunk=0  tamper_com_in_plus1      wall_s=1.3445 ok=1 load1=1.17 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5; large-state proven point
+  s=4096 k=1   chunk=0  tamper_batch_com_plus1   wall_s=1.3315 ok=1 load1=1.17 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5; large-state proven point
+  s=4096 k=1   chunk=0  tamper_salt_in_plus1     wall_s=1.2193 ok=1 load1=1.17 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5; large-state proven point
+  s=4096 k=1   chunk=0  tamper_key_not_in_digest wall_s=1.1277 ok=1 load1=1.17 note=rejected: Execution failed: Assertion failed at ss_op.zok:81:5; large-state proven point
+  s=4096 k=1   chunk=1  tamper_stale_state       wall_s=1.3251 ok=1 load1=1.24 note=rejected: Execution failed: Assertion failed at ss_op.zok:80:5; large-state proven point
+  s=4096 k=1   chunk=4  tamper_hit_updates_min_slot wall_s=1.2949 ok=1 load1=1.24 note=rejected: Execution failed: Assertion failed at ss_op.zok:93:13; large-state proven point
+  s=4096 k=1   chunk=1  tamper_miss_evicts_nonmin wall_s=1.4149 ok=1 load1=1.24 note=rejected: Execution failed: Sum check failed (range-check recomposition); large-state proven point
+  s=4096 k=1   chunk=0  tamper_selector_two_hot  wall_s=1.5070 ok=1 load1=1.22 note=rejected: Execution failed: Assertion failed at ss_op.zok:106:9; large-state proven point
+  s=4096 k=1   chunk=0  tamper_materializer_not_one wall_s=0.0161 ok=1 load1=1.22 note=rejected: Execution failed: Assertion failed at ss_op.zok:68:5; large-state proven point
+  s=4096 k=1   chunk=1  tamper_alias_key_count   wall_s=0.0157 ok=1 load1=1.22 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1; large-state proven point
+  s=4096 k=1   chunk=1  tamper_alias_count_error wall_s=0.0164 ok=1 load1=1.22 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1; large-state proven point
+  s=4096 k=1   chunk=1  tamper_alias_error_absorbs_count wall_s=0.0172 ok=1 load1=1.22 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1; large-state proven point
+  s=4096 k=1   chunk=1  tamper_alias_across_slots wall_s=0.0167 ok=1 load1=1.28 note=rejected: Execution failed: Sum check failed (range-check recomposition); forged opening hashes to com_in: 1; large-state proven point
+done -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_ss.csv

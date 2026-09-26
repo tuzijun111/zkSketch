@@ -1,0 +1,7 @@
+### SS operator at the deployed state size s=2^14, k=1, final layout -- ONE retry on a quiet box (first attempt 20260926T200847 was refused at 45 min while 2-4 other compiles ran, load 1-7) 20260926T210438
+ 21:04:38 up 12 days, 10:32, 12 users,  load average: 0.80, 1.37, 1.83
+               total        used        free      shared  buff/cache   available
+Mem:             559          61         294          42         249         498
+run=20260926T210438 load1=0.80 pin=0-31 s=[16384] k=[1] cb=21 spe=3 chunks=5 cap=45m/150G -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_ss.csv
+  s=16384 k=1   chunk=   compile_op               wall_s=2701.6337 peak_rss_mb=56922.5273 ok=0 load1=1.04 foreign=0/- note=REFUSED/OVER BUDGET: timeout 45m; deployed state size s=2^14; retry on quiet box
+done -> /home/binbin/zkSketch/scripts/baselines/zkstream/results/zkstream_ss.csv

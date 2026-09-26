@@ -1,0 +1,661 @@
+run,system,s,b,P,S,Q,CK,k,chunk,step,constraints,wall_s,peak_rss_mb,bytes,public_inputs,load1,ok,note
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,,compile_op,5191,1.4824,160.3789,4479972,,5.95,1,r1cs_bytes=3191588
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,,compile_helper,5191,1.4585,160.1016,4479284,,5.95,1,r1cs_bytes=3191596
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,,setup,5191,0.0658,32.6562,2183408,,5.95,,"vk_bytes=1917 concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,0,witness_helper,,0.0245,17.8555,,,5.95,1,helper state+commitments == native reference (3 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,0,witness_op,5191,0.0210,16.3359,,,5.95,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,0,prove,5191,0.0632,36.2852,997,3,5.95,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,0,verify,,0.0063,11.4805,,,5.95,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,witness_helper,,0.0243,18.3750,,,5.95,1,helper state+commitments == native reference (3 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,witness_op,5191,0.0216,16.6836,,,5.95,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,prove,5191,0.0677,36.2969,997,3,5.95,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,verify,,0.0062,10.9219,,,5.95,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,2,witness_helper,,0.0239,17.8398,,,5.95,1,helper state+commitments == native reference (3 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,2,witness_op,5191,0.0214,16.7891,,,5.95,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,2,prove,5191,0.0673,36.3281,997,3,5.95,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,2,verify,,0.0060,11.4961,,,5.95,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,3,witness_helper,,0.0233,17.3867,,,5.95,1,helper state+commitments == native reference (3 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,3,witness_op,5191,0.0212,16.3789,,,5.95,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,3,prove,5191,0.0664,36.2227,997,3,5.95,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,3,verify,,0.0063,11.5391,,,5.95,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,,chain,5191,,,,,5.95,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.2 vs 13 distinct keys (+1.7%)"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_wrong_update_one_slot,,0.0207,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_dropped_record_state,,0.0221,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_dropped_record_keys,,0.0084,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_stale_state,,0.0095,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_altered_state_register,,0.0062,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_key_not_in_digest,,0.0079,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_replace_not_max,,0.0203,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_com_out_equals_com_in,,0.0207,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_com_in_plus1,,0.0064,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_batch_com_plus1,,0.0079,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_salt_out_plus1,,0.0199,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_refresh_one_is_2,,0.0040,,,,5.95,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,4,1,tamper_verify_public_com_out,,0.0054,,,,5.95,1,verification failed
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,,compile_op,17429,3.5078,313.2734,13396763,,5.88,1,r1cs_bytes=9143608
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,,compile_helper,17429,3.5056,314.9688,13396043,,5.72,1,r1cs_bytes=9143616
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,,setup,17429,0.1784,69.6445,7660912,,5.72,,"vk_bytes=1917 concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,0,witness_helper,,0.0653,19.7930,,,5.72,1,helper state+commitments == native reference (8 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,0,witness_op,17429,0.0600,17.6797,,,5.72,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,0,prove,17429,0.2068,81.0742,997,3,5.72,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,0,verify,,0.0071,10.8984,,,5.72,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,witness_helper,,0.0675,20.3555,,,5.72,1,helper state+commitments == native reference (8 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,witness_op,17429,0.0604,17.6641,,,5.72,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,prove,17429,0.1915,80.1133,997,3,5.72,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,verify,,0.0073,11.4688,,,5.72,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,2,witness_helper,,0.0650,19.7969,,,5.72,1,helper state+commitments == native reference (8 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,2,witness_op,17429,0.0571,16.8828,,,5.72,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,2,prove,17429,0.2006,81.5430,997,3,5.72,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,2,verify,,0.0071,11.4062,,,5.72,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,3,witness_helper,,0.0660,19.2188,,,5.72,1,helper state+commitments == native reference (8 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,3,witness_op,17429,0.0605,17.2852,,,5.72,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,3,prove,17429,0.1990,82.7422,997,3,5.72,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,3,verify,,0.0073,11.5898,,,5.72,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,,chain,17429,,,,,5.72,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 52.3 vs 46 distinct keys (+13.6%)"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_wrong_update_one_slot,,0.0554,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_dropped_record_state,,0.0559,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_dropped_record_keys,,0.0155,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_stale_state,,0.0063,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_altered_state_register,,0.0060,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_key_not_in_digest,,0.0134,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_replace_not_max,,0.0558,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_com_out_equals_com_in,,0.0539,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_com_in_plus1,,0.0063,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_batch_com_plus1,,0.0132,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_salt_out_plus1,,0.0531,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_refresh_one_is_2,,0.0040,,,,5.72,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,16,1,tamper_verify_public_com_out,,0.0058,,,,5.72,1,verification failed
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,,compile_op,65366,11.1165,862.8086,48382018,,5.54,1,r1cs_bytes=31802284
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,,compile_helper,65366,10.7775,864.3008,48381301,,5.44,1,r1cs_bytes=31802292
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,,setup,65366,0.5429,206.2305,25051824,,5.33,,vk_bytes=1917
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,0,witness_helper,,0.2114,34.4492,,,5.33,1,helper state+commitments == native reference (24 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,0,witness_op,65366,0.2177,20.7930,,,5.33,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,0,prove,65366,0.5839,240.9180,997,3,5.33,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,0,verify,,0.0060,11.4609,,,5.33,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,witness_helper,,0.2098,34.1406,,,5.33,1,helper state+commitments == native reference (25 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,witness_op,65366,0.1905,19.8125,,,5.33,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,prove,65366,0.5534,240.2852,997,3,5.33,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,verify,,0.0067,11.5781,,,5.33,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,2,witness_helper,,0.2073,34.8477,,,5.33,1,helper state+commitments == native reference (24 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,2,witness_op,65366,0.1993,20.6367,,,5.33,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,2,prove,65366,0.6206,241.8750,997,3,5.33,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,2,verify,,0.0076,11.0508,,,5.33,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,3,witness_helper,,0.2490,33.9141,,,5.33,1,helper state+commitments == native reference (27 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,3,witness_op,65366,0.2210,19.7266,,,5.33,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,3,prove,65366,0.6381,241.0234,997,3,5.86,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,3,verify,,0.0075,11.4961,,,5.86,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,,chain,65366,,,,,5.86,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 273.3 vs 174 distinct keys (+57.1%)"
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_wrong_update_one_slot,,0.2163,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_dropped_record_state,,0.2142,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_dropped_record_keys,,0.0330,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_stale_state,,0.0073,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_altered_state_register,,0.0070,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_key_not_in_digest,,0.0320,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_replace_not_max,,0.2135,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_com_out_equals_com_in,,0.2151,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_com_in_plus1,,0.0082,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_batch_com_plus1,,0.0328,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_salt_out_plus1,,0.2139,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_refresh_one_is_2,,0.0049,,,,5.86,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,16,4,16,1,60,8,64,1,tamper_verify_public_com_out,,0.0063,,,,5.86,1,verification failed
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,,compile_op,5650,1.6565,165.8086,4667137,,5.86,1,r1cs_bytes=3296356
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,,compile_helper,5651,1.6610,150.2891,4666723,,5.86,1,r1cs_bytes=3296492
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,,setup,5650,0.0655,33.2422,2330608,,5.86,,vk_bytes=1917 concurrent_zokrates=compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,0,witness_helper,,0.0266,17.3438,,,5.86,1,helper state+commitments == native reference (4 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,0,witness_op,5650,0.0238,15.7109,,,5.86,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,0,prove,5650,0.0761,37.3867,997,3,5.63,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,0,verify,,0.0062,11.6367,,,5.63,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,witness_helper,,0.0238,17.7188,,,5.63,1,helper state+commitments == native reference (3 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,witness_op,5650,0.0228,16.3086,,,5.63,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,prove,5650,0.0779,36.9648,997,3,5.63,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,verify,,0.0069,11.5000,,,5.63,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,2,witness_helper,,0.0281,17.3320,,,5.63,1,helper state+commitments == native reference (4 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,2,witness_op,5650,0.0252,16.7891,,,5.63,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,2,prove,5650,0.0769,36.5820,997,3,5.63,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,2,verify,,0.0071,10.4453,,,5.63,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,3,witness_helper,,0.0270,18.3281,,,5.63,1,helper state+commitments == native reference (3 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,3,witness_op,5650,0.0264,15.7148,,,5.63,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,3,prove,5650,0.0798,37.3789,997,3,5.63,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,3,verify,,0.0068,10.4727,,,5.63,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,,chain,5650,,,,,5.63,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.3 vs 13 distinct keys (+2.2%)"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_wrong_update_one_slot,,0.0245,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_dropped_record_state,,0.0240,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_dropped_record_keys,,0.0091,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_stale_state,,0.0076,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_altered_state_register,,0.0072,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_key_not_in_digest,,0.0086,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_register_decreased,,0.0242,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_com_out_equals_com_in,,0.0239,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_com_in_plus1,,0.0070,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_batch_com_plus1,,0.0093,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_salt_out_plus1,,0.0236,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_refresh_one_is_2,,0.0045,,,,5.63,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,4,1,tamper_verify_public_com_out,,0.0062,,,,5.63,1,verification failed
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,,compile_op,19245,3.5750,325.4531,14195243,,5.63,1,r1cs_bytes=9558368
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,,compile_helper,19246,3.8066,323.6758,14194939,,5.42,1,r1cs_bytes=9558504
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,,setup,19245,0.1917,72.3750,8242352,,5.42,,vk_bytes=1917
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,0,witness_helper,,0.0649,20.2812,,,5.42,1,helper state+commitments == native reference (8 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,0,witness_op,19245,0.0681,16.7422,,,5.42,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,0,prove,19245,0.2201,84.3359,997,3,5.42,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compute-witness"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,0,verify,,0.0072,11.0078,,,5.42,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,witness_helper,,0.0783,21.8828,,,5.42,1,helper state+commitments == native reference (8 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,witness_op,19245,0.0699,17.7422,,,5.42,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,prove,19245,0.2143,83.7500,997,3,5.42,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,verify,,0.0068,11.4141,,,5.42,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,2,witness_helper,,0.0678,21.5117,,,5.42,1,helper state+commitments == native reference (7 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,2,witness_op,19245,0.0604,17.7656,,,5.42,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,2,prove,19245,0.2105,84.6602,997,3,5.42,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,2,verify,,0.0059,10.4648,,,5.42,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,3,witness_helper,,0.0735,21.7500,,,5.42,1,helper state+commitments == native reference (8 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,3,witness_op,19245,0.0604,17.7969,,,5.42,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,3,prove,19245,0.1930,84.1719,997,3,5.31,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,3,verify,,0.0067,10.9648,,,5.31,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,,chain,19245,,,,,5.31,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 48.5 vs 46 distinct keys (+5.4%)"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_wrong_update_one_slot,,0.0593,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_dropped_record_state,,0.0564,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_dropped_record_keys,,0.0139,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_stale_state,,0.0068,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_altered_state_register,,0.0066,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_key_not_in_digest,,0.0135,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_replace_not_max,,0.0587,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_com_out_equals_com_in,,0.0582,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_com_in_plus1,,0.0066,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_batch_com_plus1,,0.0135,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_salt_out_plus1,,0.0581,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_refresh_one_is_2,,0.0036,,,,5.31,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,16,1,tamper_verify_public_com_out,,0.0053,,,,5.31,1,verification failed
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,,compile_op,72612,12.2780,904.2852,51435255,,5.11,1,r1cs_bytes=33453812
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,,compile_helper,72613,11.9702,904.5508,51434812,,4.93,1,r1cs_bytes=33453948
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,,setup,72612,0.6598,232.6602,31565168,,4.93,,vk_bytes=1917 concurrent_zokrates=compile
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,0,witness_helper,,0.2298,35.7188,,,4.93,1,helper state+commitments == native reference (24 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,0,witness_op,72612,0.2058,20.4375,,,4.93,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,0,prove,72612,0.6893,265.5586,997,3,4.93,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,0,verify,,0.0074,11.6406,,,4.93,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,witness_helper,,0.2303,36.2148,,,4.93,1,helper state+commitments == native reference (23 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,witness_op,72612,0.2047,21.3555,,,4.93,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,prove,72612,0.6631,263.1016,997,3,4.93,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=inspect"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,verify,,0.0078,11.5898,,,4.93,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,2,witness_helper,,0.2616,35.8047,,,4.93,1,helper state+commitments == native reference (27 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,2,witness_op,72612,0.2101,21.1641,,,4.93,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,2,prove,72612,0.6460,265.1445,997,3,4.93,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,2,verify,,0.0072,11.0234,,,4.93,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,3,witness_helper,,0.2381,35.6797,,,4.93,1,helper state+commitments == native reference (24 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,3,witness_op,72612,0.2103,21.6133,,,4.78,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,3,prove,72612,0.6440,265.4492,997,3,4.78,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,3,verify,,0.0077,10.5195,,,4.78,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,,chain,72612,,,,,4.78,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 206.2 vs 174 distinct keys (+18.5%)"
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_wrong_update_one_slot,,0.2000,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_dropped_record_state,,0.2000,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_dropped_record_keys,,0.0296,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_stale_state,,0.0077,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_altered_state_register,,0.0065,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_key_not_in_digest,,0.0297,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_replace_not_max,,0.1998,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_com_out_equals_com_in,,0.1987,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_com_in_plus1,,0.0072,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_batch_com_plus1,,0.0301,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_salt_out_plus1,,0.2018,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_refresh_one_is_2,,0.0047,,,,4.78,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,64,6,32,2,58,8,64,1,tamper_verify_public_com_out,,0.0058,,,,4.78,1,verification failed
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,,compile_op,6410,2.0253,198.0391,5693354,,4.78,1,r1cs_bytes=4092300
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,,compile_helper,6417,2.0060,197.0352,5694697,,4.64,1,r1cs_bytes=4093204
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,,setup,6410,0.0738,37.7344,2575728,,4.64,,"vk_bytes=1917 concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,0,witness_helper,,0.0291,18.3164,,,4.64,1,helper state+commitments == native reference (5 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,0,witness_op,6410,0.0282,16.9258,,,4.64,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,0,prove,6410,0.0782,41.3281,997,3,4.64,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,0,verify,,0.0068,11.5039,,,4.64,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,witness_helper,,0.0294,17.2344,,,4.64,1,helper state+commitments == native reference (5 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,witness_op,6410,0.0266,16.3047,,,4.64,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,prove,6410,0.0872,40.0820,997,3,4.64,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,verify,,0.0068,11.5195,,,4.64,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,2,witness_helper,,0.0281,17.7656,,,4.64,1,helper state+commitments == native reference (5 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,2,witness_op,6410,0.0267,16.2070,,,4.64,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,2,prove,6410,0.0810,40.7500,997,3,4.64,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,2,verify,,0.0064,11.0234,,,4.64,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,3,witness_helper,,0.0297,17.2266,,,4.64,1,helper state+commitments == native reference (5 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,3,witness_op,6410,0.0268,16.3906,,,4.64,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,3,prove,6410,0.0847,41.7930,997,3,4.64,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,3,verify,,0.0068,11.5273,,,4.64,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,,chain,6410,,,,,4.64,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.3 vs 13 distinct keys (+2.6%)"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_wrong_update_one_slot,,0.0260,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_dropped_record_state,,0.0251,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_dropped_record_keys,,0.0096,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_stale_state,,0.0085,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_altered_state_register,,0.0094,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_key_not_in_digest,,0.0107,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_register_decreased,,0.0250,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_com_out_equals_com_in,,0.0254,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_com_in_plus1,,0.0082,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_batch_com_plus1,,0.0097,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_salt_out_plus1,,0.0249,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_refresh_one_is_2,,0.0034,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,4,1,tamper_verify_public_com_out,,0.0064,,,,4.64,1,verification failed
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,,compile_op,20131,4.2777,366.6094,15374706,,4.58,1,r1cs_bytes=10428472
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,,compile_helper,20138,4.3102,368.2500,15376040,,4.54,1,r1cs_bytes=10429376
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,,setup,20131,0.2042,76.6719,8527792,,4.54,,"vk_bytes=1917 concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,0,witness_helper,,0.0759,21.4180,,,4.54,1,helper state+commitments == native reference (9 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,0,witness_op,20131,0.0649,17.6680,,,4.54,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,0,prove,20131,0.1920,89.6250,997,3,4.54,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,0,verify,,0.0065,11.5195,,,4.54,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,witness_helper,,0.0708,21.2266,,,4.54,1,helper state+commitments == native reference (9 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,witness_op,20131,0.0633,17.3867,,,4.54,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,prove,20131,0.2139,88.5391,997,3,4.54,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,verify,,0.0071,11.5195,,,4.54,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,2,witness_helper,,0.0739,21.8047,,,4.54,1,helper state+commitments == native reference (9 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,2,witness_op,20131,0.0677,18.1680,,,4.54,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,2,prove,20131,0.2024,88.1211,997,3,4.54,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,2,verify,,0.0072,11.5273,,,4.54,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,3,witness_helper,,0.0740,21.3867,,,4.54,1,helper state+commitments == native reference (9 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,3,witness_op,20131,0.0682,16.8086,,,4.54,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,3,prove,20131,0.2048,90.9180,997,3,4.54,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,3,verify,,0.0068,11.4102,,,4.54,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,,chain,20131,,,,,4.54,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 47.1 vs 46 distinct keys (+2.3%)"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_wrong_update_one_slot,,0.0627,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_dropped_record_state,,0.0661,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_dropped_record_keys,,0.0166,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_stale_state,,0.0083,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_altered_state_register,,0.0082,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_key_not_in_digest,,0.0153,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_replace_not_max,,0.0646,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_com_out_equals_com_in,,0.0630,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_com_in_plus1,,0.0082,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_batch_com_plus1,,0.0149,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_salt_out_plus1,,0.0620,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_refresh_one_is_2,,0.0043,,,,4.54,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,16,1,tamper_verify_public_com_out,,0.0065,,,,4.54,1,verification failed
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,,compile_op,74014,13.0161,954.6641,53028976,,6.96,1,r1cs_bytes=34592140
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,,compile_helper,74021,13.0215,955.7969,53030310,,6.50,1,r1cs_bytes=34593044
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,,setup,74014,0.6572,240.3594,32015728,,6.38,,"vk_bytes=1917 concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,0,witness_helper,,0.2455,35.8867,,,6.38,1,helper state+commitments == native reference (27 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,0,witness_op,74014,0.2142,20.8242,,,6.38,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,0,prove,74014,0.6826,270.8398,997,3,6.38,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,0,verify,,0.0075,12.1133,,,6.38,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,witness_helper,,0.2398,36.2578,,,6.38,1,helper state+commitments == native reference (23 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,witness_op,74014,0.2106,19.7422,,,6.38,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,prove,74014,0.6653,271.1680,997,3,6.38,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,verify,,0.0081,10.4805,,,6.38,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,2,witness_helper,,0.2416,35.6836,,,6.38,1,helper state+commitments == native reference (24 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,2,witness_op,74014,0.2119,21.1250,,,6.38,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,2,prove,74014,0.6523,271.5469,997,3,6.38,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,2,verify,,0.0076,11.6367,,,6.38,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,3,witness_helper,,0.2390,36.0508,,,6.38,1,helper state+commitments == native reference (25 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,3,witness_op,74014,0.2149,21.3242,,,6.38,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,3,prove,74014,0.6705,272.4727,997,3,6.27,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,3,verify,,0.0073,11.4102,,,6.27,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,,chain,74014,,,,,6.27,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 173.5 vs 174 distinct keys (-0.3%)"
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_wrong_update_one_slot,,0.2079,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_dropped_record_state,,0.2076,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_dropped_record_keys,,0.0322,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_stale_state,,0.0078,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_altered_state_register,,0.0086,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_key_not_in_digest,,0.0298,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_replace_not_max,,0.2005,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_com_out_equals_com_in,,0.2150,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_com_in_plus1,,0.0089,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_batch_com_plus1,,0.0307,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_salt_out_plus1,,0.2029,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_refresh_one_is_2,,0.0047,,,,6.27,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,256,8,32,8,56,8,64,1,tamper_verify_public_com_out,,0.0063,,,,6.27,1,verification failed
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,,compile_op,10152,4.5140,460.3711,10883878,,6.09,1,r1cs_bytes=8051732
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,,compile_helper,10183,4.4308,428.9805,10891591,,5.92,1,r1cs_bytes=8055708
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,,setup,10152,0.1223,56.2109,4305136,,5.92,,"vk_bytes=1917 concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,0,witness_helper,,0.0502,18.8594,,,5.92,1,helper state+commitments == native reference (11 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,0,witness_op,10152,0.0466,17.2305,,,5.92,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,0,prove,10152,0.1475,61.3555,997,3,5.92,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,0,verify,,0.0064,12.0469,,,5.92,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,witness_helper,,0.0493,19.7773,,,5.92,1,helper state+commitments == native reference (11 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,witness_op,10152,0.0457,16.3359,,,5.92,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,prove,10152,0.1377,61.3359,997,3,5.92,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,verify,,0.0074,11.0000,,,5.92,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,2,witness_helper,,0.0505,18.8945,,,5.92,1,helper state+commitments == native reference (11 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,2,witness_op,10152,0.0435,16.3359,,,5.92,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,2,prove,10152,0.1433,62.6016,997,3,5.92,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,2,verify,,0.0064,11.5781,,,5.92,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,3,witness_helper,,0.0501,18.7734,,,5.92,1,helper state+commitments == native reference (11 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,3,witness_op,10152,0.0454,16.9102,,,5.92,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,3,prove,10152,0.1456,63.1406,997,3,5.92,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,3,verify,,0.0068,11.6289,,,5.92,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,,chain,10152,,,,,5.92,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.1 vs 13 distinct keys (+0.6%)"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_wrong_update_one_slot,,0.0425,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_dropped_record_state,,0.0440,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_dropped_record_keys,,0.0183,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_stale_state,,0.0169,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_altered_state_register,,0.0169,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_key_not_in_digest,,0.0189,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_register_decreased,,0.0438,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_com_out_equals_com_in,,0.0421,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_com_in_plus1,,0.0171,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_batch_com_plus1,,0.0182,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_salt_out_plus1,,0.0412,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_refresh_one_is_2,,0.0039,,,,5.92,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,4,1,tamper_verify_public_com_out,,0.0058,,,,5.92,1,verification failed
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,,compile_op,24449,6.8310,643.7734,21181927,,5.77,1,r1cs_bytes=14728320
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,,compile_helper,24480,6.8176,609.0312,21189771,,5.57,1,r1cs_bytes=14732296
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,,setup,24449,0.2551,95.7148,9917232,,5.57,,"vk_bytes=1917 concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,0,witness_helper,,0.0969,22.3516,,,5.57,1,helper state+commitments == native reference (16 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,0,witness_op,24449,0.0848,17.8750,,,5.57,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,0,prove,24449,0.2554,110.6953,997,3,5.57,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,0,verify,,0.0080,10.6367,,,5.57,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,witness_helper,,0.0919,22.1953,,,5.57,1,helper state+commitments == native reference (15 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,witness_op,24449,0.0850,17.3086,,,5.57,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,prove,24449,0.2579,109.5195,997,3,5.57,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,verify,,0.0059,10.9883,,,5.57,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,2,witness_helper,,0.0953,22.7227,,,5.57,1,helper state+commitments == native reference (15 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,2,witness_op,24449,0.0848,16.3008,,,5.57,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,2,prove,24449,0.2636,110.2031,997,3,5.57,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,2,verify,,0.0061,11.5547,,,5.57,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,3,witness_helper,,0.0901,23.3398,,,5.57,1,helper state+commitments == native reference (15 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,3,witness_op,24449,0.0856,17.3750,,,5.57,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,3,prove,24449,0.2708,110.8906,997,3,5.57,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compute-witness"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,3,verify,,0.0066,11.4922,,,5.57,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,,chain,24449,,,,,5.57,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 47.1 vs 46 distinct keys (+2.3%)"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_wrong_update_one_slot,,0.0818,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_dropped_record_state,,0.0815,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_dropped_record_keys,,0.0246,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_stale_state,,0.0175,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_altered_state_register,,0.0172,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_key_not_in_digest,,0.0245,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_register_decreased,,0.0794,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_com_out_equals_com_in,,0.0799,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_com_in_plus1,,0.0168,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_batch_com_plus1,,0.0241,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_salt_out_plus1,,0.0835,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_refresh_one_is_2,,0.0047,,,,5.57,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,16,1,tamper_verify_public_com_out,,0.0057,,,,5.57,1,verification failed
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,,compile_op,80684,15.9826,1210.2852,60659869,,5.20,1,r1cs_bytes=40126164
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,,compile_helper,80715,16.1925,1210.7227,60667600,,5.09,1,r1cs_bytes=40130140
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,,setup,80684,0.7402,257.2305,34157808,,5.09,,"vk_bytes=1917 concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,0,witness_helper,,0.2744,38.3164,,,5.09,1,helper state+commitments == native reference (30 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,0,witness_op,80684,0.2426,21.7773,,,5.09,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,0,prove,80684,0.7496,301.6328,997,3,5.09,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,0,verify,,0.0074,11.0039,,,5.09,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,witness_helper,,0.2815,37.8438,,,5.09,1,helper state+commitments == native reference (31 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,witness_op,80684,0.2490,20.7305,,,5.09,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,prove,80684,0.7270,301.5234,997,3,5.00,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,verify,,0.0071,10.9492,,,5.00,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,2,witness_helper,,0.2690,37.3516,,,5.00,1,helper state+commitments == native reference (30 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,2,witness_op,80684,0.2404,21.4492,,,5.00,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,2,prove,80684,0.7220,303.2305,997,3,5.00,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,2,verify,,0.0071,11.5352,,,5.00,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,3,witness_helper,,0.2784,37.3281,,,5.00,1,helper state+commitments == native reference (32 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,3,witness_op,80684,0.2422,22.3359,,,5.00,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,3,prove,80684,0.7394,301.3320,997,3,5.00,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,3,verify,,0.0073,10.5938,,,5.00,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,,chain,80684,,,,,5.00,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 169.2 vs 174 distinct keys (-2.7%)"
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_wrong_update_one_slot,,0.2276,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_dropped_record_state,,0.2276,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_dropped_record_keys,,0.0393,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_stale_state,,0.0173,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_altered_state_register,,0.0174,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_key_not_in_digest,,0.0373,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_replace_not_max,,0.2359,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_com_out_equals_com_in,,0.2311,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_com_in_plus1,,0.0179,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_batch_com_plus1,,0.0403,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_salt_out_plus1,,0.2245,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_refresh_one_is_2,,0.0047,,,,5.00,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,1024,10,32,32,54,8,64,1,tamper_verify_public_com_out,,0.0063,,,,5.00,1,verification failed
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,,compile_op,24466,13.7088,1227.6680,31120447,,4.85,1,r1cs_bytes=23133772
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,,compile_helper,24593,14.1144,1226.0742,31154748,,4.66,1,r1cs_bytes=23150036
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,,setup,24466,0.3096,126.6406,9964912,,4.66,,"vk_bytes=1917 concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,0,witness_helper,,0.1257,22.0859,,,4.66,1,helper state+commitments == native reference (32 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,0,witness_op,24466,0.1097,18.3047,,,4.66,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,0,prove,24466,0.3067,140.5898,997,3,4.66,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,0,verify,,0.0070,11.5664,,,4.66,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,witness_helper,,0.1258,23.8906,,,4.66,1,helper state+commitments == native reference (34 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,witness_op,24466,0.1155,18.2852,,,4.66,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,prove,24466,0.3427,142.0000,997,3,4.66,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,verify,,0.0071,10.4766,,,4.66,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,2,witness_helper,,0.1265,22.4219,,,4.66,1,helper state+commitments == native reference (36 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,2,witness_op,24466,0.1105,18.2656,,,4.66,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,2,prove,24466,0.3129,138.7148,997,3,4.66,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,2,verify,,0.0072,11.6367,,,4.66,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,3,witness_helper,,0.1250,23.3281,,,4.66,1,helper state+commitments == native reference (35 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,3,witness_op,24466,0.1161,18.1992,,,4.66,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,3,prove,24466,0.3237,140.8008,997,3,4.69,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,3,verify,,0.0075,10.6758,,,4.69,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,,chain,24466,,,,,4.69,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.0 vs 13 distinct keys (+0.2%)"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_wrong_update_one_slot,,0.1081,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_dropped_record_state,,0.1119,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_dropped_record_keys,,0.0539,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_stale_state,,0.0498,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_altered_state_register,,0.0533,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_key_not_in_digest,,0.0493,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_register_decreased,,0.1069,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_com_out_equals_com_in,,0.1143,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_com_in_plus1,,0.0513,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_batch_com_plus1,,0.0509,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_salt_out_plus1,,0.1140,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_refresh_one_is_2,,0.0046,,,,4.69,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,4,1,tamper_verify_public_com_out,,0.0060,,,,4.69,1,verification failed
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,,compile_op,41139,16.8492,1442.4648,43445944,,4.76,1,r1cs_bytes=31215800
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,,compile_helper,41266,16.3189,1440.1914,43480207,,4.97,1,r1cs_bytes=31232064
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,,setup,41139,0.4484,175.0703,17385904,,4.97,,"vk_bytes=1917 concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,0,witness_helper,,0.1757,27.1602,,,4.97,1,helper state+commitments == native reference (38 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,0,witness_op,41139,0.1679,18.7031,,,4.97,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,0,prove,41139,0.4491,208.6289,997,3,4.97,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,0,verify,,0.0073,11.0664,,,4.97,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,witness_helper,,0.1818,26.8203,,,4.97,1,helper state+commitments == native reference (41 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,witness_op,41139,0.1686,18.8516,,,4.97,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,prove,41139,0.4695,205.6836,997,3,4.97,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,verify,,0.0070,11.0234,,,4.97,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,2,witness_helper,,0.1837,28.3906,,,4.97,1,helper state+commitments == native reference (40 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,2,witness_op,41139,0.1613,18.2812,,,4.97,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,2,prove,41139,0.4561,204.2266,997,3,4.97,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,2,verify,,0.0076,11.5117,,,4.97,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,3,witness_helper,,0.1789,27.2383,,,4.97,1,helper state+commitments == native reference (40 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,3,witness_op,41139,0.1612,19.2109,,,4.97,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,3,prove,41139,0.4903,206.4531,997,3,4.97,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,3,verify,,0.0067,11.5664,,,4.97,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,,chain,41139,,,,,4.97,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 46.3 vs 46 distinct keys (+0.6%)"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_wrong_update_one_slot,,0.1532,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_dropped_record_state,,0.1538,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_dropped_record_keys,,0.0596,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_stale_state,,0.0477,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_altered_state_register,,0.0495,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_key_not_in_digest,,0.0557,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_register_decreased,,0.1567,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_com_out_equals_com_in,,0.1554,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_com_in_plus1,,0.0511,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_batch_com_plus1,,0.0579,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_salt_out_plus1,,0.1593,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_refresh_one_is_2,,0.0053,,,,4.97,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,16,1,tamper_verify_public_com_out,,0.0067,,,,4.97,1,verification failed
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,,compile_op,107070,27.9833,2150.9141,90415822,,4.76,1,r1cs_bytes=61711628
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,,compile_helper,107197,28.5086,2153.6445,90450095,,4.66,1,r1cs_bytes=61727892
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,,setup,107070,1.0047,364.2305,42632048,,4.66,,"vk_bytes=1917 concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,0,witness_helper,,0.3858,45.7539,,,4.66,1,helper state+commitments == native reference (54 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,0,witness_op,107070,0.3561,21.6406,,,4.66,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,0,prove,107070,0.9375,417.1562,997,3,4.61,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,0,verify,,0.0078,11.5977,,,4.61,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,witness_helper,,0.3860,44.7578,,,4.61,1,helper state+commitments == native reference (57 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,witness_op,107070,0.3475,23.2852,,,4.61,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,prove,107070,0.9574,416.1758,997,3,4.61,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,verify,,0.0074,11.4453,,,4.61,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,2,witness_helper,,0.3926,44.8789,,,4.61,1,helper state+commitments == native reference (54 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,2,witness_op,107070,0.3439,23.3164,,,4.61,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,2,prove,107070,0.9469,415.6992,997,3,4.61,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,2,verify,,0.0072,11.5391,,,4.61,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,3,witness_helper,,0.3916,44.1914,,,4.61,1,helper state+commitments == native reference (56 ms incl. Python Poseidon)
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,3,witness_op,107070,0.3440,22.6445,,,4.61,1,op accepts helper statement; com_in==prev.com_out
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,3,prove,107070,0.9730,417.2656,997,3,4.64,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,3,verify,,0.0072,11.5586,,,4.64,1,"CLI, includes process start"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,,chain,107070,,,,,4.64,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 175.7 vs 174 distinct keys (+1.0%)"
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_wrong_update_one_slot,,0.3321,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_dropped_record_state,,0.3348,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_dropped_record_keys,,0.0771,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_stale_state,,0.0503,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_altered_state_register,,0.0508,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_key_not_in_digest,,0.0682,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_register_decreased,,0.3261,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_com_out_equals_com_in,,0.3309,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_com_in_plus1,,0.0504,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_batch_com_plus1,,0.0737,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_salt_out_plus1,,0.3274,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_refresh_one_is_2,,0.0044,,,,4.64,1,rejected by compute-witness
+20260926T192707,zokrates_hll_op,4096,12,32,128,52,8,64,1,tamper_verify_public_com_out,,0.0058,,,,4.64,1,verification failed
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,,compile_op,82424,52.5677,4538.3672,113032021,,3.81,1,r1cs_bytes=84237588
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,,compile_helper,82935,54.6279,4537.0156,113172136,,3.44,1,r1cs_bytes=84303004
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,,setup,82424,1.0037,417.1914,34925808,,3.44,,vk_bytes=1917 concurrent_zokrates=compile
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,0,witness_helper,,0.4304,41.8555,,,3.44,1,helper state+commitments == native reference (128 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,0,witness_op,82424,0.3831,22.3047,,,3.44,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,0,prove,82424,1.0542,463.3867,997,3,3.44,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,0,verify,,0.0075,11.4531,,,3.44,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,witness_helper,,0.4330,40.2656,,,3.44,1,helper state+commitments == native reference (129 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,witness_op,82424,0.3878,22.2930,,,3.40,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,prove,82424,1.0164,461.3203,997,3,3.40,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,verify,,0.0078,11.3945,,,3.40,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,2,witness_helper,,0.4239,41.8945,,,3.40,1,helper state+commitments == native reference (136 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,2,witness_op,82424,0.3891,22.2383,,,3.40,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,2,prove,82424,1.0292,462.2227,997,3,3.40,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,2,verify,,0.0072,10.9453,,,3.40,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,3,witness_helper,,0.4442,41.7422,,,3.40,1,helper state+commitments == native reference (126 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,3,witness_op,82424,0.3880,22.3555,,,3.40,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,3,prove,82424,1.0217,460.7578,997,3,3.37,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,3,verify,,0.0075,11.4609,,,3.37,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,,chain,82424,,,,,3.37,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 13.0 vs 13 distinct keys (+0.0%)"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_wrong_update_one_slot,,0.3737,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_dropped_record_state,,0.3785,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_dropped_record_keys,,0.1808,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_stale_state,,0.1763,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_altered_state_register,,0.1770,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_key_not_in_digest,,0.1805,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_register_decreased,,0.3720,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_com_out_equals_com_in,,0.3822,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_com_in_plus1,,0.1797,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_batch_com_plus1,,0.1879,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_salt_out_plus1,,0.3723,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_refresh_one_is_2,,0.0054,,,,3.37,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,4,1,tamper_verify_public_com_out,,0.0063,,,,3.37,1,verification failed
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,,compile_op,108673,62.4452,4843.3047,133526231,,3.15,1,r1cs_bytes=97985152
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,,compile_helper,109184,59.8421,4845.3008,133666290,,3.09,1,r1cs_bytes=98050568
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,,setup,108673,1.1762,497.6875,43313968,,3.09,,vk_bytes=1917 concurrent_zokrates=compile
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,0,witness_helper,,0.5098,48.2695,,,3.09,1,helper state+commitments == native reference (132 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,0,witness_op,108673,0.4556,23.2227,,,3.09,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,0,prove,108673,1.1220,549.8164,997,3,3.08,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,0,verify,,0.0070,11.5391,,,3.08,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,witness_helper,,0.5060,47.6523,,,3.08,1,helper state+commitments == native reference (134 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,witness_op,108673,0.4628,24.3633,,,3.08,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,prove,108673,1.1394,550.8047,997,3,3.08,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,verify,,0.0081,11.5312,,,3.08,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,2,witness_helper,,0.5149,48.2969,,,3.08,1,helper state+commitments == native reference (131 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,2,witness_op,108673,0.4736,23.2031,,,3.08,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,2,prove,108673,1.2411,548.1680,997,3,3.16,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,2,verify,,0.0073,11.3984,,,3.16,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,3,witness_helper,,0.5045,47.6523,,,3.16,1,helper state+commitments == native reference (136 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,3,witness_op,108673,0.4592,23.9141,,,3.16,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,3,prove,108673,1.2475,549.8242,997,3,3.16,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,3,verify,,0.0072,10.9023,,,3.16,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,,chain,108673,,,,,3.16,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 46.1 vs 46 distinct keys (+0.1%)"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_wrong_update_one_slot,,0.4469,,,,3.16,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_dropped_record_state,,0.4585,,,,3.16,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_dropped_record_keys,,0.1912,,,,3.16,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_stale_state,,0.1830,,,,3.16,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_altered_state_register,,0.1799,,,,3.16,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_key_not_in_digest,,0.1821,,,,3.16,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_register_decreased,,0.4459,,,,3.16,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_com_out_equals_com_in,,0.4531,,,,3.23,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_com_in_plus1,,0.1804,,,,3.23,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_batch_com_plus1,,0.1882,,,,3.23,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_salt_out_plus1,,0.4642,,,,3.23,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_refresh_one_is_2,,0.0057,,,,3.23,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,16,1,tamper_verify_public_com_out,,0.0057,,,,3.23,1,verification failed
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,,compile_op,213676,91.9536,6001.9023,210717215,,3.33,1,r1cs_bytes=149034196
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,,compile_helper,214187,94.6927,6001.5156,210857274,,3.64,1,r1cs_bytes=149099612
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,,setup,213676,1.9602,808.8516,85257456,,3.59,,vk_bytes=1917 concurrent_zokrates=compile
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,0,witness_helper,,0.8485,75.1445,,,3.59,1,helper state+commitments == native reference (144 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,0,witness_op,213676,0.7630,31.8164,,,3.59,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,0,prove,213676,1.9572,909.7578,997,3,3.62,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,0,verify,,0.0075,12.1680,,,3.62,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,witness_helper,,0.8674,74.8164,,,3.62,1,helper state+commitments == native reference (145 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,witness_op,213676,0.7716,32.2148,,,3.62,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,prove,213676,1.9673,910.8984,997,3,3.62,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,verify,,0.0075,11.6055,,,3.62,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,2,witness_helper,,0.8319,75.8086,,,3.57,1,helper state+commitments == native reference (146 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,2,witness_op,213676,0.7602,31.7852,,,3.57,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,2,prove,213676,1.9172,911.2305,997,3,3.57,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,2,verify,,0.0073,11.4883,,,3.57,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,3,witness_helper,,0.8393,76.3789,,,3.57,1,helper state+commitments == native reference (142 ms incl. Python Poseidon)
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,3,witness_op,213676,0.7808,32.6680,,,3.53,1,op accepts helper statement; com_in==prev.com_out
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,3,prove,213676,1.9795,909.7031,997,3,3.53,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,3,verify,,0.0072,11.0703,,,3.53,1,"CLI, includes process start"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,,chain,213676,,,,,3.53,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 174.9 vs 174 distinct keys (+0.5%)"
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_wrong_update_one_slot,,0.7499,,,,3.53,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_dropped_record_state,,0.7431,,,,3.53,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_dropped_record_keys,,0.2051,,,,3.53,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_stale_state,,0.1866,,,,3.53,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_altered_state_register,,0.1799,,,,3.53,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_key_not_in_digest,,0.2021,,,,3.53,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_register_decreased,,0.7370,,,,3.48,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_com_out_equals_com_in,,0.7629,,,,3.48,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_com_in_plus1,,0.1882,,,,3.48,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_batch_com_plus1,,0.2004,,,,3.48,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_salt_out_plus1,,0.7433,,,,3.48,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_refresh_one_is_2,,0.0060,,,,3.48,1,rejected by compute-witness
+20260926T193250,zokrates_hll_op,16384,14,32,512,50,8,64,1,tamper_verify_public_com_out,,0.0064,,,,3.48,1,verification failed
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,,compile_op,634705,453.0647,10662.4961,521010875,,3.30,1,r1cs_bytes=354378880
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,,compile_helper,635216,466.9922,10663.1602,521150934,,5.30,1,r1cs_bytes=354444296
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,,setup,634705,5.8480,2078.6445,270134064,,5.35,,"vk_bytes=1917 concurrent_zokrates=compile,compile,compile,compile"
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,0,witness_helper,,2.2551,189.7539,,,5.33,1,helper state+commitments == native reference (211 ms incl. Python Poseidon)
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,0,witness_op,634705,2.0110,64.7695,,,5.33,1,op accepts helper statement; com_in==prev.com_out
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,0,prove,634705,5.6253,2404.4961,997,3,5.30,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile,compile"
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,0,verify,,0.0069,11.4922,,,5.30,1,"CLI, includes process start"
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,witness_helper,,2.2940,189.1523,,,5.27,1,helper state+commitments == native reference (205 ms incl. Python Poseidon)
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,witness_op,634705,2.0292,62.7422,,,5.27,1,op accepts helper statement; com_in==prev.com_out
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,prove,634705,5.4505,2403.9141,997,3,5.25,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,verify,,0.0090,11.5781,,,5.25,1,"CLI, includes process start"
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,2,witness_helper,,2.2736,190.2266,,,5.15,1,helper state+commitments == native reference (204 ms incl. Python Poseidon)
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,2,witness_op,634705,2.0275,64.1992,,,5.15,1,op accepts helper statement; com_in==prev.com_out
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,2,prove,634705,5.5384,2403.3008,997,3,5.06,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,2,verify,,0.0066,11.4688,,,5.06,1,"CLI, includes process start"
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,3,witness_helper,,2.2720,192.2266,,,4.97,1,helper state+commitments == native reference (206 ms incl. Python Poseidon)
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,3,witness_op,634705,2.0096,64.3164,,,4.97,1,op accepts helper statement; com_in==prev.com_out
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,3,prove,634705,5.5159,2399.5781,997,3,4.98,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,3,verify,,0.0071,10.9844,,,4.98,1,"CLI, includes process start"
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,,chain,634705,,,,,4.98,1,"4 chunks: com_in==prev com_out, helper==native, every proof verifies; HLL estimate 624.8 vs 624 distinct keys (+0.1%)"
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_wrong_update_one_slot,,1.9396,,,,4.90,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_dropped_record_state,,1.9067,,,,4.90,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_dropped_record_keys,,0.2648,,,,4.90,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_stale_state,,0.1798,,,,4.90,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_altered_state_register,,0.1738,,,,4.90,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_key_not_in_digest,,0.2656,,,,4.90,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_replace_not_max,,1.9398,,,,4.83,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_com_out_equals_com_in,,1.9187,,,,4.83,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_com_in_plus1,,0.1839,,,,4.83,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_batch_com_plus1,,0.2662,,,,4.83,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_salt_out_plus1,,1.9076,,,,4.84,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_refresh_one_is_2,,0.0068,,,,4.84,1,rejected by compute-witness
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,256,1,tamper_verify_public_com_out,,0.0061,,,,4.84,1,verification failed
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,,compile_op,1195738,1297.6816,16884.8750,934225881,,4.40,1,r1cs_bytes=627788956
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,,setup,1195738,10.7341,3778.2852,516527728,,4.31,,"vk_bytes=1917 concurrent_zokrates=compile,compile"
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,0,native_statement,,0.2905,,,,4.31,1,statement from native.py only (--no-helper)
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,0,witness_op,1195738,3.6782,107.7695,,,4.31,1,op accepts helper statement; com_in==prev.com_out
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,0,prove,1195738,10.6268,4358.5117,997,3,4.26,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,0,verify,,0.0073,10.9258,,,4.32,1,"CLI, includes process start"
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,native_statement,,0.2920,,,,4.32,1,statement from native.py only (--no-helper)
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,witness_op,1195738,3.7027,106.7773,,,4.32,1,op accepts helper statement; com_in==prev.com_out
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,prove,1195738,10.7547,4359.8164,997,3,4.59,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,verify,,0.0078,12.1250,,,4.59,1,"CLI, includes process start"
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,2,native_statement,,0.2828,,,,4.54,1,statement from native.py only (--no-helper)
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,2,witness_op,1195738,3.7194,105.7422,,,4.54,1,op accepts helper statement; com_in==prev.com_out
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,2,prove,1195738,10.7198,4359.7305,997,3,4.53,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,2,verify,,0.0072,10.9844,,,4.53,1,"CLI, includes process start"
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,3,native_statement,,0.2856,,,,4.53,1,statement from native.py only (--no-helper)
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,3,witness_op,1195738,3.7309,106.8047,,,4.49,1,op accepts helper statement; com_in==prev.com_out
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,3,prove,1195738,10.7803,4360.9219,997,3,4.57,1,"JSON proof; public inputs == (com_in, batch_com, com_out) concurrent_zokrates=compile,compile"
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,3,verify,,0.0073,11.5117,,,4.57,1,"CLI, includes process start"
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,,chain,1195738,,,,,4.57,1,"4 chunks: com_in==prev com_out, native statement, every proof verifies; HLL estimate 1233.3 vs 1234 distinct keys (-0.1%)"
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_wrong_update_one_slot,,3.5057,,,,4.53,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_dropped_record_state,,3.5248,,,,4.65,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_dropped_record_keys,,0.3536,,,,4.65,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_stale_state,,0.1803,,,,4.65,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_altered_state_register,,0.1791,,,,4.65,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_key_not_in_digest,,0.3505,,,,4.65,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_replace_not_max,,3.8210,,,,4.59,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_com_out_equals_com_in,,3.5032,,,,4.55,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_com_in_plus1,,0.1852,,,,4.55,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_batch_com_plus1,,0.3538,,,,4.55,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_salt_out_plus1,,3.5119,,,,4.55,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_refresh_one_is_2,,0.0060,,,,4.55,1,rejected by compute-witness
+20260926T195749,zokrates_hll_op,16384,14,32,512,50,8,512,1,tamper_verify_public_com_out,,0.0072,,,,4.55,1,verification failed
+20260926T194040,zokrates_hll_op,16384,14,32,512,50,8,1024,,compile_op,,2700.7349,19851.0352,,,2.18,0,"REFUSED: timeout 45m; exact constraints 2,317,804 (note trimmed after the run: it held the /usr/bin/time report)"

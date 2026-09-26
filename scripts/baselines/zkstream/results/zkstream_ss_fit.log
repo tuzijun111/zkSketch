@@ -1,0 +1,59 @@
+soundness gate: 16 chained runs, every witness/proof/verify ok and every chunk's com_in == previous com_out; 239 forgeries rejected (1 not applicable to a chain)   (MEASURED)
+
+ZoKrates SpaceSaving replay operator, per chunk                          (MEASURED)
+   s   k  cb  constraints   compile  comp GB   setup   pk MB  witness   prove     w+p   verify  proof  RSS GB      load1
+   8   4  21        3,106      1.3s    0.14   0.05s     1.2   0.017s  0.050s  0.067s    6.9ms   997B    0.03  4.8-4.8 
+   8  16  21        7,199      2.3s    0.21   0.09s     2.7   0.033s  0.092s  0.125s    6.6ms   997B    0.04  4.8-5.3 
+   8  64  21       22,538      5.7s    0.47   0.24s     9.0   0.084s  0.227s  0.311s    7.1ms   997B    0.10  5.3-5.4 
+  16   4  21        5,418      1.9s    0.19   0.08s     2.2   0.026s  0.077s  0.104s    6.7ms   997B    0.04  5.4-5.4 
+  16  16  21       12,503      3.0s    0.29   0.14s     4.9   0.053s  0.147s  0.200s    6.9ms   997B    0.06  5.3-5.3 
+  16  64  21       39,794      8.3s    0.61   0.37s    16.3   0.137s  0.370s  0.507s    7.3ms   997B    0.15  5.3-7.7 
+  32   4  21        9,358      2.7s    0.27   0.11s     4.0   0.042s  0.112s  0.154s    6.5ms   997B    0.05  7.5-7.7 
+  32  16  21       22,427      4.6s    0.38   0.24s     8.9   0.085s  0.230s  0.316s    7.0ms   997B    0.10  7.2-7.4 
+  32  64  21       73,622     14.8s    0.86   0.68s    30.6   0.235s  0.627s  0.862s    7.8ms   997B    0.25  6.6-7.2 
+  64   4  21       17,264      4.3s    0.37   0.18s     7.5   0.068s  0.190s  0.259s    6.9ms   997B    0.08  6.8-7.0 
+  64  16  21       42,361      7.9s    0.57   0.40s    17.1   0.156s  0.400s  0.556s    7.0ms   997B    0.17  6.4-6.5 
+  64  64  21      141,604     36.4s    1.36   1.17s    59.5   0.441s  1.099s  1.540s    7.4ms   997B    0.44  6.2-6.6 
+ 128   4  21       33,050      7.7s    0.60   0.33s    14.4   0.123s  0.330s  0.453s    7.3ms   997B    0.14  6.1-6.5 
+ 128  16  21       82,143     16.9s    0.97   0.75s    33.4   0.293s  0.686s  0.979s    7.4ms   997B    0.30  6.5-6.6 
+ 128  64  21      277,242    127.1s    2.35   2.20s   117.0   0.890s  2.073s  2.963s    7.2ms   997B    0.84  5.6-6.1 
+ 256   1  21       41,417     12.2s    0.99  (compile-only probe)
+1024   1  21      161,303     54.2s    3.61  (compile-only probe)
+4096   1  21      641,525    313.4s   13.97   5.84s   269.8   2.633s  6.161s  8.794s    7.8ms   997B    2.48  1.2-1.5 
+16384   1  21  compile REFUSED/OVER BUDGET after 2702 s, peak 55.6 GB: REFUSED/OVER BUDGET: timeout 45m; deployed state size s=2^14   (MEASURED outcome)
+16384   1  21  compile REFUSED/OVER BUDGET after 2702 s, peak 55.6 GB: REFUSED/OVER BUDGET: timeout 45m; deployed state size s=2^14; retry on quiet box   (MEASURED outcome)
+
+constraint model (cb=21, spe=3), cons(s,k) = A*s*k + B*k + C*s + G*ceil(s/spe) + D*ceil(ceil(s/spe)/5) + E*ceil(k/5) + H*k*floor(s/64) + J*s*floor(k/16) + F
+  (fit over all compiled points; G is folded into C when spe=1; H, J are the materialisation cuts of the final layout)
+  cb=21: A=31, B=7, C=78, G=6, D=678, E=339, H=5, J=2, F=427   residuals: all exactly 0 over 18 points
+  -> per record: 31 per slot + 5 per 64 slots + 2 per slot every 16 records + 7 + 339/5 (digest); per chunk: 78 per opened slot + 6 per packed element + 678 per Poseidon block of 15 slots (two commitments)
+
+prove (ark g16)  = -0.0243 s + 9.264 us/constraint;  rate 62,182..133,730 constraints/s   (fit, MEASURED range 3,106..641,525)
+witness (interp) = -0.0236 s + 3.980 us/constraint
+setup            = 0.0083 s + 8.894 us/constraint;  proving key 421.1 bytes/constraint
+prove peak RSS   = -0.004 GB + 3.722 KB/constraint
+verify (CLI, incl. process start) median 7.2 ms, any size; proof 997 B JSON (Groth16: 2 G1 + 1 G2, 3 public inputs)
+compile time     = 0.0002 * cons^1.031 s   (log-log; linear: -9.50 s + 487.00 us/constraint)
+compile peak RSS = 0.000189 * cons^0.781 GB  (log-log; linear: -0.247 GB + 19.976 KB/constraint)
+compile at k=1 vs state size (MEASURED): s=256: 12 s / 1.0 GB, s=1024: 54 s / 3.6 GB, s=4096: 313 s / 14.0 GB
+  local exponent between s=1024 and s=4096: time ~ s^1.27, memory ~ s^0.98 -> s=16,384, k=1: 30.2 min, 54 GB   (MODELED; the exponent itself grows with s)
+largest compiled here: s=4096 k=1: 641,525 constraints, 313 s, 14.0 GB   (MEASURED)
+
+DEPLOYED MODEL, s = 16,384 counters, 1,048,576-record stream, cb=21   (every number below MODELED)
+  per chunk: fixed 2,052,205 constraints (opening 78/slot + packing + two Poseidon chains) + 511,307 per record (31 x s + 5 x s/64 + 2 x s/16 + 74.8)   [exact model, k a multiple of 16]
+  Groth16/BN254: FFT domain cap 2^28 = 268,435,456 constraints -> k <= 520 records per chunk
+  prove peak RSS (3.72 KB/constraint) within this machine's 559 GB -> k <= 289
+  compile budget here 45 min / 150 GB; previous harness wall 461,428 constraints (185 s, 8.1 GB); CM d=7 w=2^14 k=2 did not compile in 60 min (76 GB and growing)
+  compile columns: power-law fit / linear fit (both extrapolated from <= 641,525 constraints)
+  prove columns: linear fit / constant rate of the largest proven point (s=4096, k=1: 104,132 constraints/s)
+       k     cons/chunk    chunks           compile     compile RSS       pk prove RSS       prove/chunk         prove, stream verify all  verdict
+       1      2,561,735 1,048,576 13.5 min/20.6 min     19/51    GB    1.1GB      10GB   23.7 s/24.6 s   287.7 days/298.6 days      2.1 h   compile REFUSED (MEASURED at k=1; a larger k only adds code); 4x the largest compile here
+      16     10,233,385    65,536 56.1 min/82.9 min     56/204   GB    4.3GB      38GB   94.8 s/98.3 s    71.9 days/74.5 days     7.9 min   compile REFUSED (MEASURED at k=1; a larger k only adds code); over compile budget (both fits); 16x the largest compile here
+      64     34,775,908    16,384    3.3 h/4.7 h       146/694   GB   14.6GB     129GB  5.4 min/5.6 min   61.1 days/63.3 days     118.0 s   compile REFUSED (MEASURED at k=1; a larger k only adds code); over compile budget (both fits); 54x the largest compile here
+     289    149,817,890     3,629   14.9 h/20.3 h      458/2993  GB   63.1GB     558GB 23.1 min/24.0 min  58.3 days/60.4 days      26.1 s  k_max(RAM) compile REFUSED (MEASURED at k=1; a larger k only adds code); over compile budget (both fits); 234x the largest compile here
+     520    267,915,357     2,017   27.1 h/36.2 h      721/5352  GB  112.8GB     997GB 41.4 min/42.9 min  57.9 days/60.1 days      14.5 s  k_max(FFT) compile REFUSED (MEASURED at k=1; a larger k only adds code); prove RSS > 559 GB; over compile budget (both fits); 418x the largest compile here
+   16384  8,379,302,884        64 39.3 days/47.2 days  10606/167385GB 3528.5GB   31189GB   21.6 h/22.4 h    57.5 days/59.6 days       0.5 s   compile REFUSED (MEASURED at k=1; a larger k only adds code); exceeds 2^28 FFT domain; prove RSS > 559 GB; over compile budget (both fits); 13062x the largest compile here
+  prove floor as k grows (fixed cost amortised away): 1,048,576 records x 511,307 constraints = 5.36e+11 constraints -> 57.5 days (linear fit) / 59.6 days (constant rate) of 32-thread Groth16 time. Both treat the per-constraint cost as constant beyond the largest proven circuit (641,525 constraints); MSM/FFT grow as n log n and the feasible k needs 10^8-constraint circuits, so the true figure at deployed k is at least this order.
+  MEASURED at s=16,384, k=1 (run 20260926T200847, load1 1.18, other compiles 3): operator compile REFUSED after 2702 s at 55.6 GB peak RSS (REFUSED/OVER BUDGET: timeout 45m); model constraints 2,561,735
+  MEASURED at s=16,384, k=1 (run 20260926T210438, load1 1.04, other compiles 0): operator compile REFUSED after 2702 s at 55.6 GB peak RSS (REFUSED/OVER BUDGET: timeout 45m); model constraints 2,561,735
+  Name this 'a SpaceSaving operator following zkStream's design (our circuit)', never 'zkStream'.

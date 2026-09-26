@@ -1,0 +1,61 @@
+# 2026-09-26T17:25:51+08:00 MIGRATED: the v1 anchor history below (lines 80-123 of zka_ss_exec_v1_before_fix.log, copied unchanged) belongs to the first two rows
+#   of zka_ss_anchor.csv (v1 aggr_ss with the per-key root, image_id 1e73f3f3...; root=perkey). Their prove_condition / load columns were filled
+#   from the CONTENDED / CLEAN notes below (not by the driver's per-second sampler, which v1 lacked). The current anchor follows after it.
+# ss_anchor.sh 2026-09-26T15:57:04+08:00 host=SPRL6201019991 load=[16.34 31.53 19.04] nproc=64
+# zka=d4a5a9a90 r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# guest risc0-zkvm=3.0.5 host risc0-zkvm=3.0.6
+# elf aggr_ss md5=47336139a89cdf6f291b4ef37249c8cd
+# elf query_ss md5=b576d9f9ae7b96e40b3977b42f65ca52
+# elf aggr_ss_prof md5=50f3dc7d0a7bd889f64d394408a21dfe
+# elf query_ss_prof md5=93c8bd6289f6473fb3b977ed0b7b7d66
+# proving: EPOCH_SIZE=2048 CAP=16384 ProverOpts::succinct() CPU; r0vm processes on the box at start (all users): 1
+[run ] ss --mode aggr --capacity 16384 --epoch-size 2048 --prove
+# 2026-09-26T16:00:16+08:00 the anchor attempt above was stopped by its operator after ~15 s: another r0vm prover (a different job on this account) started at the same time, so its timing would have been contended. No row was written.
+# ss_anchor.sh 2026-09-26T16:01:14+08:00 host=SPRL6201019991 load=[13.66 35.47 25.03] nproc=64
+# zka=d4a5a9a90 r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# guest risc0-zkvm=3.0.5 host risc0-zkvm=3.0.6
+# elf aggr_ss md5=47336139a89cdf6f291b4ef37249c8cd
+# elf query_ss md5=b576d9f9ae7b96e40b3977b42f65ca52
+# elf aggr_ss_prof md5=50f3dc7d0a7bd889f64d394408a21dfe
+# elf query_ss_prof md5=93c8bd6289f6473fb3b977ed0b7b7d66
+# proving: EPOCH_SIZE=2048 CAP=16384 ProverOpts::succinct() CPU; r0vm processes on the box at start (all users): 0
+[run ] ss --mode aggr --capacity 16384 --epoch-size 2048 --prove
+zka-port,ss,aggr,aggr_ss,ss,-,16384,1,0,2048,2048,8,-,-,1234,1234,176268,20484251,23199744,23,20,0.352,47.4,796,1,true,true,true,entries=1234 full=false min_count=0,distinct=1234 top10=3011223745:115;2066466693:29;3651107915:26;418575398:20;3949651780:19;3780053395:18;3916766849:15;2703201779:14;2993289653:13;508897398:12,exact_entries=1234/1234 max_overcount=0 sum_error=0 N/s=0.12 top10_recall=10/10,-,958.766,9.781,224818,41.685,9400.5,692.3,683.8,708.2,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+# anchor done rc=0 load=[37.04 76.30 69.77] r0vm processes on the box at end (all users): 0
+# 2026-09-26T16:17:39+08:00 CONTENDED: during the anchor above (prove 16:01:14-16:17:13) a second r0vm prover (another job on this account, started 16:01:26) ran until ~16:14:13, i.e. for ~13 of the ~16 min; sampled 1-min load averaged 101 on 64 hw threads. Its prove_s/s_per_segment are an UPPER BOUND, not a clean anchor.
+# ss_anchor.sh 2026-09-26T16:19:00+08:00 host=SPRL6201019991 load=[7.60 54.14 62.47] nproc=64
+# zka=d4a5a9a90 r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# guest risc0-zkvm=3.0.5 host risc0-zkvm=3.0.6
+# elf aggr_ss md5=47336139a89cdf6f291b4ef37249c8cd
+# elf query_ss md5=b576d9f9ae7b96e40b3977b42f65ca52
+# elf aggr_ss_prof md5=50f3dc7d0a7bd889f64d394408a21dfe
+# elf query_ss_prof md5=93c8bd6289f6473fb3b977ed0b7b7d66
+# proving: EPOCH_SIZE=2048 CAP=16384 ProverOpts::succinct() CPU; r0vm processes on the box at start (all users): 0
+[run ] ss --mode aggr --capacity 16384 --epoch-size 2048 --prove
+# 2026-09-26T16:19:49+08:00 the anchor attempt above was stopped by its operator after ~40 s: another r0vm prover (a different job on this account) started 6 s after it. No row was written.
+# ss_anchor.sh 2026-09-26T16:28:54+08:00 host=SPRL6201019991 load=[4.27 31.58 50.86] nproc=64
+# zka=d4a5a9a90 r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# guest risc0-zkvm=3.0.5 host risc0-zkvm=3.0.6
+# elf aggr_ss md5=47336139a89cdf6f291b4ef37249c8cd
+# elf query_ss md5=b576d9f9ae7b96e40b3977b42f65ca52
+# elf aggr_ss_prof md5=50f3dc7d0a7bd889f64d394408a21dfe
+# elf query_ss_prof md5=93c8bd6289f6473fb3b977ed0b7b7d66
+# proving: EPOCH_SIZE=2048 CAP=16384 ProverOpts::succinct() CPU; r0vm processes on the box at start (all users): 0
+[run ] ss --mode aggr --capacity 16384 --epoch-size 2048 --prove
+zka-port,ss,aggr,aggr_ss,ss,-,16384,1,0,2048,2048,8,-,-,1234,1234,176268,20484251,23199744,23,20,0.308,48.1,796,1,true,true,true,entries=1234 full=false min_count=0,distinct=1234 top10=3011223745:115;2066466693:29;3651107915:26;418575398:20;3949651780:19;3780053395:18;3916766849:15;2703201779:14;2993289653:13;508897398:12,exact_entries=1234/1234 max_overcount=0 sum_error=0 N/s=0.12 top10_recall=10/10,-,672.380,11.465,224818,29.234,9411.1,692.3,683.8,708.2,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured)
+# anchor done rc=0 load=[38.83 46.54 50.76] r0vm processes on the box at end (all users): 0
+# 2026-09-26T16:40:30+08:00 CLEAN: during the anchor above (prove 16:28:56-16:40:10) no other r0vm ran on the box (132 samples at 5 s); 1-min load mean 49, max 60 (this prover plus another user's ~6-process python job). This is the reported anchor: prove_s=672.380, 23 segments, 29.234 s/segment.
+# ---- end of migrated v1 history; current (v2) anchors follow ----
+# ss_anchor.sh 2026-09-26T17:17:27+08:00 host=SPRL6201019991 load=[1.53 3.33 12.60] nproc=64
+# zka=d4a5a9a90 r0vm=risc0-r0vm 3.0.6 keys=/home/binbin/zkSketch/data/aol.keys md5=01dd7d5c8a73
+# zkSketch=bf713f7a4 spacesaving_untracked_or_dirty_files=1
+# guest risc0-zkvm=3.0.5 host risc0-zkvm=3.0.6
+# elf aggr_ss md5=5aee18721904416743b1f0297579ec20
+# elf query_ss md5=b897f8a37a3f8c840d99b386f0817ebf
+# elf aggr_ss_prof md5=1df85dd383b28d9b06ea7bc22c45adbc
+# elf query_ss_prof md5=6ac99970886d58fbc6ab7489aa9e849f
+# elf aggr_ss_rootvar md5=05a6deabbd1f7a41b37701ca55df855f
+# proving: EPOCH_SIZE=2048 CAP=16384 ProverOpts::succinct() CPU; r0vm processes on the box at start (all users): 0
+[run ] ss --mode aggr --capacity 16384 --epoch-size 2048 --prove
+zka-port,ss,aggr,aggr_ss,ss,-,buckets64,16384,1,0,2048,2048,8,-,-,1234,1234,176268,14525438,16777216,16,20,0.265,48.1,796,1,true,true,true,entries=1234 full=false min_count=0,distinct=1234 top10=3011223745:115;2066466693:29;3651107915:26;418575398:20;3949651780:19;3780053395:18;3916766849:15;2703201779:14;2993289653:13;508897398:12,exact_entries=1234/1234 max_overcount=0 sum_error=0 N/s=0.12 top10_recall=10/10,-,473.379,10.168,224818,29.586,9400.7,clean,0/470,48.1,61.2,481.6,475.7,492.6,MODELED=segments*30.1 s/seg (CM-guest CPU anchors; not measured),0aff21e367bc904fe20789b628c808ee1e61eaa40cb24fc1481decfbf45217e8
+# anchor done rc=0 prove_condition=clean load=[34.74 38.90 27.97] r0vm processes on the box at end (all users): 0
