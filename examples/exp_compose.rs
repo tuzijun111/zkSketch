@@ -915,7 +915,10 @@ fn main() {
     // `_exe_guard` on return. (A concurrent no-EXP_OUT sweep can still race on
     // the default name, but each renamed file is internally consistent — the
     // per-row interleaving that corrupted a shared file is gone.)
-    let out = std::env::var("EXP_OUT").ok().or_else(|| std::env::args().nth(1));
+    let out = std::env::var("EXP_OUT")
+        .ok()
+        .or_else(|| std::env::args().nth(1))
+        .filter(|s| !s.is_empty());
     let final_csv = match out {
         Some(name) => dir.join(format!("{}.csv", name.trim_end_matches(".csv"))),
         None => dir.join("stream_compose.csv"),

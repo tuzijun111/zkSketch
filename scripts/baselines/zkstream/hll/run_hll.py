@@ -25,7 +25,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))  # the Count-Min driver's helpers
 sys.path.insert(0, str(HERE))
-from run_zkstream import timed, fval, constraints_of, size, read_keys  # noqa: E402
+from run_zkstream import timed, fval, constraints_of, size, read_keys, require_scope  # noqa: E402
 import native as nv  # noqa: E402
 
 BASELINE_DIR = Path(os.environ.get("BASELINE_DIR", Path.home() / "ext-baselines")).resolve()
@@ -119,6 +119,7 @@ def main():
                          "comes from native.py alone, which every other point cross-checks against the helper")
     ap.add_argument("--tag", default="", help="free text appended to every row's note")
     a = ap.parse_args()
+    require_scope("run_hll.py")
 
     for tool in (ZOK, "/usr/bin/time"):
         if not os.path.exists(tool):

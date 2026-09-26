@@ -34,6 +34,17 @@ def die(msg):
     sys.exit(f"run_zkstream.py: {msg}")
 
 
+def require_scope(prog):
+    """The HLL/SS/GK drivers cap every compile with `systemd-run --user --scope`.
+    Without a systemd user session (docker, cron, su) each compile would fail and be
+    recorded as a REFUSED row; stop before the first one instead."""
+    p = subprocess.run(["systemd-run", "--user", "--scope", "-q", "true"], capture_output=True, text=True)
+    if p.returncode != 0:
+        sys.exit(f"{prog}: `systemd-run --user --scope` is unavailable ({p.stderr.strip() or p.returncode}); "
+                 "the compile memory cap needs a systemd user session (log in normally, or "
+                 "`loginctl enable-linger $USER` and set XDG_RUNTIME_DIR=/run/user/$(id -u))")
+
+
 def busy():
     uid = str(os.getuid())
     return [p for p in ("zokrates", "exp_compose", "r0vm")

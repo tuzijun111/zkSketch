@@ -40,7 +40,7 @@
 #                            processes (our own finished runs still lift load1). Refuse the
 #                            stage (exit 3) after WAIT_S seconds
 #   RESULTS  BASELINE_DIR  PIN_CPUS   as in common.sh
-#   OURS_REV=revision-soundness   git revision of zkSketch measured by 'ours' (git archive)
+#   OURS_REV=HEAD                 git revision of zkSketch measured by 'ours' (git archive)
 #   OURS_DIR=$BASELINE_DIR/build/zks_sketch_ours   exported source + its CARGO_TARGET_DIR
 #   OURS_REPS=3                   repetitions per point (the CSV keeps every rep)
 #
@@ -82,7 +82,7 @@ done
 ((${#REQ[@]})) || REQ=(hll ss gk ours fit compare)
 
 MAX_LOAD="${MAX_LOAD:-8}"; WAIT_S="${WAIT_S:-1800}"
-OURS_REV="${OURS_REV:-revision-soundness}"
+OURS_REV="${OURS_REV:-HEAD}"
 OURS_DIR="$(realpath -m -- "${OURS_DIR:-$BASELINE_DIR/build/zks_sketch_ours}")"
 OURS_REPS="${OURS_REPS:-3}"
 CAP_T=45m; CAP_M=150G

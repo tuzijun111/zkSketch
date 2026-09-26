@@ -21,7 +21,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(1, str(HERE.parent))  # require_scope from the Count-Min driver
 from gk_ref import GK, VALUE_MASK, geometry, pack, read_keys  # noqa: E402
+from run_zkstream import require_scope  # noqa: E402
 
 ZKS = HERE.parents[3]
 BASELINE_DIR = Path(os.environ.get("BASELINE_DIR", Path.home() / "ext-baselines")).resolve()
@@ -158,6 +160,7 @@ def main():
     ap.add_argument("--log", default="", help="raw log file name under $RESULTS (default zkstream_gk_<run>.log)")
     ap.add_argument("--tag", default="", help="free text appended to every row's note")
     a = ap.parse_args()
+    require_scope("run_gk.py")
 
     for tool in (ZOK, "/usr/bin/time"):
         if not os.path.exists(tool):

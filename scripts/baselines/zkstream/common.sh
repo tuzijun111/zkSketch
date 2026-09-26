@@ -28,6 +28,9 @@ require_tools() {
   [[ -x $ZOK ]]         || { echo "missing $ZOK -- see ../fetch_baselines.sh" >&2; return 2; }
   [[ -d $ZOK_STDLIB ]]  || { echo "missing $ZOK_STDLIB" >&2; return 2; }
   [[ -x /usr/bin/time ]] || { echo "missing /usr/bin/time (needed for peak RSS)" >&2; return 2; }
+  # every compile and zkSketch run is capped by `systemd-run --user --scope`
+  systemd-run --user --scope -q true 2>/dev/null \
+    || { echo "systemd-run --user --scope unavailable: needs a systemd user session (see README)" >&2; return 2; }
 }
 
 # Refuse to start next to another prover of this user: timings would be contended.

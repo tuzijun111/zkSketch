@@ -178,6 +178,7 @@ fn main() -> anyhow::Result<()> {
     let out_name = std::env::var("EXP_OUT")
         .ok()
         .or_else(|| std::env::args().nth(1))
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "stream_compose_p2".into());
     let out_name = out_name.trim_end_matches(".csv").to_string();
     let proof_dir = dir.join("compose_per_batch_proofs_p2");

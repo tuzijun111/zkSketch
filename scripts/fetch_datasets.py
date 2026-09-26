@@ -70,8 +70,9 @@ DATA = os.path.join(ROOT, "data")
 AOL_URL = "https://archive.org/download/aolsearchdata2006/user-ct-test-collection-01.txt"
 NETFLIX_URL = "https://archive.org/download/nf_prize_dataset.tar/nf_prize_dataset.tar.gz"
 
-AOL_MAX = int(os.environ.get("AOL_MAX_KEYS", "1000000"))
-NETFLIX_MAX = int(os.environ.get("NETFLIX_MAX_KEYS", "1000000"))
+# 2^20 keys each: the size of the committed data/{aol,netflix}.keys and the paper's N.
+AOL_MAX = int(os.environ.get("AOL_MAX_KEYS", str(1 << 20)))
+NETFLIX_MAX = int(os.environ.get("NETFLIX_MAX_KEYS", str(1 << 20)))
 
 MASK = 0xFFFFFFFF  # S³'s mask = 2^32 - 1 (bitLen = 32)
 

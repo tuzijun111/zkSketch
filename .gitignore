@@ -23,7 +23,8 @@ Thumbs.db
 
 /src/proofs/
 
-# Real datasets — copyrighted/large; regenerate via scripts/fetch_datasets.py
+# Real datasets: the derived 2^20-key data/{aol,netflix}.keys are committed on purpose
+# (see docs/datasets.md); regenerate via scripts/fetch_datasets.py
 # /data/*.keys
 
 
@@ -46,3 +47,7 @@ Thumbs.db
 
 /paper
 /review
+
+# Python bytecode
+__pycache__/
+*.pyc

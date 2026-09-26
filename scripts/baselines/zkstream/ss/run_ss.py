@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 # Shared with the Count-Min driver: paths, pinned CPU list, JSON field parsing,
 # AOL key reader, constraint inspection, file sizes.
-from run_zkstream import ZOK, STDLIB, PIN, KEYS, BASELINE_DIR, fval, read_keys, constraints_of, size  # noqa: E402
+from run_zkstream import ZOK, STDLIB, PIN, KEYS, BASELINE_DIR, fval, read_keys, constraints_of, size, require_scope  # noqa: E402
 
 BUILD = Path(os.environ.get("BUILD", BASELINE_DIR / "build" / "zkstream_ss")).resolve()
 RESULTS = Path(os.environ.get("RESULTS", HERE.parent / "results")).resolve()
@@ -160,6 +160,7 @@ def main():
     ap.add_argument("--prune", action="store_true", help="delete witness files after each chunk verifies")
     ap.add_argument("--tag", default="", help="free text appended to every note")
     a = ap.parse_args()
+    require_scope("run_ss.py")
 
     for tool in (ZOK, "/usr/bin/time"):
         if not os.path.exists(tool):

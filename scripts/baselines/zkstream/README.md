@@ -131,7 +131,7 @@ None of zkSketch's techniques appear:
 
 | | ZoKrates operators (ours, zkStream's method) | zkSketch leaves |
 |---|---|---|
-| Code | `hll/`, `ss/`, `gk/` in this directory | branch `revision-soundness` @ `98113ce` (after the soundness fixes, before hiding), exported with `git archive`, built outside the repo |
+| Code | `hll/`, `ss/`, `gk/` in this directory | `98113ce` (branch `revision-soundness`, merged into `main`; after the soundness fixes, before hiding), exported with `git archive`, built outside the repo |
 | Circuit | `hll_op`, `ss_op`, `gk_op` | `hll_omc`, `ss_final_full`, `gk_bandmerge2`, default binding, Interval statement |
 | Proof system | Groth16 (ark) over BN254, per-circuit trusted setup, **zero-knowledge** | batch-STARK (Plonky3) over BabyBear (degree-4 extension), Poseidon2, FRI with log-blowup 2, 54 queries and 15-bit query PoW (124-bit target, `src/config.rs`), transparent, **not zero-knowledge yet** |
 | One proof covers | one chunk of k records | one batch of m records (a leaf) |
@@ -193,7 +193,11 @@ scripts/baselines/zkstream/sketch_run.sh --skip-refusals hll ss gk fit
   processes, because our own finished runs still lift the load average.
 - **Budget.** Every compile runs under `timeout 45m systemd-run --user --scope -p
   MemoryMax=150G`, in the drivers, and every zkSketch run gets the same cap here. The
-  script refuses to raise either cap.
+  script refuses to raise either cap. The cap needs a systemd user session (not docker,
+  cron or `su`); the drivers and `require_tools` check for one and stop if it is missing.
+- **`ours` revision.** The `ours` stage measures `OURS_REV` (default `HEAD`), exported
+  with `git archive`, so it needs a git clone, not a ZIP download. The committed
+  `ours` rows were measured at `98113ce`: pass `OURS_REV=98113ce` to reproduce them.
 - `--skip-refusals` skips the two compiles known to hit the 45 min limit (HLL s = 2^14
   with k = 1024, and SS s = 2^14 with k = 1) and carries their previous rows over.
   Without it, those two compiles alone take 1.5 h.
@@ -402,8 +406,8 @@ Notes on the table:
   toolchain, but zkStream ships no sketch. Never report them as "zkStream".
 - **Zero knowledge.** Groth16 is zero-knowledge, and zkSketch's prover currently is
   not: hiding is not implemented. The comparison therefore puts a hiding baseline next
-  to a non-hiding zkSketch. The zkSketch numbers come from `revision-soundness`
-  @ `98113ce`, after the soundness fixes and before hiding.
+  to a non-hiding zkSketch. The zkSketch numbers come from `98113ce`
+  (merged into `main`), after the soundness fixes and before hiding.
 - **Different proof systems and fields.** The two sides differ in several ways:
 
   | | ZoKrates operators | zkSketch |

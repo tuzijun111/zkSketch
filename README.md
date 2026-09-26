@@ -72,11 +72,16 @@ scripts/run_experiments.sh e1
 
 ## Prerequisites & build
 
-- **plonky3 (root):** stable Rust ≥ 1.85 (edition 2024). No `rust-toolchain.toml`
-  at the root — it builds on whatever stable toolchain is active.
-- **plonky2 (`plonky2/`):** a self-contained Cargo workspace pinned to **nightly**
-  via `plonky2/rust-toolchain.toml` (rustup auto-installs/selects it when you `cd
-  plonky2`). It is fully decoupled from the root build.
+- **plonky3 (root):** stable Rust ≥ 1.88 (edition 2024; `rust-version` in
+  `Cargo.toml`). Older toolchains fail inside the Plonky3 dependencies. Install
+  Rust with [rustup](https://rustup.rs); distro `rustc` packages are too old. No
+  `rust-toolchain.toml` at the root — it builds on whatever stable toolchain is
+  active (the paper's numbers used 1.97.1). A C linker is needed
+  (`build-essential`).
+- **plonky2 (`plonky2/`):** a self-contained Cargo workspace pinned to a dated
+  **nightly** (`nightly-2026-05-31`) via `plonky2/rust-toolchain.toml` (rustup
+  auto-installs/selects it when you `cd plonky2`). It is fully decoupled from the
+  root build.
 - **Network on first build:** dependencies are pinned to exact GitHub revisions
   (no crates.io release). Plonky3 core is pinned to one rev; the recursion crates
   come from a fork (`July620/Plonky3_RangeAir`) that adds the extension-degree-
@@ -98,6 +103,15 @@ scripts/run_experiments.sh e1
   `scripts/plot_eval.py` (the paper's batch-sweep figure) and
   `scripts/plot_experiments.py`; stdlib only for `fetch_datasets.py` /
   `cost_model_e10.py`.
+- **External baselines (optional):** the zk-Analytics and zkStream comparisons
+  under `scripts/baselines/` need their own toolchains. `scripts/baselines/fetch_baselines.sh`
+  clones both systems at the paper's revisions and installs ZoKrates 0.8.8; it
+  also prints the RISC Zero (`rzup`, `r0vm` 3.0.6) setup. The zkStream drivers
+  need a systemd user session; the zk-Analytics HLL/SS/GK harness needs `numpy`.
+  See `scripts/baselines/{zka,zkstream}/README.md`.
+- **Paper result CSVs:** `results/` is git-ignored, so a clone has no measured
+  CSVs; the commands in [Reproducing the paper's results](#reproducing-the-papers-results)
+  regenerate them.
 - **Hardware for the paper's runs.** The smoke-test defaults run anywhere, but
   the deployed configuration is memory-hungry and the distributed study needs a
   multi-socket box:
@@ -223,7 +237,7 @@ Unlike mpc4j — which ships **no** datasets and seeds synthetic data with an
 small prefix of the multi-hundred-MB corpora is pulled):
 
 ```bash
-python3 scripts/fetch_datasets.py                                   # both, default 1M-key cap
+python3 scripts/fetch_datasets.py                                   # both, default 2^20-key cap
 AOL_MAX_KEYS=1048576 NETFLIX_MAX_KEYS=1048576 python3 scripts/fetch_datasets.py --force  # 2^20
 python3 scripts/fetch_datasets.py aol                               # just one
 ```
@@ -306,8 +320,9 @@ scripts/run_decode.sh                 # decode/query circuits (tests + table)
 
 `semantic` is only sound on the merged soundness fork (decompose coefficients
 bound through `recompose/coeff`, zero IV on every `new_start` sponge row, bound
-constants, full top-byte range check), which the build must link via the
-`[patch]` in `.cargo/config.toml` until the fork rev is bumped in `Cargo.toml`.
+constants, full top-byte range check). `Cargo.toml` pins that fork
+(`July620/Plonky3_RangeAir` @ `fbcc78f`), so a plain clone links it; no
+`[patch]` or local fork checkout is needed.
 `cargo test --release --lib bind::tests::fork_probe_report -- --nocapture`
 prints which of these the linked fork provides.
 
@@ -542,7 +557,7 @@ cargo run --release --example hll_chain_n          # HLL chain sweep
 ## Tests
 
 ```bash
-cargo test --release                       # plonky3: 514 lib unit tests (66 #[ignore]d) + tests/ integration
+cargo test --release                       # plonky3: 524 lib unit tests (+66 #[ignore]d) + tests/ integration
 cargo test --release --lib dataset::       # one module
 cargo test --release --test two_leaf_hll   # one integration suite
 (cd plonky2 && cargo test --release)       # plonky2 backend (nightly auto)

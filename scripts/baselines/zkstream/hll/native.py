@@ -19,7 +19,7 @@ from pathlib import Path
 P_BN254 = 21888242871839275222246405745257275088548364400416034343698204186575808495617
 LANE_BITS = 6  # register width; ranks are <= 65-b <= 61 for b >= 4
 
-STDLIB = Path(os.environ.get("ZOK_STDLIB", Path.home() / "ext-baselines" / "zok" / "stdlib"))
+STDLIB = Path(os.environ.get("ZOK_STDLIB", Path(os.environ.get("BASELINE_DIR", Path.home() / "ext-baselines")) / "zok" / "stdlib"))
 
 
 # ---------------------------------------------------------------- constants parser

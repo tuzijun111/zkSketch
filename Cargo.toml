@@ -2,6 +2,7 @@
 name = "zksketch"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Recursive ZKP experiments based on the zkSketch paper, built on plonky3"
 license = "MIT OR Apache-2.0"
 

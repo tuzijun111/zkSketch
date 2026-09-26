@@ -89,7 +89,7 @@ file changes no input, only its cross-machine portability.
 ## Fetching the real datasets
 
 ```bash
-# both, default cap 1,000,000 keys each
+# both, default cap 2^20 = 1,048,576 keys each (the committed files)
 python3 scripts/fetch_datasets.py
 
 # just one, or with a smaller cap

@@ -10,9 +10,10 @@ license = "MIT OR Apache-2.0"
 # recursion. This is the "SNARK" backend standing in for the plonky3 +
 # plonky3-recursion STARK stack used by ../zkSketch.
 #
-# NOTE: the crates.io release (0.2.2) requires nightly (`#![feature(specialization)]`);
-# the git `main` branch builds on stable Rust, so we pin to that.
-plonky2 = { git = "https://github.com/0xPolygonZero/plonky2", branch = "main" }
+# NOTE: both the crates.io release and git `main` need nightly
+# (`#![feature(specialization)]`; see rust-toolchain.toml). Pinned to the exact
+# commit the results were measured at.
+plonky2 = { git = "https://github.com/0xPolygonZero/plonky2", rev = "5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f" }
 anyhow = "1.0"
 # Used only to report the prover thread count in the benchmark output, matching
 # the plonky3 `countmin_final` benchmarks. plonky2 already depends on rayon.

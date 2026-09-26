@@ -3,7 +3,8 @@
 
 Reads `results/*.csv` (produced by `cargo run --release --example exp_*`) and
 writes one figure per panel to `results/figures/*.pdf` (+ `.png`). Each figure
-maps to a paper panel (RQ1-a … RQ4, case study); see `docs/EVALUATION.md`.
+maps to a paper panel (RQ1-a … RQ4, case study) of the retired figure track;
+see README.md §Running the experiments.
 
 Usage:
     cargo run --release --example exp_rq1   # (and exp_rq2 … exp_casestudy)

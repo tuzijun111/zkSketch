@@ -1,5 +1,7 @@
 # plonky2 requires nightly Rust — its `plonky2_field` crate uses
 # `#![feature(specialization)]`, which is unavailable on stable. This pins the
-# whole project (build, test, examples) to the nightly channel automatically.
+# whole project (build, test, examples) to a dated nightly automatically, so a
+# later nightly cannot break the build. nightly-2026-05-31
+# (rustc f8a08b688 2026-05-30) produced the paper's numbers.
 [toolchain]
-channel = "nightly"
+channel = "nightly-2026-05-31"

@@ -5,10 +5,13 @@
 # constraint formula in fit.py. Artifacts go to $BUILD/probe_*, outside the repo.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ZOK="${ZOK:-$HOME/ext-baselines/zok/zokrates}"; STDLIB="${ZOK_STDLIB:-$HOME/ext-baselines/zok/stdlib}"
-BUILD="${BUILD:-$HOME/ext-baselines/build/zkstream_hll}"
+BASELINE_DIR="${BASELINE_DIR:-$HOME/ext-baselines}"
+ZOK="${ZOK:-$BASELINE_DIR/zok/zokrates}"; STDLIB="${ZOK_STDLIB:-$BASELINE_DIR/zok/stdlib}"
+BUILD="${BUILD:-$BASELINE_DIR/build/zkstream_hll}"
 CSV=$1 P=$2 S=$3; shift 3
 CK=${CK:-8}; export CK
+systemd-run --user --scope -q true 2>/dev/null \
+  || { echo "systemd-run --user --scope unavailable: needs a systemd user session" >&2; exit 2; }
 [[ -f $CSV ]] || echo "s,P,CK,k,constraints,compile_s,peak_rss_mb,load1" > "$CSV"
 for k in "$@"; do
   d="$BUILD/probe_s${S}_p${P}_ck${CK}_k${k}"

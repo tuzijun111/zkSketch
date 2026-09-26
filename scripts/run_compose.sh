@@ -154,9 +154,9 @@ case "$BACKEND" in
   plonky3|p3|stark)
     echo "-- plonky3 (STARK) --"
     # EXP_OUT is consumed by the example itself for the rename; pass it through.
-    EXP_OUT="${OUT_CSV}" cargo run --release --example exp_compose
-    FINAL_CSV="results/stream_compose.csv"
-    [[ -n "$OUT_CSV" ]] && FINAL_CSV="results/${OUT_CSV%.csv}.csv"
+    NAME="${OUT_CSV:-stream_compose}"; NAME="${NAME%.csv}"
+    EXP_OUT="$NAME" cargo run --release --example exp_compose
+    FINAL_CSV="results/${NAME}.csv"
     ENV_JSON="results/env.json"
     ;;
   plonky2|p2|snark)

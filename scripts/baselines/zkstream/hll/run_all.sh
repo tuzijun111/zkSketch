@@ -13,7 +13,7 @@
 # for other zokrates provers before every setup/prove and records load1 per row.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export BUILD="${BUILD:-$HOME/ext-baselines/build/zkstream_hll}" CK="${CK:-8}"
+export BUILD="${BUILD:-${BASELINE_DIR:-$HOME/ext-baselines}/build/zkstream_hll}" CK="${CK:-8}"
 RES="$HERE/../results"
 stages=("$@"); [[ ${#stages[@]} -gt 0 ]] || stages=(probes grid deployed wall edge)
 for st in "${stages[@]}"; do
