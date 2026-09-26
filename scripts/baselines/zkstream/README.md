@@ -433,8 +433,9 @@ Notes on the table:
 - **Anchoring the chain.** The verifier must check that chunk 0's `com_in` equals the
   commitment to the empty state with a revealed salt.
   - This matters most for SS and GK. `ss_op` opens any committed state whose limbs
-    are in range, and `gk_op` opens any committed state: it does not check sortedness,
-    the sentinel suffix or the widths of g. Their invariants (distinct keys and
+    are in range, and `gk_op` opens any committed state: it does not check sortedness
+    or the sentinel suffix (its first COMPRESS pass bit-decomposes every word, which
+    fixes the field widths only). Their invariants (distinct keys and
     K=0 <=> C=0 for SS; sorted tuples with a sentinel suffix for GK) hold only
     inductively from an empty genesis.
   - The batch digests are unsalted, as in the CM operator. At k = 1 a u32 key can
