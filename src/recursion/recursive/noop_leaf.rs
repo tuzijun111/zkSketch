@@ -180,6 +180,26 @@ pub fn gk2_noop_leaf_expose(params: crate::sketch::gk_bandmerge::GkbParams, expo
         .0
 }
 
+/// [`gk2_noop_leaf_expose`] with an explicit binding and [`CommitMode`]
+/// (revision B2). The no-op leaf (empty state, empty batch) opens all three
+/// commitments with the public zero salt
+/// ([`Openings::public_zero`](crate::commitment::hiding::Openings::public_zero),
+/// through the explicit `prove_epoch_public_zero` path), so `ρ_in = ρ_out`
+/// and it still exposes `init == final`; the salts are witnesses, so its VK
+/// is that of every real leaf of the same mode.
+pub fn gk2_noop_leaf_commit(
+    params: crate::sketch::gk_bandmerge::GkbParams,
+    expose: Expose,
+    binding: crate::sketch::bind::Binding,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::sketch::gk_bandmerge::{Gk2State, build_gkb2_leaf_commit};
+    build_gkb2_leaf_commit(params, expose, binding, mode)
+        .prove_epoch_public_zero(1, Gk2State::empty(params), Vec::new())
+        .output
+        .0
+}
+
 /// [`hll_full_noop_leaf`] with the Interval statement.
 pub fn hll_full_noop_leaf_interval(params: crate::sketch::hll_final_full::HllFullParams) -> Proof {
     use crate::sketch::hll_final_full::{HllFullState, HllFullUpdate, prove_hll_full_interval};
