@@ -16,12 +16,17 @@
 //! `enc(x)` is exactly the flat input the Plain commitment hashes today.
 //! The prefix is two rate blocks of the native sponge (BabyBear rate 8,
 //! Goldilocks rate 4), so `enc(x)` stays block-aligned and a hiding
-//! commitment costs exactly one more Poseidon2 permutation. `kind` is
-//! [`TAG_STATE`] or [`TAG_BATCH`] (a batch commitment can never be passed off
-//! as a state commitment) and `family` the [`CommitFamily`] id (an HLL
-//! register state no longer collides with a `d = 1` Count-Min state). `ρ` is
-//! a [`SaltBb`] (12 BabyBear elements, about 371 bits) or a [`SaltGl`] (6
-//! Goldilocks elements, 384 bits).
+//! commitment costs exactly two more Poseidon2 permutations, natively and
+//! in-circuit (4 prefix Challenges, 2 per permutation), plus 3 ALU rows
+//! for the salt's creators ([`SaltTargets`]): +6 Poseidon2 and +9 ALU rows
+//! per update leaf (3 commitments), +2 and +3 per decoder (logical rows,
+//! before padding; pinned by `tests::hiding_row_overhead_per_commitment`,
+//! `countmin_omc::tests::hiding_leaf_row_overhead_and_no_salt_in_public_values`
+//! and its decoder twin). `kind` is [`TAG_STATE`] or [`TAG_BATCH`] (a batch
+//! commitment can never be passed off as a state commitment) and `family`
+//! the [`CommitFamily`] id (an HLL register state no longer collides with a
+//! `d = 1` Count-Min state). `ρ` is a [`SaltBb`] (12 BabyBear elements,
+//! about 371 bits) or a [`SaltGl`] (6 Goldilocks elements, 384 bits).
 //!
 //! In-circuit, the prefix is four extension elements: the tag constant with
 //! basis coefficients `(kind, family, 0, 0)` (Goldilocks `(kind, family)`)
@@ -40,28 +45,50 @@
 //!   read from `ZKSKETCH_SALT_SEED` or drawn from the OS RNG. It is never
 //!   logged or printed (its `Debug` is redacted) and never reaches the
 //!   verifier.
-//! * **Randomizers.** `ρ^S_t = PRF(seed, STATE, family, t)` for the state
-//!   after batch `t` and `ρ^B_t = PRF(seed, BATCH, family, t)` for batch `t`
-//!   (`t` = the global 1-based batch index the leaf already uses);
-//!   [`rho_state_bb`] / [`rho_batch_bb`] and the Goldilocks twins. The PRF is
-//!   the field's native Poseidon2 sponge keyed by the seed (see
-//!   [`rho_state_bb`]).
-//! * **`ρ_0` is public: zero.** `S_0` is public (the empty sketch, or the
-//!   previous certified `S_T`), so `ρ^S_0 = SaltBb::ZERO` and the verifier
-//!   recomputes `Com(S_0; 0)` itself. Hiding `S_0` would buy nothing.
+//! * **Randomizers.** `ρ^S_t = PRF(seed, STATE, family, h, t)` for the
+//!   state after batch `t` and `ρ^B_t = PRF(seed, BATCH, family, h, t)` for
+//!   batch `t`, where `h` is the public HISTORY id and `t` the 1-based batch
+//!   index within history `h` (the index the leaf already uses);
+//!   [`rho_state_bb_in`] / [`rho_batch_bb_in`] and the Goldilocks twins, with
+//!   [`rho_state_bb`] / [`rho_batch_bb`] the genesis history
+//!   [`GENESIS_HISTORY`]. The PRF is the field's native Poseidon2 sponge
+//!   keyed by the seed (see [`rho_state_bb_in`]).
+//! * **One `(seed, h)` per history.** `(h, t)` must never repeat under one
+//!   seed: every history, stream or window that restarts `t` at 1 needs its
+//!   own `h` (or its own seed). Two histories sharing a seed AND an id would
+//!   reuse `ρ` at equal `t`, so equal states or batches there would get
+//!   equal, linkable commitments. `ZKSKETCH_SALT_SEED` is reusable across
+//!   runs for reproducibility only under distinct history ids.
+//! * **Genesis `ρ_0` is public: zero.** In the genesis history `S_0` is the
+//!   public empty sketch, so `ρ^S_0 = SaltBb::ZERO` and the verifier
+//!   recomputes `Com(S_0; 0)` itself. Hiding it would buy nothing.
+//! * **A continued history is anchored, not recomputed.** History `h ≥ 1`
+//!   (e.g. a GK rotation after 2^24 records) starts from the previous
+//!   history's final state `S_T`, which is SECRET. Its anchor is the previous
+//!   history's certified `Com(S_T; ρ_T)`, which the verifier takes from that
+//!   history's certified log (it cannot recompute it), and the prover opens
+//!   leaf 1's init with that same `ρ_T`
+//!   ([`Openings::for_leaf_after`]); a query at version 0 of history `h`
+//!   uses `ρ_T` too. There is no PRF value for `(h ≥ 1, t = 0)`:
+//!   [`rho_state_bb_in`] panics rather than silently break the link.
 //! * **The circuit does not check the derivation.** Each salt is a free
 //!   private witness. A prover that picks `ρ = 0` (or any other value) only
 //!   gives up its own privacy; binding holds for every `ρ`. This is also what
 //!   lets the no-op VK-derivation leaf use `ρ_in = ρ_out = 0` and expose
-//!   `init == final` ([`Openings::plain`]).
+//!   `init == final` ([`Openings::public_zero`]). The LIBRARY does check the
+//!   honest-prover side: a `Hiding` leaf refuses the public zero salt on its
+//!   final or batch commitment except on the explicit no-op path (see
+//!   `CmOmcLeafCircuit::prove_epoch_commit`), so a harness that forgets the
+//!   openings fails loudly instead of publishing `Com(S_t; 0)`.
 //!
 //! ## Cross-leaf consistency (binding exactly as before)
 //!
 //! **Lemma.** Let the honest prover open leaf `t` with
-//! `(init, final, batch) = (ρ^S_{t-1}, ρ^S_t, ρ^B_t)` ([`Openings::for_leaf`])
-//! and every query at version `t` with `ρ^S_t`. Then leaf `t`'s final,
-//! leaf `t + 1`'s init and every query at version `t` expose the same value
-//! `Com(S_t; ρ^S_t)`. Conversely, whenever a merge accepts two adjacent
+//! `(init, final, batch) = (ρ^S_{t-1}, ρ^S_t, ρ^B_t)` ([`Openings::for_leaf`],
+//! [`Openings::for_leaf_in`]; [`Openings::for_leaf_after`] for leaf 1 of a
+//! continued history) and every query at version `t` with `ρ^S_t`. Then
+//! leaf `t`'s final, leaf `t + 1`'s init and every query at version `t`
+//! expose the same value `Com(S_t; ρ^S_t)`. Conversely, whenever a merge accepts two adjacent
 //! children, its in-circuit check `left.final == right.init` plus collision
 //! resistance of the sponge over the fixed-length input `prefix ‖ enc(x)`
 //! gives `(ρ_left, S_left) = (ρ_right, S_right)`: the right child starts from
@@ -77,17 +104,27 @@
 //! ## What is hidden (and what is not)
 //!
 //! Hidden, in the random-oracle model and given `ρ` unknown to the verifier:
-//! every `Com(S_t)` for `t ≥ 1` and every `Com(B_t)`. Equal states at two
-//! versions get unrelated commitments (Plain would repeat the value).
-//! NOT hidden: `Com(S_0)` (public by design), the public parameters and
-//! shapes (`d, w, m`, `T`, capacities), the batch index `t`, a query's key
-//! and answer (the query statement exposes them), and anything the PROOF
-//! reveals. This module hides only the published commitment values: with the
-//! current non-ZK FRI configuration a proof's openings reveal trace
-//! evaluations, including `ρ` and the state columns, so the end-to-end
-//! property also needs a zero-knowledge PCS (revision B1). The tag and the
-//! basis constants are circuit constants, whose values the pinned fork does
-//! not bind (see the open caveat in [`crate::sketch::bind`]).
+//! every `Com(S_t)` for `t ≥ 1` and every `Com(B_t)`, provided `(seed, h,
+//! t)` never repeats (above). Equal states at two versions get unrelated
+//! commitments (Plain would repeat the value).
+//! NOT hidden: the genesis `Com(S_0)` (public by design), the public
+//! parameters and shapes (`d, w, m`, `T`, capacities), the history id `h`
+//! and batch index `t`, a query's key and answer (the query statement
+//! exposes them), and anything the PROOF reveals. No salt value is a public
+//! or exposed value of a leaf or decoder proof (tested). This module hides
+//! only the published commitment values: with the current non-ZK FRI
+//! configuration a proof's openings reveal trace evaluations, including `ρ`
+//! and the state columns, so the end-to-end property also needs a
+//! zero-knowledge PCS (revision B1).
+//!
+//! The tag and the basis constants are circuit constants, and at the pinned
+//! fork (fbcc78f) constant VALUES are bound by the VK: ConstAir keeps each
+//! constant's value in its preprocessed (committed) columns and constrains
+//! the main-trace value to it (`circuit-prover/src/air/const_air.rs`: module
+//! doc, `ConstAir` doc, and `builder.assert_eq(main_val, prep_val)` in
+//! `eval`), so a prover cannot swap the tag
+//! (`tests::tag_constant_is_bound_by_the_vk`). The older "constants are not
+//! bound" caveat in [`crate::sketch::bind`] predates that fork revision.
 //!
 //! ## Modes
 //!
@@ -130,22 +167,31 @@
 //!      `b.add_hash_slice(cfg, inputs, true)` (SS, GK) passes
 //!      `Binding::Semantic`, which is that same call.
 //!    * keep `mode` in the leaf struct (`commit_mode()` accessor).
-//! 3. **Prover.** `prove_epoch_commit(t, state, batch, &Openings)`;
-//!    `prove_epoch_at(t, ..)` = `prove_epoch_commit(t, .., &Openings::plain())`.
+//! 3. **Prover.** `prove_epoch_commit(t, state, batch, &Openings)`. On a
+//!    `Hiding` leaf it asserts that `openings.final_` and `openings.batch`
+//!    are not [`SaltBb::ZERO`] (an honest `ρ` is zero with probability
+//!    about 2^-371); the old `prove_epoch_at(t, ..)` asserts the leaf is
+//!    `Plain` and then runs the same epoch with [`Openings::plain`]. So a
+//!    call site left on the old API, or handed zero openings, panics instead
+//!    of silently publishing deterministic `Com(S_t; 0)` values.
 //!    The epoch computes the three public commitments with the step-1 natives
 //!    and `openings.init / final_ / batch`, and, when `mode.is_hiding()`,
 //!    pushes `openings.private_inputs()` BEFORE every other private input.
 //!    Convenience: `prove_countmin_omc_interval_commit(params, t, state,
 //!    batch, mode, &openings)`.
 //! 4. **No-op leaf.** `cm_omc_noop_leaf_commit(params, expose, binding, mode)`
-//!    in [`crate::recursion::recursive::noop_leaf`] proves with
-//!    [`Openings::plain`] (`ρ_in = ρ_out = 0`, so `init == final`).
+//!    in [`crate::recursion::recursive::noop_leaf`] proves through the one
+//!    explicit zero-salt path, `prove_epoch_public_zero` (all three salts
+//!    [`Openings::public_zero`], so `ρ_in = ρ_out` and `init == final`; the
+//!    batch must change nothing, which it asserts).
 //! 5. **Decoder.** `prove_<dec>_commit(params, state, query.., binding, mode,
 //!    &SaltBb)`; the old entry point passes `(Plain, &SaltBb::ZERO)`. Call
 //!    [`alloc_salt_targets`] immediately before the first private input, hash
 //!    the state with `commit_hash(.., CommitKind::State, .., salt.as_ref(),
 //!    cells, ..)`, and put `salt.packed()` first in the private inputs. The
-//!    honest salt of a query at version `t` is `rho_state_bb(seed, family, t)`.
+//!    honest salt of a query at version `t` of history `h` is
+//!    `rho_state_bb_in(seed, family, h, t)` (the history's anchor salt at
+//!    `t = 0` of a continued history).
 //! 6. **Goldilocks.** Same shape with [`SaltGl`], [`OpeningsGl`],
 //!    [`commit_flat_gl`] and `rho_*_gl`. [`alloc_salt_targets`],
 //!    [`alloc_leaf_salts`], [`salted_hash_inputs`] and [`commit_hash`] are
@@ -153,10 +199,16 @@
 //!    family)`, 2 salt values per Challenge); so far tested at runner level
 //!    only (`tests::in_circuit_salted_commit_matches_native_gl`).
 //! 7. **Harness (later stage).** `commit_mode_from_env()`; the seed
-//!    `SaltSeed::from_env().unwrap_or_else(SaltSeed::os_random)`; leaf `t`
-//!    opens with `Openings::for_leaf(&seed, family, t)`; the log anchor is
-//!    `Com(S_0; SaltBb::ZERO)`, `Com(B_t)` uses `rho_batch_bb(seed, family,
-//!    t)` and the posted final `rho_state_bb(seed, family, T)`.
+//!    `SaltSeed::from_env().unwrap_or_else(SaltSeed::os_random)`; a public
+//!    history id per history/stream (unique under the seed); leaf `t` opens
+//!    with `Openings::for_leaf_in(&seed, family, h, t)` (genesis:
+//!    `Openings::for_leaf(&seed, family, t)`); in the genesis history the log
+//!    anchor is `Com(S_0; SaltBb::ZERO)`, in a continued history it is the
+//!    previous history's certified `Com(S_T; ρ_T)` and leaf 1 opens with
+//!    `Openings::for_leaf_after(&ρ_T, &seed, family, h)`; `Com(B_t)` uses
+//!    `rho_batch_bb_in(seed, family, h, t)` and the posted final
+//!    `rho_state_bb_in(seed, family, h, T)`. Every leaf goes through
+//!    `prove_epoch_commit`, never `prove_epoch_at`.
 //! 8. **Tests to replicate** (in `countmin_omc::tests` /
 //!    `decode::countmin::tests`): `hiding_leaf_exposes_native_hiding_commitments`,
 //!    `hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged` (record the
@@ -164,8 +216,11 @@
 //!    `equal_states_get_unlinkable_hiding_commitments`,
 //!    `wrong_rho_rejected_by_log_and_inconsistent_rho_breaks_merge`,
 //!    `hiding_noop_leaf_has_init_eq_final`, `hiding_decode_exposes_hiding_commit`,
-//!    and `hiding_leaf_tiny_debug` (run once without `--release`, where the
-//!    fork debug-asserts the salts' ALU creators).
+//!    `hiding_leaf_row_overhead_and_no_salt_in_public_values` (and its
+//!    decoder twin), `hiding_leaf_rejects_zero_openings_outside_the_noop_path`,
+//!    `continued_history_leaf_opens_the_previous_final_commitment`, and
+//!    `hiding_leaf_tiny_debug` (run once without `--release`, where the fork
+//!    debug-asserts the salts' ALU creators).
 
 use p3_circuit::ops::Poseidon2Config;
 use p3_circuit::{CircuitBuilder, ExprId};
@@ -480,23 +535,30 @@ impl SaltSeed {
 
 const SEED_LIMBS: usize = 11;
 const INDEX_LIMBS: usize = 3;
-/// `[DS_RHO, kind, family, t (3 limbs), seed (11 limbs), counter]`.
-const PRF_INPUT_LEN: usize = 3 + INDEX_LIMBS + SEED_LIMBS + 1;
+/// `[DS_RHO, kind, family, h (3 limbs), t (3 limbs), seed (11 limbs), counter]`.
+const PRF_INPUT_LEN: usize = 3 + 2 * INDEX_LIMBS + SEED_LIMBS + 1;
 
-/// `t` as three 24-bit limbs, little-endian (the last one 16 bits).
+/// The genesis history: its `S_0` is the public empty sketch, so its
+/// `ρ^S_0` is [`SaltBb::ZERO`]. Every randomizer API without an explicit
+/// history id ([`rho_state_bb`], [`Openings::for_leaf`], …) uses it.
+pub const GENESIS_HISTORY: u64 = 0;
+
+/// A `u64` (a history id or a batch index) as three 24-bit limbs,
+/// little-endian (the last one 16 bits).
 fn index_limbs24(t: u64) -> [u64; INDEX_LIMBS] {
     const M: u64 = (1 << 24) - 1;
     [t & M, (t >> 24) & M, t >> 48]
 }
 
-/// The fixed-length PRF input `[DS_RHO, kind, family, t_0..t_2, seed_0..seed_10,
-/// counter]`. Every entry is `< 2^32` and below both primes, and the length
-/// is fixed, so the encoding is injective in `(kind, family, t, seed,
-/// counter)`.
+/// The fixed-length PRF input `[DS_RHO, kind, family, h_0..h_2, t_0..t_2,
+/// seed_0..seed_10, counter]`. Every entry is `< 2^32` and below both
+/// primes, and the length is fixed, so the encoding is injective in `(kind,
+/// family, history, t, seed, counter)`.
 fn prf_input<BF: PrimeField64>(
     seed: &SaltSeed,
     kind: CommitKind,
     family: CommitFamily,
+    history: u64,
     t: u64,
     counter: u64,
 ) -> Vec<BF> {
@@ -504,6 +566,7 @@ fn prf_input<BF: PrimeField64>(
     v.push(BF::from_u64(DS_RHO));
     v.push(BF::from_u64(kind.tag()));
     v.push(BF::from_u64(family.id()));
+    v.extend(index_limbs24(history).map(BF::from_u64));
     v.extend(index_limbs24(t).map(BF::from_u64));
     v.extend(seed.limbs24().map(BF::from_u64));
     v.push(BF::from_u64(counter));
@@ -511,47 +574,84 @@ fn prf_input<BF: PrimeField64>(
     v
 }
 
-fn rho_bb(seed: &SaltSeed, kind: CommitKind, family: CommitFamily, t: u64) -> SaltBb {
+fn rho_bb(seed: &SaltSeed, kind: CommitKind, family: CommitFamily, history: u64, t: u64) -> SaltBb {
     let h = MyHash::new(make_perm());
-    let a: [Val; 8] = h.hash_iter(prf_input::<Val>(seed, kind, family, t, 0));
-    let b: [Val; 8] = h.hash_iter(prf_input::<Val>(seed, kind, family, t, 1));
+    let a: [Val; 8] = h.hash_iter(prf_input::<Val>(seed, kind, family, history, t, 0));
+    let b: [Val; 8] = h.hash_iter(prf_input::<Val>(seed, kind, family, history, t, 1));
     SaltBb(std::array::from_fn(|i| if i < 8 { a[i] } else { b[i - 8] }))
 }
 
-fn rho_gl(seed: &SaltSeed, kind: CommitKind, family: CommitFamily, t: u64) -> SaltGl {
+fn rho_gl(seed: &SaltSeed, kind: CommitKind, family: CommitFamily, history: u64, t: u64) -> SaltGl {
     let h = GlHash::new(make_perm_gl());
-    let a: [GlVal; 4] = h.hash_iter(prf_input::<GlVal>(seed, kind, family, t, 0));
-    let b: [GlVal; 4] = h.hash_iter(prf_input::<GlVal>(seed, kind, family, t, 1));
+    let a: [GlVal; 4] = h.hash_iter(prf_input::<GlVal>(seed, kind, family, history, t, 0));
+    let b: [GlVal; 4] = h.hash_iter(prf_input::<GlVal>(seed, kind, family, history, t, 1));
     SaltGl(std::array::from_fn(|i| if i < 4 { a[i] } else { b[i - 4] }))
 }
 
-/// `ρ^S_t`, the randomizer of `Com(S_t)` (BabyBear). `t = 0` gives the public
-/// [`SaltBb::ZERO`]. For `t ≥ 1` it is a keyed-sponge PRF: the native
-/// Poseidon2 sponge (`MyHash`) over the fixed-length input `[DS_RHO,
-/// TAG_STATE, family, t (three 24-bit limbs), seed (eleven 24-bit limbs),
-/// counter]`, squeezed once per counter (counter 0 gives `ρ_0..ρ_7`,
-/// counter 1 gives `ρ_8..ρ_11`).
-pub fn rho_state_bb(seed: &SaltSeed, family: CommitFamily, t: u64) -> SaltBb {
-    if t == 0 { SaltBb::ZERO } else { rho_bb(seed, CommitKind::State, family, t) }
+/// `ρ^S_0` of a history: the public zero in the genesis history; a
+/// continued history has no PRF value there (its init is opened with the
+/// previous history's final randomizer, [`Openings::for_leaf_after`]).
+fn assert_state_index(history: u64, t: u64) {
+    assert!(
+        t >= 1 || history == GENESIS_HISTORY,
+        "history {history}: ρ^S_0 of a continued history is the previous history's final \
+         randomizer (open leaf 1 with Openings::for_leaf_after), not a PRF value"
+    );
 }
 
-/// `ρ^B_t`, the randomizer of `Com(B_t)` (BabyBear): the [`rho_state_bb`] PRF
-/// under `TAG_BATCH`. Batch indices are 1-based (`t = 0` panics).
-pub fn rho_batch_bb(seed: &SaltSeed, family: CommitFamily, t: u64) -> SaltBb {
+/// `ρ^S_t` of history `history` (BabyBear), the randomizer of `Com(S_t)`.
+/// Genesis `t = 0` gives the public [`SaltBb::ZERO`]; a continued history's
+/// `t = 0` panics (module doc: it is anchored, not derived). For `t ≥ 1` it
+/// is a keyed-sponge PRF: the native Poseidon2 sponge (`MyHash`) over the
+/// fixed-length input `[DS_RHO, TAG_STATE, family, history (three 24-bit
+/// limbs), t (three 24-bit limbs), seed (eleven 24-bit limbs), counter]`,
+/// squeezed once per counter (counter 0 gives `ρ_0..ρ_7`, counter 1 gives
+/// `ρ_8..ρ_11`).
+pub fn rho_state_bb_in(seed: &SaltSeed, family: CommitFamily, history: u64, t: u64) -> SaltBb {
+    assert_state_index(history, t);
+    if t == 0 { SaltBb::ZERO } else { rho_bb(seed, CommitKind::State, family, history, t) }
+}
+
+/// `ρ^B_t` of history `history` (BabyBear), the randomizer of `Com(B_t)`:
+/// the [`rho_state_bb_in`] PRF under `TAG_BATCH`. Batch indices are 1-based
+/// (`t = 0` panics).
+pub fn rho_batch_bb_in(seed: &SaltSeed, family: CommitFamily, history: u64, t: u64) -> SaltBb {
     assert!(t >= 1, "batch indices are 1-based (got t = 0)");
-    rho_bb(seed, CommitKind::Batch, family, t)
+    rho_bb(seed, CommitKind::Batch, family, history, t)
 }
 
-/// Goldilocks twin of [`rho_state_bb`] (the Goldilocks `MyHash`, rate 4:
+/// [`rho_state_bb_in`] in the [`GENESIS_HISTORY`] (`t = 0` gives the public
+/// [`SaltBb::ZERO`]).
+pub fn rho_state_bb(seed: &SaltSeed, family: CommitFamily, t: u64) -> SaltBb {
+    rho_state_bb_in(seed, family, GENESIS_HISTORY, t)
+}
+
+/// [`rho_batch_bb_in`] in the [`GENESIS_HISTORY`].
+pub fn rho_batch_bb(seed: &SaltSeed, family: CommitFamily, t: u64) -> SaltBb {
+    rho_batch_bb_in(seed, family, GENESIS_HISTORY, t)
+}
+
+/// Goldilocks twin of [`rho_state_bb_in`] (the Goldilocks `MyHash`, rate 4:
 /// counter 0 gives `ρ_0..ρ_3`, counter 1 gives `ρ_4, ρ_5`).
+pub fn rho_state_gl_in(seed: &SaltSeed, family: CommitFamily, history: u64, t: u64) -> SaltGl {
+    assert_state_index(history, t);
+    if t == 0 { SaltGl::ZERO } else { rho_gl(seed, CommitKind::State, family, history, t) }
+}
+
+/// Goldilocks twin of [`rho_batch_bb_in`].
+pub fn rho_batch_gl_in(seed: &SaltSeed, family: CommitFamily, history: u64, t: u64) -> SaltGl {
+    assert!(t >= 1, "batch indices are 1-based (got t = 0)");
+    rho_gl(seed, CommitKind::Batch, family, history, t)
+}
+
+/// Goldilocks twin of [`rho_state_bb`].
 pub fn rho_state_gl(seed: &SaltSeed, family: CommitFamily, t: u64) -> SaltGl {
-    if t == 0 { SaltGl::ZERO } else { rho_gl(seed, CommitKind::State, family, t) }
+    rho_state_gl_in(seed, family, GENESIS_HISTORY, t)
 }
 
 /// Goldilocks twin of [`rho_batch_bb`].
 pub fn rho_batch_gl(seed: &SaltSeed, family: CommitFamily, t: u64) -> SaltGl {
-    assert!(t >= 1, "batch indices are 1-based (got t = 0)");
-    rho_gl(seed, CommitKind::Batch, family, t)
+    rho_batch_gl_in(seed, family, GENESIS_HISTORY, t)
 }
 
 // ─── Openings of one leaf ────────────────────────────────────────────────────
@@ -568,21 +668,56 @@ pub struct Openings {
 }
 
 impl Openings {
-    /// All-zero randomizers: ignored by a `Plain` leaf, and the public
-    /// opening of the no-op VK-derivation leaf (`ρ_in = ρ_out`, so it
-    /// exposes `init == final`).
+    /// All-zero randomizers, the (ignored) openings of a `Plain` leaf. A
+    /// `Hiding` leaf refuses them on its final and batch commitments; the
+    /// no-op leaf's all-zero opening is [`Self::public_zero`].
     pub const fn plain() -> Self {
         Openings { init: SaltBb::ZERO, final_: SaltBb::ZERO, batch: SaltBb::ZERO }
     }
 
-    /// The honest openings of leaf `t` (global, 1-based):
-    /// `(ρ^S_{t-1}, ρ^S_t, ρ^B_t)`.
+    /// The public opening of the no-op VK-derivation leaf: all three salts
+    /// zero (`ρ_in = ρ_out`, so it exposes `init == final`). It hides
+    /// nothing; only the explicit no-op path proves with it
+    /// (`CmOmcLeafCircuit::prove_epoch_public_zero`).
+    pub const fn public_zero() -> Self {
+        Self::plain()
+    }
+
+    /// The honest openings of leaf `t` (1-based) of the genesis history:
+    /// `(ρ^S_{t-1}, ρ^S_t, ρ^B_t)`, with `ρ^S_0 = 0` at `t = 1`.
     pub fn for_leaf(seed: &SaltSeed, family: CommitFamily, t: u64) -> Self {
+        Self::for_leaf_in(seed, family, GENESIS_HISTORY, t)
+    }
+
+    /// The honest openings of leaf `t` (1-based) of history `history`:
+    /// `(ρ^S_{t-1}, ρ^S_t, ρ^B_t)`. Leaf 1 of a continued history
+    /// (`history ≠ GENESIS_HISTORY`) has no derived init and panics: use
+    /// [`Self::for_leaf_after`].
+    pub fn for_leaf_in(seed: &SaltSeed, family: CommitFamily, history: u64, t: u64) -> Self {
         assert!(t >= 1, "batch indices are 1-based (got t = 0)");
         Openings {
-            init: rho_state_bb(seed, family, t - 1),
-            final_: rho_state_bb(seed, family, t),
-            batch: rho_batch_bb(seed, family, t),
+            init: rho_state_bb_in(seed, family, history, t - 1),
+            final_: rho_state_bb_in(seed, family, history, t),
+            batch: rho_batch_bb_in(seed, family, history, t),
+        }
+    }
+
+    /// The honest openings of leaf 1 of a CONTINUED history `history`, whose
+    /// `S_0` is the previous history's final state: the init opens the
+    /// previous history's certified `Com(S_T; ρ_T)` with `anchor = ρ_T`,
+    /// so leaf 1 exposes exactly that commitment as its init; final and
+    /// batch are history `history`'s `(ρ^S_1, ρ^B_1)`. Leaf `t ≥ 2` is
+    /// [`Self::for_leaf_in`]. The genesis history's anchor is the public
+    /// zero ([`Self::for_leaf`]), so `history = GENESIS_HISTORY` panics.
+    pub fn for_leaf_after(anchor: &SaltBb, seed: &SaltSeed, family: CommitFamily, history: u64) -> Self {
+        assert!(
+            history != GENESIS_HISTORY,
+            "the genesis history starts from the public S_0 (ρ^S_0 = 0): use Openings::for_leaf"
+        );
+        Openings {
+            init: *anchor,
+            final_: rho_state_bb_in(seed, family, history, 1),
+            batch: rho_batch_bb_in(seed, family, history, 1),
         }
     }
 
@@ -607,13 +742,36 @@ impl OpeningsGl {
         OpeningsGl { init: SaltGl::ZERO, final_: SaltGl::ZERO, batch: SaltGl::ZERO }
     }
 
+    /// See [`Openings::public_zero`].
+    pub const fn public_zero() -> Self {
+        Self::plain()
+    }
+
     /// See [`Openings::for_leaf`].
     pub fn for_leaf(seed: &SaltSeed, family: CommitFamily, t: u64) -> Self {
+        Self::for_leaf_in(seed, family, GENESIS_HISTORY, t)
+    }
+
+    /// See [`Openings::for_leaf_in`].
+    pub fn for_leaf_in(seed: &SaltSeed, family: CommitFamily, history: u64, t: u64) -> Self {
         assert!(t >= 1, "batch indices are 1-based (got t = 0)");
         OpeningsGl {
-            init: rho_state_gl(seed, family, t - 1),
-            final_: rho_state_gl(seed, family, t),
-            batch: rho_batch_gl(seed, family, t),
+            init: rho_state_gl_in(seed, family, history, t - 1),
+            final_: rho_state_gl_in(seed, family, history, t),
+            batch: rho_batch_gl_in(seed, family, history, t),
+        }
+    }
+
+    /// See [`Openings::for_leaf_after`].
+    pub fn for_leaf_after(anchor: &SaltGl, seed: &SaltSeed, family: CommitFamily, history: u64) -> Self {
+        assert!(
+            history != GENESIS_HISTORY,
+            "the genesis history starts from the public S_0 (ρ^S_0 = 0): use OpeningsGl::for_leaf"
+        );
+        OpeningsGl {
+            init: *anchor,
+            final_: rho_state_gl_in(seed, family, history, 1),
+            batch: rho_batch_gl_in(seed, family, history, 1),
         }
     }
 
@@ -734,6 +892,42 @@ where
             let salted = salted_hash_inputs::<BF, F>(b, kind, family, s, inputs);
             bind::hash_slice(b, cfg, &salted, zero, binding)
         }
+    }
+}
+
+/// Test-only proof inspectors shared by the leaf and decoder tests.
+#[cfg(test)]
+pub(crate) mod probe {
+    use super::*;
+    use crate::recursion::recursive::config::ConfigWithFriParams;
+    use p3_circuit::ops::NpoTypeId;
+    use p3_circuit_prover::{BatchStarkProof, PrimitiveTable};
+
+    /// Logical `(Poseidon2, ALU)` rows of a BabyBear run (before any
+    /// padding: a proof's Poseidon2 entry reports the padded height).
+    pub(crate) fn trace_rows(traces: &p3_circuit::tables::Traces<Challenge>) -> (usize, usize) {
+        let key = NpoTypeId::poseidon2_perm(Poseidon2Config::BABY_BEAR_D4_W16);
+        let p2 = traces.non_primitive_traces.get(&key).map_or(0, |t| t.rows());
+        (p2, traces.alu_trace.values.len())
+    }
+
+    /// The ALU rows a proof reports (logical, equal to [`trace_rows`]'s).
+    pub(crate) fn proof_alu_rows(proof: &BatchStarkProof<ConfigWithFriParams>) -> usize {
+        proof.rows[PrimitiveTable::Alu]
+    }
+
+    /// Every public value the verifier is handed: the primitive tables carry
+    /// none, so these are the non-primitive tables' (including the Expose
+    /// table's exposed statement).
+    pub(crate) fn public_values(proof: &BatchStarkProof<ConfigWithFriParams>) -> Vec<Val> {
+        proof.non_primitives.iter().flat_map(|e| e.public_values.iter().copied()).collect()
+    }
+
+    /// The nonzero coefficients of `salts` that occur among
+    /// [`public_values`] (zero is the public salt, so it is skipped).
+    pub(crate) fn leaked_salts(proof: &BatchStarkProof<ConfigWithFriParams>, salts: &[SaltBb]) -> Vec<Val> {
+        let pv = public_values(proof);
+        salts.iter().flat_map(|s| s.0).filter(|c| *c != Val::ZERO && pv.contains(c)).collect()
     }
 }
 
@@ -915,6 +1109,16 @@ mod tests {
         binding: Binding,
         raw_salt: bool,
     ) -> (p3_circuit::Circuit<Challenge>, Vec<Challenge>, Vec<Challenge>, [Val; 8]) {
+        salted_commit_circuit_fam(salt, binding, raw_salt, CommitFamily::CountMin)
+    }
+
+    /// [`salted_commit_circuit`] under the tag of `family`.
+    fn salted_commit_circuit_fam(
+        salt: Option<SaltBb>,
+        binding: Binding,
+        raw_salt: bool,
+        family: CommitFamily,
+    ) -> (p3_circuit::Circuit<Challenge>, Vec<Challenge>, Vec<Challenge>, [Val; 8]) {
         let mut b = CircuitBuilder::<Challenge>::new();
         b.enable_poseidon2_perm::<BabyBearD4Width16, _>(
             generate_poseidon2_trace::<Challenge, BabyBearD4Width16>,
@@ -946,7 +1150,7 @@ mod tests {
             &mut b,
             &cfg,
             CommitKind::State,
-            CommitFamily::CountMin,
+            family,
             st.as_ref(),
             &x,
             zero,
@@ -959,8 +1163,7 @@ mod tests {
 
         let flat: Vec<Val> = (0..8u32).map(|i| Val::from_u32(1000 + i)).collect();
         let mode = if salt.is_some() { CommitMode::Hiding } else { CommitMode::Plain };
-        let native =
-            commit_flat_bb(mode, CommitKind::State, CommitFamily::CountMin, &salt.unwrap_or(SaltBb::ZERO), &flat);
+        let native = commit_flat_bb(mode, CommitKind::State, family, &salt.unwrap_or(SaltBb::ZERO), &flat);
         let pub_vals: Vec<Challenge> = native
             .chunks(4)
             .map(|c| Challenge::from_basis_coefficients_slice(c).unwrap())
@@ -1078,5 +1281,256 @@ mod tests {
             runner.set_private_inputs(&wrong).unwrap();
             assert!(runner.run().is_err(), "{binding:?}: a wrong salt must conflict");
         }
+    }
+
+    /// (F2) History separation: the PRF absorbs a public history id, so one
+    /// seed reused by two histories that both restart `t` at 1 gives
+    /// unrelated randomizers (no repeat across `(history, t)`, including the
+    /// swapped pair), the genesis wrappers are history 0, a continued
+    /// history has no derived `ρ^S_0` (it panics), and its leaf 1 opens its
+    /// init with the anchor (the previous history's final randomizer) and
+    /// chains into its leaf 2.
+    #[test]
+    fn prf_separates_histories_and_anchors_continued_histories() {
+        let seed = SaltSeed::for_tests(17);
+        let fam = CommitFamily::GreenwaldKhanna;
+        assert_eq!(PRF_INPUT_LEN, 21);
+        for t in [0u64, 1, 9] {
+            assert_eq!(rho_state_bb(&seed, fam, t), rho_state_bb_in(&seed, fam, GENESIS_HISTORY, t));
+            assert_eq!(rho_state_gl(&seed, fam, t), rho_state_gl_in(&seed, fam, GENESIS_HISTORY, t));
+        }
+        assert_eq!(rho_batch_bb(&seed, fam, 9), rho_batch_bb_in(&seed, fam, GENESIS_HISTORY, 9));
+        assert_eq!(rho_batch_gl(&seed, fam, 9), rho_batch_gl_in(&seed, fam, GENESIS_HISTORY, 9));
+        let (mut seen_bb, mut seen_gl) = (vec![SaltBb::ZERO], vec![SaltGl::ZERO]);
+        for h in [GENESIS_HISTORY, 1, 2, 1 << 24, u64::MAX] {
+            for t in [1u64, 2, 1 << 24, u64::MAX] {
+                for (s_bb, s_gl) in [
+                    (rho_state_bb_in(&seed, fam, h, t), rho_state_gl_in(&seed, fam, h, t)),
+                    (rho_batch_bb_in(&seed, fam, h, t), rho_batch_gl_in(&seed, fam, h, t)),
+                ] {
+                    assert!(!seen_bb.contains(&s_bb), "h={h} t={t}: BabyBear randomizer repeats");
+                    assert!(!seen_gl.contains(&s_gl), "h={h} t={t}: Goldilocks randomizer repeats");
+                    seen_bb.push(s_bb);
+                    seen_gl.push(s_gl);
+                }
+            }
+        }
+        // A continued history's ρ^S_0 is anchored, not derived.
+        for h in [1u64, 7] {
+            let msg = forge::catch_msg(|| rho_state_bb_in(&seed, fam, h, 0)).unwrap_err();
+            assert!(msg.contains("for_leaf_after"), "{msg}");
+            assert!(forge::catch(|| rho_state_gl_in(&seed, fam, h, 0)).is_none());
+            assert!(forge::catch(|| Openings::for_leaf_in(&seed, fam, h, 1)).is_none());
+            assert!(forge::catch(|| OpeningsGl::for_leaf_in(&seed, fam, h, 1)).is_none());
+        }
+        // Leaf 1 of history 1 opens the previous history's final Com(S_T; ρ_T).
+        let t_prev = 5;
+        let anchor = rho_state_bb(&seed, fam, t_prev);
+        let o1 = Openings::for_leaf_after(&anchor, &seed, fam, 1);
+        assert_eq!(o1.init, anchor);
+        assert_eq!(o1.init, Openings::for_leaf(&seed, fam, t_prev).final_);
+        assert_eq!(o1.final_, rho_state_bb_in(&seed, fam, 1, 1));
+        assert_eq!(o1.batch, rho_batch_bb_in(&seed, fam, 1, 1));
+        assert_eq!(o1.final_, Openings::for_leaf_in(&seed, fam, 1, 2).init, "leaf 1 chains into leaf 2");
+        assert_ne!(o1.final_, Openings::for_leaf(&seed, fam, 1).final_, "t restarts, ρ does not");
+        assert_ne!(o1.batch, Openings::for_leaf(&seed, fam, 1).batch);
+        let anchor_g = rho_state_gl(&seed, fam, t_prev);
+        let g1 = OpeningsGl::for_leaf_after(&anchor_g, &seed, fam, 1);
+        assert_eq!(g1.init, anchor_g);
+        assert_eq!(g1.final_, OpeningsGl::for_leaf_in(&seed, fam, 1, 2).init);
+        // The genesis history's anchor is the public zero.
+        assert!(forge::catch(|| Openings::for_leaf_after(&anchor, &seed, fam, GENESIS_HISTORY)).is_none());
+        assert!(forge::catch(|| OpeningsGl::for_leaf_after(&anchor_g, &seed, fam, GENESIS_HISTORY)).is_none());
+        assert_eq!(Openings::public_zero(), Openings::plain());
+    }
+
+    /// (F3) Per-commitment overhead of the salt: +2 Poseidon2 rows (the
+    /// 4-Challenge prefix is two rate blocks) and +3 ALU rows (one creator
+    /// per salt Challenge), under the plain and the bound sponge.
+    #[test]
+    fn hiding_row_overhead_per_commitment() {
+        let rho = rho_state_bb(&SaltSeed::for_tests(4), CommitFamily::CountMin, 1);
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let rows = |salt: Option<SaltBb>| {
+                let (circuit, pub_vals, priv_vals, _) = salted_commit_circuit(salt, binding, false);
+                let mut runner = circuit.runner();
+                runner.set_public_inputs(&pub_vals).unwrap();
+                runner.set_private_inputs(&priv_vals).unwrap();
+                probe::trace_rows(&runner.run().unwrap())
+            };
+            let ((p0, a0), (p1, a1)) = (rows(None), rows(Some(rho)));
+            assert_eq!(p1, p0 + 2, "{binding:?}: Poseidon2 rows {p0} -> {p1}");
+            assert_eq!(a1, a0 + SALT_CHALLENGES, "{binding:?}: ALU rows {a0} -> {a1}");
+        }
+    }
+
+    /// Preprocessed commitment (VK, `vk_pin_values` order) of a circuit on
+    /// the [`bind::probe::prove_small`] tables. Structural: no trace.
+    fn small_circuit_vk(circuit: &p3_circuit::Circuit<Challenge>) -> Vec<Challenge> {
+        use crate::config::LOG_BLOWUP;
+        use crate::recursion::recursive::config::ConfigWithFriParams;
+        use crate::recursion::recursive::countmin_leaf::make_leaf_config;
+        use p3_batch_stark::ProverData;
+        use p3_circuit_prover::batch_stark_prover::{
+            expose_air_builders, expose_preprocessor, poseidon2_air_builders_d4, poseidon2_preprocessor,
+            recompose_air_builders, recompose_preprocessor,
+        };
+        use p3_circuit_prover::common::get_airs_and_degrees_with_prep;
+        use p3_circuit_prover::{ConstraintProfile, TablePacking};
+        use p3_uni_stark::StarkGenericConfig;
+
+        let config = make_leaf_config();
+        let table_packing = TablePacking::new(1, 2).with_fri_params(6, LOG_BLOWUP);
+        let preprocessors =
+            vec![poseidon2_preprocessor::<Val>(), recompose_preprocessor::<Val>(false), expose_preprocessor::<Val>()];
+        let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
+        air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+        air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
+        let (airs_degrees, _, _) = get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
+            circuit,
+            &table_packing,
+            &preprocessors,
+            &air_builders,
+            ConstraintProfile::Standard,
+        )
+        .expect("salted commit AIRs");
+        let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
+        let ext: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
+        let pd = ProverData::from_airs_and_degrees(&config, &airs, &ext);
+        crate::recursion::recursive::expose_forest::common_vk_pin_values(&pd.common)
+    }
+
+    /// (F4) The tag is a circuit constant, and at the pinned fork a constant's
+    /// VALUE is part of the VK (ConstAir preprocesses it): two circuits that
+    /// differ only in the family tag have different VKs, while two salts
+    /// (witnesses) share one VK. Cross-checked with the structural probe.
+    #[test]
+    fn tag_constant_is_bound_by_the_vk() {
+        let seed = SaltSeed::for_tests(12);
+        let (r1, r2) = (rho_state_bb(&seed, CommitFamily::CountMin, 1), rho_state_bb(&seed, CommitFamily::CountMin, 2));
+        let vk = |salt: SaltBb, family: CommitFamily| {
+            small_circuit_vk(&salted_commit_circuit_fam(Some(salt), Binding::Semantic, false, family).0)
+        };
+        let cm = vk(r1, CommitFamily::CountMin);
+        assert_eq!(cm, vk(r2, CommitFamily::CountMin), "the salt is a witness, not part of the VK");
+        assert_ne!(cm, vk(r1, CommitFamily::HyperLogLog), "the family tag is bound by the VK");
+        assert!(bind::probe::fork_binds_const(), "the pinned fork binds constant values");
+    }
+
+    /// Goldilocks at PROOF level (the runner-level test above only checks the
+    /// witness): the field-generic salt gadget over `GOLDILOCKS_D2_W8`,
+    /// connected to the native [`commit_flat_gl`] digest and exposed, proves
+    /// and verifies; the exposed digest is the native one and no salt value
+    /// is a public value. Negative control: the salts fed raw to the sponge
+    /// (no ALU creator) do not prove.
+    #[test]
+    fn in_circuit_salted_commit_proves_gl() {
+        let rho = rho_state_gl(&SaltSeed::for_tests(3), CommitFamily::SpaceSaving, 2);
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let pv = prove_salted_commit_gl(rho, binding, false)
+                .unwrap_or_else(|| panic!("{binding:?}: the Goldilocks hiding commitment must prove"));
+            let flat: Vec<GlVal> = (0..6u64).map(|i| GlVal::from_u64((1 << 40) + i)).collect();
+            let native = commit_flat_gl(CommitMode::Hiding, CommitKind::State, CommitFamily::SpaceSaving, &rho, &flat);
+            assert_eq!(pv, native.to_vec(), "{binding:?}: exposed digest == native commitment");
+            assert!(rho.0.iter().all(|s| !pv.contains(s)), "{binding:?}: a salt value is public");
+            assert!(prove_salted_commit_gl(rho, binding, true).is_none(), "{binding:?}: raw salts must not prove");
+        }
+    }
+
+    /// Build, run, prove and verify the Goldilocks salted commitment of 3
+    /// private Challenges; the exposed values if the proof verifies.
+    fn prove_salted_commit_gl(rho: SaltGl, binding: Binding, raw_salt: bool) -> Option<Vec<GlVal>> {
+        use crate::config_gl::LOG_BLOWUP;
+        use crate::recursion::recursive::config_gl::ConfigWithFriParamsGl;
+        use crate::recursion::recursive::leaf_gl::make_leaf_config;
+        use p3_batch_stark::ProverData;
+        use p3_circuit_prover::batch_stark_prover::{
+            expose_air_builders, expose_preprocessor, poseidon2_air_builders_d2, poseidon2_preprocessor,
+            recompose_air_builders, recompose_preprocessor,
+        };
+        use p3_circuit_prover::common::get_airs_and_degrees_with_prep;
+        use p3_circuit_prover::{BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking};
+        use p3_uni_stark::StarkGenericConfig;
+
+        let cfg = Poseidon2Config::GOLDILOCKS_D2_W8;
+        let mut b = CircuitBuilder::<GlChallenge>::new();
+        b.enable_poseidon2_perm_width_8::<GoldilocksD2Width8, _>(
+            generate_poseidon2_trace::<GlChallenge, GoldilocksD2Width8>,
+            make_perm_gl(),
+        );
+        b.enable_recompose::<GlVal>(generate_recompose_trace::<GlVal, GlChallenge>);
+        b.enable_expose(generate_expose_trace::<GlVal, GlChallenge>);
+        let pis: [ExprId; 2] = std::array::from_fn(|_| b.alloc_public_input("digest"));
+        b.add_expose(&pis).unwrap();
+        let one = b.alloc_const(GlChallenge::ONE, "one");
+        let zero = b.alloc_const(GlChallenge::ZERO, "zero");
+        let st = if raw_salt {
+            let inputs: [ExprId; SALT_CHALLENGES] = std::array::from_fn(|_| b.alloc_private_input("raw_salt"));
+            SaltTargets { inputs, absorbed: inputs }
+        } else {
+            alloc_salt_targets(&mut b)
+        };
+        let x: [ExprId; 3] = std::array::from_fn(|_| b.alloc_private_input("x"));
+        for &xi in &x {
+            let _ = b.mul_add(xi, one, zero);
+        }
+        let digest = commit_hash::<GlVal, GlChallenge>(
+            &mut b,
+            &cfg,
+            CommitKind::State,
+            CommitFamily::SpaceSaving,
+            Some(&st),
+            &x,
+            zero,
+            binding,
+        );
+        for i in 0..2 {
+            b.connect(digest[i], pis[i]);
+        }
+        let circuit = b.build().unwrap();
+        let flat: Vec<GlVal> = (0..6u64).map(|i| GlVal::from_u64((1 << 40) + i)).collect();
+        let native = commit_flat_gl(CommitMode::Hiding, CommitKind::State, CommitFamily::SpaceSaving, &rho, &flat);
+        let pub_vals: Vec<GlChallenge> =
+            native.chunks(2).map(|c| GlChallenge::from_basis_coefficients_slice(c).unwrap()).collect();
+        let mut priv_vals = rho.packed().to_vec();
+        priv_vals.extend(flat.chunks(2).map(|c| GlChallenge::from_basis_coefficients_slice(c).unwrap()));
+
+        forge::catch(|| {
+            let mut runner = circuit.runner();
+            runner.set_public_inputs(&pub_vals).unwrap();
+            runner.set_private_inputs(&priv_vals).unwrap();
+            let traces = runner.run().ok()?;
+            let config = make_leaf_config();
+            let table_packing = TablePacking::new(1, 2).with_fri_params(6, LOG_BLOWUP);
+            let preprocessors = vec![
+                poseidon2_preprocessor::<GlVal>(),
+                recompose_preprocessor::<GlVal>(false),
+                expose_preprocessor::<GlVal>(),
+            ];
+            let mut air_builders = poseidon2_air_builders_d2::<ConfigWithFriParamsGl>();
+            air_builders.extend(recompose_air_builders::<ConfigWithFriParamsGl, 2>(1, false));
+            air_builders.extend(expose_air_builders::<ConfigWithFriParamsGl, 2>());
+            let (airs_degrees, pc, npc) = get_airs_and_degrees_with_prep::<ConfigWithFriParamsGl, GlChallenge, 2>(
+                &circuit,
+                &table_packing,
+                &preprocessors,
+                &air_builders,
+                ConstraintProfile::Standard,
+            )
+            .ok()?;
+            let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
+            let ext: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
+            let pd = ProverData::from_airs_and_degrees(&config, &airs, &ext);
+            let cpd = CircuitProverData::new(pd, pc, npc);
+            let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
+            prover.register_poseidon2_table::<2>(cfg);
+            prover.register_recompose_table::<2>(false);
+            prover.register_expose_table::<2>();
+            let proof = prover.prove_all_tables(&traces, &cpd).ok()?;
+            prover.verify_all_tables(&proof).ok()?;
+            let pv: Vec<GlVal> = proof.non_primitives.iter().flat_map(|e| e.public_values.clone()).collect();
+            Some(pv)
+        })
+        .flatten()
     }
 }

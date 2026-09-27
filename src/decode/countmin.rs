@@ -150,9 +150,13 @@ pub fn prove_cm_decode_with(
 /// byte (`salt` ignored). Under `Hiding` the decoder opens
 /// `Com(S_t; ρ) = commit_countmin_with(state, Hiding, salt)`: the salt is the
 /// FIRST 3 private inputs, and (under `Semantic`/`Bound`) the exposed
-/// commitment is the hiding one. For a query at version `t` the honest salt
-/// is `rho_state_bb(seed, CommitFamily::CountMin, t)`, the same randomizer
-/// leaf `t` closed its final state with.
+/// commitment is the hiding one. For a query at version `t` of history `h`
+/// the honest salt is `rho_state_bb_in(seed, CommitFamily::CountMin, h, t)`
+/// (`rho_state_bb(seed, .., t)` in the genesis history), the same randomizer
+/// leaf `t` closed its final state with; at `t = 0` it is the public zero in
+/// the genesis history and the anchor salt in a continued one. The decoder
+/// cannot tell a version-0 query from a forgotten salt, so it accepts
+/// [`SaltBb::ZERO`] under `Hiding`: the harness must pass the real salt.
 pub fn prove_cm_decode_commit(
     params: CmDecodeParams,
     state: CountMinState,
@@ -735,6 +739,28 @@ mod tests {
         assert_eq!(&exposed16(&q)[0..8], &r.final_commit.0[..], "query at t opens leaf t's final commitment");
         let wrong = prove_cm_decode_commit(P4, s_t, 7, binding, CommitMode::Hiding, &rho_state_bb(&seed, CommitFamily::CountMin, t + 1));
         assert_ne!(&exposed16(&wrong)[0..8], &r.final_commit.0[..], "a wrong salt exposes another commitment");
+    }
+
+    /// (F3, F5) Decoder twin of the leaf's overhead test: a Hiding decode
+    /// costs exactly +2 Poseidon2 rows and +3 ALU rows (one commitment)
+    /// under every binding, and none of its 12 salt values is a public value
+    /// of the proof.
+    #[test]
+    fn hiding_decode_row_overhead_and_no_salt_in_public_values() {
+        use crate::commitment::hiding::probe::{leaked_salts, proof_alu_rows, trace_rows};
+        use crate::commitment::hiding::{CommitFamily, SaltSeed, rho_state_bb};
+        let rho = rho_state_bb(&SaltSeed::for_tests(62), CommitFamily::CountMin, 3);
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let s = state_with(binding);
+            let (p0, a0) = trace_rows(&build_cm_decode(P4, &s, 7, binding).run());
+            let (p1, a1) = trace_rows(&build_cm_decode_commit(P4, &s, 7, binding, CommitMode::Hiding, &rho).run());
+            println!("B2 decode rows {binding:?}: Poseidon2 {p0} -> {p1}, ALU {a0} -> {a1}");
+            assert_eq!(p1, p0 + 2, "{binding:?}: Poseidon2 rows");
+            assert_eq!(a1, a0 + 3, "{binding:?}: ALU rows");
+            let hid = prove_cm_decode_commit(P4, s, 7, binding, CommitMode::Hiding, &rho);
+            assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
+            assert_eq!(leaked_salts(&hid.output.0, &[rho]), vec![], "{binding:?}");
+        }
     }
 
     /// Keys congruent mod `p`: decode `k` on a state holding one occurrence of
