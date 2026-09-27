@@ -93,6 +93,11 @@
 //! commitment. Prove it with [`SsFullLeafCircuit::prove_epoch_commit`]; the
 //! no-op VK-derivation leaf uses [`SsFullLeafCircuit::prove_epoch_public_zero`].
 //! Every pre-B2 entry point builds the `Plain` circuit, byte for byte.
+//! The leaf takes no [`Binding`]: both modes hash with the plain
+//! `add_hash_slice` sponge (`commit_hash(.., Binding::Semantic)`), never the
+//! zero-IV `bind::hash_slice_bound` that `Binding::Bound` selects in
+//! [`crate::commitment::hiding`], so the first row's IV rests on the fork's
+//! own Poseidon2 IV binding, as it does for the `Plain` leaf.
 
 use std::rc::Rc;
 
@@ -1595,9 +1600,13 @@ impl SsFullLeafCircuit {
     /// with [`Openings::public_zero`], so a batch that changes nothing
     /// exposes `init == final` in either mode. The only path that proves a
     /// `Hiding` leaf with zero final/batch salts; it asserts that every
-    /// update is the circuit-native no-op [`SsFullUpdate::dummy`] and that
-    /// the state does not move, so it cannot publish a real batch (or a moved
-    /// state) under deterministic commitments.
+    /// update is the circuit-native no-op [`SsFullUpdate::dummy`], that the
+    /// state does not move, and that it is the public empty state
+    /// [`SsFullState::empty`] (the no-op leaf's, whose zero-salt commitment
+    /// is the public anchor `Com(S_0; 0)`), so it can publish neither a real
+    /// batch, nor a moved state, nor a deterministic commitment to a secret
+    /// state (e.g. an all-dummy padding leaf of a live stream, whose state
+    /// needs its `ρ_t`).
     pub fn prove_epoch_public_zero(
         &mut self,
         t: u64,
@@ -1611,6 +1620,11 @@ impl SsFullLeafCircuit {
         assert!(
             apply_batch_ss_full(&initial_state, &batch).0 == initial_state,
             "prove_epoch_public_zero is for the no-op leaf: the state must not move"
+        );
+        assert!(
+            initial_state == SsFullState::empty(self.params),
+            "prove_epoch_public_zero is for the no-op leaf: the state must be the public empty state \
+             (a secret state needs Openings::for_leaf and prove_epoch_commit)"
         );
         self.prove_epoch_opened(t, initial_state, batch, &Openings::public_zero())
     }
@@ -3229,6 +3243,79 @@ mod tests {
             assert_eq!(p.initial, commit_ss_state(&hp_prior()));
             assert_eq!(p.final_, commit_ss_state(&advanced(&hp_prior(), &ups)));
             assert_eq!(p.batch_commit, commit_ss_batch(&ups));
+        }
+    }
+
+    /// The no-op path also refuses a state that does not move but is not the
+    /// public empty state: a canonical non-empty prior with an all-dummy
+    /// batch (e.g. a padding leaf of a live stream) would otherwise publish
+    /// the deterministic `Com(S; 0)` of a secret state. The guard is
+    /// mode-independent. Control: the empty state passes and exposes
+    /// `init == final == Com(S_0; 0)`.
+    #[test]
+    fn public_zero_path_requires_the_empty_state() {
+        let noop = vec![SsFullUpdate::dummy(); HP.batch];
+        assert_eq!(advanced(&hp_prior(), &noop), hp_prior(), "the prior does not move");
+        assert_ne!(hp_prior(), hp_empty());
+        for mode in [HIDING, CommitMode::Plain] {
+            let mut leaf = build_ss_full_leaf_commit(HP, Expose::Interval, mode);
+            let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(1, hp_prior(), noop.clone()).final_)
+                .unwrap_err();
+            assert!(msg.contains("public empty state"), "{mode:?}: {msg}");
+        }
+        let mut leaf = hiding_leaf(Expose::Interval);
+        let r = leaf.prove_epoch_public_zero(1, hp_empty(), noop);
+        let anchor = commit_ss_state_with(&hp_empty(), HIDING, &SaltBb::ZERO);
+        assert_eq!((r.initial, r.final_), (anchor, anchor));
+        let st = read_exposed_statement(&r.output.0);
+        assert_eq!((st.init, st.final_), (anchor.0.to_vec(), anchor.0.to_vec()));
+    }
+
+    /// The 9 salts are the FIRST private inputs (the salts-first rule the
+    /// later stages rely on). Packing: the Hiding leaf's private inputs are
+    /// exactly `Openings::private_inputs()` (init, final, batch; nine
+    /// distinct nonzero Challenges) followed by the Plain leaf's private
+    /// inputs for the same epoch. Allocation: the honest proof over these
+    /// inputs verifies, so the circuit hashes the salts from the first nine
+    /// slots (a circuit that allocated them anywhere else would open
+    /// `Com(·; ρ)` over other values and conflict with the native public
+    /// commitments); control: the same values with the salts moved last are
+    /// rejected by the runner.
+    #[test]
+    fn hiding_leaf_salts_are_the_first_private_inputs() {
+        let seed = SaltSeed::for_tests(17);
+        let t = 3u64;
+        let ups = hp_batches()[0].clone();
+        let o = Openings::for_leaf(&seed, SS, t);
+        let salts = o.private_inputs();
+        assert_eq!(salts.len(), 9);
+        assert!(salts.iter().all(|c| *c != Challenge::ZERO), "nonzero salt Challenges");
+        for i in 0..salts.len() {
+            for j in 0..i {
+                assert_ne!(salts[i], salts[j], "distinct salt Challenges ({j}, {i})");
+            }
+        }
+        for expose in [Expose::Interval, Expose::Boundary, Expose::None] {
+            let mut plain = build_ss_full_leaf_commit(HP, expose, CommitMode::Plain);
+            let wp = plain.prepare_epoch(t, &hp_prior(), &ups);
+            let pp = plain.epoch_inputs(&wp, &o);
+            let mut leaf = hiding_leaf(expose);
+            let w = leaf.prepare_epoch(t, &hp_prior(), &ups);
+            let ep = leaf.epoch_inputs(&w, &o);
+            assert_eq!(ep.private_inputs.len(), pp.private_inputs.len() + 9, "{expose:?}");
+            assert_eq!(ep.private_inputs[..9], salts[..], "{expose:?}: the salts come first");
+            assert_eq!(ep.private_inputs[9..], pp.private_inputs[..], "{expose:?}: then the Plain private inputs");
+
+            let r = leaf.prove_witness_opened(&w, &o);
+            assert_eq!(r.initial, commit_ss_state_with(&hp_prior(), HIDING, &o.init), "{expose:?}");
+            assert_eq!(r.final_, commit_ss_state_with(&advanced(&hp_prior(), &ups), HIDING, &o.final_), "{expose:?}");
+            assert_eq!(r.batch_commit, commit_ss_batch_with(&ups, HIDING, &o.batch), "{expose:?}");
+
+            let mut last = leaf.epoch_inputs(&w, &o);
+            last.private_inputs.rotate_left(9);
+            assert_eq!(last.private_inputs[last.private_inputs.len() - 9..], salts[..]);
+            let e = forge::catch_msg(|| leaf.run_inputs(&last).alu_trace.values.len()).map(|_| ());
+            assert!(e.is_err(), "{expose:?}: salts packed last must not run on the salts-first circuit");
         }
     }
 

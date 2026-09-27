@@ -284,7 +284,11 @@ pub(crate) fn build_ss_decode_commit(
     // ── Check 1: open the committed state ──
     // Salted under `Hiding` (`[tag, salt…, rows…]`). The decoder's sponge is
     // the plain `add_hash_slice` under every binding, which is
-    // `commit_hash(.., None, .., Binding::Semantic)`.
+    // `commit_hash(.., None, .., Binding::Semantic)`. So, in both modes and
+    // unlike Count-Min, `Binding::Bound` does NOT select the zero-IV
+    // `bind::hash_slice_bound` here: the first row's IV rests on the fork's
+    // own Poseidon2 IV binding, exactly as in the Plain decoder (whose
+    // Semantic and Bound VKs are equal).
     let digest = hiding::commit_hash::<Val, Challenge>(
         &mut b,
         &Poseidon2Config::BABY_BEAR_D4_W16,
@@ -988,6 +992,41 @@ mod tests {
                 control.0[0] = commit_ss_state_with(&st, CommitMode::Hiding, &rho).0[0];
                 assert!(!leaked_salts(&hid.output.0, &[control]).is_empty(), "{binding:?}: the scan sees the statement");
             }
+        }
+    }
+
+    /// The salt is the FIRST 3 private inputs (decoder twin of
+    /// `ss_final_full::tests::hiding_leaf_salts_are_the_first_private_inputs`).
+    /// Packing: under every binding the Hiding decoder's private inputs are
+    /// `salt.packed()` (three distinct nonzero Challenges) followed by the
+    /// Plain decoder's. Allocation: the honest proof over them verifies and
+    /// exposes the native hiding commitment; control: the same values with
+    /// the salt moved last are rejected by the runner.
+    #[test]
+    fn hiding_decode_salt_is_the_first_private_input() {
+        let rho = rho_state_bb(&SaltSeed::for_tests(64), SS, 2);
+        let packed = rho.packed();
+        assert!(packed.iter().all(|c| *c != Challenge::ZERO), "nonzero salt Challenges");
+        assert!(packed[0] != packed[1] && packed[1] != packed[2] && packed[0] != packed[2], "distinct");
+        let st = state();
+        let hc = commit_ss_state_with(&st, CommitMode::Hiding, &rho).0;
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let plain = build_ss_decode(QP, &st, 2, binding);
+            let mut hdc = build_ss_decode_commit(QP, &st, 2, binding, CommitMode::Hiding, &rho);
+            assert_eq!(hdc.private_inputs.len(), plain.private_inputs.len() + 3, "{binding:?}");
+            assert_eq!(hdc.private_inputs[..3], packed[..], "{binding:?}: the salt comes first");
+            assert_eq!(hdc.private_inputs[3..], plain.private_inputs[..], "{binding:?}: then the Plain private inputs");
+
+            let proof = hdc.prove_traces(&hdc.run("ss decode")).expect("honest hiding decode");
+            if binding.is_bound() {
+                let got = crate::decode::read_exposed_statement(&proof).expect("exposed");
+                assert_eq!(got, QueryStatement::new(hc, 2, hdc.answer), "{binding:?}");
+            }
+
+            hdc.private_inputs.rotate_left(3);
+            assert_eq!(hdc.private_inputs[hdc.private_inputs.len() - 3..], packed[..]);
+            let e = crate::sketch::forge::catch_msg(|| hdc.run("ss decode").alu_trace.values.len()).map(|_| ());
+            assert!(e.is_err(), "{binding:?}: the salt packed last must not run on the salt-first circuit");
         }
     }
 
