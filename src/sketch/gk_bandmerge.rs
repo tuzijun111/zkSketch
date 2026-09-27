@@ -3124,8 +3124,12 @@ pub fn build_gkb2_leaf_expose_with(
 /// commitment as `[tag, salt…, inputs…]`, i.e. [`commit_gk2_state_with`] /
 /// [`commit_gk2_batch_with`]. The commitment sponges stay the leaf's raw
 /// `add_hash_slice` under every binding (`Binding::Semantic` in
-/// [`hiding::commit_hash`] is that call), as before. The salts are
-/// witnesses, so the VK does not depend on them; prove with
+/// [`hiding::commit_hash`] is that call), as before. So, unlike Count-Min,
+/// `Binding::Bound` does NOT give GK's commitments the zero-IV first row of
+/// `bind::hash_slice` (pre-existing: the Semantic and Bound VKs are equal,
+/// as on main, and the decoder does the same); routing them through the
+/// binding would change the Bound VKs and is a separate decision. The salts
+/// are witnesses, so the VK does not depend on them; prove with
 /// [`Gkb2LeafCircuit::prove_epoch_commit`].
 pub fn build_gkb2_leaf_commit(
     params: GkbParams,
@@ -3859,20 +3863,32 @@ impl Gkb2LeafCircuit {
     /// The no-op VK-derivation leaf's epoch: all three commitments opened
     /// with [`Openings::public_zero`], so a batch that changes nothing
     /// exposes `init == final` in either mode. The only path that proves a
-    /// `Hiding` leaf with zero final/batch salts; it asserts that the batch
-    /// is empty (the GK no-op: every fresh-tuple row is an `E_MAX` dummy and
-    /// `N` does not move) and that the native final state equals the initial
-    /// one, so it cannot publish a real batch or a moved state under
-    /// deterministic commitments.
+    /// `Hiding` leaf with zero final/batch salts, so it accepts exactly the
+    /// VK-derivation leaf's input
+    /// ([`gk2_noop_leaf_commit`](crate::recursion::recursive::noop_leaf::gk2_noop_leaf_commit)):
+    /// batch index `t = 1`, the EMPTY initial state (whose `Com(S_0; 0)` the
+    /// verifier recomputes itself) and an empty batch (the GK no-op: every
+    /// fresh-tuple row is an `E_MAX` dummy and `N` does not move); it also
+    /// checks that the native final state equals the initial one. A real
+    /// state with an empty batch does not move either, so without the
+    /// empty-state check it would publish the deterministic, guess-checkable
+    /// `Com(S_t; 0)` as both init and final; it cannot publish a real
+    /// state, a real batch or a moved state under deterministic commitments.
     pub fn prove_epoch_public_zero(
         &mut self,
         t: u64,
         initial_state: Gk2State,
         batch_vals: Vec<u32>,
     ) -> Gk2LeafProof {
+        assert_eq!(t, 1, "prove_epoch_public_zero is for the no-op leaf: it is proved at batch index 1");
         assert!(
             batch_vals.is_empty(),
             "prove_epoch_public_zero is for the no-op leaf: the batch must be empty"
+        );
+        assert!(
+            initial_state == Gk2State::empty(self.params),
+            "prove_epoch_public_zero is for the no-op leaf: the initial state must be the empty genesis \
+             state (a real state would publish the guess-checkable Com(S; 0))"
         );
         let build = self.native_build(t, &initial_state, &batch_vals);
         assert!(
@@ -6255,6 +6271,34 @@ mod tests {
         assert_eq!(p.initial, commit_gk2_state(&hp_prior()));
         assert_eq!(p.final_, commit_gk2_state(&apply_batch2(&hp_prior(), &ups)));
         assert_eq!(p.batch_commit, commit_gk2_batch(&ups, HP.batch, hp_prior().n));
+    }
+
+    /// (L1) The explicit zero-salt path proves only the VK-derivation leaf's
+    /// input: the EMPTY state (whose `Com(S_0; 0)` the verifier recomputes
+    /// itself) with an empty batch at `t = 1`. A real state with an empty
+    /// batch does not move (so the empty-batch and unchanged-state checks
+    /// alone let it through), and would publish the deterministic,
+    /// guess-checkable `Com(S; 0)` as both init and final; the path now
+    /// refuses it, and another batch index, in either mode. Control: the
+    /// honest no-op input still proves and exposes `init == final ==
+    /// Com(S_0; 0)`.
+    #[test]
+    fn noop_path_refuses_a_real_state_or_another_index() {
+        let s = hp_prior();
+        let moved = build_bm2(&s, &[]);
+        assert!(moved.final_tuples == s.tuples && moved.n_t == s.n, "precondition: an empty batch leaves S unchanged");
+        for mode in [CommitMode::Hiding, CommitMode::Plain] {
+            let mut leaf = build_gkb2_leaf_commit(HP, Expose::Interval, Binding::Semantic, mode);
+            let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(1, hp_prior(), Vec::new()).final_).unwrap_err();
+            assert!(msg.contains("the initial state must be the empty genesis state"), "{mode:?}: {msg}");
+            let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(2, Gk2State::empty(HP), Vec::new()).final_)
+                .unwrap_err();
+            assert!(msg.contains("batch index 1"), "{mode:?}: {msg}");
+        }
+        let mut leaf = hiding_leaf(Expose::Interval, Binding::Semantic);
+        let r = leaf.prove_epoch_public_zero(1, Gk2State::empty(HP), Vec::new());
+        let s0 = commit_gk2_state_with(&Gk2State::empty(HP), CommitMode::Hiding, &SaltBb::ZERO);
+        assert_eq!((r.initial, r.final_), (s0, s0));
     }
 
     /// (F2) A continued history (the GK rotation) is anchored on the previous

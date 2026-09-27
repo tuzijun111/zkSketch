@@ -34,7 +34,7 @@ use crate::config::{Challenge, Val};
 use crate::decode::{DecodeProof, DecodeVk, ReleasePolicy, StdDecodeCircuit};
 use crate::recursion::recursive::countmin_leaf::DIGEST_PACKING;
 use crate::sketch::bind::{self, Binding};
-use crate::sketch::gk_bandmerge::{E_MAX, Gk2State, GkbParams, commit_gk2_state_with, pack_tuples2};
+use crate::sketch::gk_bandmerge::{E_MAX, Gk2State, Gk2Tuple, GkbParams, commit_gk2_state_with, pack_tuples2};
 
 /// Value/query comparison width (`e, q < 2^22 = E_MAX+1`).
 const E_BITS: usize = 22;
@@ -127,9 +127,13 @@ pub fn prove_gk2_decode_with(
 /// h, t)` (`rho_state_bb(seed, .., t)` in the genesis history), the same
 /// randomizer band-merge leaf `t` closed its final state with; at `t = 0` it
 /// is the public zero in the genesis history and the anchor salt in a
-/// continued one. The decoder cannot tell a version-0 query from a forgotten
-/// salt, so it accepts [`SaltBb::ZERO`] under `Hiding`: the harness must pass
-/// the real salt.
+/// continued one. So under `Hiding` the public zero salt opens only the
+/// empty genesis state (the one state commitment, `Com(S_0; 0)`, that the
+/// verifier recomputes itself): handed [`SaltBb::ZERO`] with any other state
+/// (a forgotten salt at `t ≥ 1`) the decoder panics instead of publishing
+/// the guess-checkable `Com(S_t; 0)`. A nonzero wrong salt still proves (the
+/// circuit does not check the derivation) and exposes a commitment that is
+/// not the log's.
 pub fn prove_gk2_decode_commit(
     params: Gkb2DecodeParams,
     state: Gk2State,
@@ -186,6 +190,13 @@ pub(crate) fn build_gk2_decode_commit(
     params.validate();
     let Gkb2DecodeParams { capacity: cap, release } = params;
     assert_eq!(state.tuples.len(), cap, "state shape must match params");
+    if mode.is_hiding() && salt.is_zero() {
+        assert!(
+            state.tuples.iter().all(|t| *t == Gk2Tuple::dummy()),
+            "Hiding GK decode: the public zero salt opens only the empty genesis state Com(S_0; 0); \
+             a query at t >= 1 (or at version 0 of a continued history) needs its real salt"
+        );
+    }
 
     let commit = commit_gk2_state_with(state, mode, salt);
     let est = native_estimate(state, query);
@@ -688,5 +699,40 @@ mod tests {
             assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
             assert_eq!(leaked_salts(&hid.output.0, &[rho]), vec![], "{binding:?}");
         }
+    }
+
+    /// (L2) Under `Hiding` the public zero salt opens only the empty genesis
+    /// state, the one state commitment the verifier recomputes itself
+    /// (`Com(S_0; 0)`; a continued history's version 0 opens with its
+    /// anchor salt). A real state handed the zero salt (a forgotten opening
+    /// at `t >= 1`) panics instead of publishing the guess-checkable
+    /// `Com(S_t; 0)`, from the builder and the proving entry point alike.
+    /// Controls: the Hiding VK derivation (empty state, zero salt), a real
+    /// state with a real salt, and `Plain` (salt ignored) still build.
+    #[test]
+    fn hiding_decode_refuses_zero_salt_on_a_real_state() {
+        use crate::commitment::hiding::{SaltSeed, rho_state_bb};
+        use crate::sketch::forge;
+        let cap = 16;
+        let st = built_state(cap);
+        let p = Gkb2DecodeParams { capacity: cap, release: ReleasePolicy::Identity };
+        let rho = rho_state_bb(&SaltSeed::for_tests(63), CommitFamily::GreenwaldKhanna, 2);
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let msg = forge::catch_msg(|| {
+                build_gk2_decode_commit(p, &st, 500, binding, CommitMode::Hiding, &SaltBb::ZERO).answer
+            })
+            .unwrap_err();
+            assert!(msg.contains("public zero salt"), "{binding:?}: {msg}");
+            let empty = Gk2State::empty(GkbParams { capacity: cap, batch: 8, s: 2 });
+            let _ = build_gk2_decode_commit(p, &empty, 500, binding, CommitMode::Hiding, &SaltBb::ZERO);
+            let _ = build_gk2_decode_commit(p, &st, 500, binding, CommitMode::Hiding, &rho);
+            let _ = build_gk2_decode_commit(p, &st, 500, binding, CommitMode::Plain, &SaltBb::ZERO);
+        }
+        let msg = forge::catch_msg(|| {
+            prove_gk2_decode_commit(p, st.clone(), 500, Binding::Semantic, CommitMode::Hiding, &SaltBb::ZERO).answer
+        })
+        .unwrap_err();
+        assert!(msg.contains("public zero salt"), "{msg}");
+        let _ = gk2_decode_vk_commit(p, Binding::Semantic, CommitMode::Hiding);
     }
 }
