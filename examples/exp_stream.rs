@@ -82,6 +82,14 @@
 //! so the smallest-k cells dominate. For N=2^16 a k=1 cell can take tens of
 //! minutes — set EXP_STREAM_CORES to a high-core subset for a quick run.
 //!
+//! Commitments (revision B2): this runner proves the pre-B2 PLAIN leaves only;
+//! hiding commitments are not wired into `e6_forest`. Every row of
+//! `stream_forest.csv` is therefore plain, and env.json records `commit=plain`.
+//! An explicit `ZKSKETCH_COMMIT=hiding` is refused (exit 2) rather than
+//! silently measured as plain; unset/empty/`plain` run as plain and say so.
+//! Compare these rows only with `exp_compose` rows whose `commit` column is
+//! `plain` (`ZKSKETCH_COMMIT=plain scripts/run_compose.sh`).
+//!
 //! Count ceiling: the leaf circuits range-check each cell count to a fixed bit
 //! width (c_merkle uses `COUNT_BITS=24`, max 2^24−1 per cell). With `value=1`
 //! per record a single cell can accumulate up to ~N increments worst-case, so
@@ -410,6 +418,28 @@ fn main() {
         eprintln!("EXP_W must be a power of two ≥ 2 (got {w})");
         std::process::exit(2);
     }
+    // Revision B2: the leaves here are the plain ones (see the module doc).
+    match std::env::var("ZKSKETCH_COMMIT") {
+        Ok(v) if v.is_empty() || v.eq_ignore_ascii_case("plain") => {}
+        Ok(v) if v.eq_ignore_ascii_case("hiding") => {
+            eprintln!(
+                "ZKSKETCH_COMMIT=hiding: the stream runner proves PLAIN commitments only (hiding is \
+                 not wired into e6_forest); use scripts/run_compose.sh for hiding-mode composition, \
+                 or set ZKSKETCH_COMMIT=plain"
+            );
+            std::process::exit(2);
+        }
+        Ok(v) => {
+            eprintln!("ZKSKETCH_COMMIT={v:?}: expected plain or hiding");
+            std::process::exit(2);
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!("ZKSKETCH_COMMIT is not valid UTF-8; expected plain or hiding");
+            std::process::exit(2);
+        }
+    }
+
     // Both the omc and one_hot (countmin_final) leaves pack the dense
     // d·w state into Challenge words and assert d·w % 4 == 0. The merkle leaf
     // commits per-row roots and has no such constraint.
@@ -447,11 +477,11 @@ fn main() {
         };
         let kind = if per_batch { "PER-BATCH chain" } else { "RECURSIVE merge" };
         println!(
-            "Stream compose (plonky3, {kind} [{merge_mode}], {schedule}) — N={n} d={d} w={w} datasets={datasets:?} variants={variant_str} batches={batches_m:?} (sequential leaf-gen; k-sweep ignored)"
+            "Stream compose (plonky3, {kind} [{merge_mode}], {schedule}) — N={n} d={d} w={w} datasets={datasets:?} variants={variant_str} batches={batches_m:?} (sequential leaf-gen; k-sweep ignored) commit=plain"
         );
     } else {
         println!(
-            "Stream forest (plonky3, DISTRIBUTED, digest merge) — N={n} d={d} w={w} datasets={datasets:?} variants={variant_str} k(workers)={cores:?} cores/leaf=⌊{avail}/k⌋ batches={batches_m:?} (single run)"
+            "Stream forest (plonky3, DISTRIBUTED, digest merge) — N={n} d={d} w={w} datasets={datasets:?} variants={variant_str} k(workers)={cores:?} cores/leaf=⌊{avail}/k⌋ batches={batches_m:?} (single run) commit=plain"
         );
     }
 
@@ -483,6 +513,8 @@ fn main() {
             ("merge_mode", merge_mode.into()),
             ("parallelism_model", "distributed: k workers × floor(total/k) cores each".into()),
             ("avail_threads", avail.to_string()),
+            // Revision B2: plain leaves only (hiding is not wired here).
+            ("commit", "plain".into()),
         ],
     );
     let hdr: Vec<String> = [

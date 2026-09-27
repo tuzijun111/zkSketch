@@ -52,6 +52,13 @@
 #   EXP_STREAM_PROOF_DIR  folder the per_batch mode writes proofs into
 #                         (default results/per_batch_proofs; one subfolder per cell)
 #   EXP_OUT / $1          rename output to results/<name>.csv (the .csv is optional)
+#   ZKSKETCH_COMMIT       plain only (revision B2): the stream runner proves the
+#                         pre-B2 PLAIN leaves (hiding is not wired into
+#                         e6_forest). Unset/empty/plain run as plain; `hiding` is
+#                         REFUSED (exit 2) instead of silently measuring plain.
+#                         run_compose.sh defaults to hiding, so compare these rows
+#                         with `ZKSKETCH_COMMIT=plain scripts/run_compose.sh` rows
+#                         (its CSV `commit` column says which mode a row used).
 #
 # The omc leaf needs d·w % 4 == 0; the merkle leaf needs w a power of 2.
 #
@@ -73,7 +80,7 @@ cd "$(dirname "$0")/.."
 OUT_CSV="${EXP_OUT:-${1:-}}"
 CSV="stream_forest.csv"
 
-echo "== zkSketch stream-forest == N=${EXP_STREAM_N:-65536} dataset=${EXP_DATASET:-uniform} d=${EXP_D:-4} w=${EXP_W:-8} batches=${EXP_STREAM_BATCHES:-64,256,1024} cores=${EXP_STREAM_CORES:-1,2,4,8,16,32,64} variants=${EXP_CM_VARIANT:-${EXP_STREAM_CM_VARIANT:-omc,merkle}} merge=${EXP_STREAM_MERGE:-digest} (single run)"
+echo "== zkSketch stream-forest == N=${EXP_STREAM_N:-65536} dataset=${EXP_DATASET:-uniform} d=${EXP_D:-4} w=${EXP_W:-8} batches=${EXP_STREAM_BATCHES:-64,256,1024} cores=${EXP_STREAM_CORES:-1,2,4,8,16,32,64} variants=${EXP_CM_VARIANT:-${EXP_STREAM_CM_VARIANT:-omc,merkle}} merge=${EXP_STREAM_MERGE:-digest} commit=plain (single run)"
 mkdir -p results
 rm -f "results/$CSV"
 

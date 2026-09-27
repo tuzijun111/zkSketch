@@ -176,14 +176,12 @@
 //! `Com(S_0)`, `Com(B_t)`, `Com(S_T)`) MUST run on the PROVER side, and the
 //! auditor MUST take the log the prover published, recomputing only the
 //! genesis anchor `Com(S_0; 0)` (a continued history's anchor comes from the
-//! previous history's certified log). This is a requirement on the harness,
-//! not yet its behaviour: today's harness auditor
-//! ([`crate::experiments::dist_compose`]: the concurrent and staged engines
-//! and the Goldilocks twin) still rebuilds the log natively from the
-//! plaintext batches and compares the root with a plaintext replay of the
-//! final state, which works only under `Plain` (the harness is still on the
-//! Plain APIs). Moving the log to the prover side is pattern-guide step 7
-//! (later stage).
+//! previous history's certified log). The harness does exactly this: the
+//! prover publishes the log ([`crate::experiments::prover_commit`],
+//! `dist_compose` / `stream_compose`), and the auditor entry points in
+//! [`crate::experiments::audit`] take only that log, the proofs and public
+//! parameters; the plaintext replay of the final state survives only as a
+//! labelled prover-side sanity check.
 //!
 //! ## What is hidden (and what is not)
 //!
@@ -313,7 +311,12 @@
 //!    `prove_epoch_commit`, never `prove_epoch_at`; only the VK-derivation
 //!    no-op leaf uses `prove_epoch_public_zero`. The log is computed on the
 //!    PROVER side (it needs the salts); the auditor takes the published log
-//!    and recomputes only the genesis anchor.
+//!    and recomputes only the genesis anchor. Wired (genesis history per
+//!    stream) in [`crate::experiments::prover_commit`] (the prover's context:
+//!    mode + seed, shipped to the distributed workers as [`SaltSeedWire`]),
+//!    `experiments::dist_compose` / `stream_compose` (the prover-side log),
+//!    and [`crate::experiments::audit`] (the auditor: the published log, the
+//!    proofs and public parameters only).
 //! 8. **Tests to replicate** (in `countmin_omc::tests` /
 //!    `decode::countmin::tests`): `hiding_leaf_exposes_native_hiding_commitments`,
 //!    `hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged` (record the
@@ -638,6 +641,35 @@ impl SaltSeed {
                 acc | (byte << (8 * j))
             })
         })
+    }
+}
+
+/// The wire form of a [`SaltSeed`], for the distributed PROVER's own machines
+/// only: the harness coordinator ships it to the worker processes it spawns
+/// (`experiments::dist_compose`), each of which derives its slice's openings
+/// from `(seed, family, t)`. It is never part of a published artifact, never
+/// logged (`Debug` is redacted) and crate-private, so no public API returns
+/// the seed bytes.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SaltSeedWire([u8; 32]);
+
+impl std::fmt::Debug for SaltSeedWire {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SaltSeedWire(<redacted>)")
+    }
+}
+
+impl SaltSeed {
+    /// See [`SaltSeedWire`] (prover-internal transport only).
+    pub(crate) fn to_prover_wire(&self) -> SaltSeedWire {
+        SaltSeedWire(self.0)
+    }
+}
+
+impl SaltSeedWire {
+    /// The seed a worker received from its coordinator.
+    pub(crate) fn into_seed(self) -> SaltSeed {
+        SaltSeed(self.0)
     }
 }
 

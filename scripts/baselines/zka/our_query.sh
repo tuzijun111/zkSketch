@@ -7,7 +7,8 @@
 #   matched batch    : m = 16384            (their epoch = 16,384 logs)
 #   family/variant   : cm / cm_omc
 #
-# Emits  $RESULTS/zks_query_matched.csv   (default: results/ next to this script)
+# Emits  $RESULTS/zks_query_matched.csv   (default: results/ next to this script;
+#        ZKSKETCH_COMMIT=hiding -> zks_query_matched_hiding.csv, see below)
 #
 # TWO PHASES, both driven by one SCALE knob:
 #
@@ -67,7 +68,24 @@ set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"   # ZKS = the checkout this script lives in
 ZKSQ=$HERE/zksq; ZKSQ_TARGET=$BASELINE_DIR/build/zksq
 OUTDIR=$RESULTS
-OUT=$OUTDIR/zks_query_matched.csv
+# ---- commitment mode (revision B2) -----------------------------------------
+# Pinned EXPLICITLY, never inherited from exp_compose's library default
+# (hiding): the matched rows these columns are placed next to were measured
+# with PLAIN commitments (results/zks_matched_*.csv, compare.sh, taken before
+# B2), and Q0's `cmq` isolate proves the plain decoder `prove_cm_decode` only.
+#   ZKSKETCH_COMMIT=plain  (default)  Q0 + Q1, rows -> zks_query_matched.csv
+#   ZKSKETCH_COMMIT=hiding            Q1 only (hiding leaves + queries, salt seed
+#                                     from ZKSKETCH_SALT_SEED or the OS RNG),
+#                                     rows -> zks_query_matched_hiding.csv
+# The two modes never share an output file, so every row's mode is known from
+# the file it is in (exp_compose's raw CSV also carries a `commit` column).
+COMMIT=$(printf %s "${ZKSKETCH_COMMIT:-plain}" | tr "[:upper:]" "[:lower:]")
+case "$COMMIT" in
+  plain)  OUT=$OUTDIR/zks_query_matched.csv ;;
+  hiding) OUT=$OUTDIR/zks_query_matched_hiding.csv ;;
+  *) echo "ZKSKETCH_COMMIT must be plain or hiding (got '$COMMIT')" >&2; exit 2 ;;
+esac
+export ZKSKETCH_COMMIT=$COMMIT
 
 # ---- knobs -----------------------------------------------------------------
 SCALE=${SCALE:-1}                 # number of matched epochs = number of leaves t
@@ -87,6 +105,10 @@ MODES=${MODES:-per_batch,chain,forest}
 CORES=${CORES:-32}
 MACHINES=${MACHINES:-1}
 PHASES=${PHASES:-q0,q1}           # q0 = isolate, q1 = integrated
+if [ "$COMMIT" = hiding ] && [[ ",$PHASES," == *,q0,* ]]; then
+  echo "REFUSING: Q0 (cmq) proves the plain decoder only; with ZKSKETCH_COMMIT=hiding run PHASES=q1" >&2
+  exit 2
+fi
 SEEDS=${SEEDS:-1}                 # q0 only: independent states
 TRIALS=${TRIALS:-1}               # q0 only: repeats per state (median)
 QEVERY=${QEVERY:-1}               # q1: query after every k-th batch (0 = off)
@@ -137,7 +159,7 @@ HDR
 fi
 CELLS=$(( D * W ))
 
-echo "== M3: zkSketch query side, matched CM d=$D w=$W m=$M SCALE=$SCALE (n=$N, t=$SCALE)"
+echo "== M3: zkSketch query side, matched CM d=$D w=$W m=$M SCALE=$SCALE (n=$N, t=$SCALE) commit=$COMMIT -> $OUT"
 
 # =================== Q0 : query-cost isolate (no update leaf) ===============
 # Resumability: a data point already present in $OUT is skipped unless FORCE=1.

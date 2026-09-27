@@ -105,7 +105,22 @@
 //!   query_pad_records,exec,procs,witness_pass_ms,scatter_ms,
 //!   scatter_state_bytes,scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,
 //!   local_fold_ms,merges_local,merges_cross,cross_rounds,
-//!   comm_msgs,comm_bytes,comm_ms_measured,comm_model_ms,status
+//!   comm_msgs,comm_bytes,comm_ms_measured,comm_model_ms,merge_total_ms,
+//!   commit,salt_seed,status
+//!
+//! ## Commitments (`ZKSKETCH_COMMIT`, `ZKSKETCH_SALT_SEED`)
+//! The run's commitment mode is read ONCE (`ProverCommit::from_env`):
+//! `hiding` (the default; `plain` under `ZKSKETCH_BINDING=legacy`) builds
+//! every leaf with its hiding `*_commit` builder and opens leaf `t` with the
+//! prover's randomizers `Openings::for_leaf(seed, family, t)` (query-sealed
+//! and padded batches are real leaves too), queries at version `t` open
+//! `Com(S_t; ρ^S_t)`, the published batch log is built prover-side, and the
+//! auditor sees only that log, the proofs and public parameters. The seed
+//! comes from `ZKSKETCH_SALT_SEED` (64 hex characters) or the OS RNG and is
+//! never printed; the `commit` / `salt_seed` columns (and env.json) record
+//! the mode and the seed's source (`env` / `os`; `n/a` under `plain`).
+//! `ZKSKETCH_COMMIT=plain` runs the pre-B2 circuits, commitments and VKs byte
+//! for byte.
 //!
 //! RUNTIME WARNING: every leaf and every merge is a real STARK proof. Under
 //! `sim` everything proves sequentially (the k-machine split is a makespan
@@ -119,6 +134,7 @@ use std::path::PathBuf;
 use zksketch::dataset::{aol, netflix, synthetic_stream, zipf_stream, Synthetic};
 use zksketch::experiments::dist_compose::{measure_compose_dist, measure_compose_dist_gl, DistCell};
 use zksketch::experiments::metrics::write_env_json;
+use zksketch::experiments::prover_commit::ProverCommit;
 use zksketch::experiments::results_dir;
 use zksketch::experiments::stream_compose::{
     build_query_schedule_batches, measure_compose, ComposeCell, QueryKeyMode, StreamFamily,
@@ -234,12 +250,14 @@ fn measure_guarded(
     proof_dir: &std::path::Path,
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
+    commit: &ProverCommit,
 ) -> Option<ComposeCell> {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let r = catch_unwind(AssertUnwindSafe(|| {
         measure_compose(
             family, shape, batches, mode, cores, machines, proof_dir, query_at, query_key_mode,
+            commit,
         )
     }));
     std::panic::set_hook(prev);
@@ -263,13 +281,14 @@ fn dist_guarded(
     rtt_ms: f64,
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
+    commit: &ProverCommit,
 ) -> Result<DistCell, String> {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let r = catch_unwind(AssertUnwindSafe(|| {
         measure_compose_dist(
             family, shape, batches, mode, cores, machines, proof_dir, mbps, rtt_ms, query_at,
-            query_key_mode,
+            query_key_mode, commit,
         )
     }));
     std::panic::set_hook(prev);
@@ -300,13 +319,14 @@ fn dist_guarded_gl(
     rtt_ms: f64,
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
+    commit: &ProverCommit,
 ) -> Result<DistCell, String> {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let r = catch_unwind(AssertUnwindSafe(|| {
         measure_compose_dist_gl(
             family, shape, batches, mode, cores, machines, proof_dir, mbps, rtt_ms, query_at,
-            query_key_mode,
+            query_key_mode, commit,
         )
     }));
     std::panic::set_hook(prev);
@@ -346,6 +366,11 @@ fn main() {
     }
     // Drop the pinned-child exe snapshot on ANY exit path (return or panic).
     let _exe_guard = zksketch::experiments::dist_compose::ExeSnapshotGuard::new();
+    // The PROVER's commitment context, read ONCE per run: ZKSKETCH_COMMIT
+    // (default hiding; plain under ZKSKETCH_BINDING=legacy) and, under
+    // hiding, the salt seed from ZKSKETCH_SALT_SEED or the OS RNG. The seed
+    // is never printed; only its source is (and recorded in the CSV).
+    let commit = ProverCommit::from_env();
     let avail = rayon::current_num_threads();
     let n = env_size("EXP_COMPOSE_N", 32);
     let batches_m = env_size_list("EXP_COMPOSE_BATCHES", &[8]);
@@ -518,10 +543,12 @@ fn main() {
     let _ = std::fs::remove_dir_all(&proof_base);
 
     println!(
-        "Stream compose (plonky3) — N={n} datasets={datasets:?} families={:?} modes={:?} m={batches_m:?} cores={cores_list:?} machines={machines_list:?} exec={} (avail={avail}){}",
+        "Stream compose (plonky3) — N={n} datasets={datasets:?} families={:?} modes={:?} m={batches_m:?} cores={cores_list:?} machines={machines_list:?} exec={} commit={} salt_seed={} (avail={avail}){}",
         families.iter().map(|f| f.label()).collect::<Vec<_>>(),
         modes.iter().map(|m| m.label()).collect::<Vec<_>>(),
         if exec_procs { "procs" } else { "sim" },
+        commit.label(),
+        commit.seed_label(),
         if query_every_ops > 0 {
             format!(
                 " MIXED: every {query_every_ops}-th stream position is a query (occupies the \
@@ -575,6 +602,10 @@ fn main() {
             ("total_cores", avail.to_string()),
             ("families", families.iter().map(|f| f.label()).collect::<Vec<_>>().join(",")),
             ("modes", modes.iter().map(|m| m.label()).collect::<Vec<_>>().join(",")),
+            // Commitment mode + the seed's SOURCE (env|os; n/a under plain),
+            // never the seed.
+            ("commit", commit.label().into()),
+            ("salt_seed", commit.seed_label().into()),
         ],
     );
 
@@ -597,7 +628,10 @@ fn main() {
         "exec", "procs", "witness_pass_ms", "scatter_ms", "scatter_state_bytes",
         "scatter_data_bytes", "leaf_busy_min_ms", "leaf_busy_max_ms", "local_fold_ms",
         "merges_local", "merges_cross", "cross_rounds", "comm_msgs",
-        "comm_bytes", "comm_ms_measured", "comm_model_ms", "merge_total_ms", "status",
+        "comm_bytes", "comm_ms_measured", "comm_model_ms", "merge_total_ms",
+        // Commitment mode of the run (plain|hiding) and the salt seed's
+        // source (env|os; n/a under plain) — never the seed itself.
+        "commit", "salt_seed", "status",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -702,12 +736,12 @@ fn main() {
                                 let dist_res = if family.is_gl() {
                                     dist_guarded_gl(
                                         family, fshape, &batches, mode, cores, machines, &cell_dir,
-                                        net_mbps, net_rtt_ms, &query_at, query_key_mode,
+                                        net_mbps, net_rtt_ms, &query_at, query_key_mode, &commit,
                                     )
                                 } else {
                                     dist_guarded(
                                         family, fshape, &batches, mode, cores, machines, &cell_dir,
-                                        net_mbps, net_rtt_ms, &query_at, query_key_mode,
+                                        net_mbps, net_rtt_ms, &query_at, query_key_mode, &commit,
                                     )
                                 };
                                 match dist_res {
@@ -761,6 +795,8 @@ fn main() {
                                             // Bentley–Saxe folds (in-worker) + cross-machine
                                             // merges. `merge_ms` alone is only the cross part.
                                             format!("{:.3}", c.local_fold_ms + c.merge_ms),
+                                            commit.label().into(),
+                                            commit.seed_label().into(),
                                             "ok".into(),
                                         ]);
                                         write_row(&csv, &row);
@@ -806,6 +842,8 @@ fn main() {
                                             std::iter::repeat("n/a".to_string())
                                                 .take(N_EXT_AFTER_EXEC),
                                         );
+                                        row.push(commit.label().into());
+                                        row.push(commit.seed_label().into());
                                         row.push(status.into());
                                         write_row(&csv, &row);
                                         eprintln!(
@@ -817,7 +855,7 @@ fn main() {
                             } else {
                                 match measure_guarded(
                                     family, fshape, &batches, mode, cores, machines, &cell_dir,
-                                    &query_at, query_key_mode,
+                                    &query_at, query_key_mode, &commit,
                                 ) {
                                     Some(c) => {
                                         let rps = if c.total_time_ms > 0.0 {
@@ -854,6 +892,8 @@ fn main() {
                                             std::iter::repeat("n/a".to_string())
                                                 .take(N_EXT_AFTER_EXEC),
                                         );
+                                        row.push(commit.label().into());
+                                        row.push(commit.seed_label().into());
                                         row.push("ok".into());
                                         write_row(&csv, &row);
                                         let qstr = if c.n_queries > 0 {
@@ -894,6 +934,8 @@ fn main() {
                                             std::iter::repeat("n/a".to_string())
                                                 .take(N_EXT_AFTER_EXEC),
                                         );
+                                        row.push(commit.label().into());
+                                        row.push(commit.seed_label().into());
                                         row.push("too_large".into());
                                         write_row(&csv, &row);
                                         eprintln!(
