@@ -53,6 +53,11 @@
 //! Scope: keys must fit in one BabyBear limb (`key_hi = 0`, `key < 2^31`),
 //! matching `ss_final_full`. Counts/mass fit in `DIFF_BITS − 1` bits at
 //! prototype scale. The query size `c` is a verifier-supplied public input.
+//!
+//! Hiding commitments (revision B2): [`prove_ss_decode_commit`] opens
+//! `Com(S_t; ρ)` ([`crate::sketch::ss_final_full::commit_ss_state_with`]),
+//! with the salt as the first private input, and is pinned to
+//! [`ss_decode_vk_commit`]; the pre-B2 entry points stay `Plain`.
 
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_circuit::ops::{
@@ -63,11 +68,12 @@ use p3_circuit::{CircuitBuilder, ExprId};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_poseidon2_circuit_air::BabyBearD4Width16;
 
+use crate::commitment::hiding::{self, CommitFamily, CommitKind, CommitMode, SaltBb};
 use crate::config::{Challenge, Val};
 use crate::decode::{DecodeProof, DecodeVk, ReleasePolicy, StdDecodeCircuit};
 use crate::recursion::recursive::countmin_leaf::{DIGEST_PACKING, pack_commit_to_challenge};
 use crate::sketch::bind::{self, Binding};
-use crate::sketch::ss_final_full::{SsFullParams, SsFullState, commit_ss_state};
+use crate::sketch::ss_final_full::{SsFullParams, SsFullState, commit_ss_state_with};
 
 /// Range-check window for non-negative diffs (count sortedness, the `c −
 /// Σsel ≥ 0` selection bound, and the threshold gate). Counts/`c`/mass fit in
@@ -154,24 +160,72 @@ pub fn prove_ss_decode_with(
     c: usize,
     binding: Binding,
 ) -> DecodeProof {
-    build_ss_decode(params, &state, c, binding).prove("ss decode")
+    prove_ss_decode_commit(params, state, c, binding, CommitMode::Plain, &SaltBb::ZERO)
+}
+
+/// [`prove_ss_decode_with`] against a commitment made under `mode` (revision
+/// B2, [`crate::commitment::hiding`]). `Plain` is the pre-B2 circuit byte for
+/// byte (`salt` ignored). Under `Hiding` the decoder opens
+/// `Com(S_t; ρ) = commit_ss_state_with(state, Hiding, salt)`: the salt is the
+/// FIRST 3 private inputs, and (under `Semantic`/`Bound`) the exposed
+/// commitment is the hiding one. For a query at version `t` of history `h`
+/// the honest salt is `rho_state_bb_in(seed, CommitFamily::SpaceSaving, h,
+/// t)` (`rho_state_bb(seed, .., t)` in the genesis history), the same
+/// randomizer leaf `t` closed its final state with; at `t = 0` it is the
+/// public zero in the genesis history and the anchor salt in a continued one.
+/// The decoder cannot tell a version-0 query from a forgotten salt, so it
+/// accepts [`SaltBb::ZERO`] under `Hiding`: the harness must pass the real
+/// salt. Pin the proof to [`ss_decode_vk_commit`] with the same `mode`.
+pub fn prove_ss_decode_commit(
+    params: SsDecodeParams,
+    state: SsFullState,
+    c: usize,
+    binding: Binding,
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> DecodeProof {
+    build_ss_decode_commit(params, &state, c, binding, mode, salt).prove("ss decode")
 }
 
 /// The trusted verification key of the SpaceSaving top-`c` decoder for
 /// `params` under `binding`, derived from public parameters only (a proof over
 /// the empty state; the circuit does not depend on the state). Pin query
-/// proofs to it with [`crate::decode::verify_decode_proof`].
+/// proofs to it with [`crate::decode::verify_decode_proof`]. The Plain
+/// decoder's VK (= [`ss_decode_vk_commit`] with [`CommitMode::Plain`]).
 pub fn ss_decode_vk(params: SsDecodeParams, binding: Binding) -> DecodeVk {
     let empty = SsFullState::empty(SsFullParams { capacity: params.capacity, batch: 1 });
     build_ss_decode(params, &empty, params.c, binding).derive_vk("ss decode")
 }
 
-/// Build the SpaceSaving top-`c` decode circuit and its witness.
+/// [`ss_decode_vk`] of the decoder built under `mode`: `Plain` is exactly
+/// [`ss_decode_vk`]; `Hiding` is the VK of every [`prove_ss_decode_commit`]
+/// proof under `Hiding` (the salt is a witness, so the VK does not depend on
+/// it; it is derived with the public zero salt over the empty state).
+pub fn ss_decode_vk_commit(params: SsDecodeParams, binding: Binding, mode: CommitMode) -> DecodeVk {
+    let empty = SsFullState::empty(SsFullParams { capacity: params.capacity, batch: 1 });
+    build_ss_decode_commit(params, &empty, params.c, binding, mode, &SaltBb::ZERO).derive_vk("ss decode")
+}
+
+/// Build the SpaceSaving top-`c` decode circuit and its witness (Plain
+/// commitment).
 pub(crate) fn build_ss_decode(
     params: SsDecodeParams,
     state: &SsFullState,
     c: usize,
     binding: Binding,
+) -> StdDecodeCircuit {
+    build_ss_decode_commit(params, state, c, binding, CommitMode::Plain, &SaltBb::ZERO)
+}
+
+/// [`build_ss_decode`] against a commitment made under `mode` with `salt`
+/// (see [`prove_ss_decode_commit`]).
+pub(crate) fn build_ss_decode_commit(
+    params: SsDecodeParams,
+    state: &SsFullState,
+    c: usize,
+    binding: Binding,
+    mode: CommitMode,
+    salt: &SaltBb,
 ) -> StdDecodeCircuit {
     let expose = binding.is_bound();
     params.validate();
@@ -180,7 +234,7 @@ pub(crate) fn build_ss_decode(
     assert_eq!(state.rows.len(), cap, "state capacity must match params");
 
     // ─── Native decode ───────────────────────────────────────────────────
-    let commit = commit_ss_state(state);
+    let commit = commit_ss_state_with(state, mode, salt);
     let (sel_native, mass) = native_select(state, c);
     let answer = release.apply(mass);
 
@@ -212,7 +266,9 @@ pub(crate) fn build_ss_decode(
     let zero = b.alloc_const(Challenge::ZERO, "zero");
     let neg_one = b.alloc_const(-Challenge::ONE, "neg_one");
 
-    // Private witnesses.
+    // Private witnesses. B2: under `Hiding` the salt of `Com(S_t)` comes
+    // first (3 private inputs); `Plain` allocates nothing.
+    let salt_t = mode.is_hiding().then(|| hiding::alloc_salt_targets(&mut b));
     let cells_packed: Vec<ExprId> =
         (0..cap).map(|_| b.alloc_private_input("cell_packed")).collect();
     // sel[r] ∈ {0,1}: the top-c selector (released-row indicator).
@@ -226,9 +282,23 @@ pub(crate) fn build_ss_decode(
     };
 
     // ── Check 1: open the committed state ──
-    let digest = b
-        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &cells_packed, true)
-        .expect("hash cells");
+    // Salted under `Hiding` (`[tag, salt…, rows…]`). The decoder's sponge is
+    // the plain `add_hash_slice` under every binding, which is
+    // `commit_hash(.., None, .., Binding::Semantic)`. So, in both modes and
+    // unlike Count-Min, `Binding::Bound` does NOT select the zero-IV
+    // `bind::hash_slice_bound` here: the first row's IV rests on the fork's
+    // own Poseidon2 IV binding, exactly as in the Plain decoder (whose
+    // Semantic and Bound VKs are equal).
+    let digest = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &Poseidon2Config::BABY_BEAR_D4_W16,
+        CommitKind::State,
+        CommitFamily::SpaceSaving,
+        salt_t.as_ref(),
+        &cells_packed,
+        zero,
+        Binding::Semantic,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(digest[i], commit_pis[i]);
     }
@@ -412,7 +482,9 @@ pub(crate) fn build_ss_decode(
     public_inputs.push(Challenge::from_u64(c as u64));
     public_inputs.push(Challenge::from_u64(answer));
 
-    let mut private_inputs: Vec<Challenge> = pack_cells(state);
+    let mut private_inputs: Vec<Challenge> =
+        if mode.is_hiding() { salt.packed().to_vec() } else { Vec::new() };
+    private_inputs.extend(pack_cells(state));
     // sel
     for r in 0..cap {
         private_inputs.push(if sel_native[r] == 1 { Challenge::ONE } else { Challenge::ZERO });
@@ -436,6 +508,7 @@ pub(crate) fn build_ss_decode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sketch::ss_final_full::commit_ss_state;
     use crate::sketch::ss_final_full::{SsFullParams, apply_batch_ss_full, SsFullState, SsFullUpdate};
 
     /// Build a SpaceSaving state from a few updates via the native top-`s`
@@ -798,5 +871,177 @@ mod tests {
         let got = crate::decode::verify_decode_proof(&proof3, &vk).expect("same circuit shape");
         assert_eq!(got, QueryStatement::new(commit, 3, 9));
         assert!(check_query_statement(&proof3, &QueryStatement::new(commit, 2, 9)).is_err());
+    }
+
+    // ── B2: hiding commitments (`crate::commitment::hiding`) ─────────────────
+
+    use crate::commitment::hiding::{CommitFamily, Openings, SaltSeed, rho_state_bb};
+    use crate::decode::verify_decode_proof;
+    use crate::recursion::recursive::expose_forest::vk_pin_values;
+    use crate::sketch::ss_final_full::{build_ss_full_leaf_commit, commit_ss_state_with};
+    use p3_field::PrimeField64;
+
+    const SS: CommitFamily = CommitFamily::SpaceSaving;
+
+    fn vk_flat(v: &[Challenge]) -> Vec<u64> {
+        v.iter()
+            .flat_map(|c| {
+                <Challenge as BasedVectorSpace<Val>>::as_basis_coefficients_slice(c)
+                    .iter()
+                    .map(|x| x.as_canonical_u64())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// (6) B2: a Hiding decode opens `Com(S_t; ρ)`. The Plain decoder is the
+    /// pre-B2 circuit: its pinned VK ([`ss_decode_vk`], and the VK of a Plain
+    /// proof) equals the value recorded at b2-hiding@94e9f58, for every
+    /// binding and both release policies. Under `Hiding` the answer is
+    /// unchanged, the VK does not depend on the salt and is the pinned
+    /// [`ss_decode_vk_commit`] (different from the Plain one); under
+    /// `Semantic`/`Bound` the decoder exposes the hiding commitment (not the
+    /// plain one), the pinned verifier accepts it under the Hiding VK and
+    /// rejects cross-mode proofs. A query at version `t` opened with `ρ^S_t`
+    /// exposes exactly the final commitment of the hiding leaf `t` (the lemma
+    /// in `crate::commitment::hiding`); a wrong salt still proves, but exposes
+    /// a commitment that is not the log's.
+    #[test]
+    fn hiding_decode_exposes_hiding_commit() {
+        use crate::recursion::recursive::statement::Expose;
+        let pt = SsDecodeParams { capacity: 4, c: 2, release: ReleasePolicy::Threshold(5) };
+        let recorded = [
+            (QP, Binding::Semantic, [1234796130u64, 1600695541, 1257673928, 717761815, 1443374029, 1308102251, 1978591557, 264335655]),
+            (QP, Binding::Bound, [1234796130, 1600695541, 1257673928, 717761815, 1443374029, 1308102251, 1978591557, 264335655]),
+            (QP, Binding::Legacy, [1792098982, 1363832560, 1349599348, 687201561, 767526637, 335296869, 6449583, 1244360319]),
+            (pt, Binding::Semantic, [1505638691, 1635076016, 407453922, 1183580053, 983916629, 1541970621, 1133455193, 1298685842]),
+        ];
+        let seed = SaltSeed::for_tests(61);
+        let (rho, rho2) = (rho_state_bb(&seed, SS, 4), rho_state_bb(&seed, SS, 5));
+        let st = state();
+        for (p, binding, vk) in recorded {
+            let tag = format!("{binding:?}/{}", p.release.name());
+            let want: Vec<u64> = vk.iter().flat_map(|&x| [x, 0, 0, 0]).collect();
+            let plain_vk = ss_decode_vk(p, binding);
+            assert_eq!(vk_flat(&plain_vk.commitment), want, "{tag}: Plain decode VK drifted");
+            assert_eq!(ss_decode_vk_commit(p, binding, CommitMode::Plain), plain_vk, "{tag}");
+            let plain = prove_ss_decode_with(p, st.clone(), 2, binding);
+            assert_eq!(vk_flat(&vk_pin_values(&plain.output.0)), want, "{tag}");
+
+            let hid = prove_ss_decode_commit(p, st.clone(), 2, binding, CommitMode::Hiding, &rho);
+            let hid2 = prove_ss_decode_commit(p, st.clone(), 2, binding, CommitMode::Hiding, &rho2);
+            assert_eq!(hid.answer, plain.answer, "{tag}");
+            assert_eq!(hid.answer, p.release.apply(native_topc_mass(&st, 2)), "{tag}");
+            let hvk = ss_decode_vk_commit(p, binding, CommitMode::Hiding);
+            assert_eq!(vk_pin_values(&hid.output.0), hvk.commitment, "{tag}");
+            assert_eq!(vk_pin_values(&hid2.output.0), hvk.commitment, "{tag}: salt-independent VK");
+            assert_ne!(hvk.commitment, plain_vk.commitment, "{tag}");
+            if binding.is_bound() {
+                let hc = commit_ss_state_with(&st, CommitMode::Hiding, &rho).0;
+                assert_ne!(hc, commit_ss_state(&st).0, "{tag}");
+                let want_st = QueryStatement::new(hc, 2, hid.answer);
+                assert_eq!(verify_decode_proof(&hid.output.0, &hvk), Ok(want_st), "{tag}");
+                assert_eq!(hid.statement(), Some(want_st), "{tag}");
+                let c2 = hid2.statement().expect("exposed").commit;
+                assert_eq!(c2, commit_ss_state_with(&st, CommitMode::Hiding, &rho2).0, "{tag}");
+                assert_ne!(c2, hc, "{tag}: another version, another commitment");
+                assert!(verify_decode_proof(&plain.output.0, &hvk).is_err(), "{tag}: a Plain proof under the Hiding pin");
+                assert!(verify_decode_proof(&hid.output.0, &plain_vk).is_err(), "{tag}: a Hiding proof under the Plain pin");
+            } else {
+                assert_eq!(hid.statement(), None, "{tag}: Legacy exposes nothing");
+            }
+        }
+
+        // Query at version t == leaf t's final commitment.
+        let t = 2u64;
+        let lp = SsFullParams { capacity: 4, batch: 2 };
+        let mut leaf = build_ss_full_leaf_commit(lp, Expose::Interval, CommitMode::Hiding);
+        let s_prev =
+            apply_batch_ss_full(&SsFullState::empty(lp), &[SsFullUpdate::real(9, 5), SsFullUpdate::real(3, 2)]).0;
+        let ups = vec![SsFullUpdate::real(7, 2), SsFullUpdate::real(5, 1)];
+        let r = leaf.prove_epoch_commit(t, s_prev.clone(), ups.clone(), &Openings::for_leaf(&seed, SS, t));
+        let s_t = apply_batch_ss_full(&s_prev, &ups).0;
+        let q = prove_ss_decode_commit(QP, s_t.clone(), 2, Binding::Semantic, CommitMode::Hiding, &rho_state_bb(&seed, SS, t));
+        assert_eq!(q.statement().expect("exposed").commit, r.final_.0, "query at t opens leaf t's final commitment");
+        let wrong =
+            prove_ss_decode_commit(QP, s_t, 2, Binding::Semantic, CommitMode::Hiding, &rho_state_bb(&seed, SS, t + 1));
+        assert_ne!(wrong.statement().expect("exposed").commit, r.final_.0, "a wrong salt exposes another commitment");
+    }
+
+    /// (F3, F5) Decoder twin of the leaf's overhead test: a Hiding decode
+    /// costs exactly +2 Poseidon2 rows and +3 ALU rows (one commitment)
+    /// under every binding, and none of its 12 salt values is a public value
+    /// of the proof (positive control: the scan sees the exposed statement).
+    #[test]
+    fn hiding_decode_row_overhead_and_no_salt_in_public_values() {
+        use crate::commitment::hiding::probe::{leaked_salts, proof_alu_rows, trace_rows};
+        let rho = rho_state_bb(&SaltSeed::for_tests(62), SS, 3);
+        let st = state();
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let (p0, a0) = trace_rows(&build_ss_decode(QP, &st, 2, binding).run("ss decode"));
+            let hdc = build_ss_decode_commit(QP, &st, 2, binding, CommitMode::Hiding, &rho);
+            let (p1, a1) = trace_rows(&hdc.run("ss decode"));
+            println!("B2 ss decode rows {binding:?}: Poseidon2 {p0} -> {p1}, ALU {a0} -> {a1}");
+            assert_eq!(p1, p0 + 2, "{binding:?}: Poseidon2 rows");
+            assert_eq!(a1, a0 + 3, "{binding:?}: ALU rows");
+            let hid = prove_ss_decode_commit(QP, st.clone(), 2, binding, CommitMode::Hiding, &rho);
+            assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
+            assert_eq!(leaked_salts(&hid.output.0, &[rho]), vec![], "{binding:?}");
+            if binding.is_bound() {
+                let mut control = SaltBb::ZERO;
+                control.0[0] = commit_ss_state_with(&st, CommitMode::Hiding, &rho).0[0];
+                assert!(!leaked_salts(&hid.output.0, &[control]).is_empty(), "{binding:?}: the scan sees the statement");
+            }
+        }
+    }
+
+    /// The salt is the FIRST 3 private inputs (decoder twin of
+    /// `ss_final_full::tests::hiding_leaf_salts_are_the_first_private_inputs`).
+    /// Packing: under every binding the Hiding decoder's private inputs are
+    /// `salt.packed()` (three distinct nonzero Challenges) followed by the
+    /// Plain decoder's. Allocation: the honest proof over them verifies and
+    /// exposes the native hiding commitment; control: the same values with
+    /// the salt moved last are rejected by the runner.
+    #[test]
+    fn hiding_decode_salt_is_the_first_private_input() {
+        let rho = rho_state_bb(&SaltSeed::for_tests(64), SS, 2);
+        let packed = rho.packed();
+        assert!(packed.iter().all(|c| *c != Challenge::ZERO), "nonzero salt Challenges");
+        assert!(packed[0] != packed[1] && packed[1] != packed[2] && packed[0] != packed[2], "distinct");
+        let st = state();
+        let hc = commit_ss_state_with(&st, CommitMode::Hiding, &rho).0;
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let plain = build_ss_decode(QP, &st, 2, binding);
+            let mut hdc = build_ss_decode_commit(QP, &st, 2, binding, CommitMode::Hiding, &rho);
+            assert_eq!(hdc.private_inputs.len(), plain.private_inputs.len() + 3, "{binding:?}");
+            assert_eq!(hdc.private_inputs[..3], packed[..], "{binding:?}: the salt comes first");
+            assert_eq!(hdc.private_inputs[3..], plain.private_inputs[..], "{binding:?}: then the Plain private inputs");
+
+            let proof = hdc.prove_traces(&hdc.run("ss decode")).expect("honest hiding decode");
+            if binding.is_bound() {
+                let got = crate::decode::read_exposed_statement(&proof).expect("exposed");
+                assert_eq!(got, QueryStatement::new(hc, 2, hdc.answer), "{binding:?}");
+            }
+
+            hdc.private_inputs.rotate_left(3);
+            assert_eq!(hdc.private_inputs[hdc.private_inputs.len() - 3..], packed[..]);
+            let e = crate::sketch::forge::catch_msg(|| hdc.run("ss decode").alu_trace.values.len()).map(|_| ());
+            assert!(e.is_err(), "{binding:?}: the salt packed last must not run on the salt-first circuit");
+        }
+    }
+
+    /// (8) The Hiding decoder at a tiny shape. Under the DEBUG profile
+    /// (`cargo test --lib decode::spacesaving::tests::hiding_decode_tiny_debug`)
+    /// the fork debug-asserts, during the build, that each of the 3 salt
+    /// private inputs has an ALU creator.
+    #[test]
+    fn hiding_decode_tiny_debug() {
+        let p = SsFullParams { capacity: 2, batch: 2 };
+        let s = apply_batch_ss_full(&SsFullState::empty(p), &[SsFullUpdate::real(9, 2), SsFullUpdate::real(4, 1)]).0;
+        let rho = rho_state_bb(&SaltSeed::for_tests(63), SS, 1);
+        let dp = SsDecodeParams { capacity: 2, c: 1, release: ReleasePolicy::Identity };
+        let q = prove_ss_decode_commit(dp, s.clone(), 1, Binding::Semantic, CommitMode::Hiding, &rho);
+        let want = QueryStatement::new(commit_ss_state_with(&s, CommitMode::Hiding, &rho).0, 1, 2);
+        assert_eq!(q.statement(), Some(want));
     }
 }

@@ -129,6 +129,26 @@ pub fn ss_full_noop_leaf_expose(
         .0
 }
 
+/// [`ss_full_noop_leaf_expose`] with an explicit
+/// [`CommitMode`](crate::commitment::hiding::CommitMode) (revision B2). The
+/// no-op leaf opens all three commitments with the public zero salt
+/// ([`Openings::public_zero`](crate::commitment::hiding::Openings::public_zero),
+/// through the explicit `prove_epoch_public_zero` path), so `ρ_in = ρ_out`
+/// and it still exposes `init == final`; the salts are witnesses, so its VK
+/// is that of every real leaf of the same mode.
+pub fn ss_full_noop_leaf_commit(
+    params: crate::sketch::ss_final_full::SsFullParams,
+    expose: Expose,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::sketch::ss_final_full::{SsFullState, SsFullUpdate, build_ss_full_leaf_commit};
+    let batch = vec![SsFullUpdate::dummy(); params.batch];
+    build_ss_full_leaf_commit(params, expose, mode)
+        .prove_epoch_public_zero(1, SsFullState::empty(params), batch)
+        .output
+        .0
+}
+
 /// Greenwald–Khanna (`gk_final_full`) exposed leaf: inactive (`dummy`) updates.
 pub fn gk_full_noop_leaf(params: crate::sketch::gk_final_full::GKFullParams) -> Proof {
     use crate::sketch::gk_final_full::{GKFullState, GKFullUpdate, prove_gk_full_exposed};
