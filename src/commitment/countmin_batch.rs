@@ -42,6 +42,7 @@
 use p3_field::PrimeCharacteristicRing;
 use p3_symmetric::CryptographicHasher;
 
+use crate::commitment::hiding::{CommitFamily, CommitKind, CommitMode, SaltBb, commit_flat_bb};
 use crate::config::{MyHash, Val, make_perm};
 use crate::sketch::countmin::CountMinUpdate;
 
@@ -109,6 +110,67 @@ pub fn commit_batch_limbs(records: &[CountMinUpdate]) -> CountMinBatchCommit {
         [l[0], l[1], l[2], l[3], Val::from_u32(r.value), Val::ZERO, Val::ZERO, Val::ZERO]
     });
     CountMinBatchCommit(hasher.hash_iter(flat))
+}
+
+/// Per-record flat encoding of [`commit_batch`]: `[key_lo, key_hi, value, 0]`.
+fn flat_batch(records: &[CountMinUpdate]) -> Vec<Val> {
+    records
+        .iter()
+        .flat_map(|r| {
+            [
+                Val::from_u32((r.key & 0xFFFF_FFFF) as u32),
+                Val::from_u32((r.key >> 32) as u32),
+                Val::from_u32(r.value),
+                Val::ZERO,
+            ]
+        })
+        .collect()
+}
+
+/// Per-record flat encoding of [`commit_batch_limbs`]:
+/// `[k0, k1, k2, k3, value, 0, 0, 0]`.
+fn flat_batch_limbs(records: &[CountMinUpdate]) -> Vec<Val> {
+    records
+        .iter()
+        .flat_map(|r| {
+            let l = crate::sketch::bind::key_limbs::<Val>(r.key);
+            [l[0], l[1], l[2], l[3], Val::from_u32(r.value), Val::ZERO, Val::ZERO, Val::ZERO]
+        })
+        .collect()
+}
+
+/// [`commit_batch`] under a [`CommitMode`]: `Plain` is exactly
+/// [`commit_batch`]; `Hiding` prefixes the same encoding with
+/// `[TAG_BATCH, CountMin, 0, 0, ρ…]` ([`crate::commitment::hiding`]).
+pub fn commit_batch_with(records: &[CountMinUpdate], mode: CommitMode, salt: &SaltBb) -> CountMinBatchCommit {
+    match mode {
+        CommitMode::Plain => commit_batch(records),
+        CommitMode::Hiding => CountMinBatchCommit(commit_flat_bb(
+            mode,
+            CommitKind::Batch,
+            CommitFamily::CountMin,
+            salt,
+            &flat_batch(records),
+        )),
+    }
+}
+
+/// [`commit_batch_limbs`] under a [`CommitMode`] (see [`commit_batch_with`]).
+pub fn commit_batch_limbs_with(
+    records: &[CountMinUpdate],
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> CountMinBatchCommit {
+    match mode {
+        CommitMode::Plain => commit_batch_limbs(records),
+        CommitMode::Hiding => CountMinBatchCommit(commit_flat_bb(
+            mode,
+            CommitKind::Batch,
+            CommitFamily::CountMin,
+            salt,
+            &flat_batch_limbs(records),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -229,5 +291,29 @@ mod tests {
         let c1 = commit_batch(&b);
         let c2 = commit_batch(&b);
         assert_eq!(c1, c2);
+    }
+
+    /// The `_with` variants: `Plain` is the old commitment whatever the salt;
+    /// `Hiding` is `MyHash([TAG_BATCH, 1, 0, 0, ρ…] ‖ same encoding)` and
+    /// differs per salt.
+    #[test]
+    fn commit_with_modes() {
+        use crate::commitment::hiding::{SaltSeed, TAG_BATCH, rho_batch_bb};
+        let b = sample_batch();
+        let seed = SaltSeed::for_tests(11);
+        let (r1, r2) = (rho_batch_bb(&seed, CommitFamily::CountMin, 1), rho_batch_bb(&seed, CommitFamily::CountMin, 2));
+        assert_eq!(commit_batch_with(&b, CommitMode::Plain, &r1), commit_batch(&b));
+        assert_eq!(commit_batch_limbs_with(&b, CommitMode::Plain, &r1), commit_batch_limbs(&b));
+        let mut input = vec![Val::from_u64(TAG_BATCH), Val::ONE, Val::ZERO, Val::ZERO];
+        input.extend_from_slice(&r1.0);
+        input.extend(flat_batch_limbs(&b));
+        let want: [Val; DIGEST_W] = MyHash::new(make_perm()).hash_iter(input);
+        let h1 = commit_batch_limbs_with(&b, CommitMode::Hiding, &r1);
+        assert_eq!(h1.0, want, "layout drift");
+        assert_ne!(h1, commit_batch_limbs_with(&b, CommitMode::Hiding, &r2));
+        assert_ne!(h1, commit_batch_limbs(&b));
+        assert_ne!(commit_batch_with(&b, CommitMode::Hiding, &r1), commit_batch(&b));
+        assert_eq!(flat_batch(&b).len(), RECORD_WIDTH * b.len());
+        assert_eq!(flat_batch_limbs(&b).len(), RECORD_WIDTH_LIMBS * b.len());
     }
 }

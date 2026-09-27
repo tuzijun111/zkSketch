@@ -18,6 +18,7 @@ use p3_field::PrimeCharacteristicRing;
 use p3_symmetric::CryptographicHasher;
 
 use crate::commitment::StateCommit;
+use crate::commitment::hiding::{CommitFamily, CommitKind, CommitMode, SaltBb, commit_flat_bb};
 use crate::config::{MyHash, Val, make_perm};
 use crate::sketch::countmin::{CountMin, CountMinState};
 
@@ -65,6 +66,25 @@ pub fn commit_countmin(state: &CountMinState) -> CountMinCommit {
         .map(|&c| Val::from_u32(c));
     let digest: [Val; DIGEST_W] = hasher.hash_iter(flat);
     CountMinCommit(digest)
+}
+
+/// [`commit_countmin`] under a [`CommitMode`]: `Plain` is exactly
+/// [`commit_countmin`] (the salt is ignored); `Hiding` is
+/// `MyHash([TAG_STATE, CountMin, 0, 0, ρ…] ‖ cells)` (see
+/// [`crate::commitment::hiding`]), the value the `omc` leaf and the Count-Min
+/// decoder expose for `Com(S_t; ρ)`.
+pub fn commit_countmin_with(state: &CountMinState, mode: CommitMode, salt: &SaltBb) -> CountMinCommit {
+    match mode {
+        CommitMode::Plain => commit_countmin(state),
+        CommitMode::Hiding => {
+            assert!(
+                (state.params.d * state.params.w) % CELL_ALIGNMENT == 0,
+                "Count-Min state cells must be a multiple of {CELL_ALIGNMENT}"
+            );
+            let flat: Vec<Val> = state.counters.iter().flatten().map(|&c| Val::from_u32(c)).collect();
+            CountMinCommit(commit_flat_bb(mode, CommitKind::State, CommitFamily::CountMin, salt, &flat))
+        }
+    }
 }
 
 impl StateCommit for CountMin {
@@ -123,5 +143,25 @@ mod tests {
         let expected: [Val; DIGEST_W] = hasher.hash_iter(flat);
         let actual = <CountMin as StateCommit>::commit(&s);
         assert_eq!(actual.0, expected);
+    }
+
+    /// [`commit_countmin_with`]: `Plain` is [`commit_countmin`] whatever the
+    /// salt; `Hiding` is `MyHash([TAG_STATE, 1, 0, 0, ρ…] ‖ cells)`, so equal
+    /// states at two versions (two salts) get different commitments.
+    #[test]
+    fn commit_with_modes() {
+        use crate::commitment::hiding::{SaltSeed, TAG_STATE, rho_state_bb};
+        let s = sample_state();
+        let seed = SaltSeed::for_tests(9);
+        let (r1, r2) = (rho_state_bb(&seed, CommitFamily::CountMin, 1), rho_state_bb(&seed, CommitFamily::CountMin, 2));
+        assert_eq!(commit_countmin_with(&s, CommitMode::Plain, &r1), commit_countmin(&s));
+        let h1 = commit_countmin_with(&s, CommitMode::Hiding, &r1);
+        let mut input = vec![Val::from_u64(TAG_STATE), Val::ONE, Val::ZERO, Val::ZERO];
+        input.extend_from_slice(&r1.0);
+        input.extend(s.counters.iter().flatten().map(|&c| Val::from_u32(c)));
+        let expected: [Val; DIGEST_W] = MyHash::new(make_perm()).hash_iter(input);
+        assert_eq!(h1.0, expected, "layout drift");
+        assert_ne!(h1, commit_countmin_with(&s, CommitMode::Hiding, &r2));
+        assert_ne!(h1, commit_countmin(&s));
     }
 }

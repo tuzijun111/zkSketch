@@ -76,6 +76,31 @@ pub fn cm_omc_noop_leaf_expose(
     build_countmin_omc_leaf_expose(params, expose, binding).prove_epoch_at(1, state, batch).output.0
 }
 
+/// [`cm_omc_noop_leaf_expose`] with an explicit [`CommitMode`] (revision B2).
+/// The no-op leaf opens all three commitments with the public zero salt
+/// ([`Openings::plain`](crate::commitment::hiding::Openings::plain)), so
+/// `ρ_in = ρ_out` and it still exposes `init == final`; the salts are
+/// witnesses, so its VK is that of every real leaf of the same mode.
+pub fn cm_omc_noop_leaf_commit(
+    params: crate::sketch::countmin_omc::CmOmcParams,
+    expose: Expose,
+    binding: crate::sketch::bind::Binding,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::commitment::hiding::Openings;
+    use crate::sketch::Sketch;
+    use crate::sketch::countmin::{CountMinParams, CountMinUpdate};
+    use crate::sketch::countmin_omc::build_countmin_omc_leaf_commit;
+    use crate::sketch::countmin_v9::CountMinV9;
+
+    let state = CountMinV9::new(&CountMinParams { d: params.d, w: params.w });
+    let batch = vec![CountMinUpdate { key: 0, value: 0 }; params.batch];
+    build_countmin_omc_leaf_commit(params, expose, binding, mode)
+        .prove_epoch_commit(1, state, batch, &Openings::plain())
+        .output
+        .0
+}
+
 /// HyperLogLog (`hll_final_full`) exposed leaf: inactive (`dummy`) updates.
 pub fn hll_full_noop_leaf(params: crate::sketch::hll_final_full::HllFullParams) -> Proof {
     use crate::sketch::hll_final_full::{HllFullState, HllFullUpdate, prove_hll_full_exposed};
