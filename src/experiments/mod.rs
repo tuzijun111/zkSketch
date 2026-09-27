@@ -48,6 +48,7 @@ pub mod metrics;
 pub mod rq1_capability;
 pub mod rq2_scalability;
 pub mod stream_compose;
+pub mod table_probe;
 pub mod rq3_optimisations;
 pub mod rq4_topology;
 

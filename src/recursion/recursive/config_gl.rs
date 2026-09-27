@@ -5,6 +5,9 @@
 //! Specialised to Goldilocks + Poseidon2 width-8 + binomial extension D = 2,
 //! matching the fork's `GoldilocksD2Width8` / `Poseidon2Config::GOLDILOCKS_D2_W8`
 //! path (see `recursion/tests/goldilocks.rs`).
+//!
+//! Under `--features zk` it carries `HidingFriProofTargets` and sets the MMCS
+//! private data from the inner FRI proof, exactly as the BabyBear config.
 
 use std::sync::Arc;
 
@@ -15,9 +18,12 @@ use p3_circuit::{CircuitBuilder, CircuitRunner, NonPrimitiveOpId};
 use p3_commit::Pcs as PcsTrait;
 use p3_field::BasedVectorSpace;
 use p3_lookup::logup::LogUpGadget;
+#[cfg(not(feature = "zk"))]
+use p3_recursion::pcs::{FriProofTargets, set_fri_mmcs_private_data};
+#[cfg(feature = "zk")]
+use p3_recursion::pcs::{HidingFriProofTargets, set_hiding_fri_mmcs_private_data};
 use p3_recursion::pcs::{
-    FriProofTargets, InputProofTargets, MerkleCapTargets, RecExtensionValMmcs, RecValMmcs,
-    Witness, set_fri_mmcs_private_data,
+    InputProofTargets, MerkleCapTargets, RecExtensionValMmcs, RecValMmcs, Witness,
 };
 use p3_recursion::traits::{RecursiveAir, RecursivePcs};
 use p3_recursion::verifier::VerificationError;
@@ -35,7 +41,23 @@ pub const DIGEST_ELEMS: usize = 4;
 pub const D: usize = 2;
 
 /// The FRI proof targets the recursive verifier carries — opaque to callers.
+#[cfg(not(feature = "zk"))]
 pub type InnerFri = FriProofTargets<
+    Val,
+    Challenge,
+    RecExtensionValMmcs<
+        Val,
+        Challenge,
+        DIGEST_ELEMS,
+        RecValMmcs<Val, DIGEST_ELEMS, MyHash, MyCompress>,
+    >,
+    InputProofTargets<Val, Challenge, RecValMmcs<Val, DIGEST_ELEMS, MyHash, MyCompress>>,
+    Witness<Val>,
+>;
+
+/// The FRI proof targets the recursive verifier carries (hiding PCS).
+#[cfg(feature = "zk")]
+pub type InnerFri = HidingFriProofTargets<
     Val,
     Challenge,
     RecExtensionValMmcs<
@@ -157,7 +179,8 @@ where
         op_ids: &[NonPrimitiveOpId],
         opening_proof: &Self::RawOpeningProof,
     ) -> Result<(), &'static str> {
-        set_fri_mmcs_private_data::<
+        #[cfg(not(feature = "zk"))]
+        let set = set_fri_mmcs_private_data::<
             Val,
             Challenge,
             ChallengeMmcs,
@@ -165,7 +188,18 @@ where
             MyHash,
             MyCompress,
             DIGEST_ELEMS,
-        >(runner, op_ids, opening_proof, Poseidon2Config::GOLDILOCKS_D2_W8)
+        >;
+        #[cfg(feature = "zk")]
+        let set = set_hiding_fri_mmcs_private_data::<
+            Val,
+            Challenge,
+            ChallengeMmcs,
+            ValMmcs,
+            MyHash,
+            MyCompress,
+            DIGEST_ELEMS,
+        >;
+        set(runner, op_ids, opening_proof, Poseidon2Config::GOLDILOCKS_D2_W8)
     }
 }
 

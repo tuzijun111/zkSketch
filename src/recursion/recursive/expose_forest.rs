@@ -554,14 +554,24 @@ fn aggregation_circuit_commitment(
         PcsRecursionBackend::<ConfigWithFriParams, BatchOnly, EXT_D>::non_primitive_preprocessors(backend);
     let air_builders =
         PcsRecursionBackend::<ConfigWithFriParams, BatchOnly, EXT_D>::non_primitive_air_builders(backend);
-    let (airs_degrees, _, _) = get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, EXT_D>(
-        circuit,
+    let (airs_degrees, primitive_columns, non_primitive_columns) =
+        get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, EXT_D>(
+            circuit,
+            &params.table_packing,
+            &preprocessors,
+            &air_builders,
+            params.constraint_profile,
+        )
+        .expect("get_airs_and_degrees_with_prep (merge VK)");
+    // E-0 table probe (read-only; a no-op unless armed). The merge proof
+    // (`prove_aggregation_layer`) builds the same AIRs from the same circuit.
+    crate::experiments::table_probe::record_merge(
         &params.table_packing,
-        &preprocessors,
-        &air_builders,
-        params.constraint_profile,
-    )
-    .expect("get_airs_and_degrees_with_prep (merge VK)");
+        &airs_degrees,
+        &non_primitive_columns,
+        &primitive_columns,
+    );
+    crate::experiments::table_probe::maybe_stop();
     let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
     let prover_data = ProverData::from_airs_and_degrees(config, &airs, &ext_degrees);

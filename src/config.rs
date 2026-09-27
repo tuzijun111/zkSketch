@@ -9,6 +9,37 @@
 //! (the verifier circuit recomputed leaf hashes under the canonical constants
 //! and disagreed with the leaf proof, surfacing as `WitnessConflict` at the
 //! first compared witness).
+//!
+//! ### Zero knowledge (`--features zk`)
+//!
+//! The default build is **not hiding**: `Pcs` is the plain `TwoAdicFriPcs`.
+//! The `zk` Cargo feature (off by default) swaps in `HidingFriPcs` over the
+//! SAME plain `MerkleTreeMmcs`, with the OS-seeded `ZkRng`
+//! ([`crate::zk_rng`]) as its mask RNG and `NUM_RANDOM_CODEWORDS` random
+//! codewords per commitment. Every leaf, merge, root and query proof is then
+//! produced by the hiding PCS (the whole crate uses this one `Pcs`; the
+//! recursion side follows in `recursion::recursive::config`). Degrees are
+//! unchanged but every committed trace doubles (`is_zk`), so a table fits
+//! only while its base height is `<= 2^24` (see `experiments::table_probe`).
+//!
+//! Salted Merkle leaves are NOT used. `HidingFriPcs` documents that both
+//! MMCSs "must also be hiding" (`MerkleTreeHidingMmcs`), but that MMCS draws
+//! fresh salts for EVERY commitment, the preprocessed one included, so each
+//! build of a circuit gets a different VK: the no-op-leaf VK derivation
+//! (`expose_forest::root_vk_deriver`, derived root VK == real root VK) and
+//! the auditor's root-VK pin both break. Shipping salted leaves needs a
+//! setup/prove config split (a fixed-public-salt instance for every
+//! `ProverData::from_airs_and_degrees`, an OS-seeded one for proving, and a
+//! bypass of the fork's single-config `prove_aggregation_layer`), which is not
+//! implemented. With the plain MMCS, each committed leaf row still carries
+//! its `NUM_RANDOM_CODEWORDS` random-codeword values (about 124 bits of
+//! randomness on BabyBear), which play the salt's role for the unopened
+//! Merkle siblings in a random-oracle argument; that argument is a heuristic
+//! of ours, not an upstream guarantee.
+//!
+//! Known ZK gaps even with the feature on: the per-table LogUp cumulative
+//! sums (`BatchProof::global_lookup_data`) are revealed unblinded, and
+//! upstream calls the construction only statistically zero-knowledge.
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear, default_babybear_poseidon2_16};
 use p3_challenger::DuplexChallenger;
@@ -16,7 +47,11 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{FriParameters, TwoAdicFriPcs};
+use p3_fri::FriParameters;
+#[cfg(feature = "zk")]
+use p3_fri::HidingFriPcs;
+#[cfg(not(feature = "zk"))]
+use p3_fri::TwoAdicFriPcs;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::StarkConfig;
@@ -32,7 +67,35 @@ pub type ValMmcs =
 pub type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 pub type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 pub type Dft = Radix2DitParallel<Val>;
+/// Non-hiding PCS (default build).
+#[cfg(not(feature = "zk"))]
 pub type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+/// Hiding PCS (`--features zk`; see the module docs).
+#[cfg(feature = "zk")]
+pub type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, ZkRng>;
+
+#[cfg(feature = "zk")]
+pub use crate::zk_rng::ZkRng;
+
+/// Random codewords `HidingFriPcs` appends to every commitment (`zk` only):
+/// `[Challenge : Val] = 4`.
+///
+/// They are base-field columns, and FRI batches every opened column with
+/// powers of an extension-field challenge `α`; the FRI transcript (the batched
+/// codeword at every query and fold layer) is simulatable only if that
+/// batch is a uniformly random extension-valued codeword at each height. A
+/// base column `c` scaled by `α^k` spans one `Val`-dimension of it, so each
+/// matrix needs `[Challenge : Val]` of them (`α^k, ..., α^(k+3)` are
+/// `Val`-independent unless `α` lies in a proper subfield). Upstream
+/// Plonky3's own ZK tests and example over degree-4 fields all use 4
+/// (`batch-stark/tests/simple.rs`, `uni-stark/tests/{fib_air,mul_air,
+/// mul_fib_pair,periodic_air}.rs`, `poseidon2-air/examples/
+/// prove_poseidon2_baby_bear_keccak_zk.rs`); the recursion fork's examples use
+/// 2 in functional tests. The cost is 4 extra columns per commitment (the
+/// randomization polynomial gets `4 + 4`), negligible next to the traces.
+#[cfg(feature = "zk")]
+pub const NUM_RANDOM_CODEWORDS: usize =
+    <Challenge as p3_field::BasedVectorSpace<Val>>::DIMENSION;
 
 /// The StarkConfig used for every leaf STARK in Phase 1.
 pub type StarkCfg = StarkConfig<Pcs, Challenge, Challenger>;
@@ -84,7 +147,11 @@ pub fn make_config(log_final_poly_len: usize) -> StarkCfg {
         query_proof_of_work_bits: QUERY_POW_BITS,
         mmcs: challenge_mmcs,
     };
+    #[cfg(not(feature = "zk"))]
     let pcs = Pcs::new(dft, val_mmcs, fri_params);
+    // A fresh OS seed per config (hence per leaf and per merge prover).
+    #[cfg(feature = "zk")]
+    let pcs = Pcs::new(dft, val_mmcs, fri_params, NUM_RANDOM_CODEWORDS, ZkRng::from_os());
     let challenger = Challenger::new(perm);
     StarkCfg::new(pcs, challenger)
 }

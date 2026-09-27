@@ -14,13 +14,25 @@
 //! in-circuit aggregation with a `WitnessConflict` (the same failure mode the
 //! BabyBear [`crate::config`] header documents). Mirrors the fork's
 //! `recursion/tests/goldilocks.rs` reference wiring exactly.
+//!
+//! ### Zero knowledge (`--features zk`)
+//!
+//! Mirrors [`crate::config`]: `HidingFriPcs` over the plain Merkle MMCS, the
+//! OS-seeded [`crate::zk_rng::ZkRng`], and `NUM_RANDOM_CODEWORDS`
+//! `= [Challenge : Val] = 2` random codewords per commitment (the same
+//! argument as the BabyBear side, for a degree-2 extension). The salted-MMCS
+//! caveat and the LogUp / statistical-ZK gaps documented there apply here too.
 
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{FriParameters, TwoAdicFriPcs};
+use p3_fri::FriParameters;
+#[cfg(feature = "zk")]
+use p3_fri::HidingFriPcs;
+#[cfg(not(feature = "zk"))]
+use p3_fri::TwoAdicFriPcs;
 use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -40,7 +52,18 @@ pub type ValMmcs =
 pub type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 pub type Challenger = DuplexChallenger<Val, Perm, 8, 4>;
 pub type Dft = Radix2DitParallel<Val>;
+/// Non-hiding PCS (default build).
+#[cfg(not(feature = "zk"))]
 pub type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+/// Hiding PCS (`--features zk`; see [`crate::config`]).
+#[cfg(feature = "zk")]
+pub type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, crate::zk_rng::ZkRng>;
+
+/// Random codewords per commitment under `zk`: `[Challenge : Val] = 2`
+/// (see `crate::config::NUM_RANDOM_CODEWORDS`).
+#[cfg(feature = "zk")]
+pub const NUM_RANDOM_CODEWORDS: usize =
+    <Challenge as p3_field::BasedVectorSpace<Val>>::DIMENSION;
 
 /// The StarkConfig used for every Goldilocks leaf STARK.
 pub type StarkCfg = StarkConfig<Pcs, Challenge, Challenger>;
@@ -87,7 +110,16 @@ pub fn make_config(log_final_poly_len: usize) -> StarkCfg {
         query_proof_of_work_bits: QUERY_POW_BITS,
         mmcs: challenge_mmcs,
     };
+    #[cfg(not(feature = "zk"))]
     let pcs = Pcs::new(dft, val_mmcs, fri_params);
+    #[cfg(feature = "zk")]
+    let pcs = Pcs::new(
+        dft,
+        val_mmcs,
+        fri_params,
+        NUM_RANDOM_CODEWORDS,
+        crate::zk_rng::ZkRng::from_os(),
+    );
     let challenger = Challenger::new(perm);
     StarkCfg::new(pcs, challenger)
 }

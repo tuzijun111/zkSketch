@@ -16,5 +16,6 @@ pub mod prover;
 pub mod recompose_binding;
 pub mod recursion;
 pub mod sketch;
+pub mod zk_rng;
 
 pub use config::{StarkCfg, Val};
