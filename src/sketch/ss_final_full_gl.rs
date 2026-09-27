@@ -90,6 +90,9 @@ use p3_recursion::RecursionOutput;
 use p3_symmetric::CryptographicHasher;
 use p3_uni_stark::StarkGenericConfig;
 
+use crate::commitment::hiding::{
+    self, CommitFamily, CommitKind, CommitMode, OpeningsGl, SaltGl, commit_flat_gl,
+};
 use crate::config_gl::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config_gl::ConfigWithFriParamsGl as ConfigWithFriParams;
 use crate::recursion::recursive::statement::{self, Expose, IndexPin};
@@ -391,6 +394,40 @@ pub fn commit_ss_batch(batch: &[SsFullUpdate]) -> SsFullBatchCommit {
     let hasher = MyHash::new(make_perm());
     let digest: [Val; 4] = hasher.hash_iter(flat_batch_vals(batch));
     SsFullBatchCommit(digest)
+}
+
+/// [`commit_ss_state`] under a [`CommitMode`] (revision B2,
+/// [`crate::commitment::hiding`]): `Plain` is exactly [`commit_ss_state`]
+/// (the salt is ignored); `Hiding` is `MyHash([TAG_STATE, SpaceSaving,
+/// ρ_0..ρ_5] ‖ rows)` over the same per-row `[key, count, active, 0]` stream
+/// ([`commit_flat_gl`]), the value a `Hiding` leaf exposes for `Com(S_t; ρ)`.
+pub fn commit_ss_state_with(state: &SsFullState, mode: CommitMode, salt: &SaltGl) -> SsFullStateCommit {
+    match mode {
+        CommitMode::Plain => commit_ss_state(state),
+        CommitMode::Hiding => SsFullStateCommit(commit_flat_gl(
+            mode,
+            CommitKind::State,
+            CommitFamily::SpaceSaving,
+            salt,
+            &flat_state_vals(state),
+        )),
+    }
+}
+
+/// [`commit_ss_batch`] under a [`CommitMode`]: `Plain` is exactly
+/// [`commit_ss_batch`]; `Hiding` is `Com(B_t; ρ)` over the same per-record
+/// `[key, value, active, 0]` stream.
+pub fn commit_ss_batch_with(batch: &[SsFullUpdate], mode: CommitMode, salt: &SaltGl) -> SsFullBatchCommit {
+    match mode {
+        CommitMode::Plain => commit_ss_batch(batch),
+        CommitMode::Hiding => SsFullBatchCommit(commit_flat_gl(
+            mode,
+            CommitKind::Batch,
+            CommitFamily::SpaceSaving,
+            salt,
+            &flat_batch_vals(batch),
+        )),
+    }
 }
 
 // ─── Native: batched top-s update ────────────────────────────────────────
@@ -736,6 +773,8 @@ pub struct SsFullLeafCircuit {
     expose: Expose,
     /// Batch index `t` of the next proof (Interval statement only).
     batch_index: u64,
+    /// Commitment mode (revision B2).
+    mode: CommitMode,
 }
 
 /// Build the reusable SpaceSaving leaf circuit for a shape.
@@ -746,8 +785,24 @@ pub fn build_ss_full_leaf(params: SsFullParams, expose_boundary: bool) -> SsFull
 /// Goldilocks SpaceSaving leaf with an explicit composition statement
 /// ([`Expose`]); `None` / `Boundary` are byte-for-byte [`build_ss_full_leaf`],
 /// `Interval` adds the batch index `t` (last public input) and exposes
-/// `(init, final, (t, t), Poseidon2(TAG_LEAF, t, Com(B_t)))`.
+/// `(init, final, (t, t), Poseidon2(TAG_LEAF, t, Com(B_t)))`. Plain
+/// commitments ([`build_ss_full_leaf_commit`] with [`CommitMode::Plain`]);
+/// prove with [`SsFullLeafCircuit::prove_epoch_at`].
 pub fn build_ss_full_leaf_expose(params: SsFullParams, expose: Expose) -> SsFullLeafCircuit {
+    build_ss_full_leaf_commit(params, expose, CommitMode::Plain)
+}
+
+/// [`build_ss_full_leaf_expose`] with an explicit [`CommitMode`] (revision
+/// B2, [`crate::commitment::hiding`]). `Plain` is the pre-B2 circuit byte for
+/// byte (same VK). `Hiding` adds 9 private inputs, the salts of
+/// `Com(S_{t-1})`, `Com(S_t)` and `Com(B_t)` (init, final, batch; three D = 2
+/// Challenges each), allocated as the FIRST private inputs, and hashes each
+/// commitment as `[tag, salt…, inputs…]` ([`commit_ss_state_with`] /
+/// [`commit_ss_batch_with`]) through the same plain sponge as before
+/// (`Binding::Semantic`, i.e. `add_hash_slice`). The salts are witnesses, so
+/// the VK does not depend on them; prove with
+/// [`SsFullLeafCircuit::prove_epoch_commit`].
+pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: CommitMode) -> SsFullLeafCircuit {
     let expose_boundary = expose == Expose::Boundary;
     params.validate();
     let cap = params.capacity;
@@ -794,6 +849,11 @@ pub fn build_ss_full_leaf_expose(params: SsFullParams, expose: Expose) -> SsFull
     // row count; the scalar hint tables (key_eq_tag, …) stay one per row.
     //   init, final(=s_new), batch, key_sorted, grouped, g_sorted,
     //   residual, key_eq_tag, key_inv_diff, acc_active_inv, c_new_inv.
+    // B2: the salts of (init, final, batch) come FIRST under `Hiding` (9
+    // inputs, [`OpeningsGl::private_inputs`] order); `Plain` allocates
+    // nothing, so its circuit is byte-identical.
+    // `alloc_leaf_salts_first` panics if any private input precedes them.
+    let salts = crate::recursion::recursive::leaf_gl::alloc_leaf_salts_first(&mut b, mode);
     let init_packed: Vec<ExprId> = (0..2 * cap)
         .map(|_| b.alloc_private_input("init_packed"))
         .collect();
@@ -833,21 +893,48 @@ pub fn build_ss_full_leaf_expose(params: SsFullParams, expose: Expose) -> SsFull
         .collect();
 
     // ─── Stage 1: commit bindings ───────────────────────────────────────
-    let h_init = b
-        .add_hash_slice(&Poseidon2Config::GOLDILOCKS_D2_W8, &init_packed, true)
-        .expect("hash init");
+    // Salted under `Hiding` (`[tag, salt…, inputs…]`); with no salt,
+    // `commit_hash(.., Binding::Semantic)` is exactly the pre-B2
+    // `add_hash_slice(cfg, inputs, true)`.
+    let cfg = Poseidon2Config::GOLDILOCKS_D2_W8;
+    let fam = CommitFamily::SpaceSaving;
+    let sponge = crate::sketch::bind::Binding::Semantic;
+    let h_init = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::State,
+        fam,
+        salts.as_ref().map(|s| &s.init),
+        &init_packed,
+        zero,
+        sponge,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(h_init[i], init_pis[i]);
     }
-    let h_final = b
-        .add_hash_slice(&Poseidon2Config::GOLDILOCKS_D2_W8, &final_packed, true)
-        .expect("hash final");
+    let h_final = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::State,
+        fam,
+        salts.as_ref().map(|s| &s.final_),
+        &final_packed,
+        zero,
+        sponge,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(h_final[i], final_pis[i]);
     }
-    let h_batch = b
-        .add_hash_slice(&Poseidon2Config::GOLDILOCKS_D2_W8, &batch_packed, true)
-        .expect("hash batch");
+    let h_batch = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::Batch,
+        fam,
+        salts.as_ref().map(|s| &s.batch),
+        &batch_packed,
+        zero,
+        sponge,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(h_batch[i], batch_pis[i]);
     }
@@ -1274,6 +1361,7 @@ pub fn build_ss_full_leaf_expose(params: SsFullParams, expose: Expose) -> SsFull
         op_tag,
         expose,
         batch_index: 1,
+        mode,
     }
 }
 
@@ -1293,14 +1381,117 @@ impl SsFullLeafCircuit {
         self.expose
     }
 
+    /// The commitment mode the circuit was built with (revision B2).
+    pub fn commit_mode(&self) -> CommitMode {
+        self.mode
+    }
+
+    /// The VK (preprocessed commitment, `expose_forest_gl::vk_pin_values`
+    /// order) of every proof this prebuilt leaf produces, read from its
+    /// prover data (public parameters alone, no proving).
+    pub fn vk_pin_values(&self) -> Vec<Challenge> {
+        crate::recursion::recursive::expose_forest_gl::common_vk_pin_values(
+            self.circuit_prover_data.common_data(),
+        )
+    }
+
     /// Prove the epoch of batch `t` (1-based); `t` is part of the Interval
-    /// statement (ignored by the other layouts).
+    /// statement (ignored by the other layouts). `Plain` circuits only: on a
+    /// `Hiding` circuit this would open every commitment with the public
+    /// zero salt, so it panics; use [`Self::prove_epoch_commit`] (or, for
+    /// the no-op leaf, [`Self::prove_epoch_public_zero`]).
     pub fn prove_epoch_at(
         &mut self,
         t: u64,
         initial_state: SsFullState,
         batch: Vec<SsFullUpdate>,
     ) -> SsFullLeafProof {
+        assert!(
+            !self.mode.is_hiding(),
+            "prove_epoch_at on a Hiding leaf would publish Com(S; 0): use prove_epoch_commit with \
+             OpeningsGl::for_leaf(..)"
+        );
+        self.prove_epoch_opened(t, initial_state, batch, &OpeningsGl::plain())
+    }
+
+    /// [`Self::prove_epoch_at`] with the commitment openings of leaf `t`
+    /// (`OpeningsGl::for_leaf(seed, CommitFamily::SpaceSaving, t)` for an
+    /// honest prover; ignored by a `Plain` circuit). The proof's `initial`,
+    /// `final_` and `batch_commit` are then `Com(S_{t-1}; ρ^S_{t-1})`,
+    /// `Com(S_t; ρ^S_t)` and `Com(B_t; ρ^B_t)`. A `Hiding` circuit panics
+    /// when `openings.final_` or `openings.batch` is the public zero salt
+    /// (never an honest PRF output). The init salt may be zero (leaf 1 opens
+    /// the public `Com(S_0; 0)`).
+    pub fn prove_epoch_commit(
+        &mut self,
+        t: u64,
+        initial_state: SsFullState,
+        batch: Vec<SsFullUpdate>,
+        openings: &OpeningsGl,
+    ) -> SsFullLeafProof {
+        if self.mode.is_hiding() {
+            assert!(
+                !openings.final_.is_zero() && !openings.batch.is_zero(),
+                "Hiding leaf t = {t}: the final and batch commitments need secret randomizers \
+                 (OpeningsGl::for_leaf), not the public zero salt"
+            );
+        }
+        self.prove_epoch_opened(t, initial_state, batch, openings)
+    }
+
+    /// The no-op VK-derivation leaf's epoch: all three commitments opened
+    /// with [`OpeningsGl::public_zero`], so a batch that changes nothing
+    /// exposes `init == final` in either mode. The only path that proves a
+    /// `Hiding` leaf with zero final/batch salts; it asserts that every
+    /// update is the inactive dummy (the stream harness's SpaceSaving no-op)
+    /// and that the state does not move, so it cannot publish a real batch
+    /// under deterministic commitments.
+    pub fn prove_epoch_public_zero(
+        &mut self,
+        t: u64,
+        initial_state: SsFullState,
+        batch: Vec<SsFullUpdate>,
+    ) -> SsFullLeafProof {
+        assert!(
+            batch.iter().all(|u| *u == SsFullUpdate::dummy())
+                && apply_batch_ss_full(&initial_state, &batch).0 == initial_state,
+            "prove_epoch_public_zero is for the no-op leaf: every update must be the dummy and \
+             the state must not move"
+        );
+        self.prove_epoch_opened(t, initial_state, batch, &OpeningsGl::public_zero())
+    }
+
+    /// Shared body of the three `prove_epoch_*` entry points (no opening
+    /// checks).
+    fn prove_epoch_opened(
+        &mut self,
+        t: u64,
+        initial_state: SsFullState,
+        batch: Vec<SsFullUpdate>,
+        openings: &OpeningsGl,
+    ) -> SsFullLeafProof {
+        let w = self.install_epoch(t, &initial_state, &batch);
+        self.prove_witness_opened(&w, openings)
+    }
+
+    /// Run (no proof) the epoch [`Self::prove_epoch_commit`] would prove:
+    /// its traces (the row-overhead tests).
+    #[cfg(test)]
+    fn run_epoch_commit(
+        &mut self,
+        t: u64,
+        initial_state: &SsFullState,
+        batch: &[SsFullUpdate],
+        openings: &OpeningsGl,
+    ) -> p3_circuit::tables::Traces<Challenge> {
+        let w = self.install_epoch(t, initial_state, batch);
+        self.run_witness_opened(&w, openings).0
+    }
+
+    /// The honest witness of the epoch of batch `t`, with its permutation
+    /// hints installed in the prebuilt graph and `t` recorded for the
+    /// Interval statement.
+    fn install_epoch(&mut self, t: u64, initial_state: &SsFullState, batch: &[SsFullUpdate]) -> SsWitness {
         self.batch_index = t;
         let params = self.params;
         assert_eq!(initial_state.params, params);
@@ -1309,7 +1500,7 @@ impl SsFullLeafCircuit {
         let cap = params.capacity;
 
         // ─── Native side ────────────────────────────────────────────────────
-        let w = honest_ss_witness(&initial_state, &batch);
+        let w = honest_ss_witness(initial_state, batch);
         let (final_state, residual_rows, build) = (&w.final_state, &w.residual, &w.build);
 
         // Sanity: mass conservation.
@@ -1340,22 +1531,76 @@ impl SsFullLeafCircuit {
                 expand_sigma(&build.sigma_count),
             ])
             .expect("update permute witnesses (ss_full)");
-
-        self.prove_witness(&w)
+        w
     }
 
     /// Pack a witness into public/private inputs, run the circuit, prove and
-    /// self-verify. The Permute ops' hints must already be installed.
+    /// self-verify, with Plain openings (the soundness tests' hand-crafted
+    /// witnesses). The Permute ops' hints must already be installed.
+    #[cfg(test)]
     fn prove_witness(&mut self, w: &SsWitness) -> SsFullLeafProof {
+        self.prove_witness_opened(w, &OpeningsGl::plain())
+    }
+
+    /// [`Self::prove_witness`] with explicit commitment openings (ignored
+    /// under `Plain`).
+    fn prove_witness_opened(&mut self, w: &SsWitness, openings: &OpeningsGl) -> SsFullLeafProof {
+        let params = self.params;
+        let (traces, initial_commit, final_commit, batch_commit, __witness) =
+            self.run_witness_opened(w, openings);
+
+        let __t_p = std::time::Instant::now();
+        let proof = self
+            .prover
+            .prove_all_tables(&traces, &self.circuit_prover_data)
+            .expect("prove_all_tables (ss_full)");
+        let __prove = __t_p.elapsed();
+        let __t_v = std::time::Instant::now();
+        self.prover
+            .verify_all_tables(&proof)
+            .expect("self-verify ss_full leaf");
+        crate::recursion::recursive::timing::record(
+            crate::recursion::recursive::timing::LeafTiming {
+                witness: __witness,
+                prove: __prove,
+                verify: __t_v.elapsed(),
+                trace_rows: self.trace_rows,
+            },
+        );
+
+        SsFullLeafProof {
+            output: RecursionOutput(proof, Rc::clone(&self.circuit_prover_data)),
+            initial: initial_commit,
+            final_: final_commit,
+            batch_commit,
+            params,
+        }
+    }
+
+    /// Pack a witness into public/private inputs and run the circuit (no
+    /// proof): the traces, the three commitments and the trace-generation
+    /// time. The Permute ops' hints must already be installed.
+    fn run_witness_opened(
+        &mut self,
+        w: &SsWitness,
+        openings: &OpeningsGl,
+    ) -> (
+        p3_circuit::tables::Traces<Challenge>,
+        SsFullStateCommit,
+        SsFullStateCommit,
+        SsFullBatchCommit,
+        std::time::Duration,
+    ) {
         let params = self.params;
         let cap = params.capacity;
         let m = params.batch;
         let total = cap + m;
         let (initial_state, batch) = (&w.initial, &w.batch);
         let (final_state, residual_rows, build) = (&w.final_state, &w.residual, &w.build);
-        let initial_commit = commit_ss_state(initial_state);
-        let final_commit = commit_ss_state(final_state);
-        let batch_commit = commit_ss_batch(batch);
+        let mode = self.mode;
+        let initial_commit = commit_ss_state_with(initial_state, mode, &openings.init);
+        let final_commit = commit_ss_state_with(final_state, mode, &openings.final_);
+        let batch_commit = commit_ss_batch_with(batch, mode, &openings.batch);
 
         // ─── Pack public + private ──────────────────────────────────────────
         let init_commit_packed =
@@ -1375,6 +1620,10 @@ impl SsFullLeafCircuit {
 
         // MUST match alloc order.
         let mut private_inputs: Vec<Challenge> = Vec::new();
+        if mode.is_hiding() {
+            // The salts come first (see `build_ss_full_leaf_commit`).
+            private_inputs.extend(openings.private_inputs());
+        }
         private_inputs.extend_from_slice(&pack_state_to_challenge(initial_state));
         private_inputs.extend_from_slice(&pack_state_to_challenge(final_state));
         private_inputs.extend_from_slice(&pack_batch_to_challenge(batch));
@@ -1454,7 +1703,7 @@ impl SsFullLeafCircuit {
         }
         let _ = &build.seg_end; // segment ends are recomputed in-circuit from tags
 
-        // ─── Run + prove ────────────────────────────────────────────────────
+        // ─── Run ────────────────────────────────────────────────────────────
         let __t_w = std::time::Instant::now();
         let traces = {
             let mut runner = self.circuit.runner();
@@ -1467,33 +1716,7 @@ impl SsFullLeafCircuit {
             runner.run().expect("run ss_full circuit")
         };
         let __witness = __t_w.elapsed(); // witness_gen = trace generation only
-
-        let __t_p = std::time::Instant::now();
-        let proof = self
-            .prover
-            .prove_all_tables(&traces, &self.circuit_prover_data)
-            .expect("prove_all_tables (ss_full)");
-        let __prove = __t_p.elapsed();
-        let __t_v = std::time::Instant::now();
-        self.prover
-            .verify_all_tables(&proof)
-            .expect("self-verify ss_full leaf");
-        crate::recursion::recursive::timing::record(
-            crate::recursion::recursive::timing::LeafTiming {
-                witness: __witness,
-                prove: __prove,
-                verify: __t_v.elapsed(),
-                trace_rows: self.trace_rows,
-            },
-        );
-
-        SsFullLeafProof {
-            output: RecursionOutput(proof, Rc::clone(&self.circuit_prover_data)),
-            initial: initial_commit,
-            final_: final_commit,
-            batch_commit,
-            params,
-        }
+        (traces, initial_commit, final_commit, batch_commit, __witness)
     }
 }
 
@@ -1513,6 +1736,27 @@ pub fn generate_proof(params: SsFullParams, updates: Vec<SsFullUpdate>) -> SsFul
     let (final_state, _residual) = apply_batch_ss_full(&initial_state, &updates);
     let proof = prove_ss_full(params, initial_state, updates);
     SsFullProof { proof, final_state }
+}
+
+/// Public **no-op leaf** of the Goldilocks SpaceSaving leaf for root-VK
+/// derivation (the Goldilocks counterpart of
+/// `noop_leaf::ss_full_noop_leaf_expose`): the empty state and inactive
+/// (`dummy`) updates (the stream harness's SpaceSaving no-op), proved at
+/// batch index 1 through the explicit zero-salt path
+/// ([`SsFullLeafCircuit::prove_epoch_public_zero`], all three salts
+/// [`OpeningsGl::public_zero`]), so it exposes `init == final` in either
+/// mode. The salts and the index are witnesses, so its VK is that of every
+/// real leaf of the same parameters and mode.
+pub fn ss_full_gl_noop_leaf_commit(
+    params: SsFullParams,
+    expose: Expose,
+    mode: CommitMode,
+) -> p3_circuit_prover::BatchStarkProof<ConfigWithFriParams> {
+    let batch = vec![SsFullUpdate::dummy(); params.batch];
+    build_ss_full_leaf_commit(params, expose, mode)
+        .prove_epoch_public_zero(1, SsFullState::empty(params), batch)
+        .output
+        .0
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────
@@ -2396,5 +2640,397 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── B2: hiding commitments (`crate::commitment::hiding`) ─────────────────
+
+    use crate::commitment::hiding::{
+        SaltSeed, rho_batch_gl, rho_batch_gl_in, rho_state_gl, rho_state_gl_in,
+    };
+    use crate::recursion::recursive::expose_forest_gl::{
+        batch_log, check_leaves_against_log, check_root_against_log, prove_hiding_merge,
+        read_exposed_boundary_proof, read_exposed_statement, root_vk_deriver,
+        verify_bound_stark_proof_against_log, vk_pin_values,
+    };
+    use crate::recursion::recursive::leaf_gl::hiding_probe::{
+        leaked_salts, proof_alu_rows, trace_rows, vk_flat, vk_literal,
+    };
+    use crate::recursion::recursive::root_vk::ForestShape;
+    use crate::recursion::recursive::statement::{hash_gl, leaf_digest};
+    use crate::sketch::forge;
+
+    const HP: SsFullParams = SsFullParams { capacity: 4, batch: 2 };
+    const SS: CommitFamily = CommitFamily::SpaceSaving;
+
+    fn hiding_leaf(expose: Expose) -> SsFullLeafCircuit {
+        build_ss_full_leaf_commit(HP, expose, CommitMode::Hiding)
+    }
+
+    fn advanced(state: &SsFullState, batch: &[SsFullUpdate]) -> SsFullState {
+        apply_batch_ss_full(state, batch).0
+    }
+
+    fn hp_prior() -> SsFullState {
+        advanced(&SsFullState::empty(HP), &[SsFullUpdate::real(5, 1), SsFullUpdate::real(9, 1)])
+    }
+
+    fn hp_batches() -> Vec<Vec<SsFullUpdate>> {
+        vec![
+            vec![SsFullUpdate::real(7, 1), SsFullUpdate::real(5, 1)],
+            vec![SsFullUpdate::real(13, 1), SsFullUpdate::real(7, 1)],
+        ]
+    }
+
+    /// Native drift guard: `Plain` is the pre-B2 commitment whatever the
+    /// salt; `Hiding` is `MyHash([TAG_STATE | TAG_BATCH, SpaceSaving, ρ…] ‖
+    /// flat)` over exactly the pre-B2 flat stream.
+    #[test]
+    fn commit_with_modes() {
+        use crate::commitment::hiding::{TAG_BATCH, TAG_STATE};
+        let seed = SaltSeed::for_tests(9);
+        let (r1, r2) = (rho_state_gl(&seed, SS, 1), rho_state_gl(&seed, SS, 2));
+        let s = hp_prior();
+        assert_eq!(commit_ss_state_with(&s, CommitMode::Plain, &r1), commit_ss_state(&s));
+        let mut input = vec![Val::from_u64(TAG_STATE), Val::from_u64(SS.id())];
+        input.extend_from_slice(&r1.0);
+        input.extend(flat_state_vals(&s));
+        let want: [Val; 4] = MyHash::new(make_perm()).hash_iter(input);
+        let h1 = commit_ss_state_with(&s, CommitMode::Hiding, &r1);
+        assert_eq!(h1.0, want, "state layout drift");
+        assert_ne!(h1, commit_ss_state_with(&s, CommitMode::Hiding, &r2));
+        assert_ne!(h1, commit_ss_state(&s));
+        let rb = rho_batch_gl(&seed, SS, 1);
+        let batch = hp_batches()[0].clone();
+        assert_eq!(commit_ss_batch_with(&batch, CommitMode::Plain, &rb), commit_ss_batch(&batch));
+        let mut input = vec![Val::from_u64(TAG_BATCH), Val::from_u64(SS.id())];
+        input.extend_from_slice(&rb.0);
+        input.extend(flat_batch_vals(&batch));
+        let want: [Val; 4] = MyHash::new(make_perm()).hash_iter(input);
+        let hb = commit_ss_batch_with(&batch, CommitMode::Hiding, &rb);
+        assert_eq!(hb.0, want, "batch layout drift");
+        assert_ne!(hb, commit_ss_batch(&batch));
+    }
+
+    /// (1) A hiding leaf's commitments (the proof's `initial/final_/batch`
+    /// fields and the exposed statement) equal the NATIVE hiding commitments
+    /// under the leaf-`t` openings, under the Interval and the Boundary
+    /// layout (the leaf has one binding: its sponges are the plain
+    /// `add_hash_slice`).
+    #[test]
+    fn hiding_leaf_exposes_native_hiding_commitments() {
+        let seed = SaltSeed::for_tests(21);
+        let batch = hp_batches()[0].clone();
+        let expect = advanced(&hp_prior(), &batch);
+        let t = 3u64;
+        let mut leaf = hiding_leaf(Expose::Interval);
+        assert_eq!(leaf.commit_mode(), CommitMode::Hiding);
+        let r = leaf.prove_epoch_commit(t, hp_prior(), batch.clone(), &OpeningsGl::for_leaf(&seed, SS, t));
+        let init = commit_ss_state_with(&hp_prior(), CommitMode::Hiding, &rho_state_gl(&seed, SS, t - 1));
+        let fin = commit_ss_state_with(&expect, CommitMode::Hiding, &rho_state_gl(&seed, SS, t));
+        let bc = commit_ss_batch_with(&batch, CommitMode::Hiding, &rho_batch_gl(&seed, SS, t));
+        assert_eq!(r.initial, init);
+        assert_eq!(r.final_, fin);
+        assert_eq!(r.batch_commit, bc);
+        assert_ne!(init, commit_ss_state(&hp_prior()), "hiding != plain");
+        assert_ne!(fin, commit_ss_state(&expect), "hiding != plain");
+        assert_ne!(bc, commit_ss_batch(&batch), "hiding != plain");
+        let st = read_exposed_statement(&r.output.0);
+        assert_eq!(st.init, init.0.to_vec());
+        assert_eq!(st.final_, fin.0.to_vec());
+        let iv = st.interval.expect("interval layout");
+        assert_eq!((iv.lo, iv.hi), (Val::from_u64(t), Val::from_u64(t)));
+        assert_eq!(iv.digest, leaf_digest(&hash_gl, 2, t, &bc.0), "H(TAG_LEAF, t, Com(B_t; ρ))");
+
+        let mut bleaf = hiding_leaf(Expose::Boundary);
+        let r = bleaf.prove_epoch_commit(1, hp_prior(), batch.clone(), &OpeningsGl::for_leaf(&seed, SS, 1));
+        let (i, f) = read_exposed_boundary_proof(&r.output.0);
+        assert_eq!(i.0, commit_ss_state_with(&hp_prior(), CommitMode::Hiding, &SaltGl::ZERO).0);
+        assert_eq!(f.0, r.final_.0);
+        assert_eq!(f.0, commit_ss_state_with(&expect, CommitMode::Hiding, &rho_state_gl(&seed, SS, 1)).0);
+    }
+
+    /// (2) The hiding leaf's VK does not depend on the salts (two different
+    /// openings, and the zero-salt no-op leaf, give one VK), differs from the
+    /// Plain VK, and the Plain circuit is the pre-B2 circuit: its VK equals
+    /// the value recorded on the unmodified Goldilocks leaf (b2-hiding
+    /// @94e9f58), through both the old builder and
+    /// `build_ss_full_leaf_commit(.., Plain)`, for every statement layout.
+    #[test]
+    fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+        let recorded = [
+            (Expose::None, [4633752459041422998, 17452556857357849351, 18127644367153290963, 264090878000814557]),
+            (Expose::Boundary, [12778058211499291925, 17586788496412847627, 12410193273840537267, 874854919538388358]),
+            (Expose::Interval, [6306263333184229153, 41855191592855568, 16716971515655028172, 5590991646340356760]),
+        ];
+        for (expose, vk) in recorded {
+            let old = build_ss_full_leaf_expose(HP, expose).vk_pin_values();
+            let plain = build_ss_full_leaf_commit(HP, expose, CommitMode::Plain).vk_pin_values();
+            assert_eq!(vk_flat(&old), vk_literal(vk), "{expose:?}: Plain VK drifted from the pre-B2 leaf");
+            assert_eq!(plain, old, "{expose:?}");
+            if expose != Expose::Interval {
+                let legacy_api = build_ss_full_leaf(HP, expose == Expose::Boundary).vk_pin_values();
+                assert_eq!(legacy_api, old, "{expose:?}: the bool builder");
+            }
+            let hid = build_ss_full_leaf_commit(HP, expose, CommitMode::Hiding).vk_pin_values();
+            assert_ne!(hid, old, "{expose:?}: the hiding circuit differs");
+        }
+        for expose in [Expose::Interval, Expose::Boundary] {
+            let mut leaf = hiding_leaf(expose);
+            let vk = leaf.vk_pin_values();
+            let batch = hp_batches()[0].clone();
+            let o1 = OpeningsGl::for_leaf(&SaltSeed::for_tests(1), SS, 1);
+            let o5 = OpeningsGl::for_leaf(&SaltSeed::for_tests(2), SS, 5);
+            let a = leaf.prove_epoch_commit(1, hp_prior(), batch.clone(), &o1);
+            let b = leaf.prove_epoch_commit(5, hp_prior(), batch, &o5);
+            assert_ne!(a.final_, b.final_);
+            assert_eq!(vk_pin_values(&a.output.0), vk, "{expose:?}");
+            assert_eq!(vk_pin_values(&b.output.0), vk, "{expose:?}");
+            let noop = ss_full_gl_noop_leaf_commit(HP, expose, CommitMode::Hiding);
+            assert_eq!(vk_pin_values(&noop), vk, "{expose:?}: the zero-salt no-op leaf has the real leaves' VK");
+        }
+    }
+
+    /// (2b) The Hiding leaf's VK is pinned, one literal per statement layout.
+    /// It does not depend on the salts (test (2)), so it is a fixed value per
+    /// shape; recorded on b2-gl @77a02a3. The pin guards what the other
+    /// tests only compare against the native functions, which would carry the
+    /// same change: which sponge each salted commitment uses, the
+    /// `(kind, SpaceSaving)` tag constants, and the salt allocation order.
+    /// The salted sponges are Semantic (this leaf has no binding parameter).
+    #[test]
+    fn hiding_leaf_vk_is_pinned() {
+        let recorded = [
+            (Expose::None, [17430242135028665733, 8910990021061221859, 7642923676271818013, 14624438684522492806]),
+            (Expose::Boundary, [5127476512929420219, 14949157042305783351, 988902786580556422, 18373836634480779209]),
+            (Expose::Interval, [9365049537508816069, 15386676715998429990, 10121922348505152518, 16059434801545063679]),
+        ];
+        for (expose, vk) in recorded {
+            let hid = build_ss_full_leaf_commit(HP, expose, CommitMode::Hiding).vk_pin_values();
+            assert_eq!(vk_flat(&hid), vk_literal(vk), "{expose:?}: Hiding VK drifted");
+        }
+    }
+
+    /// (3) Equal states at two versions get different hiding commitments,
+    /// both different from the plain one; at the proof level, two no-op
+    /// (all-dummy) leaves at `t = 1, 2` expose `Com(S; 0) → Com(S; ρ_1) →
+    /// Com(S; ρ_2)`: three distinct values for one state, chained.
+    #[test]
+    fn equal_states_get_unlinkable_hiding_commitments() {
+        let seed = SaltSeed::for_tests(33);
+        let s = hp_prior();
+        let (r1, r2) = (rho_state_gl(&seed, SS, 1), rho_state_gl(&seed, SS, 2));
+        let (c1, c2) = (
+            commit_ss_state_with(&s, CommitMode::Hiding, &r1),
+            commit_ss_state_with(&s, CommitMode::Hiding, &r2),
+        );
+        assert_ne!(c1, c2);
+        assert_ne!(c1, commit_ss_state(&s));
+        assert_ne!(c2, commit_ss_state(&s));
+        assert_eq!(commit_ss_state_with(&s, CommitMode::Plain, &r1), commit_ss_state(&s), "Plain ignores the salt");
+
+        let dummies = vec![SsFullUpdate::dummy(); HP.batch];
+        assert_eq!(advanced(&s, &dummies), s, "dummies move nothing");
+        let mut leaf = hiding_leaf(Expose::Interval);
+        let l1 = leaf.prove_epoch_commit(1, s.clone(), dummies.clone(), &OpeningsGl::for_leaf(&seed, SS, 1));
+        let l2 = leaf.prove_epoch_commit(2, s.clone(), dummies, &OpeningsGl::for_leaf(&seed, SS, 2));
+        let (s1, s2) = (read_exposed_statement(&l1.output.0), read_exposed_statement(&l2.output.0));
+        assert_eq!(s1.init, commit_ss_state_with(&s, CommitMode::Hiding, &SaltGl::ZERO).0.to_vec());
+        assert_eq!(s1.final_, c1.0.to_vec());
+        assert_eq!(s2.init, s1.final_, "leaf 2 opens Com(S_1) with the same ρ_1");
+        assert_eq!(s2.final_, c2.0.to_vec());
+        assert_ne!(s1.init, s1.final_, "the state did not move, the commitment did");
+        assert_ne!(s2.init, s2.final_);
+    }
+
+    /// (4) Binding in Hiding mode, through the auditor paths: an honest
+    /// 2-leaf forest passes the per-batch log check and its root verifies
+    /// against the log under the root VK derived from the zero-salt no-op
+    /// leaf; another seed's log, a wrong batch salt and a wrong final salt
+    /// are rejected; an inconsistent `ρ_1` across the leaf boundary cannot be
+    /// merged.
+    #[test]
+    fn wrong_salt_rejected_by_log_and_inconsistent_salt_breaks_merge() {
+        let (a, b) = (SaltSeed::for_tests(41), SaltSeed::for_tests(42));
+        let bs = hp_batches();
+        let s0 = SsFullState::empty(HP);
+        let s1 = advanced(&s0, &bs[0]);
+        let s2 = advanced(&s1, &bs[1]);
+        let log_for = |seed: &SaltSeed| {
+            let bc: Vec<[Val; 4]> = (0..2)
+                .map(|k| commit_ss_batch_with(&bs[k], CommitMode::Hiding, &rho_batch_gl(seed, SS, k as u64 + 1)).0)
+                .collect();
+            batch_log(
+                &commit_ss_state_with(&s0, CommitMode::Hiding, &SaltGl::ZERO).0,
+                &commit_ss_state_with(&s2, CommitMode::Hiding, &rho_state_gl(seed, SS, 2)).0,
+                &bc,
+            )
+        };
+        let (log_a, log_b) = (log_for(&a), log_for(&b));
+        let mut leaf = hiding_leaf(Expose::Interval);
+        let l1 = leaf.prove_epoch_commit(1, s0.clone(), bs[0].clone(), &OpeningsGl::for_leaf(&a, SS, 1)).output;
+        let l2 = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &OpeningsGl::for_leaf(&a, SS, 2)).output;
+        assert_eq!(check_leaves_against_log(&[&l1.0, &l2.0], &log_a, Expose::Interval), Ok(()));
+        assert!(check_leaves_against_log(&[&l1.0, &l2.0], &log_b, Expose::Interval).is_err(), "another seed's log");
+
+        let bad_batch = OpeningsGl { batch: rho_batch_gl(&b, SS, 2), ..OpeningsGl::for_leaf(&a, SS, 2) };
+        let l2b = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_batch).output;
+        let e = check_leaves_against_log(&[&l1.0, &l2b.0], &log_a, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|e| e.contains("digest")), "{e:?}");
+        let bad_final = OpeningsGl { final_: rho_state_gl(&b, SS, 2), ..OpeningsGl::for_leaf(&a, SS, 2) };
+        let l2f = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_final).output;
+        let e = check_leaves_against_log(&[&l1.0, &l2f.0], &log_a, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|e| e.contains("Com(S_T)")), "{e:?}");
+
+        let shape = ForestShape::forest(2);
+        let root = prove_hiding_merge(&l1, &l2);
+        let noop = ss_full_gl_noop_leaf_commit(HP, Expose::Interval, CommitMode::Hiding);
+        let vk = root_vk_deriver(noop).root_vk(&shape);
+        verify_bound_stark_proof_against_log(&root.0, &vk, &log_a, &shape);
+        assert!(check_root_against_log(&root.0, &log_b, &shape).is_err());
+
+        let bad_init = OpeningsGl { init: rho_state_gl(&b, SS, 1), ..OpeningsGl::for_leaf(&a, SS, 2) };
+        let l2i = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_init).output;
+        assert_ne!(read_exposed_statement(&l2i.0).init, read_exposed_statement(&l1.0).final_);
+        let e = forge::catch_msg(|| prove_hiding_merge(&l1, &l2i)).map(|_| ());
+        println!("B2 GL ss inconsistent salt merge: {e:?}");
+        assert!(
+            e.as_ref().is_err_and(|m| m.contains("WitnessConflict")),
+            "leaf 2's init must use leaf 1's final salt: {e:?}"
+        );
+    }
+
+    /// (5) The zero-salt no-op leaf of a Hiding circuit still exposes
+    /// `init == final` (`= Com(S_0; 0)`, the public anchor), so the twin-merge
+    /// root-VK derivation works unchanged; the Plain no-op leaf exposes the
+    /// pre-B2 anchor.
+    #[test]
+    fn hiding_noop_leaf_has_init_eq_final() {
+        let empty = SsFullState::empty(HP);
+        let noop = ss_full_gl_noop_leaf_commit(HP, Expose::Interval, CommitMode::Hiding);
+        let st = read_exposed_statement(&noop);
+        let anchor = commit_ss_state_with(&empty, CommitMode::Hiding, &SaltGl::ZERO);
+        assert_eq!(st.init, st.final_);
+        assert_eq!(st.init, anchor.0.to_vec());
+        assert_ne!(anchor, commit_ss_state(&empty));
+        let plain = ss_full_gl_noop_leaf_commit(HP, Expose::Boundary, CommitMode::Plain);
+        let (i, f) = read_exposed_boundary_proof(&plain);
+        assert_eq!((i.0, f.0), (commit_ss_state(&empty).0, commit_ss_state(&empty).0));
+    }
+
+    /// (F3, F5) The Hiding leaf costs exactly +2 Poseidon2 rows and +3 ALU
+    /// rows per commitment over the Plain leaf (+6 and +9 per leaf) under
+    /// both composable layouts, and none of its 18 salt values is a public
+    /// value of the proof (positive control: a "salt" equal to an exposed
+    /// commitment value is found).
+    #[test]
+    fn hiding_leaf_row_overhead_and_no_salt_in_public_values() {
+        let seed = SaltSeed::for_tests(91);
+        let t = 3u64;
+        let batch = hp_batches()[0].clone();
+        let o = OpeningsGl::for_leaf(&seed, SS, t);
+        for expose in [Expose::Interval, Expose::Boundary] {
+            let mut plain = build_ss_full_leaf_commit(HP, expose, CommitMode::Plain);
+            let mut leaf = hiding_leaf(expose);
+            let (p0, a0) = trace_rows(&plain.run_epoch_commit(t, &hp_prior(), &batch, &OpeningsGl::plain()));
+            let (p1, a1) = trace_rows(&leaf.run_epoch_commit(t, &hp_prior(), &batch, &o));
+            println!("B2 GL ss leaf rows {expose:?}: Poseidon2 {p0} -> {p1}, ALU {a0} -> {a1}");
+            assert_eq!(p1, p0 + 6, "{expose:?}: Poseidon2 rows");
+            assert_eq!(a1, a0 + 9, "{expose:?}: ALU rows");
+            let hid = leaf.prove_epoch_commit(t, hp_prior(), batch.clone(), &o);
+            assert_eq!(proof_alu_rows(&hid.output.0), a1, "{expose:?}: the proof's ALU height");
+            assert_eq!(leaked_salts(&hid.output.0, &[o.init, o.final_, o.batch]), vec![], "{expose:?}");
+            let mut control = SaltGl::ZERO;
+            control.0[0] = hid.initial.0[0];
+            assert!(!leaked_salts(&hid.output.0, &[control]).is_empty(), "{expose:?}: the scan sees the statement");
+        }
+    }
+
+    /// (F1) A Hiding leaf never falls back to zero salts silently: the old
+    /// `prove_epoch_at` / `prove_epoch` entry points panic on it, and so does
+    /// `prove_epoch_commit` handed a zero final or batch salt. The explicit
+    /// no-op path refuses real records. Controls: a zero INIT salt is leaf
+    /// 1's honest opening, and a Plain leaf still ignores its openings.
+    #[test]
+    fn hiding_leaf_rejects_zero_openings_outside_the_noop_path() {
+        let seed = SaltSeed::for_tests(81);
+        let batch = hp_batches()[0].clone();
+        let mut leaf = hiding_leaf(Expose::Interval);
+        let msg = forge::catch_msg(|| leaf.prove_epoch_at(2, hp_prior(), batch.clone()).final_).unwrap_err();
+        assert!(msg.contains("prove_epoch_at on a Hiding leaf"), "{msg}");
+        assert!(forge::catch(|| leaf.prove_epoch(hp_prior(), batch.clone()).final_).is_none());
+        let honest = OpeningsGl::for_leaf(&seed, SS, 2);
+        for (what, o) in [
+            ("plain", OpeningsGl::plain()),
+            ("public_zero", OpeningsGl::public_zero()),
+            ("zero final", OpeningsGl { final_: SaltGl::ZERO, ..honest }),
+            ("zero batch", OpeningsGl { batch: SaltGl::ZERO, ..honest }),
+        ] {
+            let msg = forge::catch_msg(|| leaf.prove_epoch_commit(2, hp_prior(), batch.clone(), &o).final_)
+                .unwrap_err();
+            assert!(msg.contains("public zero salt"), "{what}: {msg}");
+        }
+        let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(1, hp_prior(), batch.clone()).final_).unwrap_err();
+        assert!(msg.contains("every update must be the dummy"), "{msg}");
+
+        let o1 = OpeningsGl::for_leaf(&seed, SS, 1);
+        assert!(o1.init.is_zero());
+        let r = leaf.prove_epoch_commit(1, hp_prior(), batch.clone(), &o1);
+        assert_eq!(r.initial, commit_ss_state_with(&hp_prior(), CommitMode::Hiding, &SaltGl::ZERO));
+        let mut plain = build_ss_full_leaf_commit(HP, Expose::Interval, CommitMode::Plain);
+        let p = plain.prove_epoch_commit(2, hp_prior(), batch.clone(), &OpeningsGl::plain());
+        assert_eq!(p.initial, commit_ss_state(&hp_prior()));
+        assert_eq!(p.final_, commit_ss_state(&advanced(&hp_prior(), &batch)));
+        assert_eq!(p.batch_commit, commit_ss_batch(&batch));
+    }
+
+    /// (F2) A continued history is anchored on the previous history's
+    /// certified final commitment ([`OpeningsGl::for_leaf_after`]): history
+    /// 1's leaf 1 exposes exactly history 0's final `Com(S_2; ρ)`, both
+    /// leaves pass history 1's log, and the zero init salt is rejected.
+    #[test]
+    fn continued_history_leaf_opens_the_previous_final_commitment() {
+        let seed = SaltSeed::for_tests(71);
+        let bs = hp_batches();
+        let s1 = advanced(&SsFullState::empty(HP), &bs[0]);
+        let s2 = advanced(&s1, &bs[1]);
+        let mut leaf = hiding_leaf(Expose::Interval);
+        let h0_last = leaf.prove_epoch_commit(2, s1, bs[1].clone(), &OpeningsGl::for_leaf(&seed, SS, 2));
+        let anchor_salt = rho_state_gl(&seed, SS, 2);
+        let anchor = h0_last.final_;
+        assert_eq!(anchor, commit_ss_state_with(&s2, CommitMode::Hiding, &anchor_salt));
+
+        let h = 1u64;
+        let s3 = advanced(&s2, &bs[0]);
+        let s4 = advanced(&s3, &bs[1]);
+        let o1 = OpeningsGl::for_leaf_after(&anchor_salt, &seed, SS, h);
+        let l1 = leaf.prove_epoch_commit(1, s2.clone(), bs[0].clone(), &o1).output;
+        let l2 = leaf.prove_epoch_commit(2, s3, bs[1].clone(), &OpeningsGl::for_leaf_in(&seed, SS, h, 2)).output;
+        assert_eq!(read_exposed_statement(&l1.0).init, anchor.0.to_vec(), "history 1 starts at history 0's final");
+        assert_eq!(read_exposed_statement(&l2.0).init, read_exposed_statement(&l1.0).final_);
+        let bc: Vec<[Val; 4]> = (0..2)
+            .map(|k| commit_ss_batch_with(&bs[k], CommitMode::Hiding, &rho_batch_gl_in(&seed, SS, h, k as u64 + 1)).0)
+            .collect();
+        let fin = commit_ss_state_with(&s4, CommitMode::Hiding, &rho_state_gl_in(&seed, SS, h, 2));
+        let log1 = batch_log(&anchor.0, &fin.0, &bc);
+        assert_eq!(check_leaves_against_log(&[&l1.0, &l2.0], &log1, Expose::Interval), Ok(()));
+        let zero_init = OpeningsGl { init: SaltGl::ZERO, ..o1 };
+        let l1z = leaf.prove_epoch_commit(1, s2, bs[0].clone(), &zero_init).output;
+        let e = check_leaves_against_log(&[&l1z.0, &l2.0], &log1, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|m| m.contains("Com(S_0)")), "{e:?}");
+    }
+
+    /// (8) Build and prove the Hiding leaf at a tiny shape. Under the DEBUG
+    /// profile (`cargo test --lib ss_final_full_gl::tests::hiding_leaf_tiny_debug`)
+    /// the fork debug-asserts, during the build, that each of the 9 salt
+    /// private inputs has an ALU creator.
+    #[test]
+    fn hiding_leaf_tiny_debug() {
+        let p = SsFullParams { capacity: 2, batch: 2 };
+        let mut leaf = build_ss_full_leaf_commit(p, Expose::Interval, CommitMode::Hiding);
+        let seed = SaltSeed::for_tests(8);
+        let batch = vec![SsFullUpdate::real(9, 1), SsFullUpdate::dummy()];
+        let r = leaf.prove_epoch_commit(1, SsFullState::empty(p), batch.clone(), &OpeningsGl::for_leaf(&seed, SS, 1));
+        let fin = apply_batch_ss_full(&SsFullState::empty(p), &batch).0;
+        assert_eq!(r.final_, commit_ss_state_with(&fin, CommitMode::Hiding, &rho_state_gl(&seed, SS, 1)));
     }
 }
