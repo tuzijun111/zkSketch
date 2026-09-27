@@ -102,23 +102,39 @@
 //!   gives up its own privacy; binding holds for every `ρ`. This is also what
 //!   lets the no-op VK-derivation leaf use `ρ_in = ρ_out = 0` and expose
 //!   `init == final` ([`Openings::public_zero`]). The LIBRARY does check the
-//!   honest-prover side, so a harness that forgets an opening fails loudly
-//!   instead of publishing a deterministic `Com(S_t; 0)` (next item).
+//!   honest-prover side, so a harness that forgets an opening (init, final
+//!   or batch) fails loudly instead of publishing a deterministic
+//!   `Com(S_t; 0)` of a secret state or batch (next item). A nonzero WRONG
+//!   salt is not detectable there; it only makes the commitment disagree
+//!   with the log (or the adjacent leaf).
 //! * **Where the public zero salt is allowed** (every family, both fields;
 //!   all of these are input checks, so no circuit or VK changes):
-//!   - A leaf's INIT salt may be zero (leaf 1 of the genesis history opens
-//!     the public `Com(S_0; 0)`). A `Hiding` leaf's `prove_epoch_commit`
-//!     refuses a zero FINAL or BATCH salt, and its `prove_epoch_at` /
-//!     `prove_epoch` refuse to run at all.
+//!   - A `Hiding` leaf's `prove_epoch_commit` refuses a zero FINAL or
+//!     BATCH salt, and accepts a zero INIT salt only where it opens a public
+//!     state: batch index `t = 1` and the family's empty genesis state (leaf
+//!     1 of the genesis history, whose `Com(S_0; 0)` the verifier recomputes
+//!     itself; HyperLogLog also accepts the public no-op state `S_noop`
+//!     below, whose zero-salt commitment is the no-op leaf's public anchor)
+//!     ([`assert_zero_init_opens_public_state`]). A zero init on a real
+//!     (secret) prior state, e.g. a forgotten init opening or a worker that
+//!     numbers its leaves locally (`for_leaf(.., 1)` at global `t = 5`),
+//!     panics instead of proving a leaf that exposes the guess-checkable
+//!     `Com(S_{t-1}; 0)` (in `per_batch` mode the auditor receives every
+//!     leaf, so a later merge or log failure would come too late), and so
+//!     does a zero init at `t ≥ 2` (even the empty state there is
+//!     `S_{t-1}`, whose `Com(·; 0)` would reveal it). Its `prove_epoch_at` /
+//!     `prove_epoch` refuse to run at all (tests
+//!     `hiding_leaf_rejects_zero_openings_outside_the_noop_path`,
+//!     `hiding_leaf_refuses_zero_init_on_a_real_state`).
 //!   - `prove_epoch_public_zero`, the one zero-salt leaf path, accepts ONLY
 //!     the canonical public no-op input of the VK-derivation leaf, in both
-//!     modes: Count-Min `t = 1`, the empty state and every update
-//!     `{ key: 0, value: 0 }`; HyperLogLog `initial` = key 1 inserted into
-//!     empty registers (under the leaf's binding) and every key 1 (HLL has
-//!     no pad sentinel, so its no-op state is this public `S_noop`, not
-//!     `S_0`); SpaceSaving the empty state and every update
-//!     `SsFullUpdate::dummy()`; GK `t = 1`, the empty state and an empty
-//!     batch. It publishes only zero-salt commitments of public data. "The
+//!     modes, always at batch index `t = 1`: Count-Min the empty state and
+//!     every update `{ key: 0, value: 0 }`; HyperLogLog `initial` = key 1
+//!     inserted into empty registers (under the leaf's binding) and every
+//!     key 1 (HLL has no pad sentinel, so its no-op state is this public
+//!     `S_noop`, not `S_0`); SpaceSaving the empty state and every update
+//!     `SsFullUpdate::dummy()`; GK the empty state and an empty batch. It
+//!     publishes only zero-salt commitments of public data. "The
 //!     batch does not move the state" alone would not do: a real state
 //!     with a no-op or repeated-key batch does not move either, and would
 //!     publish the guess-checkable `Com(S_t; 0)`. So a padded leaf of a live
@@ -155,10 +171,19 @@
 //! `x` replaced by `(ρ, x)`; the merge circuits, the interval digest and the
 //! auditor are unchanged (they compare and absorb commitment VALUES). The
 //! log's `Com(B_t)` binds the batch the same way, and the auditor never
-//! opens a commitment. Only the prover needs `ρ`: harness code that
-//! recomputes a commitment from plaintext (the batch log `Com(S_0)`,
-//! `Com(B_t)`, `Com(S_T)`) is PROVER-side code, and the auditor takes the log
-//! the prover published, recomputing only the genesis anchor `Com(S_0; 0)`.
+//! opens a commitment. Only the prover needs `ρ`, so under `Hiding` any
+//! code that recomputes a commitment from plaintext (the batch log
+//! `Com(S_0)`, `Com(B_t)`, `Com(S_T)`) MUST run on the PROVER side, and the
+//! auditor MUST take the log the prover published, recomputing only the
+//! genesis anchor `Com(S_0; 0)` (a continued history's anchor comes from the
+//! previous history's certified log). This is a requirement on the harness,
+//! not yet its behaviour: today's harness auditor
+//! ([`crate::experiments::dist_compose`]: the concurrent and staged engines
+//! and the Goldilocks twin) still rebuilds the log natively from the
+//! plaintext batches and compares the root with a plaintext replay of the
+//! final state, which works only under `Plain` (the harness is still on the
+//! Plain APIs). Moving the log to the prover side is pattern-guide step 7
+//! (later stage).
 //!
 //! ## What is hidden (and what is not)
 //!
@@ -231,10 +256,13 @@
 //! 3. **Prover.** `prove_epoch_commit(t, state, batch, &Openings)`. On a
 //!    `Hiding` leaf it asserts that `openings.final_` and `openings.batch`
 //!    are not [`SaltBb::ZERO`] (an honest `ρ` is zero with probability
-//!    about 2^-371); the old `prove_epoch_at(t, ..)` asserts the leaf is
+//!    about 2^-371) and calls [`assert_zero_init_opens_public_state`] (a
+//!    zero `openings.init` only at `t = 1` on the family's empty genesis
+//!    state); the old `prove_epoch_at(t, ..)` asserts the leaf is
 //!    `Plain` and then runs the same epoch with [`Openings::plain`]. So a
-//!    call site left on the old API, or handed zero openings, panics instead
-//!    of silently publishing deterministic `Com(S_t; 0)` values.
+//!    call site left on the old API, or handed zero openings on a secret
+//!    state, panics instead of silently publishing deterministic
+//!    `Com(S_t; 0)` values.
 //!    The epoch computes the three public commitments with the step-1 natives
 //!    and `openings.init / final_ / batch`, and, when `mode.is_hiding()`,
 //!    pushes `openings.private_inputs()` BEFORE every other private input.
@@ -295,6 +323,7 @@
 //!    `hiding_noop_leaf_has_init_eq_final`, `hiding_decode_exposes_hiding_commit`,
 //!    `hiding_leaf_row_overhead_and_no_salt_in_public_values` (and its
 //!    decoder twin), `hiding_leaf_rejects_zero_openings_outside_the_noop_path`,
+//!    `hiding_leaf_refuses_zero_init_on_a_real_state`,
 //!    `noop_path_accepts_only_the_public_noop_input`,
 //!    `hiding_decode_refuses_zero_salt_on_a_real_state`,
 //!    `continued_history_leaf_opens_the_previous_final_commitment`, and
@@ -858,6 +887,31 @@ impl OpeningsGl {
     /// See [`Openings::private_inputs`].
     pub fn private_inputs(&self) -> Vec<GlChallenge> {
         [self.init, self.final_, self.batch].iter().flat_map(|s| s.packed()).collect()
+    }
+}
+
+/// The INIT-salt check of a `Hiding` leaf's `prove_epoch_commit` (every
+/// family, both fields; call it only in `Hiding` mode). A zero init salt
+/// is honest only for leaf 1 of the genesis history, whose init opens the
+/// public `Com(S_0; 0)`; every other honest init salt is a PRF output
+/// (`ρ^S_{t-1}`, or a continued history's anchor `ρ_T`), zero with
+/// probability about 2^-371. So when `init_is_zero`, this requires batch
+/// index `t = 1` and a PUBLIC initial state (`initial_is_public`: the
+/// family's empty genesis state; HyperLogLog also its public no-op state
+/// `S_noop`), and panics otherwise: a forgotten init opening, or a worker
+/// that numbers its leaves locally (`Openings::for_leaf(.., 1)` at global
+/// `t = 5`), would otherwise prove a leaf that exposes the guess-checkable
+/// `Com(S_{t-1}; 0)` of a secret state. A NONZERO wrong init salt is not
+/// detectable here (it only breaks the merge with the previous leaf).
+/// Input check only: no circuit or VK changes.
+pub fn assert_zero_init_opens_public_state(t: u64, init_is_zero: bool, initial_is_public: impl FnOnce() -> bool) {
+    if init_is_zero {
+        assert!(
+            t == 1 && initial_is_public(),
+            "Hiding leaf t = {t}: a zero init salt opens only the public genesis Com(S_0; 0) (batch index \
+             1, the empty initial state); a real prior state needs its randomizer (Openings::for_leaf(.., t) \
+             with the GLOBAL batch index, or for_leaf_after for a continued history), not the public zero salt"
+        );
     }
 }
 

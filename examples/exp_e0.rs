@@ -230,7 +230,7 @@ impl Leaf {
     /// at consecutive `t` merge. The circuit, hence the cost, is data-free.
     /// A `Hiding` leaf proves this input through its one zero-salt path,
     /// `prove_epoch_public_zero`, meant for the VK-derivation no-op leaf at
-    /// batch index 1 (Count-Min and GK refuse any other index); chained
+    /// batch index 1 (every family refuses any other index); chained
     /// Hiding leaves use [`Self::prove_chained`].
     fn prove_noop(&mut self, t: u64) -> Proof {
         match self {

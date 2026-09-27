@@ -1573,12 +1573,15 @@ impl SsFullLeafCircuit {
     /// [`Self::prove_epoch_at`] with the commitment openings of leaf `t`
     /// (`Openings::for_leaf(seed, CommitFamily::SpaceSaving, t)` for an honest
     /// prover; ignored by a `Plain` circuit). The proof's `initial`, `final_`
-    /// and `batch_commit` are then `Com(S_{t-1}; ρ^S_{t-1})`,
-    /// `Com(S_t; ρ^S_t)` and `Com(B_t; ρ^B_t)`. A `Hiding` circuit panics when
-    /// `openings.final_` or `openings.batch` is the public zero salt (never an
-    /// honest PRF output): a forgotten opening would otherwise give a
-    /// consistent, deterministic chain that nothing downstream detects. The
-    /// init salt may be zero (leaf 1 opens the public `Com(S_0; 0)`).
+    /// and `batch_commit` are then `Com(S_{t-1}; ρ^S_{t-1})`, `Com(S_t; ρ^S_t)`
+    /// and `Com(B_t; ρ^B_t)`. A `Hiding` circuit panics when `openings.final_`
+    /// or `openings.batch` is the public zero salt (never an honest PRF
+    /// output): a forgotten opening would otherwise give a consistent,
+    /// deterministic chain that nothing downstream detects. The init salt may
+    /// be zero only at `t = 1` on the empty genesis state (leaf 1 of the
+    /// genesis history opens the public `Com(S_0; 0)`); a zero init on any
+    /// other input panics
+    /// ([`assert_zero_init_opens_public_state`](crate::commitment::hiding::assert_zero_init_opens_public_state)).
     pub fn prove_epoch_commit(
         &mut self,
         t: u64,
@@ -1592,6 +1595,9 @@ impl SsFullLeafCircuit {
                 "Hiding leaf t = {t}: the final and batch commitments need secret randomizers \
                  (Openings::for_leaf), not the public zero salt"
             );
+            crate::commitment::hiding::assert_zero_init_opens_public_state(t, openings.init.is_zero(), || {
+                initial_state == SsFullState::empty(self.params)
+            });
         }
         self.prove_epoch_opened(t, initial_state, batch, openings)
     }
@@ -1603,7 +1609,8 @@ impl SsFullLeafCircuit {
     /// update is the circuit-native no-op [`SsFullUpdate::dummy`], that the
     /// state does not move, and that it is the public empty state
     /// [`SsFullState::empty`] (the no-op leaf's, whose zero-salt commitment
-    /// is the public anchor `Com(S_0; 0)`), so it can publish neither a real
+    /// is the public anchor `Com(S_0; 0)`), at batch index `t = 1` (checked
+    /// last), so it can publish neither a real
     /// batch, nor a moved state, nor a deterministic commitment to a secret
     /// state (e.g. an all-dummy padding leaf of a live stream, whose state
     /// needs its `ρ_t`).
@@ -1626,6 +1633,7 @@ impl SsFullLeafCircuit {
             "prove_epoch_public_zero is for the no-op leaf: the state must be the public empty state \
              (a secret state needs Openings::for_leaf and prove_epoch_commit)"
         );
+        assert_eq!(t, 1, "prove_epoch_public_zero is for the no-op leaf: it is proved at batch index 1");
         self.prove_epoch_opened(t, initial_state, batch, &Openings::public_zero())
     }
 
@@ -3030,7 +3038,9 @@ mod tests {
         for expose in [Expose::Interval, Expose::Boundary] {
             let mut leaf = hiding_leaf(expose);
             let vk = leaf.vk_pin_values();
-            let a = leaf.prove_epoch_commit(1, hp_prior(), ups.clone(), &Openings::for_leaf(&SaltSeed::for_tests(1), SS, 1));
+            // Leaf 1 starts from the empty S_0 (its zero init salt opens only
+            // that public state); leaf 5 from a real prior.
+            let a = leaf.prove_epoch_commit(1, hp_empty(), ups.clone(), &Openings::for_leaf(&SaltSeed::for_tests(1), SS, 1));
             let b = leaf.prove_epoch_commit(5, hp_prior(), ups.clone(), &Openings::for_leaf(&SaltSeed::for_tests(2), SS, 5));
             assert_ne!(a.final_, b.final_, "{expose:?}");
             assert_eq!(vk_pin_values(&a.output.0), vk, "{expose:?}");
@@ -3050,9 +3060,11 @@ mod tests {
 
     /// (3) Equal states at two versions get different hiding commitments,
     /// both different from the plain one; at the proof level, two leaves at
-    /// `t = 1, 2` whose (dummy) batches leave the state unchanged expose
-    /// `Com(S; 0) → Com(S; ρ_1) → Com(S; ρ_2)`: three distinct values for
-    /// one state, chained. Their two equal batches get different `Com(B_t)`.
+    /// `t = 1, 2` from the empty genesis state `S` (leaf 1's zero init salt
+    /// opens only that public state) whose (dummy) batches leave the state
+    /// unchanged expose `Com(S; 0) → Com(S; ρ_1) → Com(S; ρ_2)`: three
+    /// distinct values for one state, chained. Their two equal batches get
+    /// different `Com(B_t)`.
     #[test]
     fn equal_states_get_unlinkable_hiding_commitments() {
         let seed = SaltSeed::for_tests(33);
@@ -3064,6 +3076,8 @@ mod tests {
         assert_ne!(c2, commit_ss_state(&s));
         assert_eq!(commit_ss_state_with(&s, CommitMode::Plain, &r1), commit_ss_state(&s), "Plain ignores the salt");
 
+        let s = hp_empty();
+        let (c1, c2) = (commit_ss_state_with(&s, HIDING, &r1), commit_ss_state_with(&s, HIDING, &r2));
         let noop = vec![SsFullUpdate::dummy(); HP.batch];
         assert_eq!(advanced(&s, &noop), s, "a dummy batch does not move the state");
         let mut leaf = hiding_leaf(Expose::Interval);
@@ -3197,7 +3211,9 @@ mod tests {
     /// `prove_epoch_commit` (and the one-call API) handed a zero final or
     /// batch salt. The explicit no-op path refuses a real batch and a batch
     /// that moves the state. Controls: a zero INIT salt is leaf 1's honest
-    /// opening, and a Plain leaf still ignores its openings.
+    /// opening (from the empty genesis state; a zero init on a real state is
+    /// refused, test `hiding_leaf_refuses_zero_init_on_a_real_state`), and a
+    /// Plain leaf still ignores its openings.
     #[test]
     fn hiding_leaf_rejects_zero_openings_outside_the_noop_path() {
         let seed = SaltSeed::for_tests(81);
@@ -3235,14 +3251,70 @@ mod tests {
 
         let o1 = Openings::for_leaf(&seed, SS, 1);
         assert!(o1.init.is_zero());
-        let r = leaf.prove_epoch_commit(1, hp_prior(), ups.clone(), &o1);
-        assert_eq!(r.initial, commit_ss_state_with(&hp_prior(), HIDING, &SaltBb::ZERO));
+        let r = leaf.prove_epoch_commit(1, hp_empty(), ups.clone(), &o1);
+        assert_eq!(r.initial, commit_ss_state_with(&hp_empty(), HIDING, &SaltBb::ZERO));
         let mut plain = build_ss_full_leaf_commit(HP, Expose::Interval, CommitMode::Plain);
         for o in [Openings::plain(), honest] {
             let p = plain.prove_epoch_commit(2, hp_prior(), ups.clone(), &o);
             assert_eq!(p.initial, commit_ss_state(&hp_prior()));
             assert_eq!(p.final_, commit_ss_state(&advanced(&hp_prior(), &ups)));
             assert_eq!(p.batch_commit, commit_ss_batch(&ups));
+        }
+    }
+
+    /// (F1, init salt) Under `Hiding` a zero INIT salt opens only the public
+    /// genesis `Com(S_0; 0)`: batch index 1 and the empty state. Refused, in
+    /// both layouts: a forgotten init opening on a real prior (`t = 2`), a
+    /// worker that numbers its leaves locally (`for_leaf(.., 1)` at global
+    /// `t = 5` on a real state), leaf 1's openings on a real prior at
+    /// `t = 1`, and a zero init at `t = 2` even on the empty state. Each
+    /// would otherwise prove a leaf exposing the guess-checkable `Com(S; 0)`
+    /// of a secret state. Controls: the genesis leaf (empty state, zero
+    /// init) proves and exposes `Com(S_0; 0)`; a Plain leaf ignores its
+    /// openings on the same inputs.
+    #[test]
+    fn hiding_leaf_refuses_zero_init_on_a_real_state() {
+        let seed = SaltSeed::for_tests(83);
+        let ups = hp_batches()[0].clone();
+        let s0 = hp_empty();
+        assert_ne!(hp_prior(), s0, "precondition: a real (secret) prior");
+        let forgot = Openings { init: SaltBb::ZERO, ..Openings::for_leaf(&seed, SS, 2) };
+        let local = Openings::for_leaf(&seed, SS, 1);
+        let cases = [
+            ("forgotten init, real prior", 2u64, hp_prior(), forgot),
+            ("local numbering at global t = 5", 5, hp_prior(), local),
+            ("leaf-1 openings on a real prior", 1, hp_prior(), local),
+            ("zero init at t = 2 on the empty state", 2, s0.clone(), forgot),
+        ];
+        for expose in [Expose::Interval, Expose::Boundary] {
+            let mut leaf = hiding_leaf(expose);
+            for (what, t, prior, o) in &cases {
+                let msg = forge::catch_msg(|| leaf.prove_epoch_commit(*t, prior.clone(), ups.clone(), o).final_)
+                    .unwrap_err();
+                assert!(msg.contains("zero init salt"), "{expose:?}/{what}: {msg}");
+            }
+            let r = leaf.prove_epoch_commit(1, s0.clone(), ups.clone(), &local);
+            assert_eq!(r.initial, commit_ss_state_with(&s0, HIDING, &SaltBb::ZERO), "{expose:?}");
+        }
+        let mut plain = build_ss_full_leaf_commit(HP, Expose::Interval, CommitMode::Plain);
+        for (what, t, prior, o) in &cases {
+            let p = plain.prove_epoch_commit(*t, prior.clone(), ups.clone(), o);
+            assert_eq!(p.initial, commit_ss_state(prior), "Plain/{what}");
+        }
+    }
+
+    /// The zero-salt no-op path is proved at batch index 1 only (the
+    /// VK-derivation leaf's), like every other family's: the canonical
+    /// public input at `t = 2` is refused in either mode, after the input
+    /// checks.
+    #[test]
+    fn public_zero_path_refuses_another_batch_index() {
+        let noop = vec![SsFullUpdate::dummy(); HP.batch];
+        for mode in [HIDING, CommitMode::Plain] {
+            let mut leaf = build_ss_full_leaf_commit(HP, Expose::Interval, mode);
+            let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(2, hp_empty(), noop.clone()).final_)
+                .unwrap_err();
+            assert!(msg.contains("batch index 1"), "{mode:?}: {msg}");
         }
     }
 
@@ -3326,7 +3398,9 @@ mod tests {
     /// certified value, and both leaves pass the per-batch check against
     /// history 1's log, whose `Com(S_0)` is that anchor. The same batch at the
     /// same `t` gets another commitment in each history. The zero init salt
-    /// (what `for_leaf(.., 1)` gives) exposes `Com(S_2; 0)` and the log
+    /// (what `for_leaf(.., 1)` gives) would expose the guess-checkable
+    /// `Com(S_2; 0)`: the leaf refuses it. A nonzero WRONG anchor salt (not
+    /// detectable by the leaf) exposes another commitment, and the log
     /// rejects it.
     #[test]
     fn continued_history_leaf_opens_the_previous_final_commitment() {
@@ -3359,8 +3433,12 @@ mod tests {
         assert_ne!(bc[0], h0_bc1, "t restarted, the randomizer did not");
 
         let zero_init = Openings { init: SaltBb::ZERO, ..o1 };
-        let l1z = leaf.prove_epoch_commit(1, s2, bs[0].clone(), &zero_init).output;
-        let e = check_leaves_against_log(&[&l1z.0, &l2.0], &log1, Expose::Interval);
+        let msg = forge::catch_msg(|| leaf.prove_epoch_commit(1, s2.clone(), bs[0].clone(), &zero_init).final_)
+            .unwrap_err();
+        assert!(msg.contains("zero init salt"), "{msg}");
+        let wrong_init = Openings { init: rho_state_bb(&seed, SS, 1), ..o1 };
+        let l1w = leaf.prove_epoch_commit(1, s2, bs[0].clone(), &wrong_init).output;
+        let e = check_leaves_against_log(&[&l1w.0, &l2.0], &log1, Expose::Interval);
         assert!(e.as_ref().is_err_and(|m| m.contains("Com(S_0)")), "{e:?}");
     }
 

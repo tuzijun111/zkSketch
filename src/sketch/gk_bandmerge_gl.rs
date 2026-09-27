@@ -2331,10 +2331,12 @@ impl Gkb2LeafCircuit {
     /// honest prover, `OpeningsGl::for_leaf_after` for leaf 1 of a history
     /// continued after a rotation; ignored by a `Plain` circuit). The proof's
     /// `initial`, `final_` and `batch_commit` are then `Com(S_{t-1};
-    /// ρ^S_{t-1})`, `Com(S_t; ρ^S_t)` and `Com(B_t; ρ^B_t)`. A `Hiding`
-    /// circuit panics when `openings.final_` or `openings.batch` is the
-    /// public zero salt (never an honest PRF output). The init salt may be
-    /// zero (leaf 1 opens the public `Com(S_0; 0)`).
+    /// ρ^S_{t-1})`, `Com(S_t; ρ^S_t)` and `Com(B_t; ρ^B_t)`. A `Hiding` circuit
+    /// panics when `openings.final_` or `openings.batch` is the public zero
+    /// salt (never an honest PRF output). The init salt may be zero only at `t
+    /// = 1` on the empty genesis state (leaf 1 of the genesis history opens the
+    /// public `Com(S_0; 0)`); a zero init on any other input panics
+    /// ([`assert_zero_init_opens_public_state`](crate::commitment::hiding::assert_zero_init_opens_public_state)).
     pub fn prove_epoch_commit(
         &mut self,
         t: u64,
@@ -2348,6 +2350,9 @@ impl Gkb2LeafCircuit {
                 "Hiding leaf t = {t}: the final and batch commitments need secret randomizers \
                  (OpeningsGl::for_leaf), not the public zero salt"
             );
+            crate::commitment::hiding::assert_zero_init_opens_public_state(t, openings.init.is_zero(), || {
+                initial_state == Gk2State::empty(self.params)
+            });
         }
         self.prove_epoch_opened(t, initial_state, batch_vals, openings)
     }
@@ -3180,13 +3185,17 @@ mod tests {
             assert_eq!((iv.lo, iv.hi), (Val::from_u64(t), Val::from_u64(t)));
             assert_eq!(iv.digest, leaf_digest(&hash_gl, 2, t, &bc.0), "{binding:?}: H(TAG_LEAF, t, Com(B_t; ρ))");
         }
+        // Boundary layout, leaf 1 of the genesis history from the empty S_0
+        // (its zero init salt opens only that public state).
+        let s0 = Gk2State::empty(HP);
+        let expect0 = apply_batch2(&s0, &vals);
         for binding in [Binding::Semantic, Binding::Legacy] {
             let mut bleaf = build_gkb2_leaf_commit(HP, Expose::Boundary, binding, CommitMode::Hiding);
-            let r = bleaf.prove_epoch_commit(1, prior.clone(), vals.clone(), &OpeningsGl::for_leaf(&seed, GK, 1));
+            let r = bleaf.prove_epoch_commit(1, s0.clone(), vals.clone(), &OpeningsGl::for_leaf(&seed, GK, 1));
             let (i, f) = read_exposed_boundary_proof(&r.output.0);
-            assert_eq!(i.0, commit_gk2_state_with(&prior, CommitMode::Hiding, &SaltGl::ZERO).0, "{binding:?}");
+            assert_eq!(i.0, commit_gk2_state_with(&s0, CommitMode::Hiding, &SaltGl::ZERO).0, "{binding:?}");
             assert_eq!(f.0, r.final_.0, "{binding:?}");
-            assert_eq!(f.0, commit_gk2_state_with(&expect, CommitMode::Hiding, &rho_state_gl(&seed, GK, 1)).0);
+            assert_eq!(f.0, commit_gk2_state_with(&expect0, CommitMode::Hiding, &rho_state_gl(&seed, GK, 1)).0);
         }
     }
 
@@ -3224,7 +3233,9 @@ mod tests {
             let vals = hp_batches()[0].clone();
             let o1 = OpeningsGl::for_leaf(&SaltSeed::for_tests(1), GK, 1);
             let o5 = OpeningsGl::for_leaf(&SaltSeed::for_tests(2), GK, 5);
-            let a = leaf.prove_epoch_commit(1, hp_prior(), vals.clone(), &o1);
+            // Leaf 1 starts from the empty S_0 (its zero init salt opens only
+            // that public state); leaf 5 from a real prior.
+            let a = leaf.prove_epoch_commit(1, Gk2State::empty(HP), vals.clone(), &o1);
             let b = leaf.prove_epoch_commit(5, hp_prior(), vals, &o5);
             assert_ne!(a.final_, b.final_);
             assert_eq!(vk_pin_values(&a.output.0), vk, "{binding:?}");
@@ -3407,7 +3418,10 @@ mod tests {
     /// `prove_epoch_at` / `prove_epoch` entry points panic on it, and so does
     /// `prove_epoch_commit` handed a zero final or batch salt. The explicit
     /// no-op path refuses a non-empty batch. Controls: a zero INIT salt is
-    /// leaf 1's honest opening, and a Plain leaf still ignores its openings.
+    /// leaf 1's honest opening (from the empty genesis state; a zero init on
+    /// a real state is refused, test
+    /// `hiding_leaf_refuses_zero_init_on_a_real_state`), and a Plain leaf
+    /// still ignores its openings.
     #[test]
     fn hiding_leaf_rejects_zero_openings_outside_the_noop_path() {
         let seed = SaltSeed::for_tests(81);
@@ -3432,13 +3446,53 @@ mod tests {
 
         let o1 = OpeningsGl::for_leaf(&seed, GK, 1);
         assert!(o1.init.is_zero());
-        let r = leaf.prove_epoch_commit(1, hp_prior(), vals.clone(), &o1);
-        assert_eq!(r.initial, commit_gk2_state_with(&hp_prior(), CommitMode::Hiding, &SaltGl::ZERO));
+        let s0 = Gk2State::empty(HP);
+        let r = leaf.prove_epoch_commit(1, s0.clone(), vals.clone(), &o1);
+        assert_eq!(r.initial, commit_gk2_state_with(&s0, CommitMode::Hiding, &SaltGl::ZERO));
         let mut plain = build_gkb2_leaf_commit(HP, Expose::Interval, Binding::Semantic, CommitMode::Plain);
         let p = plain.prove_epoch_commit(2, hp_prior(), vals.clone(), &OpeningsGl::plain());
         assert_eq!(p.initial, commit_gk2_state(&hp_prior()));
         assert_eq!(p.final_, commit_gk2_state(&apply_batch2(&hp_prior(), &vals)));
         assert_eq!(p.batch_commit, commit_gk2_batch(&vals, HP.batch, hp_prior().n));
+    }
+
+    /// (F1, init salt) The twin of the BabyBear leaf's test: under `Hiding` a
+    /// zero INIT salt opens only the public genesis `Com(S_0; 0)` (batch
+    /// index 1, the empty state). Refused, under both bindings: a forgotten
+    /// init opening on a real prior (`t = 2`), local numbering
+    /// (`for_leaf(.., 1)` at global `t = 5` on a real state), leaf 1's
+    /// openings on a real prior at `t = 1`, and a zero init at `t = 2` on the
+    /// empty state. Controls: the genesis leaf proves and exposes
+    /// `Com(S_0; 0)`; a Plain leaf ignores its openings on the same inputs.
+    #[test]
+    fn hiding_leaf_refuses_zero_init_on_a_real_state() {
+        let seed = SaltSeed::for_tests(83);
+        let vals = hp_batches()[0].clone();
+        let s0 = Gk2State::empty(HP);
+        assert_ne!(hp_prior(), s0, "precondition: a real (secret) prior");
+        let forgot = OpeningsGl { init: SaltGl::ZERO, ..OpeningsGl::for_leaf(&seed, GK, 2) };
+        let local = OpeningsGl::for_leaf(&seed, GK, 1);
+        let cases = [
+            ("forgotten init, real prior", 2u64, hp_prior(), forgot),
+            ("local numbering at global t = 5", 5, hp_prior(), local),
+            ("leaf-1 openings on a real prior", 1, hp_prior(), local),
+            ("zero init at t = 2 on the empty state", 2, s0.clone(), forgot),
+        ];
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let mut leaf = hiding_leaf(binding);
+            for (what, t, prior, o) in &cases {
+                let msg = forge::catch_msg(|| leaf.prove_epoch_commit(*t, prior.clone(), vals.clone(), o).final_)
+                    .unwrap_err();
+                assert!(msg.contains("zero init salt"), "{binding:?}/{what}: {msg}");
+            }
+            let r = leaf.prove_epoch_commit(1, s0.clone(), vals.clone(), &local);
+            assert_eq!(r.initial, commit_gk2_state_with(&s0, CommitMode::Hiding, &SaltGl::ZERO), "{binding:?}");
+        }
+        let mut plain = build_gkb2_leaf_commit(HP, Expose::Interval, Binding::Semantic, CommitMode::Plain);
+        for (what, t, prior, o) in &cases {
+            let p = plain.prove_epoch_commit(*t, prior.clone(), vals.clone(), o);
+            assert_eq!(p.initial, commit_gk2_state(prior), "Plain/{what}");
+        }
     }
 
     /// The no-op path refuses a real state and another batch index (the twin
@@ -3468,8 +3522,9 @@ mod tests {
     /// ([`OpeningsGl::for_leaf_after`]): history 1 restarts `t` at 1 from
     /// history 0's final `S_2`, its leaf 1 exposes exactly the certified
     /// `Com(S_2; ρ_{0,2})`, both leaves pass history 1's log (whose anchor is
-    /// taken from history 0, not recomputed), and the zero init salt is
-    /// rejected.
+    /// taken from history 0, not recomputed); the zero init salt (the
+    /// guess-checkable `Com(S_2; 0)`) is refused by the leaf, and a nonzero
+    /// wrong anchor salt is rejected by the log.
     #[test]
     fn continued_history_leaf_opens_the_previous_final_commitment() {
         let seed = SaltSeed::for_tests(71);
@@ -3501,8 +3556,12 @@ mod tests {
         let log1 = batch_log(&anchor.0, &fin.0, &bc);
         assert_eq!(check_leaves_against_log(&[&l1.0, &l2.0], &log1, Expose::Interval), Ok(()));
         let zero_init = OpeningsGl { init: SaltGl::ZERO, ..o1 };
-        let l1z = leaf.prove_epoch_commit(1, s2, bs[0].clone(), &zero_init).output;
-        let e = check_leaves_against_log(&[&l1z.0, &l2.0], &log1, Expose::Interval);
+        let msg = forge::catch_msg(|| leaf.prove_epoch_commit(1, s2.clone(), bs[0].clone(), &zero_init).final_)
+            .unwrap_err();
+        assert!(msg.contains("zero init salt"), "{msg}");
+        let wrong_init = OpeningsGl { init: rho_state_gl(&seed, GK, 1), ..o1 };
+        let l1w = leaf.prove_epoch_commit(1, s2, bs[0].clone(), &wrong_init).output;
+        let e = check_leaves_against_log(&[&l1w.0, &l2.0], &log1, Expose::Interval);
         assert!(e.as_ref().is_err_and(|m| m.contains("Com(S_0)")), "{e:?}");
     }
 
