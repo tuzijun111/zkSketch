@@ -191,10 +191,11 @@ pub fn cm_v9_noop_leaf_interval(params: CountMinLeafParams) -> Proof {
 /// already holds it). The no-op leaf opens all three commitments with the
 /// public zero salt
 /// ([`Openings::public_zero`](crate::commitment::hiding::Openings::public_zero),
-/// through the explicit `prove_epoch_public_zero` path, which refuses a batch
-/// that raises a register), so the init and final salts are equal and it
-/// still exposes `init == final`; the salts are witnesses, so its VK is that
-/// of every real leaf of the same mode.
+/// through the explicit `prove_epoch_public_zero` path, which accepts only
+/// this public no-op input, since for HLL a real batch of repeated keys can
+/// also leave every register unchanged), so the init and final salts are
+/// equal and it still exposes `init == final`; the salts are witnesses, so
+/// its VK is that of every real leaf of the same mode.
 pub fn hll_omc_noop_leaf_commit(
     params: crate::sketch::hll_omc::HllOmcParams,
     expose: Expose,
