@@ -19,9 +19,12 @@
 //!
 //! Mirrors [`crate::config`]: `HidingFriPcs` over the plain Merkle MMCS, the
 //! OS-seeded [`crate::zk_rng::ZkRng`], and `NUM_RANDOM_CODEWORDS`
-//! `= [Challenge : Val] = 2` random codewords per commitment (the same
-//! argument as the BabyBear side, for a degree-2 extension). The salted-MMCS
-//! caveat and the LogUp / statistical-ZK gaps documented there apply here too.
+//! `= [Challenge : Val] = 2` random codewords per committed matrix. As on the
+//! BabyBear side the FRI batch is masked by batch-stark's randomization
+//! polynomial, not by these; they give each committed Merkle leaf row 2
+//! random Goldilocks values (about 128 bits) for the plain-MMCS argument. The
+//! salted-MMCS caveat and the LogUp / statistical-ZK gaps documented there
+//! apply here too.
 
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -59,7 +62,7 @@ pub type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 #[cfg(feature = "zk")]
 pub type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, crate::zk_rng::ZkRng>;
 
-/// Random codewords per commitment under `zk`: `[Challenge : Val] = 2`
+/// Random codewords per committed matrix under `zk`: `[Challenge : Val] = 2`
 /// (see `crate::config::NUM_RANDOM_CODEWORDS`).
 #[cfg(feature = "zk")]
 pub const NUM_RANDOM_CODEWORDS: usize =

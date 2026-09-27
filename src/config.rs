@@ -20,7 +20,8 @@
 //! produced by the hiding PCS (the whole crate uses this one `Pcs`; the
 //! recursion side follows in `recursion::recursive::config`). Degrees are
 //! unchanged but every committed trace doubles (`is_zk`), so a table fits
-//! only while its base height is `<= 2^24` (see `experiments::table_probe`).
+//! only while its base height is `<= 2^24` (for `lq <= LOG_BLOWUP`; see
+//! `experiments::table_probe`).
 //!
 //! Salted Merkle leaves are NOT used. `HidingFriPcs` documents that both
 //! MMCSs "must also be hiding" (`MerkleTreeHidingMmcs`), but that MMCS draws
@@ -77,22 +78,26 @@ pub type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, ZkRng>;
 #[cfg(feature = "zk")]
 pub use crate::zk_rng::ZkRng;
 
-/// Random codewords `HidingFriPcs` appends to every commitment (`zk` only):
-/// `[Challenge : Val] = 4`.
+/// Random codewords `HidingFriPcs` appends to every committed matrix (`zk`
+/// only): `[Challenge : Val] = 4` base-field columns.
 ///
-/// They are base-field columns, and FRI batches every opened column with
-/// powers of an extension-field challenge `α`; the FRI transcript (the batched
-/// codeword at every query and fold layer) is simulatable only if that
-/// batch is a uniformly random extension-valued codeword at each height. A
-/// base column `c` scaled by `α^k` spans one `Val`-dimension of it, so each
-/// matrix needs `[Challenge : Val]` of them (`α^k, ..., α^(k+3)` are
-/// `Val`-independent unless `α` lies in a proper subfield). Upstream
-/// Plonky3's own ZK tests and example over degree-4 fields all use 4
-/// (`batch-stark/tests/simple.rs`, `uni-stark/tests/{fib_air,mul_air,
-/// mul_fib_pair,periodic_air}.rs`, `poseidon2-air/examples/
-/// prove_poseidon2_baby_bear_keccak_zk.rs`); the recursion fork's examples use
-/// 2 in functional tests. The cost is 4 extra columns per commitment (the
-/// randomization polynomial gets `4 + 4`), negligible next to the traces.
+/// The value follows upstream Plonky3: its ZK tests and example over
+/// degree-4 fields all pass 4 (`batch-stark/tests/simple.rs`,
+/// `uni-stark/tests/{fib_air,mul_air,mul_fib_pair,periodic_air}.rs`,
+/// `poseidon2-air/examples/prove_poseidon2_baby_bear_keccak_zk.rs`); the
+/// recursion fork's examples use 2 in functional tests.
+///
+/// It is not what masks the FRI batch. batch-stark does that with the
+/// randomization polynomial `R` (core `batch-stark/src/prover.rs`, the
+/// optional ZK commitment round): `HidingFriPcs` commits `R` once per
+/// extended trace domain with `NUM_RANDOM_CODEWORDS + [Challenge : Val]`
+/// random base columns (`get_opt_randomization_poly_commitment`), so every
+/// FRI height carries at least `[Challenge : Val]` random columns whatever
+/// this constant is. What it buys here is the entropy of each committed
+/// Merkle leaf row: 4 random BabyBear values (about 124 bits) per row of every
+/// trace, permutation and quotient matrix, which the plain-MMCS argument in
+/// the module docs uses in place of a salt. The cost is 4 extra columns per
+/// matrix (and `R` gets `4 + 4`), negligible next to the traces.
 #[cfg(feature = "zk")]
 pub const NUM_RANDOM_CODEWORDS: usize =
     <Challenge as p3_field::BasedVectorSpace<Val>>::DIMENSION;

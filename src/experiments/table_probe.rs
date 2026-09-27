@@ -21,12 +21,19 @@
 //! * `E0_QUOTIENT=1` also records each table's log quotient-chunk count,
 //!   non-ZK and ZK (a symbolic evaluation of every AIR).
 //!
-//! `log_h` is the base (non-ZK) log2 padded height, the same under both PCS
-//! (a hiding PCS commits `2^(log_h + 1)` rows). Every committed LDE has
-//! `2^(log_h + is_zk + LOG_BLOWUP)` rows and BabyBear's two-adicity is 27, so
-//! a table fits iff `log_h <= 25` non-hiding and `log_h <= 24` hiding
-//! ([`LOG_CEILING_NONHIDING`], [`LOG_CEILING_HIDING`]). The quotient domain
-//! (`log_h + is_zk + lq`) stays inside that bound while `lq <= LOG_BLOWUP`.
+//! `log_h` is the base (non-ZK) log2 padded height of the circuit that was
+//! built (a hiding PCS commits `2^(log_h + 1)` rows). A leaf circuit is the
+//! same under both PCS; a merge circuit is not, since it verifies its
+//! children's proofs and a hiding proof has more to verify, so merge shapes
+//! describe the PCS of the build that recorded them.
+//!
+//! Every committed LDE has `2^(log_h + is_zk + LOG_BLOWUP)` rows and the
+//! quotient domain `2^(log_h + is_zk + lq)` points (`lq` = log quotient-chunk
+//! count), and BabyBear's two-adicity is 27, so a table fits iff
+//! `log_h + is_zk + max(LOG_BLOWUP, lq) <= 27` ([`TableShape::log_ceiling`]).
+//! With `lq` recorded (`E0_QUOTIENT=1`) that is checked as is; without it
+//! `lq <= LOG_BLOWUP` is assumed, i.e. `log_h <= 25` non-hiding and
+//! `log_h <= 24` hiding ([`LOG_CEILING_NONHIDING`], [`LOG_CEILING_HIDING`]).
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -44,9 +51,12 @@ use p3_lookup::logup::LogUpGadget;
 use crate::config::{Challenge, LOG_BLOWUP, Val};
 use crate::recursion::recursive::config::{ConfigWithFriParams, D};
 
-/// Largest `log_h` a non-hiding table may have: `TWO_ADICITY - LOG_BLOWUP`.
-pub const LOG_CEILING_NONHIDING: usize = <Val as TwoAdicField>::TWO_ADICITY - LOG_BLOWUP;
-/// Largest `log_h` a hiding table may have (the PCS doubles every trace).
+const TWO_ADICITY: usize = <Val as TwoAdicField>::TWO_ADICITY;
+/// Largest `log_h` a non-hiding table with `lq <= LOG_BLOWUP` may have:
+/// `TWO_ADICITY - LOG_BLOWUP`.
+pub const LOG_CEILING_NONHIDING: usize = TWO_ADICITY - LOG_BLOWUP;
+/// Largest `log_h` a hiding table with `lq <= LOG_BLOWUP` may have (the PCS
+/// doubles every trace).
 pub const LOG_CEILING_HIDING: usize = LOG_CEILING_NONHIDING - 1;
 
 /// Non-primitive AIR order of the zkSketch leaf builders (their
@@ -89,16 +99,24 @@ impl TableShape {
     pub fn fill(&self) -> f64 {
         self.rows as f64 / self.padded() as f64
     }
+    /// Largest `log_h` this table may have under the non-hiding (`zk =
+    /// false`) or hiding PCS: `TWO_ADICITY - is_zk - max(LOG_BLOWUP, lq)`,
+    /// with the recorded `lq` of that PCS, or `lq <= LOG_BLOWUP` assumed when
+    /// none was recorded ([`LOG_CEILING_NONHIDING`] / [`LOG_CEILING_HIDING`]).
+    pub fn log_ceiling(&self, zk: bool) -> usize {
+        let lq = self.lq.map_or(0, |(lq0, lq1)| if zk { lq1 } else { lq0 });
+        TWO_ADICITY.saturating_sub(usize::from(zk) + LOG_BLOWUP.max(lq))
+    }
     pub fn fits_nonhiding(&self) -> bool {
-        self.log_h <= LOG_CEILING_NONHIDING
+        self.log_h <= self.log_ceiling(false)
     }
     pub fn fits_hiding(&self) -> bool {
-        self.log_h <= LOG_CEILING_HIDING
+        self.log_h <= self.log_ceiling(true)
     }
-    /// Rows this table can still grow by before it outgrows the hiding
+    /// Rows this table can still grow by before it outgrows its hiding
     /// ceiling (negative once it has).
     pub fn headroom_hiding(&self) -> i64 {
-        (1i64 << LOG_CEILING_HIDING) - self.rows as i64
+        (1i64 << self.log_ceiling(true)) - self.rows as i64
     }
 }
 
@@ -125,6 +143,15 @@ impl CircuitShape {
     }
     pub fn consistent(&self) -> bool {
         self.tables.iter().all(|t| t.consistent)
+    }
+    /// Every table fits its non-hiding ceiling.
+    pub fn fits_nonhiding(&self) -> bool {
+        self.tables.iter().all(TableShape::fits_nonhiding)
+    }
+    /// Every table fits its hiding ceiling (with `lq` recorded, a table below
+    /// [`Self::max_log_h`] can be the one that does not).
+    pub fn fits_hiding(&self) -> bool {
+        self.tables.iter().all(TableShape::fits_hiding)
     }
 }
 
@@ -278,15 +305,18 @@ pub fn maybe_stop() {
 /// One-line-per-table rendering of a shape.
 pub fn summary(shape: &CircuitShape) -> String {
     let mut s = format!(
-        "[table_probe] {}: max_log_h={} sum_padded={} (hiding ceiling 2^{})",
+        "[table_probe] {}: max_log_h={} sum_padded={} fits_hiding={} (hiding ceiling 2^{} while lq<={})",
         shape.site,
         shape.max_log_h(),
         shape.sum_padded(),
-        LOG_CEILING_HIDING
+        shape.fits_hiding(),
+        LOG_CEILING_HIDING,
+        LOG_BLOWUP
     );
     for t in &shape.tables {
+        let ceiling = t.log_ceiling(true);
         s.push_str(&format!(
-            "\n  {:>2} {:<32} 2^{:<2} rows={:<10} fill={:.3} width={} prep={}{}{}",
+            "\n  {:>2} {:<32} 2^{:<2} rows={:<10} fill={:.3} width={} prep={}{}{}{}",
             t.idx,
             t.name,
             t.log_h,
@@ -295,6 +325,7 @@ pub fn summary(shape: &CircuitShape) -> String {
             t.width,
             t.prep_width,
             t.lq.map_or(String::new(), |(a, b)| format!(" lq={a}/{b}")),
+            if ceiling < LOG_CEILING_HIDING { format!(" hiding_ceiling=2^{ceiling}") } else { String::new() },
             if t.consistent { "" } else { " (inconsistent)" }
         ));
     }
@@ -385,6 +416,42 @@ mod tests {
     fn ceilings() {
         assert_eq!(LOG_CEILING_NONHIDING, 25);
         assert_eq!(LOG_CEILING_HIDING, 24);
+    }
+
+    fn table(log_h: usize, lq: Option<(usize, usize)>) -> TableShape {
+        let rows = (1usize << log_h) - 5;
+        TableShape { idx: 0, name: "alu".into(), log_h, rows, width: 1, prep_width: 1, lq, consistent: true }
+    }
+
+    /// The ceiling tracks the recorded quotient-chunk count: a degree >= 5
+    /// AIR (`lq_zk = 3`) has a `2^(log_h + 4)` hiding quotient domain, so a
+    /// 2^24 table no longer fits although `log_h <= LOG_CEILING_HIDING`.
+    #[test]
+    fn ceiling_tracks_quotient_chunks() {
+        let t = table(24, None);
+        assert_eq!((t.log_ceiling(false), t.log_ceiling(true)), (25, 24));
+        assert!(t.fits_hiding() && t.fits_nonhiding());
+        assert!(table(24, Some((1, 2))).fits_hiding());
+        assert_eq!(table(24, Some((1, 2))).headroom_hiding(), 5);
+
+        let deg5 = table(24, Some((2, 3)));
+        assert_eq!((deg5.log_ceiling(false), deg5.log_ceiling(true)), (25, 23));
+        assert!(!deg5.fits_hiding());
+        assert!(deg5.fits_nonhiding());
+        assert_eq!(deg5.headroom_hiding(), (1i64 << 23) - deg5.rows as i64);
+        assert!(deg5.headroom_hiding() < 0);
+        assert!(!table(25, Some((3, 3))).fits_nonhiding());
+        assert!(table(23, Some((2, 3))).fits_hiding());
+
+        // A shorter table with a larger `lq` decides the circuit.
+        let mut small = table(23, Some((3, 4)));
+        small.idx = 1;
+        assert_eq!(small.log_ceiling(true), 22);
+        let shape = CircuitShape { site: "merge", tables: vec![table(24, Some((1, 2))), small] };
+        assert_eq!(shape.max_log_h(), 24);
+        assert!(shape.tables[0].fits_hiding());
+        assert!(!shape.fits_hiding());
+        assert!(shape.fits_nonhiding());
     }
 
     #[test]

@@ -5,8 +5,13 @@
 //! Heights are static functions of the circuit, so nothing is proved: each
 //! builder stops right after `get_airs_and_degrees_with_prep`
 //! ([`zksketch::experiments::table_probe`]), before the preprocessed commit.
-//! The heights are the same under both PCS (a hiding PCS commits
-//! `2^(log_h + 1)` rows of each table). The circuits are the ones the
+//! Leaf heights are the same under both PCS (a hiding PCS commits
+//! `2^(log_h + 1)` rows of each table). Merge heights are NOT: a merge circuit
+//! verifies its children's proofs, and under `--features zk` those are hiding
+//! proofs (random-codeword openings, the randomization-polynomial round, a
+//! doubled FRI domain), so the hiding merge circuit is larger. Every row
+//! carries the `pcs` of the build that recorded it; the hiding merges come
+//! only from a `--features zk` run. The circuits are the ones the
 //! composition harness deploys (`stream_compose`): CM omc, HLL omc, SS
 //! certified (`ss_final_full`), GK bandmerge2, plus the Bloom omc leaf, under
 //! `composition_expose()` (Interval unless `ZKSKETCH_STATEMENT` says otherwise)
@@ -33,8 +38,13 @@
 //! * `E0_MERGE=1`: also probe the merge circuits (cm/hll/ss/gk): prove the
 //!   family's no-op leaf at the cell's geometry, then derive the root VK of an
 //!   `E0_MERGE_T`-leaf forest (default 8: merge levels L1..L3), recording each
-//!   level's real merge circuit. Merge rows report the child's m.
-//!   `E0_MERGE=only` writes the merge rows alone (no leaf rows).
+//!   level's real merge circuit. Merge rows report the child's m, and
+//!   `variant=hiding_merge` names `expose_forest`'s state-hiding merge
+//!   circuit, not the PCS (see `pcs`). `E0_MERGE=only` writes the merge rows
+//!   alone (no leaf rows). Run it under `--features zk` for the hiding merges;
+//!   the zk leaf it proves first peaks at ~107 GB for CM at m=2^14 and
+//!   ~122 GB for GK at m=2^13 (GK at m=2^14: ~250 GB), so probe GK's hiding
+//!   merges over m <= 8192 children.
 //! * `E0_COST=1`: instead of the probe, measure prove time, peak RSS and proof
 //!   bytes of one leaf per family and one merge at a SMALL geometry (CM d=4
 //!   w=1024, HLL b=10, SS cap=1024, GK cap=256, Bloom k=7 log_w=10, all at
@@ -43,13 +53,17 @@
 //! Output (`results/`): `e0_tables.csv` (one row per table), `e0_summary.csv`
 //! (one row per circuit), `e0_cost.csv` (`E0_COST`). `m_cross_hiding` is the
 //! m at which a straight-line fit of the table's unpadded rows over the
-//! probed m values reaches 2^24 (min over tables in the summary).
+//! probed m values reaches the table's hiding ceiling (min over tables in the
+//! summary). That ceiling is 2^24 unless a recorded `lq_zk` exceeds
+//! `LOG_BLOWUP` (`TableShape::log_ceiling`); `fits_*` use the same ceilings,
+//! and a circuit fits only if every table does.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use p3_circuit_prover::{BatchStarkProof, PrimitiveTable};
 use p3_uni_stark::StarkGenericConfig;
+use zksketch::config::LOG_BLOWUP;
 use zksketch::experiments::metrics::{self, BenchCfg, RunOutcome};
 use zksketch::experiments::table_probe::{
     self, CircuitShape, LOG_CEILING_HIDING, LOG_CEILING_NONHIDING, TableShape,
@@ -249,9 +263,9 @@ fn fit(points: &[(usize, usize)]) -> Option<(f64, f64)> {
     Some((my - b * mx, b))
 }
 
-/// m at which the fitted line reaches the hiding ceiling (`None` if flat).
-fn m_cross((a, b): (f64, f64)) -> Option<f64> {
-    (b > 0.0).then(|| ((1u64 << LOG_CEILING_HIDING) as f64 - a) / b)
+/// m at which the fitted line reaches `2^log_ceiling` rows (`None` if flat).
+fn m_cross((a, b): (f64, f64), log_ceiling: usize) -> Option<f64> {
+    (b > 0.0).then(|| ((1u64 << log_ceiling) as f64 - a) / b)
 }
 
 fn fmt_opt(x: Option<f64>, prec: usize) -> String {
@@ -332,7 +346,7 @@ fn write_family(ctx: &Ctx, probes: &[Probe]) {
         let mut min_headroom = i64::MAX;
         for t in &p.shape.tables {
             let f = if leaf { fits.get(&(p.fam.clone(), t.name.clone())).copied() } else { None };
-            let mc = f.and_then(m_cross);
+            let mc = f.and_then(|f| m_cross(f, t.log_ceiling(true)));
             if let Some(v) = mc {
                 if cross.is_none_or(|(c, _)| v < c) {
                     cross = Some((v, &t.name));
@@ -387,8 +401,8 @@ fn write_family(ctx: &Ctx, probes: &[Probe]) {
             max.rows.to_string(),
             format!("{:.4}", max.fill()),
             p.shape.sum_padded().to_string(),
-            max.fits_nonhiding().to_string(),
-            max.fits_hiding().to_string(),
+            p.shape.fits_nonhiding().to_string(),
+            p.shape.fits_hiding().to_string(),
             min_headroom.to_string(),
             fmt_opt(cross.map(|(v, _)| v), 0),
             cross.map_or("-".into(), |(_, n)| n.to_string()),
@@ -405,7 +419,7 @@ fn print_probe(p: &Probe) {
     let s = &p.shape;
     let largest = s.largest();
     println!(
-        "E0 fam={} level={} m={} [{}] max_log_h={} ({}) fill={:.3} sum_padded={} fits_hiding(<=2^{})={} fits_nonhiding(<=2^{})={} consistent={} probe_s={:.1} hwm_mb={:.0} check={}",
+        "E0 fam={} level={} m={} [{}] max_log_h={} ({}) fill={:.3} sum_padded={} fits_hiding(<=2^{} if lq<={})={} fits_nonhiding(<=2^{})={} consistent={} probe_s={:.1} hwm_mb={:.0} check={}",
         p.fam,
         p.level,
         p.m,
@@ -415,9 +429,10 @@ fn print_probe(p: &Probe) {
         largest.iter().map(|t| t.fill()).fold(0.0, f64::max),
         s.sum_padded(),
         LOG_CEILING_HIDING,
-        s.max_log_h() <= LOG_CEILING_HIDING,
+        LOG_BLOWUP,
+        s.fits_hiding(),
         LOG_CEILING_NONHIDING,
-        s.max_log_h() <= LOG_CEILING_NONHIDING,
+        s.fits_nonhiding(),
         s.consistent(),
         p.probe_s,
         p.hwm_mb,
@@ -427,10 +442,10 @@ fn print_probe(p: &Probe) {
 }
 
 /// Compare a probed shape with a real proof of the same circuit: per-table
-/// `degree_bits == log_h + is_zk`, the non-primitive op types, and the ALU /
-/// non-primitive row counts (row differences are reported, not fatal; a
-/// table whose proof reports its padded height, as Poseidon2 does, is
-/// skipped).
+/// `degree_bits == log_h + is_zk`, the non-primitive op types, and every
+/// table's row count (row differences are reported, not fatal). The proof's
+/// Poseidon2 entry reports that table's padded height, so it is compared
+/// with `2^log_h`; every other table must match its unpadded rows exactly.
 fn check_proof(shape: &CircuitShape, proof: &Proof, is_zk: usize) -> String {
     let db = &proof.proof.degree_bits;
     let probed: Vec<usize> = shape.tables.iter().map(|t| t.log_h + is_zk).collect();
@@ -448,16 +463,30 @@ fn check_proof(shape: &CircuitShape, proof: &Proof, is_zk: usize) -> String {
         return format!("MISMATCH op_types proof={got:?}");
     }
     let mut diffs = Vec::new();
-    if let Some(alu) = shape.tables.iter().find(|t| t.name == "alu") {
-        let rows = proof.rows[PrimitiveTable::Alu].div_ceil(proof.table_packing.alu_lanes());
-        if rows != alu.rows {
-            diffs.push(format!("alu {rows}!={}", alu.rows));
+    let packing = &proof.table_packing;
+    for t in &shape.tables[..n_prim] {
+        let rows = match t.name.as_str() {
+            "const" => proof.rows[PrimitiveTable::Const],
+            "public" => {
+                let ops = proof.rows[PrimitiveTable::Public];
+                ops.div_ceil(if ops <= 1 { 1 } else { packing.public_lanes() })
+            }
+            "alu" => proof.rows[PrimitiveTable::Alu].div_ceil(packing.alu_lanes()),
+            other => return format!("MISMATCH primitive table {other}"),
+        };
+        if rows != t.rows {
+            diffs.push(format!("{} {rows}!={}", t.name, t.rows));
         }
     }
     for (e, t) in proof.non_primitives.iter().zip(&shape.tables[n_prim..]) {
         let rows = e.rows.div_ceil(e.lanes.max(1));
-        if rows != t.rows && rows as u64 != t.padded() {
-            diffs.push(format!("{} {rows}!={}", t.name, t.rows));
+        let (want, what) = if t.name.starts_with("poseidon2") {
+            (t.padded() as usize, "padded")
+        } else {
+            (t.rows, "rows")
+        };
+        if rows != want {
+            diffs.push(format!("{} {rows}!={want}({what})", t.name));
         }
     }
     if diffs.is_empty() { "ok".into() } else { format!("ok(rows:{})", diffs.join(";")) }
@@ -470,6 +499,12 @@ fn probe(ctx: &Ctx, fams: &[String], ms: &[usize], g: &Geometry) {
     let merge_only = std::env::var("E0_MERGE").is_ok_and(|v| v == "only");
     let merge = merge_only || env_on("E0_MERGE");
     let merge_t = env_usize("E0_MERGE_T", 8);
+    if merge && ctx.is_zk == 0 {
+        println!(
+            "E0 note: non-hiding build, so the merge rows describe the NON-ZK merge circuits \
+             (they verify non-hiding children); rerun with --features zk for the hiding merges"
+        );
+    }
     for fam in fams {
         let mut probes = Vec::new();
         for &m in ms {
