@@ -386,13 +386,27 @@ fn prove_query_at(
     // The version's randomizer. Under `Hiding` only the genesis state (t = 0)
     // opens with the public zero; a zero salt at t ≥ 1 would publish the
     // guess-checkable `Com(S_t; 0)`, so refuse it here (an honest PRF output
-    // is zero with probability ~2^-371).
-    let salt_of = |fam: CommitFamily| -> SaltBb {
+    // is zero with probability ~2^-371). Version 0 is the public EMPTY
+    // sketch: a query there must open exactly the genesis anchor, so any
+    // other state at t = 0 (which would publish its own `Com(S; 0)`) is
+    // refused too. `is_genesis` compares the state's commitment with the
+    // empty sketch's; it runs only at t = 0 (never reached by the harness
+    // schedules, whose queries follow a batch).
+    let salt_of = |fam: CommitFamily, is_genesis: &dyn Fn() -> bool| -> SaltBb {
         let salt = commit.state_salt(fam, t as u64);
-        assert!(
-            !mode.is_hiding() || t == 0 || !salt.is_zero(),
-            "hiding query at version {t}: needs the version's secret randomizer, not the public zero"
-        );
+        if mode.is_hiding() {
+            if t == 0 {
+                assert!(
+                    is_genesis(),
+                    "hiding query at version 0 opens the public zero randomizer: only the genesis (empty) state may"
+                );
+            } else {
+                assert!(
+                    !salt.is_zero(),
+                    "hiding query at version {t}: needs the version's secret randomizer, not the public zero"
+                );
+            }
+        }
         salt
     };
     match q {
@@ -401,7 +415,9 @@ fn prove_query_at(
             match mode {
                 CommitMode::Plain => (prove_cm_decode(params, state.clone(), key), commit_countmin(state).0),
                 CommitMode::Hiding => {
-                    let salt = salt_of(CommitFamily::CountMin);
+                    let salt = salt_of(CommitFamily::CountMin, &|| {
+                        commit_countmin(state).0 == commit_countmin(&cm_empty(params.d, params.w)).0
+                    });
                     (
                         prove_cm_decode_commit(params, state.clone(), key, default_binding(), mode, &salt),
                         commit_countmin_with(state, mode, &salt).0,
@@ -414,7 +430,9 @@ fn prove_query_at(
             match mode {
                 CommitMode::Plain => (prove_hll_decode_omc(params, regs.to_vec(), 0), commit_hll_omc(regs, b)),
                 CommitMode::Hiding => {
-                    let salt = salt_of(CommitFamily::HyperLogLog);
+                    let salt = salt_of(CommitFamily::HyperLogLog, &|| {
+                        commit_hll_omc(regs, b) == commit_hll_omc(&hll_omc_empty(b), b)
+                    });
                     (
                         prove_hll_decode_omc_commit(params, regs.to_vec(), 0, default_binding(), mode, &salt),
                         commit_hll_omc_with(regs, b, mode, &salt),
@@ -427,7 +445,9 @@ fn prove_query_at(
             match mode {
                 CommitMode::Plain => (prove_ss_decode(params, state.clone(), c), commit_ss_state(state).0),
                 CommitMode::Hiding => {
-                    let salt = salt_of(CommitFamily::SpaceSaving);
+                    let salt = salt_of(CommitFamily::SpaceSaving, &|| {
+                        commit_ss_state(state).0 == commit_ss_state(&SsFullState::empty(state.params)).0
+                    });
                     (
                         prove_ss_decode_commit(params, state.clone(), c, default_binding(), mode, &salt),
                         commit_ss_state_with(state, mode, &salt).0,
@@ -440,7 +460,9 @@ fn prove_query_at(
             match mode {
                 CommitMode::Plain => (prove_gk2_decode(params, state.clone(), qval), commit_gk2_state(state).0),
                 CommitMode::Hiding => {
-                    let salt = salt_of(CommitFamily::GreenwaldKhanna);
+                    let salt = salt_of(CommitFamily::GreenwaldKhanna, &|| {
+                        commit_gk2_state(state).0 == commit_gk2_state(&Gk2State::empty(state.params)).0
+                    });
                     (
                         prove_gk2_decode_commit(params, state.clone(), qval, default_binding(), mode, &salt),
                         commit_gk2_state_with(state, mode, &salt).0,
@@ -749,9 +771,12 @@ fn aggregate_queries(query_arts: &[QueryArt], mode: StreamMode) -> QueryAgg {
 /// query logic exactly (same `query_key_mode` probes, same per-family circuits).
 ///
 /// The query decode circuit binds its in-circuit state hash to `Com(S_{t'})`,
-/// and `record_query` checks that the proof EXPOSES the natively recomputed
-/// `Com(S_{t'})` (there is no update leaf here, so the "leaf boundary" it
-/// compares with is that same recomputed commit). What is NOT done: the
+/// and `record_query` checks that both the replay's commitment and the
+/// proof's EXPOSED commitment equal `leaf_finals[t' - 1]`: the final
+/// commitment the workers' leaf proof for batch `t'` exposed (reported over
+/// the socket, `dist_compose::FromWorker::LeafFinal`), so a query opening
+/// another version's randomizer or another state fails, as in the sim
+/// engine. What is NOT done: the
 /// auditor verifies no composition proof at `t'` (no prefix root and no
 /// Bentley–Saxe peaks; the whole-stream root hides `Com(S_{t'})`), so the
 /// query answer is tied to the update proofs only through the auditor's own
@@ -764,11 +789,13 @@ fn prove_queries_only(
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
     commit: &ProverCommit,
+    leaf_finals: &[[Val; 8]],
 ) -> Vec<QueryArt> {
     let mut queries: Vec<QueryArt> = Vec::new();
     if query_at.is_empty() {
         return queries;
     }
+    assert_eq!(leaf_finals.len(), batches.len(), "one reported leaf final per batch");
     // Discard any timing accumulated before the first query so it times cleanly.
     let _ = timing::take();
     let qset: BTreeSet<usize> = query_at.iter().copied().collect();
@@ -795,7 +822,7 @@ fn prove_queries_only(
                     let key =
                         select_query_key(query_key_mode, &freq, batch[0] as u64, (bi + 1) as u64, 0xFFFF_FFFF);
                     let (dp, c) = prove_query_at(QueryState::Cm(&state, key), bi + 1, commit);
-                    record_query(&mut queries, bi + 1, &dp, c, c, Some(cm_query(key)));
+                    record_query(&mut queries, bi + 1, &dp, c, leaf_finals[bi], Some(cm_query(key)));
                 }
             }
         }
@@ -807,7 +834,7 @@ fn prove_queries_only(
                 hll_omc_advance(&mut regs, &hll_keys_of(batch), m_reg);
                 if query_due(bi) {
                     let (dp, c) = prove_query_at(QueryState::Hll(&regs, b), bi + 1, commit);
-                    record_query(&mut queries, bi + 1, &dp, c, c, None);
+                    record_query(&mut queries, bi + 1, &dp, c, leaf_finals[bi], None);
                 }
             }
         }
@@ -820,7 +847,7 @@ fn prove_queries_only(
                 state = apply_batch_ss_full(&state, &ss_updates_of(batch)).0;
                 if query_due(bi) {
                     let (dp, c) = prove_query_at(QueryState::Ss(&state, 1), bi + 1, commit);
-                    record_query(&mut queries, bi + 1, &dp, c, c, Some(scalar_query(1)));
+                    record_query(&mut queries, bi + 1, &dp, c, leaf_finals[bi], Some(scalar_query(1)));
                 }
             }
         }
@@ -847,7 +874,7 @@ fn prove_queries_only(
                         0x001F_FFFF,
                     ) as u32;
                     let (dp, c) = prove_query_at(QueryState::Gk(&state, qval), bi + 1, commit);
-                    record_query(&mut queries, bi + 1, &dp, c, c, Some(scalar_query(qval as u64)));
+                    record_query(&mut queries, bi + 1, &dp, c, leaf_finals[bi], Some(scalar_query(qval as u64)));
                 }
             }
         }
@@ -869,6 +896,10 @@ fn prove_queries_only(
 /// inside a `cores`-thread pool (one machine's budget). The update leaves are
 /// proved by the workers, so this covers only the query side; its cost lands in
 /// the `query_*` columns, separate from the distributed update makespan.
+/// `leaf_finals[t - 1]` is the final commitment leaf `t`'s proof exposed (as
+/// its worker reported it); each query at version `t'` must open exactly
+/// `leaf_finals[t' - 1]` (a mismatch panics, failing the cell).
+#[allow(clippy::too_many_arguments)]
 pub fn measure_queries_dist(
     family: StreamFamily,
     shape: StreamShape,
@@ -878,6 +909,7 @@ pub fn measure_queries_dist(
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
     commit: &ProverCommit,
+    leaf_finals: &[[Val; 8]],
 ) -> QueryAgg {
     if query_at.is_empty() || batches.is_empty() {
         return QueryAgg::default();
@@ -887,7 +919,8 @@ pub fn measure_queries_dist(
         .build()
         .expect("query pool");
     pool.install(|| {
-        let arts = prove_queries_only(family, shape, batches, query_at, query_key_mode, commit);
+        let arts =
+            prove_queries_only(family, shape, batches, query_at, query_key_mode, commit, leaf_finals);
         aggregate_queries(&arts, mode)
     })
 }
@@ -1392,16 +1425,21 @@ mod tests {
     /// The procs-engine query phase (`measure_queries_dist`, coordinator-side,
     /// no worker processes) proves each interleaved query for real and reports
     /// the same per-mode verifier-context count as the sim engine, under both
-    /// commitment modes.
+    /// commitment modes. The leaf finals it binds each query to are the real
+    /// leaves' exposed finals (here from the sim engine's leaves; the procs
+    /// coordinator gets them from its workers' `LeafFinal` reports).
     #[test]
     fn measure_queries_dist_matches_modes() {
         // Two batches, one query per batch ⇒ 2 query events at t'=1,2.
         let batches: Vec<Vec<u32>> = vec![(1..=4).collect(), (5..=8).collect()];
         for commit in both_modes() {
+            let (leaves, _, _) =
+                prove_leaves(StreamFamily::CmOmc, shape(), &batches, &[], QueryKeyMode::First, &commit);
+            let finals: Vec<[Val; 8]> = leaves.iter().map(|l| l.final_).collect();
             let run = |mode, query_at: &[usize]| {
                 measure_queries_dist(
                     StreamFamily::CmOmc, shape(), &batches, mode, 1, query_at, QueryKeyMode::First,
-                    &commit,
+                    &commit, &finals,
                 )
             };
             // forest ctx = popcount(1)+popcount(2) = 1+1 = 2.
@@ -1640,6 +1678,47 @@ mod tests {
             let r = crate::sketch::forge::catch_msg(|| check_query_exposure(&dp1, leaf_final, query1, 2));
             assert!(r.is_err(), "{family:?}: a query under the wrong randomizer is rejected");
         }
+    }
+
+    /// Version 0 is the public EMPTY sketch, opened with the public zero
+    /// randomizer: a hiding query at `t = 0` must open exactly the genesis
+    /// anchor `Com(S_0; 0)`, so it is refused (before any proving) on any
+    /// other state, which would otherwise publish that state's guessable
+    /// `Com(S; 0)`. On the empty state it is honest and exposes the anchor
+    /// (checked on the families whose decoders take an empty state: cm, hll).
+    #[test]
+    fn hiding_query_at_version_zero_opens_only_the_genesis_state() {
+        let hid = ProverCommit::hiding(SaltSeed::for_tests(4));
+        let sh = shape();
+        let batch: Vec<u32> = (1..=4).map(|k| k * 5 + 3).collect();
+        let refused = |what: &str, r: Result<(DecodeProof, [Val; 8]), String>| match r {
+            Ok(_) => panic!("{what}: a hiding query at version 0 on a non-genesis state was accepted"),
+            Err(e) => assert!(e.contains("version 0"), "{what}: refused by the genesis guard, got: {e}"),
+        };
+        let mut cm = cm_empty(sh.d, sh.w);
+        countmin_omc_advance(&mut cm, &cm_updates_of(&batch));
+        refused("cm", crate::sketch::forge::catch_msg(|| prove_query_at(QueryState::Cm(&cm, 8), 0, &hid)));
+        let mut regs = hll_omc_empty(sh.b);
+        hll_omc_advance(&mut regs, &hll_keys_of(&batch), 1 << sh.b);
+        refused("hll", crate::sketch::forge::catch_msg(|| prove_query_at(QueryState::Hll(&regs, sh.b), 0, &hid)));
+        let ss0 = SsFullState::empty(SsFullParams { capacity: sh.capacity, batch: 4 });
+        let ss = apply_batch_ss_full(&ss0, &ss_updates_of(&batch)).0;
+        refused("ss", crate::sketch::forge::catch_msg(|| prove_query_at(QueryState::Ss(&ss, 1), 0, &hid)));
+        let gk0 = Gk2State::empty(GkbParams { capacity: sh.capacity, batch: 4, s: sh.gk_s });
+        let gk = apply_batch2(&gk0, &gk_vals_of(&batch));
+        refused("gk", crate::sketch::forge::catch_msg(|| prove_query_at(QueryState::Gk(&gk, 8), 0, &hid)));
+        // The genesis state itself: the query exposes the public anchor.
+        let empty_cm = cm_empty(sh.d, sh.w);
+        let (dp, c) = prove_query_at(QueryState::Cm(&empty_cm, 8), 0, &hid);
+        assert_eq!(c, commit_countmin_with(&empty_cm, CommitMode::Hiding, &SaltBb::ZERO).0, "cm genesis anchor");
+        check_query_exposure(&dp, c, Some(cm_query(8)), 0);
+        let empty_regs = hll_omc_empty(sh.b);
+        let (dp, c) = prove_query_at(QueryState::Hll(&empty_regs, sh.b), 0, &hid);
+        assert_eq!(c, commit_hll_omc_with(&empty_regs, sh.b, CommitMode::Hiding, &SaltBb::ZERO), "hll genesis anchor");
+        check_query_exposure(&dp, c, None, 0);
+        // Plain has no randomizers: a version-0 query is not restricted.
+        let (_, c) = prove_query_at(QueryState::Cm(&cm, 8), 0, &ProverCommit::plain());
+        assert_eq!(c, commit_countmin(&cm).0, "plain query at version 0");
     }
 
     /// A single-leaf (t=1) stream: chain/forest have nothing to compose, so the

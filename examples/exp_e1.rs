@@ -28,9 +28,12 @@
 //! the salt seed from `ZKSKETCH_SALT_SEED` or the OS RNG, never printed):
 //! under `hiding` each is the `*_commit` leaf (9 salt inputs, 3 salted
 //! sponges) proved at batch index 1 with `Openings::for_leaf(seed, family,
-//! 1)`. Every baseline variant stays `Plain`. The CSV schema is unchanged
-//! (the plonky2 leg appends rows under the same header); env.json records
-//! `commit_deployed`, `commit_baselines` and `salt_seed` (the seed's source).
+//! 1)`. Every baseline variant stays `Plain`. Every CSV row records the mode
+//! it was proved under in its `commit` column (just before `status`): the
+//! run's mode for the deployed variants, `plain` for every baseline (the
+//! plonky2 leg writes the same column, always `plain`, so the two CSVs still
+//! merge); env.json records `commit_deployed`, `commit_baselines` and
+//! `salt_seed` (the seed's source, never the seed).
 
 use zksketch::dataset::{aol, netflix, synthetic_stream, take, zipf_stream, Synthetic};
 use zksketch::experiments::metrics::{append_csv, bench, write_env_json, AggRow, BenchCfg, RunOutcome};
@@ -206,8 +209,19 @@ fn main() {
         }
         let mut h: Vec<String> = cols.iter().map(|s| s.to_string()).collect();
         h.extend(AggRow::header().iter().map(|s| s.to_string()));
+        // Per-row provenance of the commitment mode (revision B2).
+        h.push("commit".into());
         h.push("status".into());
         h
+    };
+    // The mode a row was proved under: the run's context for the DEPLOYED
+    // variants (the only ones with a hiding circuit here), `plain` for every
+    // baseline.
+    let commit_of = |family: &str, variant: &str| -> &'static str {
+        match (family, variant) {
+            ("cm", "omc") | ("hll", "omc") | ("ss", "certified") | ("gk", "bandmerge2") => commit.label(),
+            _ => "plain",
+        }
     };
 
     let c = cfg();
@@ -280,6 +294,7 @@ fn main() {
                 r.push(cores_used.to_string());
             }
             r.extend(agg.fields());
+            r.push(commit_of(family, variant).into());
             r.push("ok".into());
             r
         };
@@ -292,6 +307,7 @@ fn main() {
                 r.push(cores_used.to_string());
             }
             r.extend(std::iter::repeat("n/a".to_string()).take(AggRow::header().len()));
+            r.push(commit_of(family, variant).into());
             r.push(status.into());
             r
         };

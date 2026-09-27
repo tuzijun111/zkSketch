@@ -28,14 +28,28 @@ nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader
 echo
 
 ######################## 1. OUR SIDE ########################
+# Commitment mode (revision B2), pinned EXPLICITLY rather than inherited from
+# exp_compose's library default (hiding): the stored matched rows (and
+# zkstream/fit.py, which reads zks_matched_*.csv by name) are PLAIN. Set
+# ZKSKETCH_COMMIT=hiding to measure the hiding circuits; those rows go to
+# zks_matched_*_hiding.csv, so a file name never hides a mode switch (each row
+# also carries exp_compose's `commit` column).
+ZKSKETCH_COMMIT=$(printf %s "${ZKSKETCH_COMMIT:-plain}" | tr "[:upper:]" "[:lower:]")
+export ZKSKETCH_COMMIT
+case "$ZKSKETCH_COMMIT" in
+  plain) SUF="" ;;
+  hiding) SUF="_hiding" ;;
+  *) echo "ZKSKETCH_COMMIT must be plain or hiding (got '$ZKSKETCH_COMMIT')" >&2; exit 2 ;;
+esac
+log "commit=$ZKSKETCH_COMMIT"
 # One batch (t=1): the unit that matches one of their epochs.
 log "=== S1 zkSketch, d=3 w=1024, single batch m=2^14 (t=1) ==="
 cd $ZK && EXP_COMPOSE_FAMILY=cm EXP_D=3 EXP_W=1024 \
   EXP_COMPOSE_N=16384 EXP_COMPOSE_BATCHES=16384 \
   EXP_COMPOSE_MODE=forest EXP_DATASET=aol EXP_COMPOSE_CORES=32 \
-  EXP_OUT=zks_matched_t1.csv \
+  EXP_OUT=zks_matched_t1$SUF.csv \
   cargo run --release --example exp_compose 2>&1 | tail -20
-cp -f $ZK/results/zks_matched_t1.csv $R/ 2>/dev/null
+cp -f $ZK/results/zks_matched_t1$SUF.csv $R/ 2>/dev/null
 log "S1 DONE"
 
 # Whole stream (t=64): forest and chain, for the composed-root numbers.
@@ -44,9 +58,9 @@ for MODE in forest chain; do
   cd $ZK && EXP_COMPOSE_FAMILY=cm EXP_D=3 EXP_W=1024 \
     EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
     EXP_COMPOSE_MODE=$MODE EXP_DATASET=aol EXP_COMPOSE_CORES=32 \
-    EXP_OUT=zks_matched_t64_$MODE.csv \
+    EXP_OUT=zks_matched_t64_$MODE$SUF.csv \
     cargo run --release --example exp_compose 2>&1 | tail -20
-  cp -f $ZK/results/zks_matched_t64_$MODE.csv $R/ 2>/dev/null
+  cp -f $ZK/results/zks_matched_t64_$MODE$SUF.csv $R/ 2>/dev/null
   log "S2-$MODE DONE"
 done
 

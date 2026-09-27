@@ -1057,6 +1057,39 @@ enum ToWorker {
     Exit,
 }
 
+impl ToWorker {
+    /// The coordinator's `Task` for one machine: its slice `batches` (the
+    /// global 1-based index of `batches[0]` is `first_index`), its slice-start
+    /// state, and the prover's commitment context (mode + seed: the prover's
+    /// own machines only). The one constructor every scatter site uses (the
+    /// BabyBear concurrent and staged engines, the Goldilocks engine), and so
+    /// do the in-process worker tests.
+    #[allow(clippy::too_many_arguments)]
+    fn task(
+        family: StreamFamily,
+        mode: StreamMode,
+        shape: &StreamShape,
+        m: usize,
+        start: WireState,
+        batches: Vec<Vec<u32>>,
+        first_index: u64,
+        commit: &ProverCommit,
+    ) -> Self {
+        let (commit_label, salt_seed) = commit.to_prover_wire();
+        ToWorker::Task {
+            family: family.label().into(),
+            mode: mode.label().into(),
+            shape: WireShape::from(shape),
+            m: m as u32,
+            start,
+            batches,
+            first_index,
+            commit: commit_label,
+            salt_seed,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 enum FromWorker {
     Hello {
@@ -1088,6 +1121,17 @@ enum FromWorker {
     },
     Fatal {
         msg: String,
+    },
+    /// BabyBear workers: the FINAL commitment `Com(S_t)` leaf `t` EXPOSES in
+    /// its proof's statement (read back from the proof, not recomputed), sent
+    /// just before that leaf's `LeafDone` in every mode. The coordinator's
+    /// query replay ([`measure_queries_dist`]) holds each query at version
+    /// `t'` to leaf `t'`'s reported final, so a query that opens another
+    /// version (or another state) fails the cell. Internal bookkeeping: not
+    /// counted in `comm_msgs` / `comm_bytes`.
+    LeafFinal {
+        idx: u32,
+        final_commit: [Val; 8],
     },
 }
 
@@ -1176,142 +1220,155 @@ fn serve_guarded(stream: UnixStream, cores: usize, f: impl FnOnce(&mut UnixStrea
 fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
     let mut stream = UnixStream::connect(sock).expect("worker connect");
     send_msg(&mut stream, &FromWorker::Hello { id }).expect("hello");
-    serve_guarded(stream, cores, move |s| {
-        let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
-        let ToWorker::Task { family, mode, shape, m, start, batches, first_index, commit, salt_seed } =
-            task
-        else {
-            panic!("first message must be Task");
-        };
-        // The state's wire tag fixes the family; parse validates agreement.
-        let family = StreamFamily::parse(&family).expect("family");
-        let mode = StreamMode::parse(&mode).expect("mode");
-        let shape = shape.to_shape();
-        let m = m as usize;
-        // The prover's commitment context (mode + seed), as the coordinator
-        // holds it.
-        let commit = ProverCommit::from_prover_wire(&commit, salt_seed);
-        let mut state = FamState::decode(&start, m);
-        // Build the leaf circuit ONCE; every epoch below reuses it.
-        let mut leaf = FamLeafCircuit::build(family, &shape, m, commit.mode());
+    serve_guarded(stream, cores, worker_session)
+}
 
-        // Forest: Bentley–Saxe peak stack `(size, root)`, folded as we go.
-        let mut peaks: Vec<(u64, RecursionOutput<ConfigWithFriParams>)> = Vec::new();
-        // Chain: the running left-leaning prefix proof.
-        let mut chain_acc: Option<RecursionOutput<ConfigWithFriParams>> = None;
-        let mut root: Option<RecursionOutput<ConfigWithFriParams>> = None;
+/// One BabyBear machine's whole session after its `Hello`: receive the
+/// `Task`, prove (and fold) its slice, then serve the command loop until
+/// `Exit`. Factored out of [`worker_main`] so the in-process tests drive the
+/// exact code a worker process runs over a socket pair (the seed path: the
+/// openings come from the Task's `salt_seed`, never from this process's
+/// environment).
+fn worker_session(s: &mut UnixStream) {
+    let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
+    let ToWorker::Task { family, mode, shape, m, start, batches, first_index, commit, salt_seed } =
+        task
+    else {
+        panic!("first message must be Task");
+    };
+    // The state's wire tag fixes the family; parse validates agreement.
+    let family = StreamFamily::parse(&family).expect("family");
+    let mode = StreamMode::parse(&mode).expect("mode");
+    let shape = shape.to_shape();
+    let m = m as usize;
+    // The prover's commitment context (mode + seed), as the coordinator
+    // holds it.
+    let commit = ProverCommit::from_prover_wire(&commit, salt_seed);
+    let mut state = FamState::decode(&start, m);
+    // Build the leaf circuit ONCE; every epoch below reuses it.
+    let mut leaf = FamLeafCircuit::build(family, &shape, m, commit.mode());
 
-        for (i, batch) in batches.iter().enumerate() {
-            let (output, prove_ms, verify_ms) =
-                state.prove_leaf(&mut leaf, first_index + i as u64, batch, LeafOpen::Real(&commit));
-            state.advance(&shape, batch);
+    // Forest: Bentley–Saxe peak stack `(size, root)`, folded as we go.
+    let mut peaks: Vec<(u64, RecursionOutput<ConfigWithFriParams>)> = Vec::new();
+    // Chain: the running left-leaning prefix proof.
+    let mut chain_acc: Option<RecursionOutput<ConfigWithFriParams>> = None;
+    let mut root: Option<RecursionOutput<ConfigWithFriParams>> = None;
 
-            let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
-            let proof_bytes = match mode {
-                StreamMode::PerBatch => {
-                    Some(postcard::to_allocvec(&output.0).expect("serialize leaf"))
-                }
-                StreamMode::Chain => {
-                    // Sequential fold into the running prefix. The fold waits on
-                    // the previous prefix proof (the chain's inherent bottleneck)
-                    // — timed as this step's composition, not shipped anywhere.
-                    let t0 = Instant::now();
-                    chain_acc = Some(match chain_acc.take() {
-                        None => output, // Π_{[1,1]}
-                        Some(acc) => {
-                            cascade_merges = 1;
-                            prove_hiding_merge(&acc, &output)
-                        }
-                    });
-                    cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                    None
-                }
-                StreamMode::Forest => {
-                    // The paper's composition cascade: merge equal-size peaks
-                    // (binary-counter carry), off the leaf critical path but
-                    // measured within the slice phase.
-                    let t0 = Instant::now();
-                    let mut node = (1u64, output);
-                    while peaks.last().is_some_and(|(sz, _)| *sz == node.0) {
-                        let (_, left) = peaks.pop().unwrap();
-                        node = (node.0 * 2, prove_hiding_merge(&left, &node.1));
-                        cascade_merges += 1;
-                    }
-                    peaks.push(node);
-                    cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                    None
-                }
-            };
-            send_msg(
-                s,
-                &FromWorker::LeafDone {
-                    idx: i as u32,
-                    prove_ms,
-                    verify_ms,
-                    cascade_ms,
-                    cascade_merges,
-                    proof: proof_bytes,
-                },
-            )
-            .expect("send LeafDone");
-        }
+    for (i, batch) in batches.iter().enumerate() {
+        let (output, prove_ms, verify_ms) =
+            state.prove_leaf(&mut leaf, first_index + i as u64, batch, LeafOpen::Real(&commit));
+        state.advance(&shape, batch);
+        // The final commitment this leaf's proof EXPOSES (the value a query
+        // at this version must open), reported before its `LeafDone`.
+        let final_commit = read_exposed_boundary_proof(&output.0).1 .0;
+        send_msg(s, &FromWorker::LeafFinal { idx: i as u32, final_commit })
+            .expect("send LeafFinal");
 
-        match mode {
+        let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
+        let proof_bytes = match mode {
+            StreamMode::PerBatch => {
+                Some(postcard::to_allocvec(&output.0).expect("serialize leaf"))
+            }
             StreamMode::Chain => {
-                // The prefix proof is already the whole-stream root.
-                root = chain_acc;
-                send_msg(s, &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0 })
-                    .expect("send SliceDone");
+                // Sequential fold into the running prefix. The fold waits on
+                // the previous prefix proof (the chain's inherent bottleneck)
+                // — timed as this step's composition, not shipped anywhere.
+                let t0 = Instant::now();
+                chain_acc = Some(match chain_acc.take() {
+                    None => output, // Π_{[1,1]}
+                    Some(acc) => {
+                        cascade_merges = 1;
+                        prove_hiding_merge(&acc, &output)
+                    }
+                });
+                cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                None
             }
             StreamMode::Forest => {
-                // Finalize surviving peaks left-to-right into the slice root.
+                // The paper's composition cascade: merge equal-size peaks
+                // (binary-counter carry), off the leaf critical path but
+                // measured within the slice phase.
                 let t0 = Instant::now();
-                let mut merges = 0u32;
-                let mut acc = peaks.remove(0).1;
-                for (_, r) in peaks.drain(..) {
-                    acc = prove_hiding_merge(&acc, &r);
-                    merges += 1;
+                let mut node = (1u64, output);
+                while peaks.last().is_some_and(|(sz, _)| *sz == node.0) {
+                    let (_, left) = peaks.pop().unwrap();
+                    node = (node.0 * 2, prove_hiding_merge(&left, &node.1));
+                    cascade_merges += 1;
                 }
-                root = Some(acc);
-                send_msg(
-                    s,
-                    &FromWorker::SliceDone {
-                        finalize_ms: t0.elapsed().as_secs_f64() * 1000.0,
-                        finalize_merges: merges,
-                    },
-                )
-                .expect("send SliceDone");
+                peaks.push(node);
+                cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                None
             }
-            StreamMode::PerBatch => {}
-        }
+        };
+        send_msg(
+            s,
+            &FromWorker::LeafDone {
+                idx: i as u32,
+                prove_ms,
+                verify_ms,
+                cascade_ms,
+                cascade_merges,
+                proof: proof_bytes,
+            },
+        )
+        .expect("send LeafDone");
+    }
 
-        // Command loop: forest reduction merges / root shipping / exit.
-        loop {
-            let (cmd, _) = recv_msg::<ToWorker>(s).expect("recv cmd");
-            match cmd {
-                ToWorker::MergeWith { right_proof } => {
-                    let right: Proof =
-                        postcard::from_bytes(&right_proof).expect("deserialize peer root");
-                    let t0 = Instant::now();
-                    let left = root.take().expect("local root for merge");
-                    root = Some(prove_hiding_merge_proofs(&left.0, &right));
-                    send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
-                        .expect("send Merged");
-                }
-                ToWorker::FetchRoot => {
-                    let r = root.as_ref().expect("local root to ship");
-                    let bytes = postcard::to_allocvec(&r.0).expect("serialize root");
-                    send_msg(s, &FromWorker::Root { proof: bytes }).expect("send Root");
-                }
-                ToWorker::Exit => {
-                    send_msg(s, &FromWorker::Done { peak_rss_mb: read_vmhwm_mb() })
-                        .expect("send Done");
-                    break;
-                }
-                ToWorker::Task { .. } => panic!("duplicate Task"),
-            }
+    match mode {
+        StreamMode::Chain => {
+            // The prefix proof is already the whole-stream root.
+            root = chain_acc;
+            send_msg(s, &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0 })
+                .expect("send SliceDone");
         }
-    })
+        StreamMode::Forest => {
+            // Finalize surviving peaks left-to-right into the slice root.
+            let t0 = Instant::now();
+            let mut merges = 0u32;
+            let mut acc = peaks.remove(0).1;
+            for (_, r) in peaks.drain(..) {
+                acc = prove_hiding_merge(&acc, &r);
+                merges += 1;
+            }
+            root = Some(acc);
+            send_msg(
+                s,
+                &FromWorker::SliceDone {
+                    finalize_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                    finalize_merges: merges,
+                },
+            )
+            .expect("send SliceDone");
+        }
+        StreamMode::PerBatch => {}
+    }
+
+    // Command loop: forest reduction merges / root shipping / exit.
+    loop {
+        let (cmd, _) = recv_msg::<ToWorker>(s).expect("recv cmd");
+        match cmd {
+            ToWorker::MergeWith { right_proof } => {
+                let right: Proof =
+                    postcard::from_bytes(&right_proof).expect("deserialize peer root");
+                let t0 = Instant::now();
+                let left = root.take().expect("local root for merge");
+                root = Some(prove_hiding_merge_proofs(&left.0, &right));
+                send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
+                    .expect("send Merged");
+            }
+            ToWorker::FetchRoot => {
+                let r = root.as_ref().expect("local root to ship");
+                let bytes = postcard::to_allocvec(&r.0).expect("serialize root");
+                send_msg(s, &FromWorker::Root { proof: bytes }).expect("send Root");
+            }
+            ToWorker::Exit => {
+                send_msg(s, &FromWorker::Done { peak_rss_mb: read_vmhwm_mb() })
+                    .expect("send Done");
+                break;
+            }
+            ToWorker::Task { .. } => panic!("duplicate Task"),
+        }
+    }
 }
 
 
@@ -1324,155 +1381,159 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
 fn worker_main_gl(sock: &str, id: u32, cores: usize) -> ! {
     let mut stream = UnixStream::connect(sock).expect("worker connect");
     send_msg(&mut stream, &FromWorker::Hello { id }).expect("hello");
-    serve_guarded(stream, cores, move |s| {
-        let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
-        let ToWorker::Task { family, mode, shape, m, start, batches, first_index, commit, salt_seed } =
-            task
-        else {
-            panic!("first message must be Task");
-        };
-        // The state's wire tag fixes the family; parse validates agreement.
-        let family = StreamFamily::parse(&family).expect("family");
-        let mode = StreamMode::parse(&mode).expect("mode");
-        let shape = shape.to_shape();
-        let m = m as usize;
-        // The prover's commitment context (mode + seed), as the coordinator
-        // holds it.
-        let commit = ProverCommit::from_prover_wire(&commit, salt_seed);
-        let mut state = FamStateGl::decode(&start, m);
-        // Build the leaf circuit ONCE; every epoch below reuses it.
-        let mut leaf = FamLeafCircuitGl::build(family, &shape, m, commit.mode());
+    serve_guarded(stream, cores, worker_session_gl)
+}
 
-        // Forest: Bentley–Saxe peak stack `(size, root)`, folded as we go.
-        let mut peaks: Vec<(u64, RecursionOutput<ConfigWithFriParamsGl>)> = Vec::new();
-        // Chain: the running left-leaning prefix proof.
-        let mut chain_acc: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
-        let mut root: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
+/// Goldilocks twin of [`worker_session`] (no `LeafFinal`: the query replay
+/// is BabyBear-only).
+fn worker_session_gl(s: &mut UnixStream) {
+    let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
+    let ToWorker::Task { family, mode, shape, m, start, batches, first_index, commit, salt_seed } =
+        task
+    else {
+        panic!("first message must be Task");
+    };
+    // The state's wire tag fixes the family; parse validates agreement.
+    let family = StreamFamily::parse(&family).expect("family");
+    let mode = StreamMode::parse(&mode).expect("mode");
+    let shape = shape.to_shape();
+    let m = m as usize;
+    // The prover's commitment context (mode + seed), as the coordinator
+    // holds it.
+    let commit = ProverCommit::from_prover_wire(&commit, salt_seed);
+    let mut state = FamStateGl::decode(&start, m);
+    // Build the leaf circuit ONCE; every epoch below reuses it.
+    let mut leaf = FamLeafCircuitGl::build(family, &shape, m, commit.mode());
 
-        for (i, batch) in batches.iter().enumerate() {
-            let (output, prove_ms, verify_ms) =
-                state.prove_leaf(&mut leaf, first_index + i as u64, batch, LeafOpen::Real(&commit));
-            state.advance(&shape, batch);
+    // Forest: Bentley–Saxe peak stack `(size, root)`, folded as we go.
+    let mut peaks: Vec<(u64, RecursionOutput<ConfigWithFriParamsGl>)> = Vec::new();
+    // Chain: the running left-leaning prefix proof.
+    let mut chain_acc: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
+    let mut root: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
 
-            let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
-            let proof_bytes = match mode {
-                StreamMode::PerBatch => {
-                    Some(postcard::to_allocvec(&output.0).expect("serialize leaf"))
-                }
-                StreamMode::Chain => {
-                    // Sequential fold into the running prefix. The fold waits on
-                    // the previous prefix proof (the chain's inherent bottleneck)
-                    // — timed as this step's composition, not shipped anywhere.
-                    let t0 = Instant::now();
-                    chain_acc = Some(match chain_acc.take() {
-                        None => output, // Π_{[1,1]}
-                        Some(acc) => {
-                            cascade_merges = 1;
-                            crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
-                                &acc, &output,
-                            )
-                        }
-                    });
-                    cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                    None
-                }
-                StreamMode::Forest => {
-                    // The paper's composition cascade: merge equal-size peaks
-                    // (binary-counter carry), off the leaf critical path but
-                    // measured within the slice phase.
-                    let t0 = Instant::now();
-                    let mut node = (1u64, output);
-                    while peaks.last().is_some_and(|(sz, _)| *sz == node.0) {
-                        let (_, left) = peaks.pop().unwrap();
-                        node = (
-                            node.0 * 2,
-                            crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
-                                &left, &node.1,
-                            ),
-                        );
-                        cascade_merges += 1;
-                    }
-                    peaks.push(node);
-                    cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                    None
-                }
-            };
-            send_msg(
-                s,
-                &FromWorker::LeafDone {
-                    idx: i as u32,
-                    prove_ms,
-                    verify_ms,
-                    cascade_ms,
-                    cascade_merges,
-                    proof: proof_bytes,
-                },
-            )
-            .expect("send LeafDone");
-        }
+    for (i, batch) in batches.iter().enumerate() {
+        let (output, prove_ms, verify_ms) =
+            state.prove_leaf(&mut leaf, first_index + i as u64, batch, LeafOpen::Real(&commit));
+        state.advance(&shape, batch);
 
-        match mode {
+        let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
+        let proof_bytes = match mode {
+            StreamMode::PerBatch => {
+                Some(postcard::to_allocvec(&output.0).expect("serialize leaf"))
+            }
             StreamMode::Chain => {
-                // The prefix proof is already the whole-stream root.
-                root = chain_acc;
-                send_msg(s, &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0 })
-                    .expect("send SliceDone");
+                // Sequential fold into the running prefix. The fold waits on
+                // the previous prefix proof (the chain's inherent bottleneck)
+                // — timed as this step's composition, not shipped anywhere.
+                let t0 = Instant::now();
+                chain_acc = Some(match chain_acc.take() {
+                    None => output, // Π_{[1,1]}
+                    Some(acc) => {
+                        cascade_merges = 1;
+                        crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
+                            &acc, &output,
+                        )
+                    }
+                });
+                cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                None
             }
             StreamMode::Forest => {
-                // Finalize surviving peaks left-to-right into the slice root.
+                // The paper's composition cascade: merge equal-size peaks
+                // (binary-counter carry), off the leaf critical path but
+                // measured within the slice phase.
                 let t0 = Instant::now();
-                let mut merges = 0u32;
-                let mut acc = peaks.remove(0).1;
-                for (_, r) in peaks.drain(..) {
-                    acc = crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
-                        &acc, &r,
-                    );
-                    merges += 1;
-                }
-                root = Some(acc);
-                send_msg(
-                    s,
-                    &FromWorker::SliceDone {
-                        finalize_ms: t0.elapsed().as_secs_f64() * 1000.0,
-                        finalize_merges: merges,
-                    },
-                )
-                .expect("send SliceDone");
-            }
-            StreamMode::PerBatch => {}
-        }
-
-        // Command loop: forest reduction merges / root shipping / exit.
-        loop {
-            let (cmd, _) = recv_msg::<ToWorker>(s).expect("recv cmd");
-            match cmd {
-                ToWorker::MergeWith { right_proof } => {
-                    let right: ProofGl =
-                        postcard::from_bytes(&right_proof).expect("deserialize peer root");
-                    let t0 = Instant::now();
-                    let left = root.take().expect("local root for merge");
-                    root = Some(
-                        crate::recursion::recursive::expose_forest_gl::prove_hiding_merge_proofs(
-                            &left.0, &right,
+                let mut node = (1u64, output);
+                while peaks.last().is_some_and(|(sz, _)| *sz == node.0) {
+                    let (_, left) = peaks.pop().unwrap();
+                    node = (
+                        node.0 * 2,
+                        crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
+                            &left, &node.1,
                         ),
                     );
-                    send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
-                        .expect("send Merged");
+                    cascade_merges += 1;
                 }
-                ToWorker::FetchRoot => {
-                    let r = root.as_ref().expect("local root to ship");
-                    let bytes = postcard::to_allocvec(&r.0).expect("serialize root");
-                    send_msg(s, &FromWorker::Root { proof: bytes }).expect("send Root");
-                }
-                ToWorker::Exit => {
-                    send_msg(s, &FromWorker::Done { peak_rss_mb: read_vmhwm_mb() })
-                        .expect("send Done");
-                    break;
-                }
-                ToWorker::Task { .. } => panic!("duplicate Task"),
+                peaks.push(node);
+                cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                None
             }
+        };
+        send_msg(
+            s,
+            &FromWorker::LeafDone {
+                idx: i as u32,
+                prove_ms,
+                verify_ms,
+                cascade_ms,
+                cascade_merges,
+                proof: proof_bytes,
+            },
+        )
+        .expect("send LeafDone");
+    }
+
+    match mode {
+        StreamMode::Chain => {
+            // The prefix proof is already the whole-stream root.
+            root = chain_acc;
+            send_msg(s, &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0 })
+                .expect("send SliceDone");
         }
-    })
+        StreamMode::Forest => {
+            // Finalize surviving peaks left-to-right into the slice root.
+            let t0 = Instant::now();
+            let mut merges = 0u32;
+            let mut acc = peaks.remove(0).1;
+            for (_, r) in peaks.drain(..) {
+                acc = crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
+                    &acc, &r,
+                );
+                merges += 1;
+            }
+            root = Some(acc);
+            send_msg(
+                s,
+                &FromWorker::SliceDone {
+                    finalize_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                    finalize_merges: merges,
+                },
+            )
+            .expect("send SliceDone");
+        }
+        StreamMode::PerBatch => {}
+    }
+
+    // Command loop: forest reduction merges / root shipping / exit.
+    loop {
+        let (cmd, _) = recv_msg::<ToWorker>(s).expect("recv cmd");
+        match cmd {
+            ToWorker::MergeWith { right_proof } => {
+                let right: ProofGl =
+                    postcard::from_bytes(&right_proof).expect("deserialize peer root");
+                let t0 = Instant::now();
+                let left = root.take().expect("local root for merge");
+                root = Some(
+                    crate::recursion::recursive::expose_forest_gl::prove_hiding_merge_proofs(
+                        &left.0, &right,
+                    ),
+                );
+                send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
+                    .expect("send Merged");
+            }
+            ToWorker::FetchRoot => {
+                let r = root.as_ref().expect("local root to ship");
+                let bytes = postcard::to_allocvec(&r.0).expect("serialize root");
+                send_msg(s, &FromWorker::Root { proof: bytes }).expect("send Root");
+            }
+            ToWorker::Exit => {
+                send_msg(s, &FromWorker::Done { peak_rss_mb: read_vmhwm_mb() })
+                    .expect("send Done");
+                break;
+            }
+            ToWorker::Task { .. } => panic!("duplicate Task"),
+        }
+    }
 }
 
 
@@ -2027,6 +2088,16 @@ fn fatal_msg(msg: &FromWorker) -> Option<String> {
     }
 }
 
+/// Every leaf's reported exposed final (`FromWorker::LeafFinal`), in global
+/// leaf order; a leaf whose machine never reported it fails the cell.
+fn reported_leaf_finals(finals: Vec<Option<[Val; 8]>>) -> Result<Vec<[Val; 8]>, String> {
+    finals
+        .into_iter()
+        .enumerate()
+        .map(|(g, f)| f.ok_or_else(|| format!("leaf {}: its machine reported no exposed final", g + 1)))
+        .collect()
+}
+
 /// Measure one `(family, shape, mode)` cell under the process-level
 /// distributed emulation: up to `machines` pinned worker processes × `cores`
 /// CPUs each. The **chain is pinned to a single machine** regardless of
@@ -2115,9 +2186,9 @@ pub fn measure_compose_dist(
     let _ = std::fs::remove_file(&sock_path);
     let listener = UnixListener::bind(&sock_path).map_err(|e| format!("bind socket: {e}"))?;
     let exe = stable_self_exe()?;
-    // PROVER-internal: the commitment context every worker needs (the seed
-    // travels to the prover's own machines only, inside `ToWorker::Task`).
-    let (wire_mode, wire_seed) = commit.to_prover_wire();
+    // PROVER-internal: the commitment context every worker needs travels
+    // inside `ToWorker::Task` ([`ToWorker::task`]; the seed goes to the
+    // prover's own machines only).
 
     let spawn_child = |role: &str, id: usize, lo: usize, hi: usize| -> Result<ChildGuard, String> {
         let mut cmd = pinned_command(&exe, lo, hi);
@@ -2161,17 +2232,7 @@ pub fn measure_compose_dist(
         scatter_data_bytes += postcard::to_allocvec(&slice).map(|v| v.len() as u64).unwrap_or(0);
         send_msg(
             &mut worker_tx[i],
-            &ToWorker::Task {
-                family: family.label().into(),
-                mode: mode.label().into(),
-                shape: WireShape::from(&shape),
-                m: m as u32,
-                start,
-                batches: slice,
-                first_index: a as u64 + 1,
-                commit: wire_mode.clone(),
-                salt_seed: wire_seed.clone(),
-            },
+            &ToWorker::task(family, mode, &shape, m, start, slice, a as u64 + 1, commit),
         )
         .map_err(|e| format!("scatter to {i}: {e}"))?;
     }
@@ -2182,6 +2243,9 @@ pub fn measure_compose_dist(
     let mut leaf_prove_ms = vec![0.0f64; t]; // by global leaf index
     let mut leaf_verify_sum = 0.0f64;
     let mut leaf_proofs: Vec<Option<Vec<u8>>> = (0..t).map(|_| None).collect();
+    // Each leaf's EXPOSED final commitment, as its machine reported it
+    // (`LeafFinal`, by global leaf index): what the query replay binds to.
+    let mut leaf_finals: Vec<Option<[Val; 8]>> = vec![None; t];
     let mut busy = vec![0.0f64; machines_eff];
     let mut fold = vec![0.0f64; machines_eff];
     let mut merges_local = 0u32;
@@ -2201,6 +2265,9 @@ pub fn measure_compose_dist(
                 }
                 let w = id as usize;
                 match msg {
+                    FromWorker::LeafFinal { idx, final_commit } => {
+                        leaf_finals[ranges[w].0 + idx as usize] = Some(final_commit);
+                    }
                     FromWorker::LeafDone {
                         idx,
                         prove_ms,
@@ -2426,7 +2493,11 @@ pub fn measure_compose_dist(
     // query cost stays in the separate `query_*` columns (S³'s sequential,
     // report-separately discipline), not folded into the distributed update
     // total. No-op (all zero) when the schedule is empty.
-    let q = measure_queries_dist(family, shape, batches, mode, cores, query_at, query_key_mode, commit);
+    // Each query at version `t'` must open exactly leaf `t'`'s exposed final.
+    let leaf_finals = reported_leaf_finals(leaf_finals)?;
+    let q = measure_queries_dist(
+        family, shape, batches, mode, cores, query_at, query_key_mode, commit, &leaf_finals,
+    );
 
     // ── Network models (critical path): scatter (parallel links, max) +
     // composition-path proof transfers + root delivery.
@@ -2652,9 +2723,9 @@ fn measure_compose_dist_staged(
     let _ = std::fs::remove_file(&sock_path);
     let listener = UnixListener::bind(&sock_path).map_err(|e| format!("bind socket: {e}"))?;
     let exe = stable_self_exe()?;
-    // PROVER-internal: the commitment context every worker needs (the seed
-    // travels to the prover's own machines only, inside `ToWorker::Task`).
-    let (wire_mode, wire_seed) = commit.to_prover_wire();
+    // PROVER-internal: the commitment context every worker needs travels
+    // inside `ToWorker::Task` ([`ToWorker::task`]; the seed goes to the
+    // prover's own machines only).
     let spawn_child = |role: &str, id: usize, lo: usize, hi: usize| -> Result<ChildGuard, String> {
         let mut cmd = pinned_command(&exe, lo, hi);
         cmd.env(ENV_ROLE, role)
@@ -2691,6 +2762,8 @@ fn measure_compose_dist_staged(
     let (mut scatter_state_bytes, mut scatter_data_bytes) = (0u64, 0u64);
     let mut leaf_prove_ms = vec![0.0f64; t];
     let mut leaf_verify_sum = 0.0f64;
+    // Each leaf's reported exposed final (`LeafFinal`), for the query replay.
+    let mut leaf_finals: Vec<Option<[Val; 8]>> = vec![None; t];
     let mut busy = vec![0.0f64; machines_eff];
     let mut fold = vec![0.0f64; machines_eff];
     let mut merges_local = 0u32;
@@ -2718,17 +2791,7 @@ fn measure_compose_dist_staged(
                 postcard::to_allocvec(&slice).map(|v| v.len() as u64).unwrap_or(0);
             send_msg(
                 &mut worker_tx[i],
-                &ToWorker::Task {
-                    family: family.label().into(),
-                    mode: mode.label().into(),
-                    shape: WireShape::from(&shape),
-                    m: m as u32,
-                    start,
-                    batches: slice,
-                    first_index: a as u64 + 1,
-                    commit: wire_mode.clone(),
-                    salt_seed: wire_seed.clone(),
-                },
+                &ToWorker::task(family, mode, &shape, m, start, slice, a as u64 + 1, commit),
             )
             .map_err(|e| format!("scatter to {i}: {e}"))?;
         }
@@ -2744,6 +2807,9 @@ fn measure_compose_dist_staged(
                     }
                     let w = id as usize;
                     match msg {
+                        FromWorker::LeafFinal { idx, final_commit } => {
+                            leaf_finals[ranges[w].0 + idx as usize] = Some(final_commit);
+                        }
                         FromWorker::LeafDone {
                             idx, prove_ms, verify_ms, cascade_ms, cascade_merges, ..
                         } => {
@@ -2911,7 +2977,11 @@ fn measure_compose_dist_staged(
     children.clear();
     let _ = std::fs::remove_file(&sock_path);
 
-    let q = measure_queries_dist(family, shape, batches, mode, cores, query_at, query_key_mode, commit);
+    // Each query at version `t'` must open exactly leaf `t'`'s exposed final.
+    let leaf_finals = reported_leaf_finals(leaf_finals)?;
+    let q = measure_queries_dist(
+        family, shape, batches, mode, cores, query_at, query_key_mode, commit, &leaf_finals,
+    );
 
     // ── Network model (forest path only).
     let root_sz = root_bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
@@ -3041,9 +3111,9 @@ pub fn measure_compose_dist_gl(
     let _ = std::fs::remove_file(&sock_path);
     let listener = UnixListener::bind(&sock_path).map_err(|e| format!("bind socket: {e}"))?;
     let exe = stable_self_exe()?;
-    // PROVER-internal: the commitment context every worker needs (the seed
-    // travels to the prover's own machines only, inside `ToWorker::Task`).
-    let (wire_mode, wire_seed) = commit.to_prover_wire();
+    // PROVER-internal: the commitment context every worker needs travels
+    // inside `ToWorker::Task` ([`ToWorker::task`]; the seed goes to the
+    // prover's own machines only).
 
     let spawn_child = |role: &str, id: usize, lo: usize, hi: usize| -> Result<ChildGuard, String> {
         let mut cmd = pinned_command(&exe, lo, hi);
@@ -3087,17 +3157,7 @@ pub fn measure_compose_dist_gl(
         scatter_data_bytes += postcard::to_allocvec(&slice).map(|v| v.len() as u64).unwrap_or(0);
         send_msg(
             &mut worker_tx[i],
-            &ToWorker::Task {
-                family: family.label().into(),
-                mode: mode.label().into(),
-                shape: WireShape::from(&shape),
-                m: m as u32,
-                start,
-                batches: slice,
-                first_index: a as u64 + 1,
-                commit: wire_mode.clone(),
-                salt_seed: wire_seed.clone(),
-            },
+            &ToWorker::task(family, mode, &shape, m, start, slice, a as u64 + 1, commit),
         )
         .map_err(|e| format!("scatter to {i}: {e}"))?;
     }
@@ -4126,6 +4186,489 @@ mod tests {
         let gl = audit_run_gl(&pp(StreamFamily::CmOmcGl), &leaves, &chain, &forest, &log);
         assert!(gl.iter().all(|r| r.is_ok()), "{gl:?}");
         assert!(audit::check_log_genesis_gl(&pp(StreamFamily::CmOmcGl), &log).is_ok());
+    }
+
+    // ─── The genesis anchor rejects an inflated start ────────────────────────
+
+    /// Records a dishonest prover applies natively BEFORE leaf 1 (never
+    /// proved, never logged), so that its stream starts from `S_0' != S_0`.
+    const INFLATE: [u32; 4] = [999, 999, 999, 999];
+
+    /// The rejection must come from the genesis-anchor check itself.
+    fn assert_genesis_rejection(what: &str, r: Result<f64, String>) {
+        match r {
+            Ok(ms) => panic!("{what}: the auditor accepted an inflated genesis ({ms} ms)"),
+            Err(e) => assert!(e.contains("genesis anchor"), "{what}: rejected, but not by the genesis check: {e}"),
+        }
+    }
+
+    /// The genesis anchor is the auditor's only defence against a prover that
+    /// starts from a false initial state (the log's `Com(S_0)` comes from the
+    /// prover). The attack: apply [`INFLATE`] natively, then behave honestly
+    /// from `S_0'`: every leaf opened with the context's openings of its
+    /// index (leaf 1's init salt is the public zero), the chain and the
+    /// `M = 2` forest folded as the workers fold them, and a log anchored at
+    /// `Com(S_0'; 0)` with `Com(S_T'; ρ^S_T)` and every `Com(B_t; ρ^B_t)`.
+    /// That log is consistent with every leaf and root statement (checked);
+    /// every auditor entry point (dist per_batch / chain / forest, sim leaves
+    /// / root) must still reject it, AT the genesis check, in both modes.
+    /// BabyBear families.
+    #[test]
+    fn inflated_genesis_rejected_by_the_anchor_check_bb() {
+        assert_eq!(composition_expose(), Expose::Interval, "default layout");
+        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        let layout = composition_expose();
+        for commit in both_modes() {
+            let mode = commit.mode();
+            for family in BB_FAMILIES {
+                let tag = format!("{family:?} {}", commit.label());
+                let pp = PublicParams { family, shape: sh, m, commit_mode: mode };
+                // PROVER: the inflated start, then honest leaves and folds.
+                let mut leaf = FamLeafCircuit::build(family, &sh, m, mode);
+                let mut st = FamState::empty(family, &sh, m);
+                st.advance(&sh, &INFLATE);
+                let init = st.commit_with(&sh, mode, &SaltBb::ZERO);
+                assert_ne!(init, audit::genesis_commit_bb(&pp), "{tag}: S_0' must differ from S_0");
+                let mut outs = Vec::new();
+                for (i, b) in batches.iter().enumerate() {
+                    outs.push(st.prove_leaf(&mut leaf, i as u64 + 1, b, LeafOpen::Real(&commit)).0);
+                    st.advance(&sh, b);
+                }
+                let fin = st.commit_with(&sh, mode, &commit.state_salt(family.commit_family(), E2E_T as u64));
+                // GK's Com(B_t) binds the arrival count before the batch, which
+                // the inflated start shifts; the other families' do not.
+                let commits = if family == StreamFamily::GkBandmerge2 {
+                    let mut n_prev = gk_vals_of(&INFLATE).len() as u64;
+                    let cf = family.commit_family();
+                    batches
+                        .iter()
+                        .enumerate()
+                        .map(|(i, b)| {
+                            let vals = gk_vals_of(b);
+                            let salt = commit.batch_salt(cf, i as u64 + 1);
+                            let c = commit_gk2_batch_with(&vals, m, n_prev, mode, &salt).0;
+                            n_prev += vals.len() as u64;
+                            c
+                        })
+                        .collect()
+                } else {
+                    batch_commits_with(family, m, &batches, &commit)
+                };
+                let log = crate::recursion::recursive::expose_forest::batch_log(&init, &fin, &commits);
+                let prefix2 = prove_hiding_merge(&outs[0], &outs[1]);
+                let chain = prove_hiding_merge(&prefix2, &outs[2]);
+                let forest = prove_hiding_merge_proofs(&prefix2.0, &outs[2].0);
+                // Consistent with every statement: only the anchor stands in the way.
+                let leaf_refs: Vec<&Proof> = outs.iter().map(|o| &o.0).collect();
+                check_leaves_against_log(&leaf_refs, &log, layout)
+                    .unwrap_or_else(|e| panic!("{tag}: the inflated leaves match their log: {e}"));
+                for (root, tree) in [
+                    (&chain.0, dist_tree_shape(StreamMode::Chain, E2E_T, 1)),
+                    (&forest.0, dist_tree_shape(StreamMode::Forest, E2E_T, E2E_MACHINES)),
+                ] {
+                    crate::recursion::recursive::expose_forest::check_root_against_log(root, &log, &tree)
+                        .unwrap_or_else(|e| panic!("{tag}: the inflated root matches its log: {e}"));
+                }
+                // AUDITOR, distributed entry points (wire bytes).
+                let bytes = |p: &Proof| postcard::to_allocvec(p).unwrap();
+                let leaves: Vec<Vec<u8>> = outs.iter().map(|o| bytes(&o.0)).collect();
+                let dist = audit_run_bb(&pp, &leaves, &bytes(&chain.0), &bytes(&forest.0), &log);
+                for (r, what) in dist.into_iter().zip(["per_batch", "chain", "forest"]) {
+                    assert_genesis_rejection(&format!("{tag} dist {what}"), r);
+                }
+                // AUDITOR, sim entry points (proofs in memory).
+                let r = crate::sketch::forge::catch_msg(|| {
+                    audit::audit_leaves(&pp, &leaf_refs, None, &log, layout, -1.0)
+                });
+                assert_genesis_rejection(&format!("{tag} sim leaves"), r);
+                let r = crate::sketch::forge::catch_msg(|| {
+                    audit::audit_root(&pp, &chain, None, &log, &ForestShape::chain(E2E_T), layout)
+                });
+                assert_genesis_rejection(&format!("{tag} sim root"), r);
+            }
+        }
+    }
+
+    /// Goldilocks twin of [`inflated_genesis_rejected_by_the_anchor_check_bb`]
+    /// (the distributed entry points: the sim engine is BabyBear-only).
+    #[test]
+    fn inflated_genesis_rejected_by_the_anchor_check_gl() {
+        use crate::recursion::recursive::expose_forest_gl as efg;
+        assert_eq!(composition_expose(), Expose::Interval, "default layout");
+        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        let layout = composition_expose();
+        for commit in both_modes() {
+            let mode = commit.mode();
+            for family in GL_FAMILIES {
+                let tag = format!("{family:?} {}", commit.label());
+                let pp = PublicParams { family, shape: sh, m, commit_mode: mode };
+                let mut leaf = FamLeafCircuitGl::build(family, &sh, m, mode);
+                let mut st = FamStateGl::empty(family, &sh, m);
+                st.advance(&sh, &INFLATE);
+                let init = st.commit_with(&sh, mode, &SaltGl::ZERO);
+                assert_ne!(init, audit::genesis_commit_gl(&pp), "{tag}: S_0' must differ from S_0");
+                let mut outs = Vec::new();
+                for (i, b) in batches.iter().enumerate() {
+                    outs.push(st.prove_leaf(&mut leaf, i as u64 + 1, b, LeafOpen::Real(&commit)).0);
+                    st.advance(&sh, b);
+                }
+                let fin =
+                    st.commit_with(&sh, mode, &commit.state_salt_gl(family.commit_family(), E2E_T as u64));
+                let commits = if family == StreamFamily::GkBandmerge2Gl {
+                    let mut n_prev = gk_vals_of(&INFLATE).len() as u64;
+                    let cf = family.commit_family();
+                    batches
+                        .iter()
+                        .enumerate()
+                        .map(|(i, b)| {
+                            let vals = gk_vals_of(b);
+                            let salt = commit.batch_salt_gl(cf, i as u64 + 1);
+                            let c = commit_gk2_batch_with_gl(&vals, m, n_prev, mode, &salt).0;
+                            n_prev += vals.len() as u64;
+                            c
+                        })
+                        .collect()
+                } else {
+                    batch_commits_gl_with(family, m, &batches, &commit)
+                };
+                let log = efg::batch_log(&init, &fin, &commits);
+                let prefix2 = efg::prove_hiding_merge(&outs[0], &outs[1]);
+                let chain = efg::prove_hiding_merge(&prefix2, &outs[2]);
+                let forest = efg::prove_hiding_merge_proofs(&prefix2.0, &outs[2].0);
+                let leaf_refs: Vec<&ProofGl> = outs.iter().map(|o| &o.0).collect();
+                efg::check_leaves_against_log(&leaf_refs, &log, layout)
+                    .unwrap_or_else(|e| panic!("{tag}: the inflated leaves match their log: {e}"));
+                for (root, tree) in [
+                    (&chain.0, dist_tree_shape(StreamMode::Chain, E2E_T, 1)),
+                    (&forest.0, dist_tree_shape(StreamMode::Forest, E2E_T, E2E_MACHINES)),
+                ] {
+                    efg::check_root_against_log(root, &log, &tree)
+                        .unwrap_or_else(|e| panic!("{tag}: the inflated root matches its log: {e}"));
+                }
+                let bytes = |p: &ProofGl| postcard::to_allocvec(p).unwrap();
+                let leaves: Vec<Vec<u8>> = outs.iter().map(|o| bytes(&o.0)).collect();
+                let dist = audit_run_gl(&pp, &leaves, &bytes(&chain.0), &bytes(&forest.0), &log);
+                for (r, what) in dist.into_iter().zip(["per_batch", "chain", "forest"]) {
+                    assert_genesis_rejection(&format!("{tag} dist {what}"), r);
+                }
+            }
+        }
+    }
+
+    // ─── In-process workers: the real worker session over socket pairs ──────
+
+    /// What an in-process distributed run hands back: the per_batch leaf
+    /// proofs (global order; empty for chain/forest), the chain/forest root,
+    /// and every leaf's reported exposed final (`LeafFinal`; BabyBear only).
+    struct InprocRun {
+        leaves: Vec<Vec<u8>>,
+        root: Option<Vec<u8>>,
+        leaf_finals: Vec<Option<[Val; 8]>>,
+    }
+
+    fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
+        p.downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".into())
+    }
+
+    fn recv_from(s: &mut UnixStream, w: usize) -> FromWorker {
+        match recv_msg::<FromWorker>(s) {
+            Ok((FromWorker::Fatal { msg }, _)) => panic!("worker {w}: {msg}"),
+            Ok((msg, _)) => msg,
+            Err(e) => panic!("worker {w} closed its socket: {e}"),
+        }
+    }
+
+    /// The PROVER's witness pass for an in-process run: one `ToWorker::task`
+    /// per machine slice (chain: one machine), exactly as the coordinator
+    /// scatters it (the Task carries `commit`'s mode and seed).
+    fn inproc_tasks(
+        family: StreamFamily,
+        mode: StreamMode,
+        machines: usize,
+        batches: &[Vec<u32>],
+        commit: &ProverCommit,
+    ) -> (Vec<ToWorker>, Vec<(usize, usize)>) {
+        let (sh, m) = (shape(), batches[0].len());
+        let machines = if mode == StreamMode::Chain { 1 } else { machines };
+        let ranges = slice_ranges(batches.len(), machines);
+        let mut starts: Vec<WireState> = Vec::new();
+        if family.is_gl() {
+            let mut st = FamStateGl::empty(family, &sh, m);
+            for (i, b) in batches.iter().enumerate() {
+                if ranges.iter().any(|r| r.0 == i) {
+                    starts.push(st.encode());
+                }
+                st.advance(&sh, b);
+            }
+        } else {
+            let mut st = FamState::empty(family, &sh, m);
+            for (i, b) in batches.iter().enumerate() {
+                if ranges.iter().any(|r| r.0 == i) {
+                    starts.push(st.encode());
+                }
+                st.advance(&sh, b);
+            }
+        }
+        let tasks = ranges
+            .iter()
+            .zip(starts)
+            .map(|(&(a, e), start)| {
+                ToWorker::task(family, mode, &sh, m, start, batches[a..e].to_vec(), a as u64 + 1, commit)
+            })
+            .collect();
+        (tasks, ranges)
+    }
+
+    /// Drive one in-process distributed run: each machine is a thread running
+    /// the REAL worker session (`worker_session` / `worker_session_gl`, the
+    /// body of a worker process) over a socket pair; the coordinator side
+    /// sends the Tasks, collects `LeafFinal` / `LeafDone` (+ `SliceDone`),
+    /// runs the forest reduction rounds, fetches the root and shuts the
+    /// workers down. A worker's panic (e.g. an inconsistent commitment
+    /// context on the wire) fails the caller with the worker's message.
+    fn run_inproc(
+        session: fn(&mut UnixStream),
+        tasks: Vec<ToWorker>,
+        ranges: &[(usize, usize)],
+        mode: StreamMode,
+    ) -> InprocRun {
+        let t = ranges.last().map_or(0, |r| r.1);
+        let mut coords: Vec<UnixStream> = Vec::new();
+        let mut handles = Vec::new();
+        for task in tasks {
+            let (mut c, mut w) = UnixStream::pair().expect("socket pair");
+            handles.push(std::thread::spawn(move || session(&mut w)));
+            send_msg(&mut c, &task).expect("send Task");
+            coords.push(c);
+        }
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut leaves: Vec<Option<Vec<u8>>> = vec![None; t];
+            let mut leaf_finals: Vec<Option<[Val; 8]>> = vec![None; t];
+            for (w, c) in coords.iter_mut().enumerate() {
+                let (a, e) = ranges[w];
+                let (mut pending, mut slice_done) = (e - a, mode == StreamMode::PerBatch);
+                while pending > 0 || !slice_done {
+                    match recv_from(c, w) {
+                        FromWorker::LeafFinal { idx, final_commit } => {
+                            leaf_finals[a + idx as usize] = Some(final_commit)
+                        }
+                        FromWorker::LeafDone { idx, proof, .. } => {
+                            leaves[a + idx as usize] = proof;
+                            pending -= 1;
+                        }
+                        FromWorker::SliceDone { .. } => slice_done = true,
+                        _ => panic!("worker {w}: unexpected message in the slice phase"),
+                    }
+                }
+            }
+            let root = (mode != StreamMode::PerBatch).then(|| {
+                let n = coords.len();
+                let mut stride = 1;
+                while stride < n {
+                    for k in (0..n).step_by(2 * stride).filter(|k| k + stride < n) {
+                        send_msg(&mut coords[k + stride], &ToWorker::FetchRoot).unwrap();
+                        let FromWorker::Root { proof } = recv_from(&mut coords[k + stride], k + stride) else {
+                            panic!("expected Root");
+                        };
+                        send_msg(&mut coords[k], &ToWorker::MergeWith { right_proof: proof }).unwrap();
+                        let FromWorker::Merged { .. } = recv_from(&mut coords[k], k) else {
+                            panic!("expected Merged");
+                        };
+                    }
+                    stride *= 2;
+                }
+                send_msg(&mut coords[0], &ToWorker::FetchRoot).unwrap();
+                let FromWorker::Root { proof } = recv_from(&mut coords[0], 0) else { panic!("expected Root") };
+                proof
+            });
+            for (w, c) in coords.iter_mut().enumerate() {
+                send_msg(c, &ToWorker::Exit).unwrap();
+                let FromWorker::Done { .. } = recv_from(c, w) else { panic!("expected Done") };
+            }
+            InprocRun { leaves: leaves.into_iter().flatten().collect(), root, leaf_finals }
+        }));
+        drop(coords); // a worker still waiting on its socket now errors out
+        let worker_panics: Vec<String> =
+            handles.into_iter().filter_map(|h| h.join().err()).map(|p| panic_text(&*p)).collect();
+        match run {
+            Ok(r) => {
+                assert!(worker_panics.is_empty(), "worker panicked: {worker_panics:?}");
+                r
+            }
+            Err(p) => panic!("in-process run failed: {}; workers: {worker_panics:?}", panic_text(&*p)),
+        }
+    }
+
+    /// The distributed worker's SEED PATH, end to end over the real worker
+    /// session: the coordinator's Task ([`ToWorker::task`]) carries the
+    /// prover's seed, and every worker must derive its leaves' openings from
+    /// THAT seed, at the global index of its slice (machine 1 starts at leaf
+    /// 3), never from its own environment or RNG. The auditor accepts the
+    /// per_batch leaves (2 machines) and the chain (1 machine) and forest
+    /// (2 machines) roots against the log the coordinator publishes under its
+    /// seed, and rejects them against another seed's log; each reported
+    /// `LeafFinal` is exactly the leaf proof's exposed final, i.e. the
+    /// prover's `Com(S_t; ρ^S_t)`. A worker that dropped or ignored the wire
+    /// seed fails this test (fails closed, or its leaves bind other salts).
+    /// Also `Plain`: the wire carries no seed and the pre-B2 leaves verify.
+    #[test]
+    fn inproc_workers_derive_openings_from_the_wire_seed_bb() {
+        if root_vk_overridden() {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        let layout = composition_expose();
+        let seeded = ProverCommit::hiding(SaltSeed::for_tests(21));
+        let other = ProverCommit::hiding(SaltSeed::for_tests(22));
+        for family in BB_FAMILIES {
+            let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Hiding };
+            let log = publish_batch_log(family, &sh, m, &batches, &seeded);
+            let wrong = publish_batch_log(family, &sh, m, &batches, &other);
+            let (tasks, ranges) = inproc_tasks(family, StreamMode::PerBatch, 2, &batches, &seeded);
+            assert_eq!(ranges, vec![(0, 2), (2, 3)], "machine 1 starts at global leaf 3");
+            let run = run_inproc(worker_session, tasks, &ranges, StreamMode::PerBatch);
+            let refs: Vec<&[u8]> = run.leaves.iter().map(|b| b.as_slice()).collect();
+            assert_eq!(refs.len(), E2E_T, "{family:?}: one leaf proof per batch");
+            let ok = audit::audit_leaf_bytes(&pp, &refs, &log, layout, -1.0);
+            assert!(ok.is_ok(), "{family:?}: the workers' leaves verify against the coordinator's log: {ok:?}");
+            let bad = crate::sketch::forge::catch_msg(|| audit::audit_leaf_bytes(&pp, &refs, &wrong, layout, -1.0))
+                .and_then(|x| x);
+            assert!(bad.is_err(), "{family:?}: another seed's log is rejected");
+            let mut st = FamState::empty(family, &sh, m);
+            for (g, b) in batches.iter().enumerate() {
+                st.advance(&sh, b);
+                let proof: Proof = postcard::from_bytes(&run.leaves[g]).unwrap();
+                let exposed = read_exposed_boundary_proof(&proof).1 .0;
+                let prover = st.commit_with(
+                    &sh,
+                    CommitMode::Hiding,
+                    &seeded.state_salt(family.commit_family(), g as u64 + 1),
+                );
+                assert_eq!(run.leaf_finals[g], Some(exposed), "{family:?}: leaf {} reports its exposed final", g + 1);
+                assert_eq!(exposed, prover, "{family:?}: leaf {} ends at the prover's Com(S_t; ρ_t)", g + 1);
+            }
+        }
+        // The composed artifacts, on one family.
+        let family = StreamFamily::CmOmc;
+        let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Hiding };
+        let log = publish_batch_log(family, &sh, m, &batches, &seeded);
+        let wrong = publish_batch_log(family, &sh, m, &batches, &other);
+        for (mode, machines) in [(StreamMode::Chain, 1), (StreamMode::Forest, E2E_MACHINES)] {
+            let (tasks, ranges) = inproc_tasks(family, mode, machines, &batches, &seeded);
+            let run = run_inproc(worker_session, tasks, &ranges, mode);
+            assert!(run.leaf_finals.iter().all(Option::is_some), "{mode:?}: every leaf reported its final");
+            let root = run.root.expect("root");
+            let ok = audit::audit_root_bytes(&pp, &root, &log, mode, E2E_T, machines, layout, -1.0);
+            assert!(ok.is_ok(), "{mode:?}: the workers' root verifies against the coordinator's log: {ok:?}");
+            let bad = crate::sketch::forge::catch_msg(|| {
+                audit::audit_root_bytes(&pp, &root, &wrong, mode, E2E_T, machines, layout, -1.0)
+            })
+            .and_then(|x| x);
+            assert!(bad.is_err(), "{mode:?}: another seed's log is rejected");
+        }
+        // Plain: no seed on the wire; the pre-B2 leaves verify against the plain log.
+        let plain = ProverCommit::plain();
+        let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Plain };
+        let (tasks, ranges) = inproc_tasks(family, StreamMode::PerBatch, 2, &batches, &plain);
+        let run = run_inproc(worker_session, tasks, &ranges, StreamMode::PerBatch);
+        let refs: Vec<&[u8]> = run.leaves.iter().map(|b| b.as_slice()).collect();
+        let log = publish_batch_log(family, &sh, m, &batches, &plain);
+        let ok = audit::audit_leaf_bytes(&pp, &refs, &log, layout, -1.0);
+        assert!(ok.is_ok(), "plain: the workers' leaves verify against the plain log: {ok:?}");
+    }
+
+    /// Goldilocks twin of
+    /// [`inproc_workers_derive_openings_from_the_wire_seed_bb`]: per_batch
+    /// over 2 machines for every family, the forest over 2 machines for one.
+    #[test]
+    fn inproc_workers_derive_openings_from_the_wire_seed_gl() {
+        if root_vk_overridden() {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        let layout = composition_expose();
+        let seeded = ProverCommit::hiding(SaltSeed::for_tests(23));
+        let other = ProverCommit::hiding(SaltSeed::for_tests(24));
+        for family in GL_FAMILIES {
+            let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Hiding };
+            let log = publish_batch_log_gl(family, &sh, m, &batches, &seeded);
+            let wrong = publish_batch_log_gl(family, &sh, m, &batches, &other);
+            let (tasks, ranges) = inproc_tasks(family, StreamMode::PerBatch, 2, &batches, &seeded);
+            let run = run_inproc(worker_session_gl, tasks, &ranges, StreamMode::PerBatch);
+            let refs: Vec<&[u8]> = run.leaves.iter().map(|b| b.as_slice()).collect();
+            assert_eq!(refs.len(), E2E_T, "{family:?}: one leaf proof per batch");
+            let ok = audit::audit_leaf_bytes_gl(&pp, &refs, &log, layout, -1.0);
+            assert!(ok.is_ok(), "{family:?}: the workers' leaves verify against the coordinator's log: {ok:?}");
+            let bad =
+                crate::sketch::forge::catch_msg(|| audit::audit_leaf_bytes_gl(&pp, &refs, &wrong, layout, -1.0))
+                    .and_then(|x| x);
+            assert!(bad.is_err(), "{family:?}: another seed's log is rejected");
+        }
+        let family = StreamFamily::CmOmcGl;
+        let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Hiding };
+        let log = publish_batch_log_gl(family, &sh, m, &batches, &seeded);
+        let (tasks, ranges) = inproc_tasks(family, StreamMode::Forest, E2E_MACHINES, &batches, &seeded);
+        let run = run_inproc(worker_session_gl, tasks, &ranges, StreamMode::Forest);
+        let root = run.root.expect("root");
+        let ok = audit::audit_root_bytes_gl(&pp, &root, &log, StreamMode::Forest, E2E_T, E2E_MACHINES, layout, -1.0);
+        assert!(ok.is_ok(), "forest: the workers' root verifies against the coordinator's log: {ok:?}");
+    }
+
+    /// The procs engine's query replay binds each query to the WORKERS' leaf:
+    /// the operation-stream schedule (n = 10, Q = 3, m = 4: queries after
+    /// leaves 1..3, every one mid-batch, split and padded leaves) is proved
+    /// per_batch by 2 in-process workers, and [`measure_queries_dist`] holds
+    /// each query at version `t'` to the final leaf `t'` REPORTED
+    /// (`LeafFinal`, which equals that leaf proof's exposed final). With the
+    /// reported finals shifted by one version the replay must refuse (a
+    /// query opening another version's randomizer, or another state, fails
+    /// the same check). Every family, both modes.
+    #[test]
+    fn procs_query_replay_binds_the_workers_leaf_finals() {
+        let sh = shape();
+        let base: Vec<u32> = (1..=10).map(|k| k * 7 + 1).collect();
+        for commit in both_modes() {
+            for family in BB_FAMILIES {
+                let tag = format!("{family:?} {}", commit.label());
+                let (batches, query_at, _pads, _splits) =
+                    crate::experiments::stream_compose::build_query_schedule_batches(&base, 10, 4, 3, family);
+                assert_eq!(query_at, vec![1, 2, 3], "{tag}");
+                let (tasks, ranges) = inproc_tasks(family, StreamMode::PerBatch, 2, &batches, &commit);
+                let run = run_inproc(worker_session, tasks, &ranges, StreamMode::PerBatch);
+                let finals = reported_leaf_finals(run.leaf_finals).expect("every leaf reported its final");
+                for (g, p) in run.leaves.iter().enumerate() {
+                    let proof: Proof = postcard::from_bytes(p).unwrap();
+                    assert_eq!(finals[g], read_exposed_boundary_proof(&proof).1 .0, "{tag}: leaf {} final", g + 1);
+                }
+                let q = measure_queries_dist(
+                    family, sh, &batches, StreamMode::PerBatch, 1, &query_at, QueryKeyMode::First, &commit,
+                    &finals,
+                );
+                assert_eq!(q.n_queries, 3, "{tag}: every query bound its leaf's final");
+                let shifted: Vec<[Val; 8]> = (0..finals.len()).map(|i| finals[(i + 1) % finals.len()]).collect();
+                if !query_at.iter().any(|&t| shifted[t - 1] != finals[t - 1]) {
+                    // Plain only: consecutive versions may share a state (e.g. an
+                    // HLL batch that moves no register), hence a commitment.
+                    assert!(!commit.is_hiding(), "{tag}: hiding finals differ per version");
+                    continue;
+                }
+                let r = crate::sketch::forge::catch_msg(|| {
+                    measure_queries_dist(
+                        family, sh, &batches, StreamMode::PerBatch, 1, &query_at, QueryKeyMode::First, &commit,
+                        &shifted,
+                    )
+                });
+                match r {
+                    Ok(_) => panic!("{tag}: a query bound to another version's leaf final was accepted"),
+                    Err(e) => assert!(e.contains("must equal the leaf boundary"), "{tag}: {e}"),
+                }
+            }
+        }
     }
 
     /// Transfer model: bytes·8 / (Mb/s · 1e6) · 1000 + RTT.
