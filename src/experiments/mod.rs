@@ -38,6 +38,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 pub mod casestudy;
+pub mod audit;
 pub mod dist_compose;
 pub mod e5_ladder;
 pub mod e6_forest;
@@ -45,6 +46,7 @@ pub mod e7_policy;
 pub mod families;
 pub mod inputfold;
 pub mod metrics;
+pub mod prover_commit;
 pub mod rq1_capability;
 pub mod rq2_scalability;
 pub mod stream_compose;

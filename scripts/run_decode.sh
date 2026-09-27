@@ -19,6 +19,13 @@
 #   SS  certified  -> prove_ss_decode        (top-c heavy-hitter mass)
 #   GK  bandmerge2 -> prove_gk2_decode       (two-sided approximate rank)
 #
+# Commitments (revision B2): the runner reads ZKSKETCH_COMMIT once (hiding by
+# default, plain under ZKSKETCH_BINDING=legacy). Under hiding each decoder opens
+# Com(S_t; rho_t) with the prover's randomizer of the state's version t (seed
+# from ZKSKETCH_SALT_SEED, 64 hex chars, or the OS RNG; never printed) and a row
+# is ok only if the proof exposes that commitment. ZKSKETCH_COMMIT=plain runs the
+# pre-B2 decoders byte for byte.
+#
 # Usage:
 #   scripts/run_decode.sh            # tests + runner (default)
 #   scripts/run_decode.sh tests      # only the decode unit tests

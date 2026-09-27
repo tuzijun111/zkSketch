@@ -208,7 +208,12 @@
 //!    `Openings::for_leaf_after(&ρ_T, &seed, family, h)`; `Com(B_t)` uses
 //!    `rho_batch_bb_in(seed, family, h, t)` and the posted final
 //!    `rho_state_bb_in(seed, family, h, T)`. Every leaf goes through
-//!    `prove_epoch_commit`, never `prove_epoch_at`.
+//!    `prove_epoch_commit`, never `prove_epoch_at`. Wired (genesis history
+//!    per stream) in [`crate::experiments::prover_commit`] (the prover's
+//!    context: mode + seed, shipped to the distributed workers as
+//!    [`SaltSeedWire`]), `experiments::dist_compose` / `stream_compose` (the
+//!    prover-side log), and [`crate::experiments::audit`] (the auditor: the
+//!    published log, the proofs and public parameters only).
 //! 8. **Tests to replicate** (in `countmin_omc::tests` /
 //!    `decode::countmin::tests`): `hiding_leaf_exposes_native_hiding_commitments`,
 //!    `hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged` (record the
@@ -530,6 +535,35 @@ impl SaltSeed {
                 acc | (byte << (8 * j))
             })
         })
+    }
+}
+
+/// The wire form of a [`SaltSeed`], for the distributed PROVER's own machines
+/// only: the harness coordinator ships it to the worker processes it spawns
+/// (`experiments::dist_compose`), each of which derives its slice's openings
+/// from `(seed, family, t)`. It is never part of a published artifact, never
+/// logged (`Debug` is redacted) and crate-private, so no public API returns
+/// the seed bytes.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SaltSeedWire([u8; 32]);
+
+impl std::fmt::Debug for SaltSeedWire {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SaltSeedWire(<redacted>)")
+    }
+}
+
+impl SaltSeed {
+    /// See [`SaltSeedWire`] (prover-internal transport only).
+    pub(crate) fn to_prover_wire(&self) -> SaltSeedWire {
+        SaltSeedWire(self.0)
+    }
+}
+
+impl SaltSeedWire {
+    /// The seed a worker received from its coordinator.
+    pub(crate) fn into_seed(self) -> SaltSeed {
+        SaltSeed(self.0)
     }
 }
 
