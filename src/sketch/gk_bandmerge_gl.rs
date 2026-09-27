@@ -2355,10 +2355,15 @@ impl Gkb2LeafCircuit {
     /// The no-op VK-derivation leaf's epoch: all three commitments opened
     /// with [`OpeningsGl::public_zero`], so a batch that changes nothing
     /// exposes `init == final` in either mode. The only path that proves a
-    /// `Hiding` leaf with zero final/batch salts; it asserts that the batch
-    /// is empty (the stream harness's GK no-op: `n` does not move) and that
-    /// the state does not move, so it cannot publish a real batch under
-    /// deterministic commitments.
+    /// `Hiding` leaf with zero final/batch salts, so (like the BabyBear
+    /// leaf's) it accepts exactly the VK-derivation leaf's input
+    /// ([`gk2_gl_noop_leaf_commit`]): an empty batch (the stream harness's GK
+    /// no-op: `n` does not move) that leaves the state unchanged, batch index
+    /// `t = 1` and the EMPTY initial state (whose `Com(S_0; 0)` the verifier
+    /// recomputes itself). A real state with an empty batch does not move
+    /// either, so without the empty-state check it would publish the
+    /// deterministic, guess-checkable `Com(S_t; 0)` as both init and final.
+    /// Input checks only (circuit and VK unchanged), in both modes.
     pub fn prove_epoch_public_zero(
         &mut self,
         t: u64,
@@ -2369,6 +2374,12 @@ impl Gkb2LeafCircuit {
             batch_vals.is_empty() && apply_batch2(&initial_state, &batch_vals) == initial_state,
             "prove_epoch_public_zero is for the no-op leaf: the batch must be empty and the state \
              must not move"
+        );
+        assert_eq!(t, 1, "prove_epoch_public_zero is for the no-op leaf: it is proved at batch index 1");
+        assert!(
+            initial_state == Gk2State::empty(self.params),
+            "prove_epoch_public_zero is for the no-op leaf: the initial state must be the empty genesis \
+             state (a real state would publish the guess-checkable Com(S; 0))"
         );
         self.prove_epoch_opened(t, initial_state, batch_vals, &OpeningsGl::public_zero())
     }
@@ -3428,6 +3439,28 @@ mod tests {
         assert_eq!(p.initial, commit_gk2_state(&hp_prior()));
         assert_eq!(p.final_, commit_gk2_state(&apply_batch2(&hp_prior(), &vals)));
         assert_eq!(p.batch_commit, commit_gk2_batch(&vals, HP.batch, hp_prior().n));
+    }
+
+    /// The no-op path refuses a real state and another batch index (the twin
+    /// of the BabyBear leaf's test): an empty batch leaves ANY state
+    /// unchanged, so "empty batch, state does not move" alone would let a
+    /// real state publish the guess-checkable `Com(S; 0)` as both init and
+    /// final. Rejected in either mode. Control: the honest no-op input still
+    /// proves and exposes `init == final == Com(S_0; 0)`.
+    #[test]
+    fn noop_path_refuses_a_real_state_or_another_index() {
+        assert_eq!(apply_batch2(&hp_prior(), &[]), hp_prior(), "precondition: an empty batch leaves S unchanged");
+        for mode in [CommitMode::Hiding, CommitMode::Plain] {
+            let mut leaf = build_gkb2_leaf_commit(HP, Expose::Interval, Binding::Semantic, mode);
+            let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(1, hp_prior(), Vec::new()).final_).unwrap_err();
+            assert!(msg.contains("the initial state must be the empty genesis state"), "{mode:?}: {msg}");
+            let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(2, Gk2State::empty(HP), Vec::new()).final_)
+                .unwrap_err();
+            assert!(msg.contains("batch index 1"), "{mode:?}: {msg}");
+        }
+        let r = hiding_leaf(Binding::Semantic).prove_epoch_public_zero(1, Gk2State::empty(HP), Vec::new());
+        let s0 = commit_gk2_state_with(&Gk2State::empty(HP), CommitMode::Hiding, &SaltGl::ZERO);
+        assert_eq!((r.initial, r.final_), (s0, s0));
     }
 
     /// (F2) A continued history (the GK rotation after 2^24 records) is

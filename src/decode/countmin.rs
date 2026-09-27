@@ -154,9 +154,13 @@ pub fn prove_cm_decode_with(
 /// the honest salt is `rho_state_bb_in(seed, CommitFamily::CountMin, h, t)`
 /// (`rho_state_bb(seed, .., t)` in the genesis history), the same randomizer
 /// leaf `t` closed its final state with; at `t = 0` it is the public zero in
-/// the genesis history and the anchor salt in a continued one. The decoder
-/// cannot tell a version-0 query from a forgotten salt, so it accepts
-/// [`SaltBb::ZERO`] under `Hiding`: the harness must pass the real salt.
+/// the genesis history and the anchor salt in a continued one. So under
+/// `Hiding` the public zero salt opens only the empty genesis state (the one
+/// state commitment, `Com(S_0; 0)`, that the verifier recomputes itself):
+/// handed [`SaltBb::ZERO`] with any other state (a forgotten salt at
+/// `t ≥ 1`) the decoder panics instead of publishing the guess-checkable
+/// `Com(S_t; 0)`. A nonzero wrong salt still proves (the circuit does not
+/// check the derivation) and exposes a commitment that is not the log's.
 pub fn prove_cm_decode_commit(
     params: CmDecodeParams,
     state: CountMinState,
@@ -242,6 +246,13 @@ fn build_cm_decode_commit(
     let bound = binding.is_bound();
     let CmDecodeParams { d, w, release } = params;
     assert_eq!((state.params.d, state.params.w), (d, w), "state shape must match params");
+    if mode.is_hiding() && salt.is_zero() {
+        assert!(
+            state.counters.iter().flatten().all(|&c| c == 0),
+            "Hiding CM decode: the public zero salt opens only the empty genesis state Com(S_0; 0); \
+             a query at t >= 1 (or at version 0 of a continued history) needs its real salt"
+        );
+    }
     let num_cells = d * w;
     let cell_packing = num_cells / 4;
     let w_log2 = w.trailing_zeros() as usize;
@@ -761,6 +772,47 @@ mod tests {
             assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
             assert_eq!(leaked_salts(&hid.output.0, &[rho]), vec![], "{binding:?}");
         }
+    }
+
+    /// Under `Hiding` the public zero salt opens only the empty genesis
+    /// state, the one state commitment the verifier recomputes itself
+    /// (`Com(S_0; 0)`; a continued history's version 0 opens with its
+    /// anchor salt). A real state handed the zero salt (a forgotten opening
+    /// at `t >= 1`) panics instead of publishing the guess-checkable
+    /// `Com(S_t; 0)`, from the builder and the proving entry point alike
+    /// (the twin of `decode::gk_bandmerge`'s test). Controls: the empty state
+    /// with the zero salt (a genesis query; the Hiding VK derivation), a
+    /// real state with a real salt, and `Plain` (salt ignored) still build,
+    /// and the genesis query proves and exposes `Com(S_0; 0)`.
+    #[test]
+    fn hiding_decode_refuses_zero_salt_on_a_real_state() {
+        use crate::commitment::hiding::{SaltSeed, rho_state_bb};
+        let rho = rho_state_bb(&SaltSeed::for_tests(64), CommitFamily::CountMin, 2);
+        let empty = CountMin::new(&CountMinParams { d: P4.d, w: P4.w });
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let s = state_with(binding);
+            let msg = forge::catch_msg(|| {
+                build_cm_decode_commit(P4, &s, 7, binding, CommitMode::Hiding, &SaltBb::ZERO).answer
+            })
+            .unwrap_err();
+            assert!(msg.contains("public zero salt"), "{binding:?}: {msg}");
+            let _ = build_cm_decode_commit(P4, &empty, 7, binding, CommitMode::Hiding, &SaltBb::ZERO);
+            let _ = build_cm_decode_commit(P4, &s, 7, binding, CommitMode::Hiding, &rho);
+            let _ = build_cm_decode_commit(P4, &s, 7, binding, CommitMode::Plain, &SaltBb::ZERO);
+        }
+        let msg = forge::catch_msg(|| {
+            prove_cm_decode_commit(P4, state_with(Binding::Semantic), 7, Binding::Semantic, CommitMode::Hiding, &SaltBb::ZERO)
+                .answer
+        })
+        .unwrap_err();
+        assert!(msg.contains("public zero salt"), "{msg}");
+        let genesis = prove_cm_decode_commit(P4, empty.clone(), 7, Binding::Semantic, CommitMode::Hiding, &SaltBb::ZERO);
+        assert_eq!(genesis.answer, 0);
+        assert_eq!(
+            &exposed16(&genesis)[0..8],
+            &commit_countmin_with(&empty, CommitMode::Hiding, &SaltBb::ZERO).0[..],
+            "a genesis query opens the public anchor Com(S_0; 0)"
+        );
     }
 
     /// Keys congruent mod `p`: decode `k` on a state holding one occurrence of

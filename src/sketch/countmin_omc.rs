@@ -1371,9 +1371,18 @@ impl CmOmcLeafCircuit {
     /// The no-op VK-derivation leaf's epoch: all three commitments opened
     /// with [`Openings::public_zero`], so a batch that changes nothing
     /// exposes `init == final` in either mode. The only path that proves a
-    /// `Hiding` leaf with zero final/batch salts; it asserts that every
-    /// update has value 0 (the state does not move), so it cannot publish a
-    /// real batch under deterministic commitments.
+    /// `Hiding` leaf with zero final/batch salts, so it accepts exactly the
+    /// VK-derivation leaf's public input
+    /// ([`cm_omc_noop_leaf_commit`](crate::recursion::recursive::noop_leaf::cm_omc_noop_leaf_commit),
+    /// and the harness's `PAD_KEY` no-op batch): batch index `t = 1`, the
+    /// EMPTY initial state (whose `Com(S_0; 0)` the verifier recomputes
+    /// itself) and a batch of `{ key: 0, value: 0 }` updates. It publishes
+    /// only `Com(S_0; 0)` and the zero-salt commitment of that public batch.
+    /// "Every value is 0" alone would not do: a value-0 batch leaves ANY
+    /// state unchanged, so a real state would publish the deterministic,
+    /// guess-checkable `Com(S_t; 0)` as both init and final. The checks are
+    /// on the inputs only (the circuit and its VK are unchanged) and apply
+    /// in both modes.
     pub fn prove_epoch_public_zero(
         &mut self,
         t: u64,
@@ -1383,6 +1392,19 @@ impl CmOmcLeafCircuit {
         assert!(
             batch.iter().all(|u| u.value == 0),
             "prove_epoch_public_zero is for the no-op leaf: every update must have value 0"
+        );
+        assert_eq!(t, 1, "prove_epoch_public_zero is for the no-op leaf: it is proved at batch index 1");
+        assert!(
+            batch.iter().all(|u| *u == CountMinUpdate { key: 0, value: 0 }),
+            "prove_epoch_public_zero is for the no-op leaf: every update must be the public no-op \
+             {{ key: 0, value: 0 }}"
+        );
+        let (d, w) = (self.params.d, self.params.w);
+        let empty = CountMinState { counters: vec![vec![0u32; w]; d], params: CountMinParams { d, w } };
+        assert!(
+            initial_state == empty,
+            "prove_epoch_public_zero is for the no-op leaf: the initial state must be the empty genesis \
+             state (a real state would publish the guess-checkable Com(S; 0))"
         );
         self.prove_epoch_opened(t, initial_state, batch, &Openings::public_zero())
     }
@@ -2746,6 +2768,78 @@ mod tests {
         let p = plain.prove_epoch_commit(2, hp_prior(), ups, &Openings::plain());
         assert_eq!(p.initial_commit, commit_countmin(&hp_prior()));
         assert_eq!(p.final_commit, commit_countmin(&advanced(&hp_prior(), &hp_batches()[0], Binding::Semantic)));
+    }
+
+    /// The zero-salt no-op path accepts only the public no-op input (batch
+    /// index 1, the empty state, every update `{ key: 0, value: 0 }`), not
+    /// merely "every value is 0": a value-0 batch leaves ANY state unchanged,
+    /// so a real state would otherwise publish the deterministic,
+    /// guess-checkable `Com(S_t; 0)` as both init and final. Rejected, under
+    /// every binding and in either mode: a real state with the canonical
+    /// no-op batch (an all-pad leaf of a live stream, whose state needs its
+    /// `ρ_t`), the empty state with value-0 updates on real keys, and the
+    /// canonical input at another batch index. Control: the canonical input
+    /// proves and exposes `Com(S_0; 0)` as init and final and the zero-salt
+    /// commitment of the public batch.
+    #[test]
+    fn noop_path_accepts_only_the_public_noop_input() {
+        let noop = vec![CountMinUpdate { key: 0, value: 0 }; HP.batch];
+        let real_keys: Vec<CountMinUpdate> =
+            hp_batches()[0].iter().map(|u| CountMinUpdate { key: u.key, value: 0 }).collect();
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let cases = [
+                ("real state, canonical no-op batch", 1u64, hp_prior(), noop.clone(), "empty genesis state"),
+                ("empty state, value-0 real keys", 1, empty(HP.d, HP.w), real_keys.clone(), "public no-op"),
+                ("canonical input at t = 2", 2, empty(HP.d, HP.w), noop.clone(), "batch index 1"),
+            ];
+            for mode in [CommitMode::Hiding, CommitMode::Plain] {
+                let mut leaf = build_countmin_omc_leaf_commit(HP, Expose::Interval, binding, mode);
+                for (what, t, init, ups, want) in &cases {
+                    let msg = forge::catch_msg(|| {
+                        leaf.prove_epoch_public_zero(*t, init.clone(), ups.clone()).final_commit
+                    })
+                    .unwrap_err();
+                    assert!(msg.contains(want), "{binding:?}/{mode:?}/{what}: {msg}");
+                }
+            }
+            let mut leaf = hiding_leaf(binding);
+            let r = leaf.prove_epoch_public_zero(1, empty(HP.d, HP.w), noop.clone());
+            let anchor = commit_countmin_with(&empty(HP.d, HP.w), CommitMode::Hiding, &SaltBb::ZERO);
+            assert_eq!(r.initial_commit, anchor, "{binding:?}");
+            assert_eq!(r.final_commit, anchor, "{binding:?}");
+            assert_eq!(
+                r.batch_commit.0,
+                countmin_omc_batch_commit_salted(&noop, binding, CommitMode::Hiding, &SaltBb::ZERO),
+                "{binding:?}"
+            );
+        }
+    }
+
+    /// The harness's Count-Min VK-derivation input (`dist_compose`'s
+    /// `noop_leaf_input` / `prove_noop_leaf`: the empty state
+    /// `families::cm_empty` and a batch of `PAD_KEY` records mapped by
+    /// `stream_compose::cm_updates_of`, proved at batch index 1) is exactly
+    /// the canonical public no-op input, so it passes the tightened
+    /// `prove_epoch_public_zero` in either mode and under every binding, and
+    /// exposes `init == final`; the harness code itself is not changed here.
+    #[test]
+    fn harness_noop_input_is_the_public_noop_input() {
+        use crate::experiments::families::cm_empty;
+        use crate::experiments::stream_compose::{PAD_KEY, cm_updates_of};
+        let batch = cm_updates_of(&vec![PAD_KEY; HP.batch]);
+        assert!(batch.iter().all(|u| *u == CountMinUpdate { key: 0, value: 0 }));
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            for mode in [CommitMode::Hiding, CommitMode::Plain] {
+                let mut leaf = build_countmin_omc_leaf_commit(HP, Expose::Interval, binding, mode);
+                let r = leaf.prove_epoch_public_zero(1, cm_empty(HP.d, HP.w), batch.clone());
+                assert_eq!(r.initial_commit, r.final_commit, "{binding:?}/{mode:?}");
+                assert_eq!(
+                    r.initial_commit,
+                    commit_countmin_with(&empty(HP.d, HP.w), mode, &SaltBb::ZERO),
+                    "{binding:?}/{mode:?}"
+                );
+            }
+        }
     }
 
     /// (F2) A continued history (e.g. after a GK rotation) is anchored on the

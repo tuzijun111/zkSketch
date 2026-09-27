@@ -964,16 +964,28 @@ impl HllOmcLeafCircuit {
     /// The no-op VK-derivation leaf's epoch: all three commitments opened
     /// with [`OpeningsGl::public_zero`], so a batch that changes nothing
     /// exposes `init == final` in either mode. The only path that proves a
-    /// `Hiding` leaf with zero final/batch salts; it asserts that the batch
-    /// leaves the registers unchanged (every key re-inserts a rank its
-    /// register already holds; `max` is idempotent), so it cannot publish a
-    /// real batch under deterministic commitments.
+    /// `Hiding` leaf with zero final/batch salts, so (like the BabyBear
+    /// leaf's) it accepts exactly the public no-op input
+    /// ([`hll_omc_gl_noop_leaf_commit`]): `initial` is key 1 inserted into
+    /// empty registers (under this leaf's binding) and every key is 1. "The
+    /// batch leaves the registers unchanged" alone would not do for HLL: a
+    /// real batch of repeated keys often raises nothing, and would then
+    /// publish the deterministic (guess-checkable) commitments of a secret
+    /// state and of real keys. Input checks only (circuit and VK unchanged),
+    /// in both modes.
     pub fn prove_epoch_public_zero(&mut self, t: u64, initial: Vec<u64>, keys: Vec<u64>) -> HllOmcProof {
         let mut after = initial.clone();
         hll_omc_advance_with(&mut after, &keys, self.params.m(), self.binding);
         assert!(
             after == initial,
             "prove_epoch_public_zero is for the no-op leaf: the batch must not change the registers"
+        );
+        let mut noop = hll_omc_empty(self.params.b);
+        hll_omc_advance_with(&mut noop, &[1], self.params.m(), self.binding);
+        assert!(
+            initial == noop && keys.iter().all(|&k| k == 1),
+            "prove_epoch_public_zero is for the no-op leaf: the public no-op input only (initial = key 1 \
+             in empty registers, every key 1)"
         );
         self.prove_epoch_opened(t, initial, keys, &OpeningsGl::public_zero())
     }
@@ -2051,6 +2063,55 @@ mod tests {
         assert_eq!(p.initial_commit.0, commit_hll_omc(&hp_prior(binding), HP.b));
         assert_eq!(p.final_commit.0, commit_hll_omc(&advanced(&hp_prior(binding), &keys, binding), HP.b));
         assert_eq!(p.batch_commit.0, hll_omc_batch_commit_with(&keys, binding));
+    }
+
+    /// The zero-salt no-op path accepts only the public no-op input (key 1
+    /// in empty registers, every key 1), the twin of the BabyBear leaf's
+    /// test: for HLL a real batch of repeated keys often raises nothing, so
+    /// "the registers do not move" alone would let it publish the
+    /// deterministic commitments of a secret state and of real keys.
+    /// Rejected, under every binding and in either mode: a real state with a
+    /// repeated real key (the stream harness's split-leaf pad shape), a
+    /// non-canonical state with keys 1, and the canonical state with a real
+    /// key that does not raise its register. Control: the canonical input
+    /// proves, and exposes `Com(S_noop; 0)`.
+    #[test]
+    fn noop_path_accepts_only_the_public_noop_input() {
+        let noop_msg = "the public no-op input only";
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let empty = hll_omc_empty(HP.b);
+            let noop = advanced(&empty, &[1], binding);
+            let real = advanced(&empty, &[4242, 777], binding);
+            let repeat = vec![4242u64; HP.batch];
+            assert_eq!(advanced(&real, &repeat, binding), real, "{binding:?}: the repeat raises nothing");
+            let other = advanced(&empty, &[1, 4242], binding);
+            assert_ne!(other, noop, "{binding:?}");
+            let quiet = (2u64..100_000)
+                .find(|&k| advanced(&noop, &[k], binding) == noop)
+                .expect("a key dominated by key 1's register");
+            let cases = [
+                ("real state, repeated real key", real, repeat),
+                ("non-canonical state, keys 1", other, vec![1; HP.batch]),
+                ("canonical state, dominated real key", noop.clone(), vec![quiet; HP.batch]),
+            ];
+            for mode in [CommitMode::Hiding, CommitMode::Plain] {
+                let mut leaf = build_hll_omc_leaf_commit(HP, Expose::Interval, binding, mode);
+                for (what, init, keys) in &cases {
+                    let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(9, init.clone(), keys.clone()).final_commit)
+                        .unwrap_err();
+                    assert!(msg.contains(noop_msg), "{binding:?}/{mode:?}/{what}: {msg}");
+                }
+            }
+            let r = hiding_leaf(binding).prove_epoch_public_zero(1, noop.clone(), vec![1; HP.batch]);
+            let c = commit_hll_omc_with(&noop, HP.b, CommitMode::Hiding, &SaltGl::ZERO);
+            assert_eq!(r.initial_commit.0, c, "{binding:?}");
+            assert_eq!(r.final_commit.0, c, "{binding:?}");
+            assert_eq!(
+                r.batch_commit.0,
+                hll_omc_batch_commit_salted(&vec![1; HP.batch], binding, CommitMode::Hiding, &SaltGl::ZERO),
+                "{binding:?}"
+            );
+        }
     }
 
     /// (F2) A continued history is anchored on the previous history's

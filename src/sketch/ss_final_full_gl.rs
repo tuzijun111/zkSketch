@@ -1442,10 +1442,15 @@ impl SsFullLeafCircuit {
     /// The no-op VK-derivation leaf's epoch: all three commitments opened
     /// with [`OpeningsGl::public_zero`], so a batch that changes nothing
     /// exposes `init == final` in either mode. The only path that proves a
-    /// `Hiding` leaf with zero final/batch salts; it asserts that every
-    /// update is the inactive dummy (the stream harness's SpaceSaving no-op)
-    /// and that the state does not move, so it cannot publish a real batch
-    /// under deterministic commitments.
+    /// `Hiding` leaf with zero final/batch salts, so (like the BabyBear
+    /// leaf's) it accepts exactly the public no-op input
+    /// ([`ss_full_gl_noop_leaf_commit`]): every update is the inactive dummy
+    /// (the stream harness's SpaceSaving no-op), the state does not move,
+    /// and it is the public empty state [`SsFullState::empty`] (whose
+    /// zero-salt commitment is the public anchor `Com(S_0; 0)`). Without the
+    /// empty-state check an all-dummy padding leaf of a live stream would
+    /// publish the deterministic `Com(S_t; 0)` of a secret state. Input
+    /// checks only (circuit and VK unchanged), in both modes.
     pub fn prove_epoch_public_zero(
         &mut self,
         t: u64,
@@ -1457,6 +1462,11 @@ impl SsFullLeafCircuit {
                 && apply_batch_ss_full(&initial_state, &batch).0 == initial_state,
             "prove_epoch_public_zero is for the no-op leaf: every update must be the dummy and \
              the state must not move"
+        );
+        assert!(
+            initial_state == SsFullState::empty(self.params),
+            "prove_epoch_public_zero is for the no-op leaf: the state must be the public empty state \
+             (a secret state needs OpeningsGl::for_leaf and prove_epoch_commit)"
         );
         self.prove_epoch_opened(t, initial_state, batch, &OpeningsGl::public_zero())
     }
@@ -2981,6 +2991,30 @@ mod tests {
         assert_eq!(p.initial, commit_ss_state(&hp_prior()));
         assert_eq!(p.final_, commit_ss_state(&advanced(&hp_prior(), &batch)));
         assert_eq!(p.batch_commit, commit_ss_batch(&batch));
+    }
+
+    /// The no-op path also refuses a state that does not move but is not the
+    /// public empty state (the twin of the BabyBear leaf's test): a canonical
+    /// non-empty prior with an all-dummy batch (e.g. a padding leaf of a live
+    /// stream) would otherwise publish the deterministic `Com(S; 0)` of a
+    /// secret state. The guard is mode-independent. Control: the empty state
+    /// passes and exposes `init == final == Com(S_0; 0)`.
+    #[test]
+    fn public_zero_path_requires_the_empty_state() {
+        let noop = vec![SsFullUpdate::dummy(); HP.batch];
+        let empty = SsFullState::empty(HP);
+        assert_eq!(advanced(&hp_prior(), &noop), hp_prior(), "the prior does not move");
+        assert_ne!(hp_prior(), empty);
+        for mode in [CommitMode::Hiding, CommitMode::Plain] {
+            let mut leaf = build_ss_full_leaf_commit(HP, Expose::Interval, mode);
+            let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(1, hp_prior(), noop.clone()).final_)
+                .unwrap_err();
+            assert!(msg.contains("public empty state"), "{mode:?}: {msg}");
+        }
+        let r = hiding_leaf(Expose::Interval).prove_epoch_public_zero(1, empty.clone(), noop.clone());
+        let anchor = commit_ss_state_with(&empty, CommitMode::Hiding, &SaltGl::ZERO);
+        assert_eq!((r.initial, r.final_), (anchor, anchor));
+        assert_eq!(r.batch_commit, commit_ss_batch_with(&noop, CommitMode::Hiding, &SaltGl::ZERO));
     }
 
     /// (F2) A continued history is anchored on the previous history's
