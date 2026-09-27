@@ -776,6 +776,15 @@ pub fn build_hll_omc_leaf_expose(
             ConstraintProfile::Standard,
         )
         .expect("get_airs_and_degrees_with_prep (hll_omc)");
+    // E-0 table probe (read-only; a no-op unless armed).
+    crate::experiments::table_probe::record_leaf(
+        "hll_omc",
+        &table_packing,
+        &airs_degrees,
+        &non_primitive_columns,
+        &primitive_columns,
+    );
+    crate::experiments::table_probe::maybe_stop();
     let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
     let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);

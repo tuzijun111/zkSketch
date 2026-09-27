@@ -744,6 +744,8 @@ pub struct SsFullLeafCircuit {
     prover: BatchStarkProver<ConfigWithFriParams>,
     circuit_prover_data: Rc<CircuitProverData<ConfigWithFriParams>>,
     trace_rows: u64,
+    /// Padded height of each table (AIR order), as `trace_rows` sums.
+    table_rows: Vec<usize>,
     /// Whether the count-sort permute's rows carry [`GROUPED_OP_TAG`] in the
     /// `key_hi` coordinate (the shared-PermuteBus fix). Always `true` outside
     /// tests; the soundness PoC builds the pre-fix circuit to show the attack.
@@ -1330,6 +1332,15 @@ pub fn build_ss_full_leaf_expose(params: SsFullParams, expose: Expose) -> SsFull
             ConstraintProfile::Standard,
         )
         .expect("get_airs_and_degrees_with_prep (ss_full)");
+    // E-0 table probe (read-only; a no-op unless armed).
+    crate::experiments::table_probe::record_leaf(
+        "ss_final_full",
+        &table_packing,
+        &airs_degrees,
+        &non_primitive_columns,
+        &primitive_columns,
+    );
+    crate::experiments::table_probe::maybe_stop();
     let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
     let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
@@ -1345,6 +1356,7 @@ pub fn build_ss_full_leaf_expose(params: SsFullParams, expose: Expose) -> SsFull
         prover.register_expose_table::<4>();
     }
     let trace_rows: u64 = ext_degrees.iter().map(|&d| 1u64 << d).sum();
+    let table_rows: Vec<usize> = ext_degrees.iter().map(|&d| 1usize << d).collect();
 
     SsFullLeafCircuit {
         params,
@@ -1352,6 +1364,7 @@ pub fn build_ss_full_leaf_expose(params: SsFullParams, expose: Expose) -> SsFull
         prover,
         circuit_prover_data: Rc::new(circuit_prover_data),
         trace_rows,
+        table_rows,
         op_tag,
         expose,
         batch_index: 1,
@@ -1400,6 +1413,15 @@ impl SsFullLeafCircuit {
     /// The statement this leaf exposes ([`Expose`]).
     pub fn expose(&self) -> Expose {
         self.expose
+    }
+
+    /// `Σ 2^degree` over all tables.
+    pub fn trace_rows(&self) -> u64 {
+        self.trace_rows
+    }
+    /// Padded height of each table (AIR order).
+    pub fn table_rows(&self) -> &[usize] {
+        &self.table_rows
     }
 
     /// Prove the epoch of batch `t` (1-based); `t` is part of the Interval
