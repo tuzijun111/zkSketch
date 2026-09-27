@@ -562,6 +562,13 @@ enum LeafOpen<'a> {
     /// `Plain` → `prove_epoch_at`; `Hiding` → `prove_epoch_public_zero` (all
     /// three salts the public zero, so `init == final`). Never a real batch.
     NoOp(CommitMode),
+    /// Tests only: hiding openings chosen by the caller (a prover that does
+    /// not follow [`ProverCommit`], e.g. the inflated-genesis attack).
+    #[cfg(test)]
+    Explicit(crate::commitment::hiding::Openings),
+    /// Goldilocks twin of [`LeafOpen::Explicit`].
+    #[cfg(test)]
+    ExplicitGl(crate::commitment::hiding::OpeningsGl),
 }
 
 impl FamState {
@@ -584,6 +591,8 @@ impl FamState {
         let hiding: Option<Option<crate::commitment::hiding::Openings>> = match open {
             LeafOpen::Real(c) if c.is_hiding() => Some(Some(c.openings(self.commit_family(), t))),
             LeafOpen::NoOp(CommitMode::Hiding) => Some(None),
+            #[cfg(test)]
+            LeafOpen::Explicit(o) => Some(Some(o)),
             _ => None,
         };
         macro_rules! prove {
@@ -857,6 +866,8 @@ impl FamStateGl {
         let hiding: Option<Option<crate::commitment::hiding::OpeningsGl>> = match open {
             LeafOpen::Real(c) if c.is_hiding() => Some(Some(c.openings_gl(self.commit_family(), t))),
             LeafOpen::NoOp(CommitMode::Hiding) => Some(None),
+            #[cfg(test)]
+            LeafOpen::ExplicitGl(o) => Some(Some(o)),
             _ => None,
         };
         macro_rules! prove {
@@ -4206,9 +4217,12 @@ mod tests {
     /// starts from a false initial state (the log's `Com(S_0)` comes from the
     /// prover). The attack: apply [`INFLATE`] natively, then behave honestly
     /// from `S_0'`: every leaf opened with the context's openings of its
-    /// index (leaf 1's init salt is the public zero), the chain and the
-    /// `M = 2` forest folded as the workers fold them, and a log anchored at
-    /// `Com(S_0'; 0)` with `Com(S_T'; ρ^S_T)` and every `Com(B_t; ρ^B_t)`.
+    /// index, the chain and the `M = 2` forest folded as the workers fold
+    /// them, and a log anchored at `Com(S_0'; ρ_0')` with `Com(S_T'; ρ^S_T)`
+    /// and every `Com(B_t; ρ^B_t)`. Under Plain `ρ_0'` is the public zero;
+    /// under Hiding the library refuses a zero init salt on a non-genesis
+    /// state (checked), so the attacker opens leaf 1's init with its own
+    /// nonzero `ρ_0'` instead.
     /// That log is consistent with every leaf and root statement (checked);
     /// every auditor entry point (dist per_batch / chain / forest, sim leaves
     /// / root) must still reject it, AT the genesis check, in both modes.
@@ -4227,11 +4241,31 @@ mod tests {
                 let mut leaf = FamLeafCircuit::build(family, &sh, m, mode);
                 let mut st = FamState::empty(family, &sh, m);
                 st.advance(&sh, &INFLATE);
-                let init = st.commit_with(&sh, mode, &SaltBb::ZERO);
+                // Under Hiding the library refuses the public zero init salt
+                // on a non-genesis state, so the attacker opens leaf 1's init
+                // with its own nonzero salt and anchors the log there.
+                let cf = family.commit_family();
+                let init_salt = if commit.is_hiding() {
+                    let refused = crate::sketch::forge::catch_msg(|| {
+                        st.prove_leaf(&mut leaf, 1, &batches[0], LeafOpen::Real(&commit));
+                        0.0
+                    });
+                    assert!(refused.is_err(), "{tag}: a zero init salt on S_0' must be refused by the prover");
+                    commit.state_salt(cf, 99)
+                } else {
+                    SaltBb::ZERO
+                };
+                let init = st.commit_with(&sh, mode, &init_salt);
                 assert_ne!(init, audit::genesis_commit_bb(&pp), "{tag}: S_0' must differ from S_0");
                 let mut outs = Vec::new();
                 for (i, b) in batches.iter().enumerate() {
-                    outs.push(st.prove_leaf(&mut leaf, i as u64 + 1, b, LeafOpen::Real(&commit)).0);
+                    let t = i as u64 + 1;
+                    let open = if t == 1 && commit.is_hiding() {
+                        LeafOpen::Explicit(crate::commitment::hiding::Openings { init: init_salt, ..commit.openings(cf, t) })
+                    } else {
+                        LeafOpen::Real(&commit)
+                    };
+                    outs.push(st.prove_leaf(&mut leaf, t, b, open).0);
                     st.advance(&sh, b);
                 }
                 let fin = st.commit_with(&sh, mode, &commit.state_salt(family.commit_family(), E2E_T as u64));
@@ -4305,11 +4339,30 @@ mod tests {
                 let mut leaf = FamLeafCircuitGl::build(family, &sh, m, mode);
                 let mut st = FamStateGl::empty(family, &sh, m);
                 st.advance(&sh, &INFLATE);
-                let init = st.commit_with(&sh, mode, &SaltGl::ZERO);
+                // See the BabyBear twin: under Hiding the attacker anchors at
+                // its own nonzero init salt.
+                let cf = family.commit_family();
+                let init_salt = if commit.is_hiding() {
+                    let refused = crate::sketch::forge::catch_msg(|| {
+                        st.prove_leaf(&mut leaf, 1, &batches[0], LeafOpen::Real(&commit));
+                        0.0
+                    });
+                    assert!(refused.is_err(), "{tag}: a zero init salt on S_0' must be refused by the prover");
+                    commit.state_salt_gl(cf, 99)
+                } else {
+                    SaltGl::ZERO
+                };
+                let init = st.commit_with(&sh, mode, &init_salt);
                 assert_ne!(init, audit::genesis_commit_gl(&pp), "{tag}: S_0' must differ from S_0");
                 let mut outs = Vec::new();
                 for (i, b) in batches.iter().enumerate() {
-                    outs.push(st.prove_leaf(&mut leaf, i as u64 + 1, b, LeafOpen::Real(&commit)).0);
+                    let t = i as u64 + 1;
+                    let open = if t == 1 && commit.is_hiding() {
+                        LeafOpen::ExplicitGl(crate::commitment::hiding::OpeningsGl { init: init_salt, ..commit.openings_gl(cf, t) })
+                    } else {
+                        LeafOpen::Real(&commit)
+                    };
+                    outs.push(st.prove_leaf(&mut leaf, t, b, open).0);
                     st.advance(&sh, b);
                 }
                 let fin =
