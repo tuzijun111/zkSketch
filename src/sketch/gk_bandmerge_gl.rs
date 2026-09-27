@@ -1634,7 +1634,8 @@ pub fn build_gkb2_leaf_commit(
     // B2: the salts of (init, final, batch) come FIRST under `Hiding` (9
     // inputs, [`OpeningsGl::private_inputs`] order); `Plain` allocates
     // nothing, so its circuit is byte-identical.
-    let salts = hiding::alloc_leaf_salts(&mut b, mode);
+    // `alloc_leaf_salts_first` panics if any private input precedes them.
+    let salts = crate::recursion::recursive::leaf_gl::alloc_leaf_salts_first(&mut b, mode);
     let init_packed: Vec<ExprId> = (0..3 * cap)
         .map(|_| b.alloc_private_input("init"))
         .collect();
@@ -3219,6 +3220,33 @@ mod tests {
             assert_eq!(vk_pin_values(&b.output.0), vk, "{binding:?}");
             let noop = gk2_gl_noop_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding);
             assert_eq!(vk_pin_values(&noop), vk, "{binding:?}: the zero-salt no-op leaf has the real leaves' VK");
+        }
+    }
+
+    /// (2b) The Hiding leaf's VK is pinned, one literal per statement layout and binding.
+    /// It does not depend on the salts (test (2)), so it is a fixed value per
+    /// shape; recorded on b2-gl @77a02a3. The pin guards what the other
+    /// tests only compare against the native functions, which would carry the
+    /// same change: which sponge each salted commitment uses, the
+    /// `(kind, GreenwaldKhanna)` tag constants, and the salt allocation order.
+    /// The salted sponges are Semantic under every binding, as the Plain
+    /// ones are, so the `Bound` VK equals the `Semantic` one here too.
+    #[test]
+    fn hiding_leaf_vk_is_pinned() {
+        let recorded = [
+            (Expose::None, Binding::Legacy, [3029885619994448637, 17441158352762443225, 10853978290850170651, 14097643031452289306]),
+            (Expose::None, Binding::Semantic, [2553289518217700547, 11811450157687497045, 7917681042355712433, 16431477266885413259]),
+            (Expose::None, Binding::Bound, [2553289518217700547, 11811450157687497045, 7917681042355712433, 16431477266885413259]),
+            (Expose::Boundary, Binding::Legacy, [4254308733864687361, 12525722226883359869, 5696773030907435527, 2424577922232817698]),
+            (Expose::Boundary, Binding::Semantic, [1326411197357999998, 1628734671836764846, 10759183271107343309, 13359699208043678665]),
+            (Expose::Boundary, Binding::Bound, [1326411197357999998, 1628734671836764846, 10759183271107343309, 13359699208043678665]),
+            (Expose::Interval, Binding::Legacy, [9782628864113537765, 17236547483427436253, 1394173986358015459, 10953610386781663955]),
+            (Expose::Interval, Binding::Semantic, [17948282801466964897, 16583181577784489926, 13993560794779333575, 3530354182268625117]),
+            (Expose::Interval, Binding::Bound, [17948282801466964897, 16583181577784489926, 13993560794779333575, 3530354182268625117]),
+        ];
+        for (expose, binding, vk) in recorded {
+            let hid = build_gkb2_leaf_commit(HP, expose, binding, CommitMode::Hiding).vk_pin_values();
+            assert_eq!(vk_flat(&hid), vk_literal(vk), "{expose:?}/{binding:?}: Hiding VK drifted");
         }
     }
 

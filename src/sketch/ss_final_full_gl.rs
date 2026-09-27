@@ -852,7 +852,8 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
     // B2: the salts of (init, final, batch) come FIRST under `Hiding` (9
     // inputs, [`OpeningsGl::private_inputs`] order); `Plain` allocates
     // nothing, so its circuit is byte-identical.
-    let salts = hiding::alloc_leaf_salts(&mut b, mode);
+    // `alloc_leaf_salts_first` panics if any private input precedes them.
+    let salts = crate::recursion::recursive::leaf_gl::alloc_leaf_salts_first(&mut b, mode);
     let init_packed: Vec<ExprId> = (0..2 * cap)
         .map(|_| b.alloc_private_input("init_packed"))
         .collect();
@@ -2786,6 +2787,26 @@ mod tests {
             assert_eq!(vk_pin_values(&b.output.0), vk, "{expose:?}");
             let noop = ss_full_gl_noop_leaf_commit(HP, expose, CommitMode::Hiding);
             assert_eq!(vk_pin_values(&noop), vk, "{expose:?}: the zero-salt no-op leaf has the real leaves' VK");
+        }
+    }
+
+    /// (2b) The Hiding leaf's VK is pinned, one literal per statement layout.
+    /// It does not depend on the salts (test (2)), so it is a fixed value per
+    /// shape; recorded on b2-gl @77a02a3. The pin guards what the other
+    /// tests only compare against the native functions, which would carry the
+    /// same change: which sponge each salted commitment uses, the
+    /// `(kind, SpaceSaving)` tag constants, and the salt allocation order.
+    /// The salted sponges are Semantic (this leaf has no binding parameter).
+    #[test]
+    fn hiding_leaf_vk_is_pinned() {
+        let recorded = [
+            (Expose::None, [17430242135028665733, 8910990021061221859, 7642923676271818013, 14624438684522492806]),
+            (Expose::Boundary, [5127476512929420219, 14949157042305783351, 988902786580556422, 18373836634480779209]),
+            (Expose::Interval, [9365049537508816069, 15386676715998429990, 10121922348505152518, 16059434801545063679]),
+        ];
+        for (expose, vk) in recorded {
+            let hid = build_ss_full_leaf_commit(HP, expose, CommitMode::Hiding).vk_pin_values();
+            assert_eq!(vk_flat(&hid), vk_literal(vk), "{expose:?}: Hiding VK drifted");
         }
     }
 

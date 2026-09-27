@@ -7,8 +7,10 @@
 //! `[Val; 4]` (width-8 Poseidon2) rather than `[Val; 8]`, and one `Challenge`
 //! packs `CELL_ALIGNMENT = 2` base elements (D = 2) rather than 4.
 
+use p3_circuit::CircuitBuilder;
 use p3_field::BasedVectorSpace;
 
+use crate::commitment::hiding::{self, CommitMode, LeafSaltTargets};
 use crate::config_gl::{
     COMMIT_POW_BITS, Challenge, LOG_BLOWUP, QUERY_POW_BITS, Val, make_config,
 };
@@ -49,6 +51,48 @@ pub fn make_leaf_config() -> ConfigWithFriParamsGl {
         COMMIT_POW_BITS,
         QUERY_POW_BITS,
     )
+}
+
+/// Allocate a Goldilocks leaf's commitment salts (init, final, batch) with
+/// [`hiding::alloc_leaf_salts`], enforcing the B2 order: under `Hiding` they
+/// are the FIRST 9 private inputs, because every Goldilocks leaf pushes
+/// [`hiding::OpeningsGl::private_inputs`] before its other private values.
+/// Panics if a private input was allocated before them. `Plain` allocates
+/// nothing, so its circuit is byte-identical.
+pub fn alloc_leaf_salts_first(
+    b: &mut CircuitBuilder<Challenge>,
+    mode: CommitMode,
+) -> Option<LeafSaltTargets> {
+    if mode.is_hiding() {
+        assert_eq!(
+            b.private_input_count(),
+            0,
+            "B2: the commitment salts must be the first private inputs of a Hiding leaf"
+        );
+    }
+    hiding::alloc_leaf_salts(b, mode)
+}
+
+#[cfg(test)]
+mod salts_first_tests {
+    use super::*;
+
+    #[test]
+    fn hiding_salts_are_the_first_nine_private_inputs() {
+        let mut b = CircuitBuilder::<Challenge>::new();
+        assert!(alloc_leaf_salts_first(&mut b, CommitMode::Plain).is_none());
+        assert_eq!(b.private_input_count(), 0, "Plain allocates nothing");
+        assert!(alloc_leaf_salts_first(&mut b, CommitMode::Hiding).is_some());
+        assert_eq!(b.private_input_count(), 3 * hiding::SALT_CHALLENGES);
+    }
+
+    #[test]
+    #[should_panic(expected = "the commitment salts must be the first private inputs")]
+    fn salts_after_another_private_input_are_refused() {
+        let mut b = CircuitBuilder::<Challenge>::new();
+        let _ = b.alloc_private_input("state");
+        let _ = alloc_leaf_salts_first(&mut b, CommitMode::Hiding);
+    }
 }
 
 /// Test-only proof inspectors of the Goldilocks hiding-commitment tests
@@ -100,8 +144,9 @@ pub(crate) mod hiding_probe {
             .collect()
     }
 
-    /// A Goldilocks VK recorded at b2-hiding@94e9f58 (the pre-B2 Goldilocks
-    /// leaves): 4 base values, each the first coefficient of one pin Challenge.
+    /// A recorded Goldilocks VK (Plain: b2-hiding@94e9f58, the pre-B2
+    /// Goldilocks leaves; Hiding: b2-gl@77a02a3): 4 base values, each the
+    /// first coefficient of one pin Challenge.
     pub(crate) fn vk_literal(v: [u64; 4]) -> Vec<u64> {
         v.iter().flat_map(|&x| [x, 0]).collect()
     }

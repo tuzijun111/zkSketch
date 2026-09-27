@@ -484,7 +484,8 @@ pub fn build_hll_omc_leaf_commit(
     // B2: the salts of (init, final, batch) are the FIRST 9 private inputs
     // under `Hiding` ([`OpeningsGl::private_inputs`] order); `Plain`
     // allocates nothing, so its circuit is byte-identical.
-    let salts = hiding::alloc_leaf_salts(&mut b, mode);
+    // `alloc_leaf_salts_first` panics if any private input precedes them.
+    let salts = crate::recursion::recursive::leaf_gl::alloc_leaf_salts_first(&mut b, mode);
     let init_packed: Vec<ExprId> = (0..cell_packing)
         .map(|_| b.alloc_private_input("init_cell_packed"))
         .collect();
@@ -1837,6 +1838,35 @@ mod tests {
             assert_eq!(vk_pin_values(&b.output.0), vk, "{binding:?}");
             let noop = hll_omc_gl_noop_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding);
             assert_eq!(vk_pin_values(&noop), vk, "{binding:?}: the zero-salt no-op leaf has the real leaves' VK");
+        }
+    }
+
+    /// (2b) The Hiding leaf's VK is pinned, one literal per statement layout and binding.
+    /// It does not depend on the salts (test (2)), so it is a fixed value per
+    /// shape; recorded on b2-gl @77a02a3. The pin guards what the other
+    /// tests only compare against the native functions, which would carry the
+    /// same change: which sponge each salted commitment uses, the
+    /// `(kind, HyperLogLog)` tag constants, and the salt allocation order.
+    /// Under `Bound` the three salted sponges are the zero-IV bound sponge
+    /// (`hash_slice_bound`); a Hiding leaf that fell back to the plain sponge
+    /// there keeps its row counts and still matches the native `_with`
+    /// functions, so only this pin sees it.
+    #[test]
+    fn hiding_leaf_vk_is_pinned() {
+        let recorded = [
+            (Expose::None, Binding::Legacy, [9020287199632471132, 4922640300835232299, 6545664025718793889, 16708064044724174711]),
+            (Expose::None, Binding::Semantic, [16676829244106536675, 7186883655321923827, 7030534363062251864, 3279728442841506886]),
+            (Expose::None, Binding::Bound, [3612063495855129343, 11975865296845562783, 4356664480343767723, 1742447526026485940]),
+            (Expose::Boundary, Binding::Legacy, [478692673385797063, 9835345290699689723, 17957644977397044213, 2418480954263820918]),
+            (Expose::Boundary, Binding::Semantic, [13832337578725166954, 10137499088671747806, 1255461744675994764, 15138686581792200521]),
+            (Expose::Boundary, Binding::Bound, [7159761428616114914, 9102334846850709283, 2608971208970966697, 5004193696937718827]),
+            (Expose::Interval, Binding::Legacy, [12682436709770012897, 17765918685796911134, 9764386592423390210, 17028952910073436610]),
+            (Expose::Interval, Binding::Semantic, [7723533189676974475, 2704071495339774341, 2715990335894637200, 11753830400438177939]),
+            (Expose::Interval, Binding::Bound, [11527054926566344460, 3907425700823126067, 8490328091609986456, 16436418461637429624]),
+        ];
+        for (expose, binding, vk) in recorded {
+            let hid = build_hll_omc_leaf_commit(HP, expose, binding, CommitMode::Hiding).vk_pin_values();
+            assert_eq!(vk_flat(&hid), vk_literal(vk), "{expose:?}/{binding:?}: Hiding VK drifted");
         }
     }
 
