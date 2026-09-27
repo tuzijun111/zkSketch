@@ -186,6 +186,31 @@ pub fn cm_v9_noop_leaf_interval(params: CountMinLeafParams) -> Proof {
     prove_countmin_leaf_v9_interval_with_params(params, 1, state, batch).output.0
 }
 
+/// [`hll_omc_noop_leaf_expose`] with an explicit [`CommitMode`] (revision
+/// B2), over the same no-op input (key 1 re-inserted into a state that
+/// already holds it). The no-op leaf opens all three commitments with the
+/// public zero salt
+/// ([`Openings::public_zero`](crate::commitment::hiding::Openings::public_zero),
+/// through the explicit `prove_epoch_public_zero` path, which accepts only
+/// this public no-op input, since for HLL a real batch of repeated keys can
+/// also leave every register unchanged), so the init and final salts are
+/// equal and it still exposes `init == final`; the salts are witnesses, so
+/// its VK is that of every real leaf of the same mode.
+pub fn hll_omc_noop_leaf_commit(
+    params: crate::sketch::hll_omc::HllOmcParams,
+    expose: Expose,
+    binding: crate::sketch::bind::Binding,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::sketch::hll_omc::{build_hll_omc_leaf_commit, hll_omc_advance_with, hll_omc_empty};
+    let mut regs = hll_omc_empty(params.b);
+    hll_omc_advance_with(&mut regs, &[1], params.m(), binding);
+    build_hll_omc_leaf_commit(params, expose, binding, mode)
+        .prove_epoch_public_zero(1, regs, vec![1; params.batch])
+        .output
+        .0
+}
+
 /// HyperLogLog `omc` leaf with an explicit statement ([`Expose`]) and
 /// binding: every record re-inserts key 1 into a state that already holds it
 /// (`max` is idempotent), exactly the stream harness's HLL no-op.

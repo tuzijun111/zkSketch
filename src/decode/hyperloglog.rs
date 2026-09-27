@@ -94,6 +94,7 @@ use p3_poseidon2_circuit_air::BabyBearD4Width16;
 use p3_recursion::RecursionOutput;
 use p3_uni_stark::StarkGenericConfig;
 
+use crate::commitment::hiding::{self, CommitFamily, CommitKind, CommitMode, SaltBb};
 use crate::config::{Challenge, LOG_BLOWUP, Val};
 use crate::decode::{DecodeProof, ReleasePolicy};
 use crate::recursion::recursive::config::ConfigWithFriParams;
@@ -102,7 +103,7 @@ use crate::recursion::recursive::countmin_leaf::{
 };
 use crate::sketch::hll_final_full::{HllFullState, commit_hll_state};
 use crate::sketch::bind::{self, Binding};
-use crate::sketch::hll_omc::commit_hll_omc;
+use crate::sketch::hll_omc::commit_hll_omc_with;
 
 const LOG_FINAL_POLY_LEN: usize = 6;
 
@@ -750,7 +751,8 @@ fn build_hll_decode(params: HllDecodeParams, state: &HllFullState, binding: Bind
 }
 
 /// HyperLogLog cardinality decode against the **omc** committed state: the `m`
-/// registers as a `d=1, w=m` array committed via [`commit_hll_omc`] (=
+/// registers as a `d=1, w=m` array committed via
+/// [`commit_hll_omc`](crate::sketch::hll_omc::commit_hll_omc) (=
 /// `commit_countmin`, one Val per register, 4 registers per Challenge) — the
 /// state the deployed `prove_hll_omc` update recommits. Same fixed-point
 /// estimator as [`prove_hll_decode`]; only the state binding differs (so this
@@ -778,7 +780,43 @@ pub fn prove_hll_decode_omc_with(
     build_hll_decode_omc(params, &regs, binding).prove()
 }
 
+/// [`prove_hll_decode_omc_with`] against a commitment made under `mode`
+/// (revision B2, [`crate::commitment::hiding`]). `Plain` is the pre-B2
+/// circuit byte for byte (`salt` ignored). Under `Hiding` the decoder opens
+/// `Com(S_t; salt) = commit_hll_omc_with(regs, b, Hiding, salt)` (the
+/// [`CommitFamily::HyperLogLog`] tag): the salt is the FIRST 3 private
+/// inputs, and (under `Semantic`/`Bound`) the exposed commitment is the
+/// hiding one. For a query at version `t` of history `h` the honest salt is
+/// `rho_state_bb_in(seed, CommitFamily::HyperLogLog, h, t)`
+/// (`rho_state_bb(seed, .., t)` in the genesis history), the same randomizer
+/// leaf `t` closed its final state with; at `t = 0` it is the public zero in
+/// the genesis history and the anchor salt in a continued one. The decoder
+/// cannot tell a version-0 query from a forgotten salt, so it accepts
+/// [`SaltBb::ZERO`] under `Hiding`: the harness must pass the real salt.
+pub fn prove_hll_decode_omc_commit(
+    params: HllDecodeParams,
+    regs: Vec<u64>,
+    _query: u64,
+    binding: Binding,
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> DecodeProof {
+    build_hll_decode_omc_commit(params, &regs, binding, mode, salt).prove()
+}
+
+/// The Plain omc decoder ([`build_hll_decode_omc_commit`] with
+/// [`CommitMode::Plain`]).
 fn build_hll_decode_omc(params: HllDecodeParams, regs: &[u64], binding: Binding) -> HllDecodeCircuit {
+    build_hll_decode_omc_commit(params, regs, binding, CommitMode::Plain, &SaltBb::ZERO)
+}
+
+fn build_hll_decode_omc_commit(
+    params: HllDecodeParams,
+    regs: &[u64],
+    binding: Binding,
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> HllDecodeCircuit {
     params.validate();
     let bound = binding.is_bound();
     let HllDecodeParams { b: blog2, release } = params;
@@ -789,7 +827,7 @@ fn build_hll_decode_omc(params: HllDecodeParams, regs: &[u64], binding: Binding)
 
     // ─── Native decode ───────────────────────────────────────────────────
     let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
-    let commit = commit_hll_omc(regs, blog2);
+    let commit = commit_hll_omc_with(regs, blog2, mode, salt);
     let res = fixed_res(m, &regs32);
     let answer = release.apply(res);
 
@@ -815,7 +853,10 @@ fn build_hll_decode_omc(params: HllDecodeParams, regs: &[u64], binding: Binding)
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
 
-    // Private witnesses: m/4 packed challenges (4 registers each).
+    // Private witnesses: m/4 packed challenges (4 registers each). B2: under
+    // `Hiding` the salt of `Com(S_t)` comes first (3 private inputs); `Plain`
+    // allocates nothing.
+    let salt_t = mode.is_hiding().then(|| hiding::alloc_salt_targets(&mut b));
     let n_cells = m / 4;
     let cells_packed: Vec<ExprId> =
         (0..n_cells).map(|_| b.alloc_private_input("cell_packed")).collect();
@@ -825,8 +866,18 @@ fn build_hll_decode_omc(params: HllDecodeParams, regs: &[u64], binding: Binding)
     let wires = alloc_estimator_wires(&mut b, m);
     let flag = alloc_release_flag(&mut b, release);
 
-    // ── Stage 1: open the committed omc register state ──
-    let digest = bind::hash_slice(&mut b, &Poseidon2Config::BABY_BEAR_D4_W16, &cells_packed, zero, binding);
+    // ── Stage 1: open the committed omc register state (salted under
+    // `Hiding`; exactly `bind::hash_slice(cells)` under `Plain`) ──
+    let digest = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &Poseidon2Config::BABY_BEAR_D4_W16,
+        CommitKind::State,
+        CommitFamily::HyperLogLog,
+        salt_t.as_ref(),
+        &cells_packed,
+        zero,
+        binding,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(digest[i], commit_pis[i]);
     }
@@ -856,8 +907,11 @@ fn build_hll_decode_omc(params: HllDecodeParams, regs: &[u64], binding: Binding)
     public_inputs.extend_from_slice(&commit_packed);
     public_inputs.push(Challenge::from_u64(answer));
 
-    // pack the m registers 4-per-challenge (commit_countmin / commit_hll_omc form).
-    let mut private_inputs: Vec<Challenge> = pack_omc_regs(regs);
+    // pack the m registers 4-per-challenge (commit_countmin / commit_hll_omc form),
+    // after the salt under `Hiding`.
+    let mut private_inputs: Vec<Challenge> =
+        if mode.is_hiding() { salt.packed().to_vec() } else { Vec::new() };
+    private_inputs.extend(pack_omc_regs(regs));
     private_inputs.extend(estimator_witness_values(m, &regs32));
     private_inputs.extend(release_flag_value(release, res));
 
@@ -878,6 +932,7 @@ fn pack_omc_regs(regs: &[u64]) -> Vec<Challenge> {
 mod tests {
     use super::*;
     use crate::sketch::hll_final_full::{HllFullParams, HllFullState, HllFullUpdate, apply_update};
+    use crate::sketch::hll_omc::commit_hll_omc;
 
     fn state() -> HllFullState {
         let params = HllFullParams { b: 4, batch: 2 };
@@ -1166,6 +1221,118 @@ mod tests {
             for b in [Binding::Semantic, Binding::Legacy] {
                 assert!(run(b).is_none(), "fork binds decompose coefficients: {b:?} must reject too");
             }
+        }
+    }
+
+    // ── B2: hiding commitments (`crate::commitment::hiding`) ─────────────────
+    //
+    // The commitment randomizers are called salts here (`ρ` is the HLL rank).
+
+    /// Flat basis coefficients of VK pin values.
+    fn vk_flat(v: &[Challenge]) -> Vec<u64> {
+        v.iter()
+            .flat_map(|c| {
+                <Challenge as BasedVectorSpace<Val>>::as_basis_coefficients_slice(c)
+                    .iter()
+                    .map(|x| x.as_canonical_u64())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// (6) B2: a Hiding omc decode opens `Com(S_t; salt)` (HLL tag). Under
+    /// `Semantic`/`Bound` it exposes the hiding commitment (not the plain
+    /// one) with the same answer. The Plain omc decoder is the pre-B2 circuit
+    /// and the full-state decoder (a baseline) is untouched (VKs recorded on
+    /// the unmodified code); the Hiding VK does not depend on the salt. A
+    /// query at version `t` opened with leaf `t`'s final salt exposes exactly
+    /// the final commitment of the hiding leaf `t` (the lemma in
+    /// `crate::commitment::hiding`); a wrong salt still proves, but exposes a
+    /// commitment that is not the log's.
+    #[test]
+    fn hiding_decode_exposes_hiding_commit() {
+        use crate::commitment::hiding::{Openings, SaltSeed, rho_state_bb as state_salt};
+        use crate::recursion::recursive::expose_forest::vk_pin_values;
+        use crate::recursion::recursive::statement::Expose;
+        use crate::sketch::hll_omc::{HllOmcParams, build_hll_omc_leaf_commit, hll_omc_advance_with};
+
+        let hll = CommitFamily::HyperLogLog;
+        let recorded_omc = [
+            (Binding::Semantic, [553619783u64, 460455411, 967440984, 478139815, 18213792, 1764800338, 1609330975, 1376495153]),
+            (Binding::Bound, [128184265, 1884925790, 1404361898, 1802899203, 1720621139, 1345013240, 1702163576, 1194416800]),
+            (Binding::Legacy, [1630689861, 1648956362, 701836224, 806664448, 1605616227, 1995127880, 139559199, 498339503]),
+        ];
+        let recorded_full = [
+            (Binding::Semantic, [1646968299u64, 1561807953, 1751689998, 1111581370, 668467397, 1083039643, 1053758752, 928644370]),
+            (Binding::Bound, [1274148678, 1510692462, 184212138, 695814638, 1857215020, 1434953037, 86045661, 293491081]),
+            (Binding::Legacy, [24680293, 460647713, 1936709773, 1332581232, 733900906, 1018094016, 781985858, 1374363088]),
+        ];
+        let lit = |v: [u64; 8]| -> Vec<u64> { v.iter().flat_map(|&x| [x, 0, 0, 0]).collect() };
+        let p = HllDecodeParams { b: 4, release: ReleasePolicy::Identity };
+        let regs = omc_regs(4);
+        let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
+        let seed = SaltSeed::for_tests(61);
+        let (s4, s5) = (state_salt(&seed, hll, 4), state_salt(&seed, hll, 5));
+        for ((binding, vk), (fb, fvk)) in recorded_omc.into_iter().zip(recorded_full) {
+            assert_eq!(binding, fb);
+            let plain = prove_hll_decode_omc_with(p, regs.clone(), 0, binding);
+            assert_eq!(vk_flat(&vk_pin_values(&plain.output.0)), lit(vk), "{binding:?}: Plain omc decode VK drifted");
+            let plain_c = prove_hll_decode_omc_commit(p, regs.clone(), 0, binding, CommitMode::Plain, &s4);
+            assert_eq!(vk_pin_values(&plain_c.output.0), vk_pin_values(&plain.output.0), "{binding:?}");
+            let full = prove_hll_decode_with(p, state(), 0, binding);
+            assert_eq!(vk_flat(&vk_pin_values(&full.output.0)), lit(fvk), "{binding:?}: full decoder VK drifted");
+            let hid = prove_hll_decode_omc_commit(p, regs.clone(), 0, binding, CommitMode::Hiding, &s4);
+            assert_eq!(hid.answer, fixed_res(16, &regs32), "{binding:?}");
+            assert_eq!(hid.answer, plain.answer, "{binding:?}");
+            let hid2 = prove_hll_decode_omc_commit(p, regs.clone(), 0, binding, CommitMode::Hiding, &s5);
+            assert_eq!(vk_pin_values(&hid.output.0), vk_pin_values(&hid2.output.0), "{binding:?}");
+            assert_ne!(vk_pin_values(&hid.output.0), vk_pin_values(&plain.output.0), "{binding:?}");
+            if binding.is_bound() {
+                let pv = exposed(&hid);
+                assert_eq!(&pv[0..8], &commit_hll_omc_with(&regs, 4, CommitMode::Hiding, &s4)[..], "{binding:?}");
+                assert_ne!(&pv[0..8], &commit_hll_omc(&regs, 4)[..], "{binding:?}");
+                assert_eq!(pv[8].as_canonical_u64(), hid.answer);
+                assert_ne!(exposed(&hid2)[0..8], pv[0..8], "{binding:?}: another version, another commitment");
+                assert_eq!(&exposed(&plain_c)[0..8], &commit_hll_omc(&regs, 4)[..], "{binding:?}: Plain ignores the salt");
+            }
+        }
+
+        // Query at version t == leaf t's final commitment.
+        let binding = Binding::Semantic;
+        let t = 2u64;
+        let lp = HllOmcParams { b: 4, batch: 2 };
+        let mut leaf = build_hll_omc_leaf_commit(lp, Expose::Interval, binding, CommitMode::Hiding);
+        let ups = vec![1001u64, 1003];
+        let r = leaf.prove_epoch_commit(t, regs.clone(), ups.clone(), &Openings::for_leaf(&seed, hll, t));
+        let mut s_t = regs.clone();
+        hll_omc_advance_with(&mut s_t, &ups, 16, binding);
+        let q = prove_hll_decode_omc_commit(p, s_t.clone(), 0, binding, CommitMode::Hiding, &state_salt(&seed, hll, t));
+        assert_eq!(&exposed(&q)[0..8], &r.final_commit.0[..], "query at t opens leaf t's final commitment");
+        let wrong = prove_hll_decode_omc_commit(p, s_t, 0, binding, CommitMode::Hiding, &state_salt(&seed, hll, t + 1));
+        assert_ne!(&exposed(&wrong)[0..8], &r.final_commit.0[..], "a wrong salt exposes another commitment");
+    }
+
+    /// (F3, F5) Decoder twin of the leaf's overhead test: a Hiding omc decode
+    /// costs exactly +2 Poseidon2 rows and +3 ALU rows (one commitment)
+    /// under every binding, and none of its 12 salt values is a public value
+    /// of the proof.
+    #[test]
+    fn hiding_decode_row_overhead_and_no_salt_in_public_values() {
+        use crate::commitment::hiding::probe::{leaked_salts, proof_alu_rows, trace_rows};
+        use crate::commitment::hiding::{SaltSeed, rho_state_bb as state_salt};
+        let salt = state_salt(&SaltSeed::for_tests(62), CommitFamily::HyperLogLog, 3);
+        let p = HllDecodeParams { b: 4, release: ReleasePolicy::Identity };
+        let regs = omc_regs(4);
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let (p0, a0) = trace_rows(&build_hll_decode_omc(p, &regs, binding).run());
+            let (p1, a1) =
+                trace_rows(&build_hll_decode_omc_commit(p, &regs, binding, CommitMode::Hiding, &salt).run());
+            println!("B2 HLL decode rows {binding:?}: Poseidon2 {p0} -> {p1}, ALU {a0} -> {a1}");
+            assert_eq!(p1, p0 + 2, "{binding:?}: Poseidon2 rows");
+            assert_eq!(a1, a0 + 3, "{binding:?}: ALU rows");
+            let hid = prove_hll_decode_omc_commit(p, regs.clone(), 0, binding, CommitMode::Hiding, &salt);
+            assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
+            assert_eq!(leaked_salts(&hid.output.0, &[salt]), vec![], "{binding:?}");
         }
     }
 }
