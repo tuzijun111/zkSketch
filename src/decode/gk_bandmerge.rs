@@ -3,7 +3,8 @@
 //! produced by the deployed `bandmerge2` update). The real-GK query counterpart
 //! of the group-by [`crate::decode::greenwald_khanna`] decode: where that reads
 //! the folded 4-field `GKFullState`, this reads the six-field two-sided tuple
-//! `(e, g₁, g₂, Δ₁, Δ₂, t)` and binds the SAME [`commit_gk2_state`] digest the
+//! `(e, g₁, g₂, Δ₁, Δ₂, t)` and binds the SAME
+//! [`commit_gk2_state`](crate::sketch::gk_bandmerge::commit_gk2_state) digest the
 //! `bandmerge2` update recommits, so the query chains to that leaf.
 //!
 //! ### Estimator (S³ / zk1.tex `app:gk-decode`, two-sided form)
@@ -28,11 +29,12 @@ use p3_circuit::{CircuitBuilder, ExprId};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_poseidon2_circuit_air::BabyBearD4Width16;
 
+use crate::commitment::hiding::{self, CommitFamily, CommitKind, CommitMode, SaltBb};
 use crate::config::{Challenge, Val};
 use crate::decode::{DecodeProof, DecodeVk, ReleasePolicy, StdDecodeCircuit};
 use crate::recursion::recursive::countmin_leaf::DIGEST_PACKING;
 use crate::sketch::bind::{self, Binding};
-use crate::sketch::gk_bandmerge::{E_MAX, Gk2State, GkbParams, commit_gk2_state, pack_tuples2};
+use crate::sketch::gk_bandmerge::{E_MAX, Gk2State, GkbParams, commit_gk2_state_with, pack_tuples2};
 
 /// Value/query comparison width (`e, q < 2^22 = E_MAX+1`).
 const E_BITS: usize = 22;
@@ -112,31 +114,80 @@ pub fn prove_gk2_decode_with(
     query: u32,
     binding: Binding,
 ) -> DecodeProof {
-    build_gk2_decode(params, &state, query, binding).prove("gk2 decode")
+    prove_gk2_decode_commit(params, state, query, binding, CommitMode::Plain, &SaltBb::ZERO)
+}
+
+/// [`prove_gk2_decode_with`] against a commitment made under `mode` (revision
+/// B2, [`crate::commitment::hiding`]). `Plain` is the pre-B2 circuit byte for
+/// byte (`salt` ignored). Under `Hiding` the decoder opens
+/// `Com(S_t; ρ) = commit_gk2_state_with(state, Hiding, salt)`: the salt is the
+/// FIRST 3 private inputs, and (under `Semantic`/`Bound`) the exposed
+/// commitment is the hiding one. For a query at version `t` of history `h`
+/// the honest salt is `rho_state_bb_in(seed, CommitFamily::GreenwaldKhanna,
+/// h, t)` (`rho_state_bb(seed, .., t)` in the genesis history), the same
+/// randomizer band-merge leaf `t` closed its final state with; at `t = 0` it
+/// is the public zero in the genesis history and the anchor salt in a
+/// continued one. The decoder cannot tell a version-0 query from a forgotten
+/// salt, so it accepts [`SaltBb::ZERO`] under `Hiding`: the harness must pass
+/// the real salt.
+pub fn prove_gk2_decode_commit(
+    params: Gkb2DecodeParams,
+    state: Gk2State,
+    query: u32,
+    binding: Binding,
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> DecodeProof {
+    build_gk2_decode_commit(params, &state, query, binding, mode, salt).prove("gk2 decode")
 }
 
 /// The trusted verification key of the two-sided GK rank decoder for
 /// `params` under `binding`, derived from public parameters only (a proof over
 /// the empty state). Pin query proofs to it with
-/// [`crate::decode::verify_decode_proof`].
+/// [`crate::decode::verify_decode_proof`]. Plain commitments
+/// ([`gk2_decode_vk_commit`] with [`CommitMode::Plain`]).
 pub fn gk2_decode_vk(params: Gkb2DecodeParams, binding: Binding) -> DecodeVk {
-    let empty = Gk2State::empty(GkbParams { capacity: params.capacity, batch: 2, s: 1 });
-    build_gk2_decode(params, &empty, 0, binding).derive_vk("gk2 decode")
+    gk2_decode_vk_commit(params, binding, CommitMode::Plain)
 }
 
-/// Build the two-sided GK rank decode circuit and its witness.
+/// [`gk2_decode_vk`] of the decoder built under `mode` (revision B2): the
+/// trusted VK of [`prove_gk2_decode_commit`] proofs. Derived from the empty
+/// state with the public zero salt; the salt is a witness, so every `Hiding`
+/// decode proof of the same parameters has this VK.
+pub fn gk2_decode_vk_commit(params: Gkb2DecodeParams, binding: Binding, mode: CommitMode) -> DecodeVk {
+    let empty = Gk2State::empty(GkbParams { capacity: params.capacity, batch: 2, s: 1 });
+    build_gk2_decode_commit(params, &empty, 0, binding, mode, &SaltBb::ZERO).derive_vk("gk2 decode")
+}
+
+/// Build the two-sided GK rank decode circuit and its witness (Plain
+/// commitment; test-only since B2, the entry points go through
+/// [`build_gk2_decode_commit`]).
+#[cfg(test)]
 pub(crate) fn build_gk2_decode(
     params: Gkb2DecodeParams,
     state: &Gk2State,
     query: u32,
     binding: Binding,
 ) -> StdDecodeCircuit {
+    build_gk2_decode_commit(params, state, query, binding, CommitMode::Plain, &SaltBb::ZERO)
+}
+
+/// [`build_gk2_decode`] against a commitment made under `mode` with `salt`
+/// (see [`prove_gk2_decode_commit`]).
+pub(crate) fn build_gk2_decode_commit(
+    params: Gkb2DecodeParams,
+    state: &Gk2State,
+    query: u32,
+    binding: Binding,
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> StdDecodeCircuit {
     let expose = binding.is_bound();
     params.validate();
     let Gkb2DecodeParams { capacity: cap, release } = params;
     assert_eq!(state.tuples.len(), cap, "state shape must match params");
 
-    let commit = commit_gk2_state(state);
+    let commit = commit_gk2_state_with(state, mode, salt);
     let est = native_estimate(state, query);
     let answer = release.apply(est.res);
 
@@ -166,6 +217,9 @@ pub(crate) fn build_gk2_decode(
     let zero = b.alloc_const(Challenge::ZERO, "zero");
     let two = b.alloc_const(Challenge::from_u64(2), "two");
 
+    // B2: under `Hiding` the salt of `Com(S_t)` is the first 3 private
+    // inputs; `Plain` allocates nothing.
+    let salt_t = mode.is_hiding().then(|| hiding::alloc_salt_targets(&mut b));
     let cells_packed: Vec<ExprId> =
         (0..2 * cap).map(|_| b.alloc_private_input("cell_packed")).collect();
     let le: Vec<ExprId> = (0..cap).map(|_| b.alloc_private_input("le")).collect();
@@ -179,9 +233,18 @@ pub(crate) fn build_gk2_decode(
     };
 
     // ── Stage 1: open the committed state ──
-    let digest = b
-        .add_hash_slice(&Poseidon2Config::BABY_BEAR_D4_W16, &cells_packed, true)
-        .expect("hash cells");
+    // Salted under `Hiding`; under `Plain` exactly the raw
+    // `add_hash_slice(cells)` (`Binding::Semantic` in `hiding::commit_hash`).
+    let digest = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &Poseidon2Config::BABY_BEAR_D4_W16,
+        CommitKind::State,
+        CommitFamily::GreenwaldKhanna,
+        salt_t.as_ref(),
+        &cells_packed,
+        zero,
+        Binding::Semantic,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(digest[i], commit_pis[i]);
     }
@@ -337,7 +400,9 @@ pub(crate) fn build_gk2_decode(
     public_inputs.push(Challenge::from_u64(query as u64));
     public_inputs.push(Challenge::from_u64(answer));
 
-    let mut private_inputs: Vec<Challenge> = pack_tuples2(&state.tuples);
+    let mut private_inputs: Vec<Challenge> =
+        if mode.is_hiding() { salt.packed().to_vec() } else { Vec::new() };
+    private_inputs.extend(pack_tuples2(&state.tuples));
     for t in &state.tuples {
         private_inputs.push(if t.e <= query { Challenge::ONE } else { Challenge::ZERO });
     }
@@ -357,7 +422,7 @@ pub(crate) fn build_gk2_decode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketch::gk_bandmerge::apply_batch2;
+    use crate::sketch::gk_bandmerge::{apply_batch2, commit_gk2_state};
 
     fn built_state(cap: usize) -> Gk2State {
         let params = GkbParams { capacity: cap, batch: 8, s: 2 };
@@ -511,5 +576,117 @@ mod tests {
             ],
             &build_gk2_decode(p, &st, 500, Binding::Legacy),
         );
+    }
+
+    // ── B2: hiding commitments (`crate::commitment::hiding`) ─────────────────
+
+    /// (6) B2: a Hiding decode opens `Com(S_t; ρ)`. Under `Semantic`/`Bound`
+    /// it exposes the hiding commitment (not the plain one) with the same
+    /// answer; the Plain decoder is the pre-B2 circuit (VK recorded before
+    /// this change, both off a proof and from the pinned [`gk2_decode_vk`]);
+    /// the Hiding VK does not depend on the salt and equals
+    /// [`gk2_decode_vk_commit`]`(.., Hiding)`, which accepts the Hiding proof
+    /// while the Plain pin rejects it. A query at version `t` opened with
+    /// `ρ^S_t` exposes exactly the final commitment of the hiding band-merge
+    /// leaf `t` (the lemma in `crate::commitment::hiding`); a wrong salt still
+    /// proves, but exposes a commitment that is not the log's.
+    #[test]
+    fn hiding_decode_exposes_hiding_commit() {
+        use crate::commitment::hiding::{Openings, SaltSeed, rho_state_bb};
+        use crate::decode::verify_decode_proof;
+        use crate::recursion::recursive::expose_forest::vk_pin_values;
+        use crate::recursion::recursive::statement::Expose;
+        use crate::sketch::gk_bandmerge::{build_gkb2_leaf_commit, commit_gk2_state_with};
+        use p3_field::PrimeField64;
+
+        let flat = |v: &[Challenge]| -> Vec<u64> {
+            v.iter()
+                .flat_map(|c| {
+                    <Challenge as BasedVectorSpace<Val>>::as_basis_coefficients_slice(c)
+                        .iter()
+                        .map(|x| x.as_canonical_u64())
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        let recorded = [
+            (Binding::Semantic, [203355892u64, 237880594, 1750979469, 1997198089, 576604346, 52959881, 1491069700, 322413283]),
+            (Binding::Bound, [203355892, 237880594, 1750979469, 1997198089, 576604346, 52959881, 1491069700, 322413283]),
+            (Binding::Legacy, [1884057042, 1978897654, 1908599913, 512142752, 520418862, 202716958, 153147690, 1581877963]),
+        ];
+        let gk = CommitFamily::GreenwaldKhanna;
+        let cap = 16;
+        let st = built_state(cap);
+        let q = 500u32;
+        let p = Gkb2DecodeParams { capacity: cap, release: ReleasePolicy::Identity };
+        let seed = SaltSeed::for_tests(61);
+        let (rho, rho2) = (rho_state_bb(&seed, gk, 4), rho_state_bb(&seed, gk, 5));
+        for (binding, vk) in recorded {
+            let want: Vec<u64> = vk.iter().flat_map(|&x| [x, 0, 0, 0]).collect();
+            let plain = prove_gk2_decode_with(p, st.clone(), q, binding);
+            assert_eq!(flat(&vk_pin_values(&plain.output.0)), want, "{binding:?}: Plain decode VK drifted");
+            let plain_vk = gk2_decode_vk(p, binding);
+            assert_eq!(flat(&plain_vk.commitment), want, "{binding:?}: pinned Plain decode VK drifted");
+            let hid = prove_gk2_decode_commit(p, st.clone(), q, binding, CommitMode::Hiding, &rho);
+            assert_eq!(hid.answer, native_res(&st, q), "{binding:?}");
+            assert_eq!(hid.answer, plain.answer, "{binding:?}");
+            let hid2 = prove_gk2_decode_commit(p, st.clone(), q, binding, CommitMode::Hiding, &rho2);
+            assert_eq!(vk_pin_values(&hid.output.0), vk_pin_values(&hid2.output.0), "{binding:?}");
+            assert_ne!(vk_pin_values(&hid.output.0), vk_pin_values(&plain.output.0), "{binding:?}");
+            let hid_vk = gk2_decode_vk_commit(p, binding, CommitMode::Hiding);
+            assert_eq!(hid_vk.commitment, vk_pin_values(&hid.output.0), "{binding:?}: pinned Hiding decode VK");
+            assert_eq!(gk2_decode_vk_commit(p, binding, CommitMode::Plain).commitment, plain_vk.commitment);
+            if binding.is_bound() {
+                let c = commit_gk2_state_with(&st, CommitMode::Hiding, &rho).0;
+                assert_ne!(c, commit_gk2_state(&st).0, "{binding:?}");
+                let want_st = QueryStatement::new(c, q as u64, native_res(&st, q));
+                assert_eq!(hid.statement(), Some(want_st), "{binding:?}");
+                assert_ne!(hid2.statement().unwrap().commit, c, "{binding:?}: another version, another commitment");
+                assert_eq!(verify_decode_proof(&hid.output.0, &hid_vk), Ok(want_st), "{binding:?}");
+                assert!(verify_decode_proof(&hid.output.0, &plain_vk).is_err(), "{binding:?}: the Plain pin");
+            } else {
+                assert_eq!(hid.statement(), None, "Legacy exposes nothing");
+            }
+        }
+
+        // Query at version t == band-merge leaf t's final commitment.
+        let binding = Binding::Semantic;
+        let t = 2u64;
+        let lp = GkbParams { capacity: 4, batch: 2, s: 2 };
+        let s_prev = apply_batch2(&Gk2State::empty(lp), &[10, 11]);
+        let ups = vec![20u32, 21];
+        let mut leaf = build_gkb2_leaf_commit(lp, Expose::Interval, binding, CommitMode::Hiding);
+        let r = leaf.prove_epoch_commit(t, s_prev.clone(), ups.clone(), &Openings::for_leaf(&seed, gk, t));
+        let s_t = apply_batch2(&s_prev, &ups);
+        let dp = Gkb2DecodeParams { capacity: lp.capacity, release: ReleasePolicy::Identity };
+        let qp = prove_gk2_decode_commit(dp, s_t.clone(), 15, binding, CommitMode::Hiding, &rho_state_bb(&seed, gk, t));
+        assert_eq!(qp.statement().unwrap().commit, r.final_.0, "query at t opens leaf t's final commitment");
+        let wrong = prove_gk2_decode_commit(dp, s_t, 15, binding, CommitMode::Hiding, &rho_state_bb(&seed, gk, t + 1));
+        assert_ne!(wrong.statement().unwrap().commit, r.final_.0, "a wrong salt exposes another commitment");
+    }
+
+    /// (F3, F5) Decoder twin of the leaf's overhead test: a Hiding decode
+    /// costs exactly +2 Poseidon2 rows and +3 ALU rows (one commitment)
+    /// under every binding, and none of its 12 salt values is a public value
+    /// of the proof.
+    #[test]
+    fn hiding_decode_row_overhead_and_no_salt_in_public_values() {
+        use crate::commitment::hiding::probe::{leaked_salts, proof_alu_rows, trace_rows};
+        use crate::commitment::hiding::{SaltSeed, rho_state_bb};
+        let rho = rho_state_bb(&SaltSeed::for_tests(62), CommitFamily::GreenwaldKhanna, 3);
+        let cap = 16;
+        let st = built_state(cap);
+        let p = Gkb2DecodeParams { capacity: cap, release: ReleasePolicy::Identity };
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let (p0, a0) = trace_rows(&build_gk2_decode(p, &st, 500, binding).run("gk2 decode"));
+            let hc = build_gk2_decode_commit(p, &st, 500, binding, CommitMode::Hiding, &rho);
+            let (p1, a1) = trace_rows(&hc.run("gk2 decode"));
+            println!("B2 GK decode rows {binding:?}: Poseidon2 {p0} -> {p1}, ALU {a0} -> {a1}");
+            assert_eq!(p1, p0 + 2, "{binding:?}: Poseidon2 rows");
+            assert_eq!(a1, a0 + 3, "{binding:?}: ALU rows");
+            let hid = prove_gk2_decode_commit(p, st.clone(), 500, binding, CommitMode::Hiding, &rho);
+            assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
+            assert_eq!(leaked_salts(&hid.output.0, &[rho]), vec![], "{binding:?}");
+        }
     }
 }
