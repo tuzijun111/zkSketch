@@ -73,7 +73,7 @@ use crate::config::{Challenge, Val};
 use crate::decode::{DecodeProof, DecodeVk, ReleasePolicy, StdDecodeCircuit};
 use crate::recursion::recursive::countmin_leaf::{DIGEST_PACKING, pack_commit_to_challenge};
 use crate::sketch::bind::{self, Binding};
-use crate::sketch::ss_final_full::{SsFullParams, SsFullState, commit_ss_state_with};
+use crate::sketch::ss_final_full::{SsFullParams, SsFullRow, SsFullState, commit_ss_state_with};
 
 /// Range-check window for non-negative diffs (count sortedness, the `c −
 /// Σsel ≥ 0` selection bound, and the threshold gate). Counts/`c`/mass fit in
@@ -173,9 +173,14 @@ pub fn prove_ss_decode_with(
 /// t)` (`rho_state_bb(seed, .., t)` in the genesis history), the same
 /// randomizer leaf `t` closed its final state with; at `t = 0` it is the
 /// public zero in the genesis history and the anchor salt in a continued one.
-/// The decoder cannot tell a version-0 query from a forgotten salt, so it
-/// accepts [`SaltBb::ZERO`] under `Hiding`: the harness must pass the real
-/// salt. Pin the proof to [`ss_decode_vk_commit`] with the same `mode`.
+/// So under `Hiding` the public zero salt opens only the empty genesis state
+/// ([`SsFullState::empty`], every row the dummy; the one state commitment,
+/// `Com(S_0; 0)`, that the verifier recomputes itself): handed
+/// [`SaltBb::ZERO`] with any other state (a forgotten salt at `t ≥ 1`) the
+/// decoder panics instead of publishing the guess-checkable `Com(S_t; 0)`.
+/// A nonzero wrong salt still proves (the circuit does not check the
+/// derivation) and exposes a commitment that is not the log's. Pin the proof
+/// to [`ss_decode_vk_commit`] with the same `mode`.
 pub fn prove_ss_decode_commit(
     params: SsDecodeParams,
     state: SsFullState,
@@ -232,6 +237,13 @@ pub(crate) fn build_ss_decode_commit(
     assert_eq!(c, params.c, "c argument must match params.c");
     let SsDecodeParams { capacity: cap, c: _c, release } = params;
     assert_eq!(state.rows.len(), cap, "state capacity must match params");
+    if mode.is_hiding() && salt.is_zero() {
+        assert!(
+            state.rows.iter().all(|r| *r == SsFullRow::dummy()),
+            "Hiding SS decode: the public zero salt opens only the empty genesis state Com(S_0; 0); \
+             a query at t >= 1 (or at version 0 of a continued history) needs its real salt"
+        );
+    }
 
     // ─── Native decode ───────────────────────────────────────────────────
     let commit = commit_ss_state_with(state, mode, salt);
@@ -1043,5 +1055,41 @@ mod tests {
         let q = prove_ss_decode_commit(dp, s.clone(), 1, Binding::Semantic, CommitMode::Hiding, &rho);
         let want = QueryStatement::new(commit_ss_state_with(&s, CommitMode::Hiding, &rho).0, 1, 2);
         assert_eq!(q.statement(), Some(want));
+    }
+
+    /// Under `Hiding` the public zero salt opens only the empty genesis
+    /// state, the one state commitment the verifier recomputes itself
+    /// (`Com(S_0; 0)`; a continued history's version 0 opens with its
+    /// anchor salt). A real state handed the zero salt (a forgotten opening
+    /// at `t >= 1`) panics instead of publishing the guess-checkable
+    /// `Com(S_t; 0)`, from the builder and the proving entry point alike
+    /// (the twin of `decode::gk_bandmerge`'s test). Controls: the Hiding VK
+    /// derivation ([`ss_decode_vk_commit`]: empty state, zero salt), a real
+    /// state with a real salt, and `Plain` (salt ignored) still build, and a
+    /// genesis query proves under the Hiding VK and exposes `Com(S_0; 0)`.
+    #[test]
+    fn hiding_decode_refuses_zero_salt_on_a_real_state() {
+        let rho = rho_state_bb(&SaltSeed::for_tests(65), SS, 2);
+        let st = state();
+        let empty = SsFullState::empty(SsFullParams { capacity: QP.capacity, batch: 4 });
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let msg = crate::sketch::forge::catch_msg(|| {
+                build_ss_decode_commit(QP, &st, 2, binding, CommitMode::Hiding, &SaltBb::ZERO).answer
+            })
+            .unwrap_err();
+            assert!(msg.contains("public zero salt"), "{binding:?}: {msg}");
+            let _ = build_ss_decode_commit(QP, &empty, 2, binding, CommitMode::Hiding, &SaltBb::ZERO);
+            let _ = build_ss_decode_commit(QP, &st, 2, binding, CommitMode::Hiding, &rho);
+            let _ = build_ss_decode_commit(QP, &st, 2, binding, CommitMode::Plain, &SaltBb::ZERO);
+        }
+        let msg = crate::sketch::forge::catch_msg(|| {
+            prove_ss_decode_commit(QP, st.clone(), 2, Binding::Semantic, CommitMode::Hiding, &SaltBb::ZERO).answer
+        })
+        .unwrap_err();
+        assert!(msg.contains("public zero salt"), "{msg}");
+        let hvk = ss_decode_vk_commit(QP, Binding::Semantic, CommitMode::Hiding);
+        let genesis = prove_ss_decode_commit(QP, empty.clone(), 2, Binding::Semantic, CommitMode::Hiding, &SaltBb::ZERO);
+        let want = QueryStatement::new(commit_ss_state_with(&empty, CommitMode::Hiding, &SaltBb::ZERO).0, 2, 0);
+        assert_eq!(verify_decode_proof(&genesis.output.0, &hvk), Ok(want), "a genesis query opens Com(S_0; 0)");
     }
 }

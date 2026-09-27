@@ -14,11 +14,18 @@
 //! only from a `--features zk` run. The circuits are the ones the
 //! composition harness deploys (`stream_compose`): CM omc, HLL omc, SS
 //! certified (`ss_final_full`), GK bandmerge2, plus the Bloom omc leaf, under
-//! `composition_expose()` (Interval unless `ZKSKETCH_STATEMENT` says otherwise)
-//! and `default_binding()` (Semantic unless `ZKSKETCH_BINDING` says otherwise).
+//! `composition_expose()` (Interval unless `ZKSKETCH_STATEMENT` says otherwise),
+//! `default_binding()` (Semantic unless `ZKSKETCH_BINDING` says otherwise) and
+//! `commit_mode_from_env()` (revision B2: `ZKSKETCH_COMMIT=plain|hiding`,
+//! unset = Hiding except Plain under `ZKSKETCH_BINDING=legacy`). The four
+//! deployed leaves are built with their `*_commit` builders in that mode (a
+//! Hiding leaf carries the 9 salt private inputs and the salted commitment
+//! sponges); the Bloom leaf has no hiding variant and stays Plain. Every CSV
+//! row records the mode its circuit was built in (`commit_mode`).
 //!
 //! ```bash
 //! cargo run --release --example exp_e0                  # 5 families x m in {2^12, 2^13, 2^14}
+//! ZKSKETCH_COMMIT=plain cargo run --release --example exp_e0   # the pre-B2 (Plain) leaves
 //! ZKSKETCH_BINDING=bound E0_FAMILY=cm,hll cargo run --release --example exp_e0
 //! E0_MERGE=1 E0_FAMILY=hll E0_M=4096 cargo run --release --example exp_e0
 //! E0_COST=1 cargo run --release --example exp_e0 [--features zk]
@@ -32,7 +39,9 @@
 //! * `E0_QUOTIENT=1`: also record each table's log quotient-chunk count
 //!   (non-ZK and ZK).
 //! * `E0_PROVE=1`: also build and prove one no-op epoch per cell and check the
-//!   proof's per-table `degree_bits == log_h + is_zk` and op types. It proves
+//!   proof's per-table `degree_bits == log_h + is_zk` and op types (a Hiding
+//!   leaf proves the VK-derivation no-op through `prove_epoch_public_zero`
+//!   at batch index 1, the one zero-salt path). It proves
 //!   at the probed geometry, so keep m small (GK at m=2^14 needs ~85 GB
 //!   non-hiding, ~250 GB hiding).
 //! * `E0_MERGE=1`: also probe the merge circuits (cm/hll/ss/gk): prove the
@@ -49,6 +58,9 @@
 //!   bytes of one leaf per family and one merge at a SMALL geometry (CM d=4
 //!   w=1024, HLL b=10, SS cap=1024, GK cap=256, Bloom k=7 log_w=10, all at
 //!   m=`E0_COST_M`=1024; merge over two CM leaves). Run once per PCS build.
+//!   Under Hiding the two merged CM leaves are opened honestly
+//!   (`Openings::for_leaf` from `ZKSKETCH_SALT_SEED` or an OS-random seed,
+//!   never printed), so leaf 1's final `Com(S_0; ρ_1)` is leaf 2's init.
 //!
 //! Output (`results/`): `e0_tables.csv` (one row per table), `e0_summary.csv`
 //! (one row per circuit), `e0_cost.csv` (`E0_COST`). `m_cross_hiding` is the
@@ -63,6 +75,7 @@ use std::time::{Duration, Instant};
 
 use p3_circuit_prover::{BatchStarkProof, PrimitiveTable};
 use p3_uni_stark::StarkGenericConfig;
+use zksketch::commitment::hiding::{CommitFamily, CommitMode, Openings, SaltSeed, commit_mode_from_env};
 use zksketch::config::LOG_BLOWUP;
 use zksketch::experiments::metrics::{self, BenchCfg, RunOutcome};
 use zksketch::experiments::table_probe::{
@@ -77,14 +90,14 @@ use zksketch::sketch::Sketch;
 use zksketch::sketch::bind::{Binding, default_binding};
 use zksketch::sketch::bloom_omc::{BloomOmcLeafCircuit, BloomOmcParams, bloom_empty, build_bloom_omc_leaf};
 use zksketch::sketch::countmin::{CountMinParams, CountMinUpdate};
-use zksketch::sketch::countmin_omc::{CmOmcLeafCircuit, CmOmcParams, build_countmin_omc_leaf_expose};
+use zksketch::sketch::countmin_omc::{CmOmcLeafCircuit, CmOmcParams, build_countmin_omc_leaf_commit};
 use zksketch::sketch::countmin_v9::CountMinV9;
-use zksketch::sketch::gk_bandmerge::{Gk2State, Gkb2LeafCircuit, GkbParams, build_gkb2_leaf_expose};
+use zksketch::sketch::gk_bandmerge::{Gk2State, Gkb2LeafCircuit, GkbParams, build_gkb2_leaf_commit};
 use zksketch::sketch::hll_omc::{
-    HllOmcLeafCircuit, HllOmcParams, build_hll_omc_leaf_expose, hll_omc_advance_with, hll_omc_empty,
+    HllOmcLeafCircuit, HllOmcParams, build_hll_omc_leaf_commit, hll_omc_advance_with, hll_omc_empty,
 };
 use zksketch::sketch::ss_final_full::{
-    SsFullLeafCircuit, SsFullParams, SsFullState, SsFullUpdate, build_ss_full_leaf_expose,
+    SsFullLeafCircuit, SsFullParams, SsFullState, SsFullUpdate, build_ss_full_leaf_commit,
 };
 
 type Proof = BatchStarkProof<ConfigWithFriParams>;
@@ -159,6 +172,19 @@ fn variant(fam: &str) -> &'static str {
     }
 }
 
+/// The commitment mode a family's leaf is built in: the run's mode for the
+/// four deployed families, `Plain` for Bloom (no hiding variant).
+fn family_mode(fam: &str, mode: CommitMode) -> CommitMode {
+    if fam == "bloom" { CommitMode::Plain } else { mode }
+}
+
+fn mode_name(mode: CommitMode) -> &'static str {
+    match mode {
+        CommitMode::Plain => "plain",
+        CommitMode::Hiding => "hiding",
+    }
+}
+
 /// A built deployed leaf of one family.
 enum Leaf {
     Cm(CmOmcLeafCircuit, CmOmcParams),
@@ -169,23 +195,27 @@ enum Leaf {
 }
 
 impl Leaf {
-    fn build(fam: &str, g: &Geometry, m: usize, expose: Expose, binding: Binding) -> Self {
+    /// Build the family's deployed leaf in `mode` (Bloom ignores it). Under
+    /// `Plain` these are exactly the pre-B2 `*_expose` builders (which
+    /// delegate to the same `*_commit` builders with `CommitMode::Plain`;
+    /// GK's used `default_binding()`, which is the run's `binding`).
+    fn build(fam: &str, g: &Geometry, m: usize, expose: Expose, binding: Binding, mode: CommitMode) -> Self {
         match fam {
             "cm" => {
                 let p = CmOmcParams { d: g.cm_d, w: g.cm_w, batch: m };
-                Leaf::Cm(build_countmin_omc_leaf_expose(p, expose, binding), p)
+                Leaf::Cm(build_countmin_omc_leaf_commit(p, expose, binding, mode), p)
             }
             "hll" => {
                 let p = HllOmcParams { b: g.hll_b, batch: m };
-                Leaf::Hll(build_hll_omc_leaf_expose(p, expose, binding), p, binding)
+                Leaf::Hll(build_hll_omc_leaf_commit(p, expose, binding, mode), p, binding)
             }
             "ss" => {
                 let p = SsFullParams { capacity: g.ss_cap, batch: m };
-                Leaf::Ss(build_ss_full_leaf_expose(p, expose), p)
+                Leaf::Ss(build_ss_full_leaf_commit(p, expose, mode), p)
             }
             "gk" => {
                 let p = GkbParams { capacity: g.gk_cap, batch: m, s: g.gk_s };
-                Leaf::Gk(build_gkb2_leaf_expose(p, expose), p)
+                Leaf::Gk(build_gkb2_leaf_commit(p, expose, binding, mode), p)
             }
             "bloom" => {
                 let p = BloomOmcParams { k: g.bloom_k, log_w: g.bloom_log_w, batch: m };
@@ -198,24 +228,89 @@ impl Leaf {
     /// Prove batch `t` over the family's provable no-op records from a
     /// public state (the `noop_leaf` inputs): `initial == final`, so leaves
     /// at consecutive `t` merge. The circuit, hence the cost, is data-free.
+    /// A `Hiding` leaf proves this input through its one zero-salt path,
+    /// `prove_epoch_public_zero`, meant for the VK-derivation no-op leaf at
+    /// batch index 1 (every family refuses any other index); chained
+    /// Hiding leaves use [`Self::prove_chained`].
     fn prove_noop(&mut self, t: u64) -> Proof {
         match self {
             Leaf::Cm(leaf, p) => {
                 let state = CountMinV9::new(&CountMinParams { d: p.d, w: p.w });
                 let batch = vec![CountMinUpdate { key: 0, value: 0 }; p.batch];
-                leaf.prove_epoch_at(t, state, batch).output.0
+                if leaf.commit_mode().is_hiding() {
+                    leaf.prove_epoch_public_zero(t, state, batch).output.0
+                } else {
+                    leaf.prove_epoch_at(t, state, batch).output.0
+                }
             }
             Leaf::Hll(leaf, p, binding) => {
                 let mut regs = hll_omc_empty(p.b);
                 hll_omc_advance_with(&mut regs, &[1], p.m(), *binding);
-                leaf.prove_epoch_at(t, regs, vec![1; p.batch]).output.0
+                if leaf.commit_mode().is_hiding() {
+                    leaf.prove_epoch_public_zero(t, regs, vec![1; p.batch]).output.0
+                } else {
+                    leaf.prove_epoch_at(t, regs, vec![1; p.batch]).output.0
+                }
             }
             Leaf::Ss(leaf, p) => {
                 let batch = vec![SsFullUpdate::dummy(); p.batch];
-                leaf.prove_epoch_at(t, SsFullState::empty(*p), batch).output.0
+                if leaf.commit_mode().is_hiding() {
+                    leaf.prove_epoch_public_zero(t, SsFullState::empty(*p), batch).output.0
+                } else {
+                    leaf.prove_epoch_at(t, SsFullState::empty(*p), batch).output.0
+                }
             }
-            Leaf::Gk(leaf, p) => leaf.prove_epoch_at(t, Gk2State::empty(*p), Vec::new()).output.0,
+            Leaf::Gk(leaf, p) => {
+                if leaf.commit_mode().is_hiding() {
+                    leaf.prove_epoch_public_zero(t, Gk2State::empty(*p), Vec::new()).output.0
+                } else {
+                    leaf.prove_epoch_at(t, Gk2State::empty(*p), Vec::new()).output.0
+                }
+            }
             Leaf::Bloom(leaf, p) => leaf.prove_epoch(&bloom_empty(p), &[]).output.0,
+        }
+    }
+
+    /// Leaf `t` of a chain of no-op batches over the public state, for the
+    /// `E0_COST` merge: `Plain` is [`Self::prove_noop`]; a `Hiding` leaf opens
+    /// its commitments honestly (`Openings::for_leaf(seed, family, t)`), so
+    /// leaf `t`'s final `Com(S_0; ρ_t)` is leaf `t + 1`'s init. `seed` is
+    /// required for a `Hiding` leaf only.
+    fn prove_chained(&mut self, t: u64, seed: Option<&SaltSeed>) -> Proof {
+        let hiding = match self {
+            Leaf::Cm(l, _) => l.commit_mode().is_hiding(),
+            Leaf::Hll(l, _, _) => l.commit_mode().is_hiding(),
+            Leaf::Ss(l, _) => l.commit_mode().is_hiding(),
+            Leaf::Gk(l, _) => l.commit_mode().is_hiding(),
+            Leaf::Bloom(..) => false,
+        };
+        if !hiding {
+            return self.prove_noop(t);
+        }
+        let seed = seed.expect("a Hiding leaf needs the prover's salt seed");
+        match self {
+            Leaf::Cm(leaf, p) => {
+                let state = CountMinV9::new(&CountMinParams { d: p.d, w: p.w });
+                let batch = vec![CountMinUpdate { key: 0, value: 0 }; p.batch];
+                let o = Openings::for_leaf(seed, CommitFamily::CountMin, t);
+                leaf.prove_epoch_commit(t, state, batch, &o).output.0
+            }
+            Leaf::Hll(leaf, p, binding) => {
+                let mut regs = hll_omc_empty(p.b);
+                hll_omc_advance_with(&mut regs, &[1], p.m(), *binding);
+                let o = Openings::for_leaf(seed, CommitFamily::HyperLogLog, t);
+                leaf.prove_epoch_commit(t, regs, vec![1; p.batch], &o).output.0
+            }
+            Leaf::Ss(leaf, p) => {
+                let batch = vec![SsFullUpdate::dummy(); p.batch];
+                let o = Openings::for_leaf(seed, CommitFamily::SpaceSaving, t);
+                leaf.prove_epoch_commit(t, SsFullState::empty(*p), batch, &o).output.0
+            }
+            Leaf::Gk(leaf, p) => {
+                let o = Openings::for_leaf(seed, CommitFamily::GreenwaldKhanna, t);
+                leaf.prove_epoch_commit(t, Gk2State::empty(*p), Vec::new(), &o).output.0
+            }
+            Leaf::Bloom(..) => unreachable!("Bloom has no hiding variant"),
         }
     }
 }
@@ -290,29 +385,33 @@ struct Ctx {
     pcs: &'static str,
     binding: Binding,
     statement: Expose,
+    /// `ZKSKETCH_COMMIT` (Bloom rows are always `plain`, [`family_mode`]).
+    mode: CommitMode,
     is_zk: usize,
 }
 
 impl Ctx {
-    fn prefix(&self) -> Vec<String> {
+    /// The leading columns of family `fam`'s rows.
+    fn prefix(&self, fam: &str) -> Vec<String> {
         vec![
             self.commit.clone(),
             self.pcs.into(),
             format!("{:?}", self.binding).to_lowercase(),
             format!("{:?}", self.statement).to_lowercase(),
+            mode_name(family_mode(fam, self.mode)).into(),
         ]
     }
 }
 
 const TABLE_HEADER: &[&str] = &[
-    "commit", "pcs", "binding", "statement", "family", "variant", "site", "level", "geometry", "m",
+    "commit", "pcs", "binding", "statement", "commit_mode", "family", "variant", "site", "level", "geometry", "m",
     "table_idx", "table", "log_h", "rows_padded", "rows_unpadded", "fill", "width", "prep_width",
     "lq_nonzk", "lq_zk", "fits_nonhiding", "fits_hiding", "headroom_rows_hiding",
     "rows_per_record", "m_cross_hiding", "consistent",
 ];
 
 const SUMMARY_HEADER: &[&str] = &[
-    "commit", "pcs", "binding", "statement", "family", "variant", "site", "level", "geometry", "m",
+    "commit", "pcs", "binding", "statement", "commit_mode", "family", "variant", "site", "level", "geometry", "m",
     "tables", "max_log_h", "largest", "max_rows_unpadded", "max_fill", "sum_rows_padded",
     "fits_nonhiding", "fits_hiding", "min_headroom_rows_hiding", "m_cross_hiding",
     "m_cross_table", "consistent", "probe_s", "hwm_mb", "proof_check",
@@ -354,7 +453,7 @@ fn write_family(ctx: &Ctx, probes: &[Probe]) {
             }
             min_headroom = min_headroom.min(t.headroom_hiding());
             let (lq0, lq1) = t.lq.map_or(("-".into(), "-".into()), |(a, b)| (a.to_string(), b.to_string()));
-            let mut row = ctx.prefix();
+            let mut row = ctx.prefix(&p.fam);
             row.extend([
                 p.fam.clone(),
                 variant.into(),
@@ -387,7 +486,7 @@ fn write_family(ctx: &Ctx, probes: &[Probe]) {
             .copied()
             .max_by_key(|t| t.rows)
             .expect("a circuit has tables");
-        let mut row = ctx.prefix();
+        let mut row = ctx.prefix(&p.fam);
         row.extend([
             p.fam.clone(),
             variant.into(),
@@ -415,12 +514,13 @@ fn write_family(ctx: &Ctx, probes: &[Probe]) {
     }
 }
 
-fn print_probe(p: &Probe) {
+fn print_probe(ctx: &Ctx, p: &Probe) {
     let s = &p.shape;
     let largest = s.largest();
     println!(
-        "E0 fam={} level={} m={} [{}] max_log_h={} ({}) fill={:.3} sum_padded={} fits_hiding(<=2^{} if lq<={})={} fits_nonhiding(<=2^{})={} consistent={} probe_s={:.1} hwm_mb={:.0} check={}",
+        "E0 fam={} commit_mode={} level={} m={} [{}] max_log_h={} ({}) fill={:.3} sum_padded={} fits_hiding(<=2^{} if lq<={})={} fits_nonhiding(<=2^{})={} consistent={} probe_s={:.1} hwm_mb={:.0} check={}",
         p.fam,
+        mode_name(family_mode(&p.fam, ctx.mode)),
         p.level,
         p.m,
         p.geometry,
@@ -495,6 +595,7 @@ fn check_proof(shape: &CircuitShape, proof: &Proof, is_zk: usize) -> String {
 fn probe(ctx: &Ctx, fams: &[String], ms: &[usize], g: &Geometry) {
     let expose = ctx.statement;
     let binding = ctx.binding;
+    let mode = ctx.mode;
     let prove = env_on("E0_PROVE");
     let merge_only = std::env::var("E0_MERGE").is_ok_and(|v| v == "only");
     let merge = merge_only || env_on("E0_MERGE");
@@ -510,7 +611,7 @@ fn probe(ctx: &Ctx, fams: &[String], ms: &[usize], g: &Geometry) {
         for &m in ms {
             reset_hwm();
             let t0 = Instant::now();
-            let res = table_probe::capture_shapes(|| Leaf::build(fam, g, m, expose, binding));
+            let res = table_probe::capture_shapes(|| Leaf::build(fam, g, m, expose, binding, mode));
             let probe_s = t0.elapsed().as_secs_f64();
             let shape = match res {
                 Ok(mut shapes) if shapes.len() == 1 => shapes.remove(0),
@@ -536,7 +637,7 @@ fn probe(ctx: &Ctx, fams: &[String], ms: &[usize], g: &Geometry) {
                 reset_hwm();
                 let t1 = Instant::now();
                 let (proof, shapes) = table_probe::capture(|| {
-                    let mut leaf = Leaf::build(fam, g, m, expose, binding);
+                    let mut leaf = Leaf::build(fam, g, m, expose, binding, mode);
                     leaf.prove_noop(1)
                 });
                 if prove {
@@ -552,7 +653,7 @@ fn probe(ctx: &Ctx, fams: &[String], ms: &[usize], g: &Geometry) {
                 noop = Some(proof);
             }
             if !merge_only {
-                print_probe(&p);
+                print_probe(ctx, &p);
                 probes.push(p);
             }
 
@@ -573,7 +674,7 @@ fn probe(ctx: &Ctx, fams: &[String], ms: &[usize], g: &Geometry) {
                         hwm_mb: hwm,
                         proof_check: "-".into(),
                     };
-                    print_probe(&mp);
+                    print_probe(ctx, &mp);
                     probes.push(mp);
                 }
             }
@@ -583,7 +684,7 @@ fn probe(ctx: &Ctx, fams: &[String], ms: &[usize], g: &Geometry) {
 }
 
 const COST_HEADER: &[&str] = &[
-    "commit", "pcs", "binding", "statement", "family", "circuit", "geometry", "m", "build_s",
+    "commit", "pcs", "binding", "statement", "commit_mode", "family", "circuit", "geometry", "m", "build_s",
     "witness_ms", "prove_ms", "verify_ms", "peak_rss_mb", "proof_bytes", "max_degree_bits",
 ];
 
@@ -595,7 +696,7 @@ fn cost_row(ctx: &Ctx, fam: &str, circuit: &str, geometry: &str, m: usize, build
         max_db = db;
         out
     });
-    let mut row = ctx.prefix();
+    let mut row = ctx.prefix(fam);
     row.extend([
         fam.into(),
         circuit.into(),
@@ -610,8 +711,8 @@ fn cost_row(ctx: &Ctx, fam: &str, circuit: &str, geometry: &str, m: usize, build
         max_db.to_string(),
     ]);
     println!(
-        "E0C pcs={} fam={fam} circuit={circuit} [{geometry}] m={m} build_s={build_s:.1} prove_ms={:.0} peak_rss_mb={:.0} proof_bytes={} max_degree_bits={max_db}",
-        ctx.pcs, agg.prove_ms_median, agg.peak_rss_mb_median, agg.proof_size_bytes
+        "E0C pcs={} commit_mode={} fam={fam} circuit={circuit} [{geometry}] m={m} build_s={build_s:.1} prove_ms={:.0} peak_rss_mb={:.0} proof_bytes={} max_degree_bits={max_db}",
+        ctx.pcs, mode_name(family_mode(fam, ctx.mode)), agg.prove_ms_median, agg.peak_rss_mb_median, agg.proof_size_bytes
     );
     metrics::append_csv(&results_dir(), "e0_cost", &header(COST_HEADER), &row);
 }
@@ -636,7 +737,7 @@ fn cost(ctx: &Ctx, fams: &[String]) {
     let m = env_usize("E0_COST_M", 1024);
     for fam in fams {
         let t0 = Instant::now();
-        let mut leaf = Leaf::build(fam, &g, m, ctx.statement, ctx.binding);
+        let mut leaf = Leaf::build(fam, &g, m, ctx.statement, ctx.binding, ctx.mode);
         let build_s = t0.elapsed().as_secs_f64();
         cost_row(ctx, fam, "leaf", &g.label(fam), m, build_s, || {
             let proof = leaf.prove_noop(1);
@@ -644,9 +745,11 @@ fn cost(ctx: &Ctx, fams: &[String]) {
             outcome(&proof, tm.witness, tm.prove, tm.verify)
         });
     }
-    // One merge over two adjacent CM no-op leaves (t = 1, 2).
-    let mut leaf = Leaf::build("cm", &g, m, ctx.statement, ctx.binding);
-    let (left, right) = (leaf.prove_noop(1), leaf.prove_noop(2));
+    // One merge over two adjacent CM no-op leaves (t = 1, 2); Hiding leaves
+    // are opened honestly so that they chain ([`Leaf::prove_chained`]).
+    let mut leaf = Leaf::build("cm", &g, m, ctx.statement, ctx.binding, ctx.mode);
+    let seed = ctx.mode.is_hiding().then(|| SaltSeed::from_env().unwrap_or_else(SaltSeed::os_random));
+    let (left, right) = (leaf.prove_chained(1, seed.as_ref()), leaf.prove_chained(2, seed.as_ref()));
     cost_row(ctx, "cm", "merge", &g.label("cm"), m, 0.0, || {
         let t = Instant::now();
         let merged = prove_hiding_merge_proofs(&left, &right);
@@ -672,11 +775,16 @@ fn main() {
         pcs: if is_zk == 1 { "hiding" } else { "nonhiding" },
         binding: default_binding(),
         statement: composition_expose(),
+        mode: commit_mode_from_env(),
         is_zk,
     };
     println!(
-        "E0 commit={} pcs={} binding={:?} statement={:?} families={fams:?} m={ms:?}",
-        ctx.commit, ctx.pcs, ctx.binding, ctx.statement
+        "E0 commit={} pcs={} binding={:?} statement={:?} commit_mode={} (bloom: plain) families={fams:?} m={ms:?}",
+        ctx.commit,
+        ctx.pcs,
+        ctx.binding,
+        ctx.statement,
+        mode_name(ctx.mode)
     );
     table_probe::quiet_shapes_only_panics();
     if env_on("E0_COST") {

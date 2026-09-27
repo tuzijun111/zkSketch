@@ -790,9 +790,14 @@ pub fn prove_hll_decode_omc_with(
 /// `rho_state_bb_in(seed, CommitFamily::HyperLogLog, h, t)`
 /// (`rho_state_bb(seed, .., t)` in the genesis history), the same randomizer
 /// leaf `t` closed its final state with; at `t = 0` it is the public zero in
-/// the genesis history and the anchor salt in a continued one. The decoder
-/// cannot tell a version-0 query from a forgotten salt, so it accepts
-/// [`SaltBb::ZERO`] under `Hiding`: the harness must pass the real salt.
+/// the genesis history and the anchor salt in a continued one. So under
+/// `Hiding` the public zero salt opens only the empty genesis registers
+/// ([`hll_omc_empty`](crate::sketch::hll_omc::hll_omc_empty), the one state
+/// commitment, `Com(S_0; 0)`, that the verifier recomputes itself): handed
+/// [`SaltBb::ZERO`] with any other registers (a forgotten salt at `t ≥ 1`)
+/// the decoder panics instead of publishing the guess-checkable
+/// `Com(S_t; 0)`. A nonzero wrong salt still proves (the circuit does not
+/// check the derivation) and exposes a commitment that is not the log's.
 pub fn prove_hll_decode_omc_commit(
     params: HllDecodeParams,
     regs: Vec<u64>,
@@ -824,6 +829,13 @@ fn build_hll_decode_omc_commit(
     assert_eq!(regs.len(), m, "state shape must match params (m = 2^b)");
     assert_eq!(m % 4, 0, "m = 2^b must be a multiple of 4 (b >= 2)");
     assert!(regs.iter().all(|&r| (r as usize) <= MU_MAX), "register exceeds MU_MAX = {MU_MAX}");
+    if mode.is_hiding() && salt.is_zero() {
+        assert!(
+            regs.iter().all(|&r| r == 0),
+            "Hiding HLL decode: the public zero salt opens only the empty genesis state Com(S_0; 0); \
+             a query at t >= 1 (or at version 0 of a continued history) needs its real salt"
+        );
+    }
 
     // ─── Native decode ───────────────────────────────────────────────────
     let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
@@ -1334,5 +1346,48 @@ mod tests {
             assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
             assert_eq!(leaked_salts(&hid.output.0, &[salt]), vec![], "{binding:?}");
         }
+    }
+
+    /// Under `Hiding` the public zero salt opens only the empty genesis
+    /// registers, the one state commitment the verifier recomputes itself
+    /// (`Com(S_0; 0)`; a continued history's version 0 opens with its
+    /// anchor salt). Real registers handed the zero salt (a forgotten opening
+    /// at `t >= 1`) panic instead of publishing the guess-checkable
+    /// `Com(S_t; 0)`, from the builder and the proving entry point alike
+    /// (the twin of `decode::gk_bandmerge`'s test). Controls: the empty
+    /// registers with the zero salt (a genesis query; the Hiding VK
+    /// derivation), real registers with a real salt, and `Plain` (salt
+    /// ignored) still build, and the genesis query proves and exposes
+    /// `Com(S_0; 0)`.
+    #[test]
+    fn hiding_decode_refuses_zero_salt_on_a_real_state() {
+        use crate::commitment::hiding::{SaltSeed, rho_state_bb as state_salt};
+        use crate::sketch::hll_omc::hll_omc_empty;
+        let salt = state_salt(&SaltSeed::for_tests(64), CommitFamily::HyperLogLog, 2);
+        let p = HllDecodeParams { b: 4, release: ReleasePolicy::Identity };
+        let regs = omc_regs(4);
+        let empty = hll_omc_empty(4);
+        assert!(regs.iter().any(|&r| r != 0));
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let msg = forge::catch_msg(|| {
+                build_hll_decode_omc_commit(p, &regs, binding, CommitMode::Hiding, &SaltBb::ZERO).answer
+            })
+            .unwrap_err();
+            assert!(msg.contains("public zero salt"), "{binding:?}: {msg}");
+            let _ = build_hll_decode_omc_commit(p, &empty, binding, CommitMode::Hiding, &SaltBb::ZERO);
+            let _ = build_hll_decode_omc_commit(p, &regs, binding, CommitMode::Hiding, &salt);
+            let _ = build_hll_decode_omc_commit(p, &regs, binding, CommitMode::Plain, &SaltBb::ZERO);
+        }
+        let msg = forge::catch_msg(|| {
+            prove_hll_decode_omc_commit(p, regs.clone(), 0, Binding::Semantic, CommitMode::Hiding, &SaltBb::ZERO).answer
+        })
+        .unwrap_err();
+        assert!(msg.contains("public zero salt"), "{msg}");
+        let genesis = prove_hll_decode_omc_commit(p, empty.clone(), 0, Binding::Semantic, CommitMode::Hiding, &SaltBb::ZERO);
+        assert_eq!(
+            &exposed(&genesis)[0..8],
+            &commit_hll_omc_with(&empty, 4, CommitMode::Hiding, &SaltBb::ZERO)[..],
+            "a genesis query opens the public anchor Com(S_0; 0)"
+        );
     }
 }
