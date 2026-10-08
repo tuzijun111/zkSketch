@@ -100,8 +100,10 @@ impl DecodeProof {
 /// Base values of the `(Com(S), query, answer)` statement a decode proof
 /// exposes on BabyBear (D = 4): `Com(S)` (8), the query Challenge (4) and the
 /// answer Challenge (4). The Count-Min, SpaceSaving and both GK decoders use
-/// it; HyperLogLog (no query) exposes `(Com(S), answer)` (12) and Bloom its
-/// own 16-value `(Com(S), record, answer)`.
+/// it, and so does the Bloom membership decoder: its 16-value `(Com(S),
+/// record(key), answer)` is this layout with `query = record(key)`
+/// ([`bloom::bloom_query_input`]). HyperLogLog (no query) exposes `(Com(S),
+/// answer)` (12).
 pub const QUERY_STATEMENT_LEN: usize = 16;
 
 /// The `(Com(S), query, answer)` statement a decode proof exposes.
@@ -112,7 +114,9 @@ pub struct QueryStatement {
     /// scalar query ([`Self::new`]); the Count-Min decoder's key encoding
     /// under `Binding::Semantic`/`Bound` is the exact 16-bit limbs
     /// `(k0, k1, k2, k3)` ([`Self::with_query`] with
-    /// [`crate::sketch::countmin_final::key_hash_input`]).
+    /// [`crate::sketch::countmin_final::key_hash_input`]); the Bloom
+    /// decoder's is the active record `(k0, k1, k2, k3 + 2^16)`
+    /// ([`bloom::bloom_query_input`]).
     pub query: [Val; 4],
     /// The released answer as a Challenge's 4 base coordinates.
     pub answer: [Val; 4],
@@ -147,17 +151,30 @@ impl QueryStatement {
 /// given: the Expose table binds these values to the circuit's wires, so a
 /// proof whose exposed values were altered fails verification.
 pub fn read_exposed_statement(proof: &BatchStarkProof<ConfigWithFriParams>) -> Option<QueryStatement> {
-    let pv = proof
-        .non_primitives
-        .iter()
-        .map(|e| &e.public_values)
-        .find(|v| v.len() == QUERY_STATEMENT_LEN)?;
+    let exposed = |len: usize| {
+        proof.non_primitives.iter().map(|e| &e.public_values).find(|v| v.len() == len)
+    };
+    if let Some(pv) = exposed(QUERY_STATEMENT_LEN) {
+        return Some(QueryStatement {
+            commit: std::array::from_fn(|i| pv[i]),
+            query: std::array::from_fn(|i| pv[8 + i]),
+            answer: std::array::from_fn(|i| pv[12 + i]),
+        });
+    }
+    // A keyless decoder (HyperLogLog cardinality) exposes `(Com(S), answer)`:
+    // read it with an all-zero query.
+    use p3_field::PrimeCharacteristicRing;
+    let pv = exposed(KEYLESS_STATEMENT_LEN)?;
     Some(QueryStatement {
         commit: std::array::from_fn(|i| pv[i]),
-        query: std::array::from_fn(|i| pv[8 + i]),
-        answer: std::array::from_fn(|i| pv[12 + i]),
+        query: [Val::ZERO; 4],
+        answer: std::array::from_fn(|i| pv[8 + i]),
     })
 }
+
+/// Base values of the `(Com(S), answer)` statement a keyless decode proof
+/// (HyperLogLog) exposes: `Com(S)` (8) and the answer Challenge (4).
+pub const KEYLESS_STATEMENT_LEN: usize = 12;
 
 /// Verifier-side check of a decode proof's query statement: the proof must
 /// expose `(Com(S), query, answer)` and it must equal `want`. The STARK itself

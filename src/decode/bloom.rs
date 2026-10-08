@@ -20,7 +20,12 @@
 //!
 //! The verifier-visible statement is the Expose op `(Com(S), record(key),
 //! answer)`: `record(key) = [k0, k1, k2, k3 + 2^16]` is injective in the key,
-//! so the verifier checks it equals [`record_vals`]`(Some(key))`.
+//! so the verifier checks it equals [`record_vals`]`(Some(key))`. The 16
+//! values are the standard decode statement layout, so
+//! [`crate::decode::read_exposed_statement`] reads them as `(Com(S), query,
+//! answer)` with `query = record(key)` and `answer = (a, 0, 0, 0)`, and
+//! [`crate::decode::verify_decode_proof`] pins a proof to
+//! [`bloom_decode_vk`] (derived from public parameters).
 //!
 //! Soundness caveat: as for the update leaf, this is conditional on the pinned
 //! fork binding constant values (see the "constants are not bound" section of
@@ -51,9 +56,11 @@ use p3_recursion::RecursionOutput;
 use p3_uni_stark::StarkGenericConfig;
 
 use crate::config::{Challenge, LOG_BLOWUP, Val};
-use crate::decode::DecodeProof;
+use crate::decode::{DecodeProof, DecodeVk};
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::countmin_leaf::make_leaf_config;
+use crate::recursion::recursive::expose_forest::vk_pin_values;
+use crate::recursion::recursive::root_vk::bound_proof_shape;
 use crate::sketch::bloom_omc::{
     BloomOmcParams, Consts, bloom_positions, commit_bloom, hash_slice_bound, pack_cells,
     record_route_gadget, record_vals, split_witness_count, split_witness_values,
@@ -84,6 +91,29 @@ pub fn read_exposed_query(
         std::array::from_fn(|i| pv[8 + i]),
         pv[12],
     )
+}
+
+/// The query coordinates the membership circuit exposes for `key`:
+/// `record(key) = [k0, k1, k2, k3 + 2^16]` ([`record_vals`] of an active
+/// record), what a verifier compares the exposed query with.
+pub fn bloom_query_input(key: u64) -> [Val; 4] {
+    record_vals(Some(key))
+}
+
+/// The trusted VK of the Bloom membership circuit at `(k, log_w)`, derived
+/// from public parameters only: the circuit is proved once over the empty
+/// filter and key 0 (the cells, key limbs, splits and selectors are private
+/// witnesses, so neither shapes the circuit) and its preprocessed commitment
+/// and metadata are read off. A verifier pins every Bloom query proof to it
+/// with [`crate::decode::verify_decode_proof`], never to the VK a proof
+/// carries. `params.batch` is ignored.
+pub fn bloom_decode_vk(params: BloomOmcParams) -> DecodeVk {
+    use crate::sketch::bloom_omc::bloom_empty;
+    let proof = prove_bloom_query(params, &bloom_empty(&params), 0);
+    DecodeVk {
+        commitment: vk_pin_values(&proof.output.0),
+        shape: Some(bound_proof_shape(&proof.output.0)),
+    }
 }
 
 /// Prove `answer = contains(S, key)` against `Com(S)`. `params.batch` is
@@ -326,6 +356,42 @@ mod tests {
                 assert_eq!(q.answer, 1, "no false negatives");
             }
         }
+    }
+
+    /// The pinned verifier with the VK derived from public parameters accepts
+    /// honest proofs over non-empty filters, members and non-members alike,
+    /// and returns the exposed `(Com(S), record(key), answer)` as the standard
+    /// query statement; it rejects a membership circuit at another shape and
+    /// another family's decode proof (Count-Min, also 16 exposed values).
+    #[test]
+    fn bloom_decode_vk_pins_proofs() {
+        use crate::decode::{QueryStatement, check_query_statement, verify_decode_proof};
+        let vk = bloom_decode_vk(P);
+        let ks = keys(8, 11);
+        let mut bits = bloom_empty(&P);
+        bloom_insert(&mut bits, &P, &ks);
+        for key in [ks[0], ks[7], 0xDEAD_BEEF_0042, 0] {
+            let q = prove_bloom_query(P, &bits, key);
+            let want = QueryStatement::with_query(commit_bloom(&bits), bloom_query_input(key), q.answer);
+            assert_eq!(verify_decode_proof(&q.output.0, &vk), Ok(want), "key {key}");
+            assert_eq!(check_query_statement(&q.output.0, &want), Ok(()));
+            // Another key's query coordinates do not match.
+            let other = QueryStatement::with_query(want.commit, bloom_query_input(key ^ 1), q.answer);
+            assert!(check_query_statement(&q.output.0, &other).is_err(), "key {key} vs key^1");
+        }
+        let p2 = BloomOmcParams { k: 3, log_w: 8, batch: 8 };
+        let wider = prove_bloom_query(p2, &bloom_empty(&p2), 5);
+        assert!(verify_decode_proof(&wider.output.0, &vk).is_err(), "another width");
+        let cm = crate::decode::countmin::prove_cm_decode(
+            crate::decode::countmin::CmDecodeParams {
+                d: 4,
+                w: 8,
+                release: crate::decode::ReleasePolicy::Identity,
+            },
+            crate::experiments::families::cm_empty(4, 8),
+            7,
+        );
+        assert!(verify_decode_proof(&cm.output.0, &vk).is_err(), "a Count-Min decode proof");
     }
 
     /// Opening a cell the key does not map to (to flip the answer) violates

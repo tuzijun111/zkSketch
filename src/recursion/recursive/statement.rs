@@ -515,6 +515,83 @@ pub fn check_leaf_statements_against_log<BF: PrimeField64>(
     Ok(())
 }
 
+/// Check the statements of a **prefix certificate** against the log
+/// (Property 3, query time): the interval proofs a verifier holds at version
+/// `t` (the forest's live peaks, the chain's current fold, or the per-batch
+/// leaves), in order, each with the bracketing it was folded under. They must
+/// tile `[1, t]` exactly: part `k` exposes `lo` = one past the previous part's
+/// `hi` (the first `lo == 1`), `hi = lo + |shape| - 1`, zero `idx` padding,
+/// `init` = the previous part's `final` (the first `init == Com(S_0)`), and
+/// `H == H_expected(shape, Com(B_lo..B_hi))` recomputed from the log. Returns
+/// the certified `Com(S_t)`, the last part's `final`, which a query proof's
+/// exposed state commitment must equal.
+///
+/// Each part's digest is recomputed with the honest indices, so a part whose
+/// exposed `(lo, hi)` wrapped modulo `p` (see the module docs) fails the
+/// digest check exactly as a wrapped root would. This checks VALUES only: it
+/// authenticates nothing unless every part was first verified against the
+/// trusted VK of its bracketing (`expose_forest::PrefixAuditor` does both).
+pub fn check_prefix_statements<BF: PrimeField64>(
+    parts: &[(&Statement<BF>, &ForestShape)],
+    log: &BatchLog<BF>,
+    t: usize,
+    hash: &dyn Fn(&[BF]) -> Vec<BF>,
+    d: usize,
+) -> Result<Vec<BF>, String> {
+    if t == 0 || t > log.num_batches() {
+        return Err(format!("version t = {t} is outside the log's 1..={}", log.num_batches()));
+    }
+    if parts.is_empty() {
+        return Err("empty prefix certificate".into());
+    }
+    let mut next = 1usize;
+    let mut prev = &log.init;
+    for (k, (stmt, shape)) in parts.iter().enumerate() {
+        let n = shape.num_leaves();
+        let hi = next + n - 1;
+        if hi > t {
+            return Err(format!("part {} covers up to batch {hi}, past version t = {t}", k + 1));
+        }
+        let iv = stmt
+            .interval
+            .as_ref()
+            .ok_or_else(|| format!("part {} exposes the Boundary layout only", k + 1))?;
+        if iv.lo != BF::from_u64(next as u64) || iv.hi != BF::from_u64(hi as u64) {
+            return Err(format!(
+                "part {} idx = [{}, {}] != [{next}, {hi}] (parts must tile [1, t] in order)",
+                k + 1,
+                iv.lo,
+                iv.hi
+            ));
+        }
+        if iv.idx_pad.iter().any(|&x| x != BF::ZERO) {
+            return Err(format!("part {} idx padding coordinates are not zero", k + 1));
+        }
+        if &stmt.init != prev {
+            return Err(if k == 0 {
+                "part 1 init != Com(S_0) of the log".into()
+            } else {
+                format!("boundary break: part {} init != part {k} final", k + 1)
+            });
+        }
+        let (_, _, expected) =
+            expected_interval(hash, d, shape, next as u64, &log.batch_commits[next - 1..hi]);
+        if iv.digest != expected {
+            return Err(format!(
+                "part {} ordered-batch digest != the digest recomputed from Com(B_{next}..B_{hi}) \
+                 under its bracketing",
+                k + 1
+            ));
+        }
+        prev = &stmt.final_;
+        next = hi + 1;
+    }
+    if next - 1 != t {
+        return Err(format!("the parts certify [1, {}], not [1, {t}]", next - 1));
+    }
+    Ok(prev.clone())
+}
+
 // ─── Field instances ─────────────────────────────────────────────────────────
 
 /// BabyBear native sponge (`crate::config::MyHash`, digest `[Val; 8]`).
@@ -565,6 +642,81 @@ mod tests {
         let (_, _, f3) = expected_interval(&hash_bb, 4, &ForestShape::forest(3), 1, &c[..3]);
         let (_, _, c3) = expected_interval(&hash_bb, 4, &ForestShape::chain(3), 1, &c[..3]);
         assert_eq!(f3, c3);
+    }
+
+    /// The honest statement of an interval proof over batches `[lo, lo+|shape|-1]`
+    /// whose boundaries are `states[lo-1]` and `states[hi]`.
+    fn honest(states: &[Vec<Val>], c: &[Vec<Val>], lo: usize, shape: &ForestShape) -> Statement<Val> {
+        let hi = lo + shape.num_leaves() - 1;
+        let (_, _, digest) = expected_interval(&hash_bb, 4, shape, lo as u64, &c[lo - 1..hi]);
+        Statement {
+            init: states[lo - 1].clone(),
+            final_: states[hi].clone(),
+            interval: Some(IntervalPart {
+                lo: Val::from_u64(lo as u64),
+                hi: Val::from_u64(hi as u64),
+                idx_pad: vec![Val::ZERO; 2],
+                digest,
+            }),
+        }
+    }
+
+    /// A prefix certificate at version t = 7 = 4 + 2 + 1 (the forest's live
+    /// peaks) is accepted and yields Com(S_7); so do the chain's single fold
+    /// and the per-batch leaves. Gaps, overlaps, a wrong order, a broken
+    /// boundary, a foreign Com(S_0), a wrong bracketing, a part past t, and a
+    /// certificate of a shorter prefix are all rejected.
+    #[test]
+    fn prefix_statements_tile_the_log() {
+        let c = commits(9);
+        let states: Vec<Vec<Val>> = (0..10).map(|i| vec![Val::from_u64(1000 + i as u64); 8]).collect();
+        let log = BatchLog { init: states[0].clone(), final_: states[9].clone(), batch_commits: c.clone() };
+        let check = |parts: &[(Statement<Val>, ForestShape)], t: usize| {
+            let refs: Vec<(&Statement<Val>, &ForestShape)> = parts.iter().map(|(s, sh)| (s, sh)).collect();
+            check_prefix_statements(&refs, &log, t, &hash_bb, 4)
+        };
+        let (p4, p2, p1) = (ForestShape::forest(4), ForestShape::forest(2), ForestShape::Leaf);
+        let peaks = vec![
+            (honest(&states, &c, 1, &p4), p4.clone()),
+            (honest(&states, &c, 5, &p2), p2.clone()),
+            (honest(&states, &c, 7, &p1), p1.clone()),
+        ];
+        assert_eq!(check(&peaks, 7), Ok(states[7].clone()));
+        let chain7 = ForestShape::chain(7);
+        assert_eq!(check(&[(honest(&states, &c, 1, &chain7), chain7.clone())], 7), Ok(states[7].clone()));
+        let leaves: Vec<_> = (1..=7).map(|lo| (honest(&states, &c, lo, &p1), p1.clone())).collect();
+        assert_eq!(check(&leaves, 7), Ok(states[7].clone()));
+
+        // A certificate of [1, 6] does not certify version 7, and vice versa.
+        assert!(check(&peaks[..2], 7).is_err(), "missing the last peak");
+        assert!(check(&peaks, 6).is_err(), "a part past t");
+        // Gap: drop the middle peak.
+        assert!(check(&[peaks[0].clone(), peaks[2].clone()], 7).is_err(), "gap");
+        // Order: swap two peaks.
+        assert!(check(&[peaks[1].clone(), peaks[0].clone(), peaks[2].clone()], 7).is_err(), "order");
+        // Wrong bracketing for the first peak: chain(4) instead of forest(4).
+        let mut wrong = peaks.clone();
+        wrong[0].1 = ForestShape::chain(4);
+        assert!(check(&wrong, 7).is_err(), "bracketing");
+        // Broken boundary: the middle peak starts from a different state.
+        let mut brk = peaks.clone();
+        brk[1].0.init = vec![Val::from_u64(7); 8];
+        assert!(check(&brk, 7).is_err(), "boundary");
+        // Foreign anchor.
+        let mut anchor = peaks.clone();
+        anchor[0].0.init = vec![Val::from_u64(7); 8];
+        assert!(check(&anchor, 7).is_err(), "Com(S_0)");
+        // A peak whose digest covers other batches.
+        let mut other = peaks.clone();
+        other[1].0 = honest(&states, &c, 5, &p2);
+        other[1].0.interval.as_mut().unwrap().digest = honest(&states, &c, 3, &p2).interval.unwrap().digest;
+        assert!(check(&other, 7).is_err(), "digest");
+        // Boundary-only statements carry no interval.
+        let mut bnd = peaks.clone();
+        bnd[2].0.interval = None;
+        assert!(check(&bnd, 7).is_err(), "boundary layout");
+        assert!(check(&[], 7).is_err(), "empty");
+        assert!(check(&peaks, 10).is_err(), "t beyond the log");
     }
 
     #[test]

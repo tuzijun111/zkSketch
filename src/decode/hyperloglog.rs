@@ -592,6 +592,30 @@ impl HllDecodeCircuit {
         self.prover.verify_all_tables(&proof).map_err(|e| format!("verify: {e:?}"))?;
         Ok(proof)
     }
+
+    /// This circuit's VK (preprocessed commitment + proof metadata), read off
+    /// a proof of its own honest witness.
+    fn derive_vk(&self) -> crate::decode::DecodeVk {
+        let proof = self
+            .prover
+            .prove_all_tables(&self.run(), &self.circuit_prover_data)
+            .expect("prove hll decode (VK derivation)");
+        self.prover.verify_all_tables(&proof).expect("self-verify hll decode (VK derivation)");
+        crate::decode::DecodeVk {
+            commitment: crate::recursion::recursive::expose_forest::vk_pin_values(&proof),
+            shape: Some(crate::recursion::recursive::root_vk::bound_proof_shape(&proof)),
+        }
+    }
+}
+
+/// The trusted VK of the HyperLogLog cardinality decode circuit over the
+/// `omc` register state ([`prove_hll_decode_omc`]) at `params` and `binding`,
+/// derived from public parameters only: built over the all-zero registers
+/// (witnesses, not circuit structure), proved once, and its preprocessed
+/// commitment and metadata read off. A verifier pins every HyperLogLog query
+/// proof to it with [`crate::decode::verify_decode_proof`].
+pub fn hll_omc_decode_vk(params: HllDecodeParams, binding: Binding) -> crate::decode::DecodeVk {
+    build_hll_decode_omc(params, &vec![0u64; 1usize << params.b], binding).derive_vk()
 }
 
 /// Prover data + registered prover for a built HLL decode circuit (Poseidon2,
@@ -1033,6 +1057,32 @@ mod tests {
     use crate::config::make_perm;
     use crate::sketch::forge;
     use p3_field::PrimeField64;
+
+    /// The pinned verifier with the VK derived from public parameters
+    /// accepts honest proofs over non-empty register states and returns the
+    /// exposed `(Com(S), answer)` (query coordinates zero); it rejects the
+    /// Legacy circuit and a decoder at another register count.
+    #[test]
+    fn hll_omc_decode_vk_pins_proofs() {
+        use crate::decode::{QueryStatement, verify_decode_proof};
+        let binding = bind::default_binding();
+        if binding == Binding::Legacy {
+            return;
+        }
+        let p = HllDecodeParams { b: 4, release: ReleasePolicy::Identity };
+        let vk = hll_omc_decode_vk(p, binding);
+        for n in [0u64, 40, 400] {
+            let mut regs = vec![0u64; 16];
+            crate::sketch::hll_omc::hll_omc_advance(&mut regs, &(0..n).collect::<Vec<_>>(), 16);
+            let proof = prove_hll_decode_omc(p, regs.clone(), 0);
+            let want = QueryStatement::new(commit_hll_omc(&regs, 4), 0, proof.answer);
+            assert_eq!(verify_decode_proof(&proof.output.0, &vk), Ok(want), "n = {n}");
+        }
+        let legacy = prove_hll_decode_omc_with(p, omc_regs(4), 0, Binding::Legacy);
+        assert!(verify_decode_proof(&legacy.output.0, &vk).is_err(), "Legacy circuit");
+        let other = prove_hll_decode_omc(HllDecodeParams { b: 5, release: ReleasePolicy::Identity }, omc_regs(5), 0);
+        assert!(verify_decode_proof(&other.output.0, &vk).is_err(), "another register count");
+    }
 
     fn omc_regs(b: usize) -> Vec<u64> {
         let m = 1usize << b;

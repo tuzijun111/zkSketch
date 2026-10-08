@@ -177,3 +177,20 @@ pub fn hll_omc_noop_leaf_expose(
         .output
         .0
 }
+
+/// Bloom-filter `omc` leaf with an explicit statement ([`Expose`]): the
+/// empty filter and a batch of canonical dummy records only (`act = 0`
+/// records OR in nothing, so `initial == final`; the stream harness strips
+/// its `PAD_KEY` slots into exactly these dummies). An Interval no-op leaf is
+/// proved at batch index 1, so `lo == hi`; the index is a witness, so every
+/// real Interval leaf of the same `(k, log_w, batch)` has this VK.
+pub fn bloom_omc_noop_leaf_expose(
+    params: crate::sketch::bloom_omc::BloomOmcParams,
+    expose: Expose,
+) -> Proof {
+    use crate::sketch::bloom_omc::{bloom_empty, build_bloom_omc_leaf_expose};
+    build_bloom_omc_leaf_expose(params, expose)
+        .prove_epoch_at(1, &bloom_empty(&params), &[])
+        .output
+        .0
+}

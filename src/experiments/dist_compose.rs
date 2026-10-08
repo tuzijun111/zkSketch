@@ -97,6 +97,7 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, OnceLock};
@@ -108,7 +109,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Val;
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::expose_forest::{
-    check_leaves_against_log, leaf_vk, prove_hiding_merge, prove_hiding_merge_proofs,
+    check_leaves_against_log, leaf_vk, prove_hiding_merge, prove_hiding_merge_proofs, ForestCascade,
     read_exposed_boundary_proof, root_vk_deriver, verify_bound_stark_proof_against_log,
     verify_bound_stark_proof_pinned, verify_leaves_against_log, vk_pin_values,
 };
@@ -120,6 +121,10 @@ use crate::recursion::recursive::timing;
 use p3_circuit_prover::BatchStarkProof;
 use p3_recursion::RecursionOutput;
 
+use crate::sketch::bloom_omc::{
+    bloom_batch_commit, bloom_empty, bloom_insert, build_bloom_omc_leaf_expose, commit_bloom,
+    BloomOmcLeafCircuit, BloomOmcParams,
+};
 use crate::sketch::countmin::{CountMinParams, CountMinState};
 use crate::sketch::countmin_omc::{
     build_countmin_omc_leaf_expose, countmin_omc_advance, countmin_omc_batch_commit,
@@ -170,8 +175,8 @@ use crate::sketch::ss_final_full_gl::{
 
 use super::families::cm_empty;
 use super::stream_compose::{
-    cm_updates_of, gk_vals_of, hll_keys_of, measure_queries_dist, ss_updates_of, QueryKeyMode,
-    StreamFamily, StreamMode, StreamShape, PAD_KEY,
+    bloom_keys_of, cm_updates_of, gk_vals_of, hll_keys_of, measure_queries_dist, ss_updates_of,
+    ContextStore, QueryAudit, QueryKeyMode, StreamFamily, StreamMode, StreamShape, PAD_KEY,
 };
 
 use crate::commitment::countmin::commit_countmin;
@@ -220,6 +225,9 @@ pub enum WireState {
     Ss { capacity: u32, rows: Vec<(u64, u32, u32)> },
     /// `(e, g, g_o, delta, delta_o, t, active)` per tuple.
     Gk { capacity: u32, s: u64, n: u64, tuples: Vec<(u32, u64, u64, u64, u64, u64, u32)> },
+    /// The `M = k·2^log_w` filter bits, packed 8 per byte (LSB first): the
+    /// state is bits, so this is what a deployment ships.
+    Bloom { k: u32, log_w: u32, cells: u32, packed: Vec<u8> },
 }
 
 /// Local plaintext state a machine advances and proves against. `advance`
@@ -230,6 +238,8 @@ enum FamState {
     Hll(Vec<u64>),
     Ss(SsFullState),
     Gk(Gk2State),
+    /// The filter's parameters (shape + batch slots) and its `M` bits.
+    Bloom(BloomOmcParams, Vec<u8>),
 }
 
 // The per-family record mappings (key masks + PAD_KEY no-op handling) are the
@@ -250,6 +260,10 @@ impl FamState {
                 batch: m,
                 s: shape.gk_s,
             })),
+            StreamFamily::BloomOmc => {
+                let p = shape.bloom_params(m);
+                Self::Bloom(p, bloom_empty(&p))
+            }
             StreamFamily::SsCertifiedGl
             | StreamFamily::GkBandmerge2Gl
             | StreamFamily::HllOmcGl
@@ -268,6 +282,7 @@ impl FamState {
             Self::Hll(regs) => hll_omc_advance(regs, &hll_keys_of(batch), 1usize << shape.b),
             Self::Ss(state) => *state = apply_batch_ss_full(state, &ss_updates_of(batch)).0,
             Self::Gk(state) => *state = apply_batch2(state, &gk_vals_of(batch)),
+            Self::Bloom(p, bits) => bloom_insert(bits, p, &bloom_keys_of(batch)),
         }
     }
 
@@ -278,6 +293,7 @@ impl FamState {
             Self::Hll(regs) => commit_hll_omc(regs, shape.b),
             Self::Ss(state) => commit_ss_state(state).0,
             Self::Gk(state) => commit_gk2_state(state).0,
+            Self::Bloom(_, bits) => commit_bloom(bits),
         }
     }
 }
@@ -305,6 +321,8 @@ pub(crate) fn batch_commits(
                 n_prev += vals.len() as u64;
                 c
             }
+            // `m` record slots: the real keys, then canonical dummies.
+            StreamFamily::BloomOmc => bloom_batch_commit(m, &bloom_keys_of(b)),
             _ => unreachable!("gl families use batch_commits_gl"),
         })
         .collect()
@@ -382,6 +400,9 @@ impl FamState {
             (FamLeafCircuit::Gk(l), Self::Gk(state)) => {
                 l.prove_epoch_at(t, state.clone(), gk_vals_of(batch)).output
             }
+            (FamLeafCircuit::Bloom(l), Self::Bloom(_, bits)) => {
+                l.prove_epoch_at(t, bits, &bloom_keys_of(batch)).output
+            }
             _ => panic!("FamLeafCircuit/FamState family mismatch"),
         };
         let tm = timing::take();
@@ -414,6 +435,18 @@ impl FamState {
                     .map(|t| (t.e, t.g, t.g_o, t.delta, t.delta_o, t.t, t.active))
                     .collect(),
             },
+            Self::Bloom(p, bits) => {
+                let mut packed = vec![0u8; bits.len().div_ceil(8)];
+                for (i, &bit) in bits.iter().enumerate() {
+                    packed[i / 8] |= (bit & 1) << (i % 8);
+                }
+                WireState::Bloom {
+                    k: p.k as u32,
+                    log_w: p.log_w as u32,
+                    cells: bits.len() as u32,
+                    packed,
+                }
+            }
         }
     }
 
@@ -453,6 +486,15 @@ impl FamState {
                 params: GkbParams { capacity: *capacity as usize, batch: m, s: *s },
                 n: *n,
             }),
+            WireState::Bloom { k, log_w, cells, packed } => {
+                let p = BloomOmcParams { k: *k as usize, log_w: *log_w as usize, batch: m };
+                p.validate();
+                let cells = *cells as usize;
+                assert_eq!(cells, p.m_cells(), "bloom wire state size");
+                assert_eq!(packed.len(), cells.div_ceil(8), "bloom wire state bytes");
+                let bits: Vec<u8> = (0..cells).map(|i| (packed[i / 8] >> (i % 8)) & 1).collect();
+                Self::Bloom(p, bits)
+            }
         }
     }
 }
@@ -467,6 +509,7 @@ enum FamLeafCircuit {
     Hll(HllOmcLeafCircuit),
     Ss(SsFullLeafCircuit),
     Gk(Gkb2LeafCircuit),
+    Bloom(BloomOmcLeafCircuit),
 }
 
 impl FamLeafCircuit {
@@ -495,6 +538,10 @@ impl FamLeafCircuit {
                 GkbParams { capacity: shape.capacity, batch: m, s: shape.gk_s },
                 expose,
             )),
+            // One (bound) construction: no binding switch.
+            StreamFamily::BloomOmc => {
+                Self::Bloom(build_bloom_omc_leaf_expose(shape.bloom_params(m), expose))
+            }
             StreamFamily::SsCertifiedGl
             | StreamFamily::GkBandmerge2Gl
             | StreamFamily::HllOmcGl
@@ -674,6 +721,9 @@ impl FamStateGl {
                     params: CountMinParams { d, w },
                 })
             }
+            WireState::Bloom { .. } => {
+                panic!("the Bloom filter has no Goldilocks leaf (BabyBear engine only)")
+            }
         }
     }
 }
@@ -727,6 +777,8 @@ struct WireShape {
     b: u32,
     capacity: u32,
     gk_s: u64,
+    bloom_k: u32,
+    bloom_log_w: u32,
 }
 
 impl WireShape {
@@ -737,6 +789,8 @@ impl WireShape {
             b: s.b as u32,
             capacity: s.capacity as u32,
             gk_s: s.gk_s,
+            bloom_k: s.bloom_k as u32,
+            bloom_log_w: s.bloom_log_w as u32,
         }
     }
     fn to_shape(self) -> StreamShape {
@@ -746,8 +800,19 @@ impl WireShape {
             b: self.b as usize,
             capacity: self.capacity as usize,
             gk_s: self.gk_s,
+            bloom_k: self.bloom_k as usize,
+            bloom_log_w: self.bloom_log_w as usize,
         }
     }
+}
+
+/// One interval proof of a query's prefix certificate, as a worker ships it:
+/// the batches `[lo, hi]` it covers and, unless already shipped, its bytes.
+#[derive(Serialize, Deserialize)]
+struct WireInterval {
+    lo: u64,
+    hi: u64,
+    proof: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -764,6 +829,14 @@ enum ToWorker {
         /// Global 1-based stream index of `batches[0]` (the leaves' Interval
         /// statement carries the global batch index).
         first_index: u64,
+        /// Mixed workload with the prefix binding on: local 0-based leaf
+        /// indices after which a query fires. After each, the worker ships
+        /// the interval proofs live at that version (forest: its peaks, each
+        /// shipped once; chain: the running fold) in `LeafDone::context`.
+        checkpoints: Vec<u32>,
+        /// Forest: ship the finalized slice root in `SliceDone::root` (a
+        /// query in a later slice needs this slice certified).
+        ship_root: bool,
     },
     /// Forest reduction round: merge this (right-adjacent) peer root into the
     /// local root. Reply: `Merged`.
@@ -788,11 +861,16 @@ enum FromWorker {
         cascade_ms: f64,
         cascade_merges: u32,
         proof: Option<Vec<u8>>,
+        /// At a query checkpoint: the interval proofs live after this leaf,
+        /// left to right (bytes omitted for a peak shipped earlier).
+        context: Option<Vec<WireInterval>>,
     },
     /// Slice complete (forest: after finalizing the local root).
     SliceDone {
         finalize_ms: f64,
         finalize_merges: u32,
+        /// The serialized slice root when `Task::ship_root`.
+        root: Option<Vec<u8>>,
     },
     Merged {
         ms: f64,
@@ -895,9 +973,13 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
     send_msg(&mut stream, &FromWorker::Hello { id }).expect("hello");
     serve_guarded(stream, cores, move |s| {
         let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
-        let ToWorker::Task { family, mode, shape, m, start, batches, first_index } = task else {
+        let ToWorker::Task {
+            family, mode, shape, m, start, batches, first_index, checkpoints, ship_root,
+        } = task
+        else {
             panic!("first message must be Task");
         };
+        let checkpoints: std::collections::BTreeSet<u32> = checkpoints.into_iter().collect();
         // The state's wire tag fixes the family; parse validates agreement.
         let family = StreamFamily::parse(&family).expect("family");
         let mode = StreamMode::parse(&mode).expect("mode");
@@ -907,8 +989,10 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
         // Build the leaf circuit ONCE; every epoch below reuses it.
         let mut leaf = FamLeafCircuit::build(family, &shape, m);
 
-        // Forest: Bentley–Saxe peak stack `(size, root)`, folded as we go.
-        let mut peaks: Vec<(u64, RecursionOutput<ConfigWithFriParams>)> = Vec::new();
+        // Forest: the online Bentley–Saxe cascade, folded as we go.
+        let mut forest = ForestCascade::new(first_index);
+        // Peaks already shipped to the coordinator (`(lo, hi)`).
+        let mut shipped: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
         // Chain: the running left-leaning prefix proof.
         let mut chain_acc: Option<RecursionOutput<ConfigWithFriParams>> = None;
         let mut root: Option<RecursionOutput<ConfigWithFriParams>> = None;
@@ -943,17 +1027,34 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
                     // (binary-counter carry), off the leaf critical path but
                     // measured within the slice phase.
                     let t0 = Instant::now();
-                    let mut node = (1u64, output);
-                    while peaks.last().is_some_and(|(sz, _)| *sz == node.0) {
-                        let (_, left) = peaks.pop().unwrap();
-                        node = (node.0 * 2, prove_hiding_merge(&left, &node.1));
-                        cascade_merges += 1;
-                    }
-                    peaks.push(node);
+                    cascade_merges = forest.push(output);
                     cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
                     None
                 }
             };
+            // A query fires after this leaf: ship what certifies it (outside
+            // the cascade timing; peaks are immutable, so each goes once).
+            let ser = |p: &RecursionOutput<ConfigWithFriParams>| {
+                postcard::to_allocvec(&p.0).expect("serialize context proof")
+            };
+            let context = checkpoints.contains(&(i as u32)).then(|| match mode {
+                StreamMode::Forest => forest
+                    .peaks()
+                    .into_iter()
+                    .map(|(lo, hi, p)| WireInterval {
+                        lo,
+                        hi,
+                        proof: shipped.insert((lo, hi)).then(|| ser(p)),
+                    })
+                    .collect(),
+                StreamMode::Chain => vec![WireInterval {
+                    lo: first_index,
+                    hi: first_index + i as u64,
+                    proof: Some(ser(chain_acc.as_ref().expect("chain prefix"))),
+                }],
+                // per_batch: the leaf proofs themselves are the certificate.
+                StreamMode::PerBatch => Vec::new(),
+            });
             send_msg(
                 s,
                 &FromWorker::LeafDone {
@@ -963,6 +1064,7 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
                     cascade_ms,
                     cascade_merges,
                     proof: proof_bytes,
+                    context,
                 },
             )
             .expect("send LeafDone");
@@ -972,24 +1074,26 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
             StreamMode::Chain => {
                 // The prefix proof is already the whole-stream root.
                 root = chain_acc;
-                send_msg(s, &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0 })
-                    .expect("send SliceDone");
+                send_msg(
+                    s,
+                    &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0, root: None },
+                )
+                .expect("send SliceDone");
             }
             StreamMode::Forest => {
                 // Finalize surviving peaks left-to-right into the slice root.
                 let t0 = Instant::now();
-                let mut merges = 0u32;
-                let mut acc = peaks.remove(0).1;
-                for (_, r) in peaks.drain(..) {
-                    acc = prove_hiding_merge(&acc, &r);
-                    merges += 1;
-                }
+                let (acc, merges) = forest.finalize();
+                let finalize_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let root_bytes =
+                    ship_root.then(|| postcard::to_allocvec(&acc.0).expect("serialize slice root"));
                 root = Some(acc);
                 send_msg(
                     s,
                     &FromWorker::SliceDone {
-                        finalize_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                        finalize_ms,
                         finalize_merges: merges,
+                        root: root_bytes,
                     },
                 )
                 .expect("send SliceDone");
@@ -1038,7 +1142,7 @@ fn worker_main_gl(sock: &str, id: u32, cores: usize) -> ! {
     send_msg(&mut stream, &FromWorker::Hello { id }).expect("hello");
     serve_guarded(stream, cores, move |s| {
         let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
-        let ToWorker::Task { family, mode, shape, m, start, batches, first_index } = task else {
+        let ToWorker::Task { family, mode, shape, m, start, batches, first_index, .. } = task else {
             panic!("first message must be Task");
         };
         // The state's wire tag fixes the family; parse validates agreement.
@@ -1113,6 +1217,7 @@ fn worker_main_gl(sock: &str, id: u32, cores: usize) -> ! {
                     cascade_ms,
                     cascade_merges,
                     proof: proof_bytes,
+                    context: None,
                 },
             )
             .expect("send LeafDone");
@@ -1122,8 +1227,11 @@ fn worker_main_gl(sock: &str, id: u32, cores: usize) -> ! {
             StreamMode::Chain => {
                 // The prefix proof is already the whole-stream root.
                 root = chain_acc;
-                send_msg(s, &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0 })
-                    .expect("send SliceDone");
+                send_msg(
+                    s,
+                    &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0, root: None },
+                )
+                .expect("send SliceDone");
             }
             StreamMode::Forest => {
                 // Finalize surviving peaks left-to-right into the slice root.
@@ -1142,6 +1250,7 @@ fn worker_main_gl(sock: &str, id: u32, cores: usize) -> ! {
                     &FromWorker::SliceDone {
                         finalize_ms: t0.elapsed().as_secs_f64() * 1000.0,
                         finalize_merges: merges,
+                        root: None,
                     },
                 )
                 .expect("send SliceDone");
@@ -1464,9 +1573,10 @@ fn dist_tree_shape(mode: StreamMode, t: usize, machines: usize) -> ForestShape {
 
 /// Public, data-free leaf input whose leaf proof is a NO-OP (initial ==
 /// final boundary): `(setup, batch)` — advance the empty state by `setup`,
-/// then prove `batch`. CM/SS/GK: a batch of `PAD_KEY` no-op records from the
-/// empty state; HLL: re-insert a key the state already holds (`max` is
-/// idempotent), since HLL has no pad sentinel.
+/// then prove `batch`. CM/SS/GK/Bloom: a batch of `PAD_KEY` no-op records
+/// from the empty state (Bloom: all slots become `act = 0` dummies, the
+/// `noop_leaf::bloom_omc_noop_leaf_expose` input); HLL: re-insert a key the
+/// state already holds (`max` is idempotent), since HLL has no pad sentinel.
 fn noop_leaf_input(family: StreamFamily, m: usize) -> (Vec<u32>, Vec<u32>) {
     if family.base_family() == StreamFamily::HllOmc {
         (vec![1], vec![1; m])
@@ -1525,7 +1635,7 @@ fn resolve_root_vk<C: Serialize + DeserializeOwned>(
 /// the workers build it, [`FamLeafCircuit::build`]) over public, data-free
 /// input ([`noop_leaf_input`]) at batch index 1 — the starting point of every
 /// VK derivation.
-fn prove_noop_leaf(family: StreamFamily, shape: &StreamShape, m: usize) -> Proof {
+pub(crate) fn prove_noop_leaf(family: StreamFamily, shape: &StreamShape, m: usize) -> Proof {
     let mut leaf = FamLeafCircuit::build(family, shape, m);
     let mut state = FamState::empty(family, shape, m);
     let (setup, batch) = noop_leaf_input(family, m);
@@ -1737,6 +1847,10 @@ pub struct DistCell {
     pub query_verify_ms: f64,
     pub query_proof_bytes: u64,
     pub query_ctx_verifies: u64,
+    /// Σ measured cost of binding each answer to the certified history
+    /// (see [`super::stream_compose::ComposeCell::query_bind_ms`]); `None`
+    /// when unbound.
+    pub query_bind_ms: Option<f64>,
 }
 
 /// Network-model transfer time for one message: serialization at `mbps`
@@ -1756,6 +1870,150 @@ enum Event {
     Worker(u32, FromWorker, Instant, u64),
     /// A child's socket closed (EOF/err) — fatal unless it already said Done.
     Gone(u32),
+}
+
+/// Coordinator side of the mixed workload's prefix binding (Property 3):
+/// which leaves are query checkpoints for each worker, and the interval
+/// proofs the workers ship there, assembled per query version into the
+/// certificate [`QueryAudit::bind`] checks: forest, the finalized roots of
+/// the earlier slices plus the query slice's live peaks (with one machine,
+/// exactly the Bentley–Saxe peaks at `t'`); chain, the running fold
+/// `Π_[1,t']`; per_batch, the leaf proofs `1..t'`.
+struct CtxCollector {
+    on: bool,
+    mode: StreamMode,
+    store: ContextStore,
+    /// Per query version `g` (1-based): the worker-local parts shipped there.
+    local: BTreeMap<usize, Vec<(u64, u64, ForestShape)>>,
+    /// Forest: each slice's shipped root interval.
+    slice_roots: Vec<Option<(u64, u64, ForestShape)>>,
+}
+
+impl CtxCollector {
+    fn new(on: bool, mode: StreamMode, machines: usize) -> Self {
+        Self {
+            on,
+            mode,
+            store: ContextStore::default(),
+            local: BTreeMap::new(),
+            slice_roots: vec![None; machines],
+        }
+    }
+
+    /// The bracketing of a worker-shipped interval `[lo, hi]`.
+    fn shape_of(&self, lo: u64, hi: u64) -> ForestShape {
+        let n = (hi - lo + 1) as usize;
+        match self.mode {
+            StreamMode::Chain => ForestShape::chain(n),
+            _ => ForestShape::forest(n),
+        }
+    }
+
+    /// Local 0-based leaf indices of slice `(a, b]` after which a query fires.
+    fn checkpoints(&self, query_at: &[usize], (a, b): (usize, usize)) -> Vec<u32> {
+        if !self.on || self.mode == StreamMode::PerBatch {
+            return Vec::new();
+        }
+        query_at.iter().filter(|&&g| g > a && g <= b).map(|&g| (g - a - 1) as u32).collect()
+    }
+
+    /// Forest: a later slice holds a query, so this slice's root is needed.
+    fn ship_root(&self, query_at: &[usize], (_, b): (usize, usize)) -> bool {
+        self.on && self.mode == StreamMode::Forest && query_at.iter().any(|&g| g > b)
+    }
+
+    fn on_leaf(
+        &mut self,
+        mode: StreamMode,
+        g: usize,
+        context: Option<Vec<WireInterval>>,
+    ) -> Result<(), String> {
+        let Some(parts) = context else { return Ok(()) };
+        if !self.on || mode != self.mode {
+            return Err(format!("unrequested query context at leaf {g}"));
+        }
+        let mut list = Vec::with_capacity(parts.len());
+        for wi in parts {
+            let key = (wi.lo, wi.hi, self.shape_of(wi.lo, wi.hi));
+            match wi.proof {
+                Some(bytes) => self.store.insert(key.clone(), bytes)?,
+                None if self.store.has(&key) => {}
+                None => {
+                    return Err(format!(
+                        "interval [{}, {}] referenced before it was shipped",
+                        wi.lo, wi.hi
+                    ));
+                }
+            }
+            list.push(key);
+        }
+        self.local.insert(g, list);
+        Ok(())
+    }
+
+    fn on_slice(
+        &mut self,
+        w: usize,
+        (a, b): (usize, usize),
+        root: Option<Vec<u8>>,
+    ) -> Result<(), String> {
+        let Some(bytes) = root else { return Ok(()) };
+        let key = (a as u64 + 1, b as u64, ForestShape::forest(b - a));
+        self.store.insert(key.clone(), bytes)?;
+        self.slice_roots[w] = Some(key);
+        Ok(())
+    }
+
+    /// Assemble every query's certificate (per_batch: from the leaf proofs).
+    fn finish(
+        mut self,
+        query_at: &[usize],
+        ranges: &[(usize, usize)],
+        leaf_proofs: &[Option<Vec<u8>>],
+    ) -> Result<ContextStore, String> {
+        if !self.on {
+            return Ok(self.store);
+        }
+        for &g in query_at {
+            let parts = match self.mode {
+                StreamMode::PerBatch => {
+                    let mut v = Vec::with_capacity(g);
+                    for k in 1..=g {
+                        let key = (k as u64, k as u64, ForestShape::Leaf);
+                        if !self.store.has(&key) {
+                            let p = leaf_proofs[k - 1]
+                                .clone()
+                                .ok_or(format!("leaf {k} proof missing"))?;
+                            self.store.insert(key.clone(), p)?;
+                        }
+                        v.push(key);
+                    }
+                    v
+                }
+                StreamMode::Chain => self
+                    .local
+                    .get(&g)
+                    .cloned()
+                    .ok_or(format!("no chain prefix shipped for t'={g}"))?,
+                StreamMode::Forest => {
+                    let i = ranges
+                        .iter()
+                        .position(|&(a, b)| g > a && g <= b)
+                        .ok_or(format!("t'={g} lies in no slice"))?;
+                    let mut v = Vec::new();
+                    for j in 0..i {
+                        let root = self.slice_roots[j].clone();
+                        v.push(root.ok_or(format!("slice {j} root not shipped"))?);
+                    }
+                    let peaks = self.local.get(&g).cloned();
+                    v.extend(peaks.ok_or(format!("no peaks shipped for t'={g}"))?);
+                    v
+                }
+            };
+            self.store.parts.insert(g, parts);
+        }
+        Ok(self.store)
+    }
 }
 
 fn spawn_worker_reader(id: u32, mut stream: UnixStream, tx: mpsc::Sender<Event>) {
@@ -1845,6 +2103,12 @@ pub fn measure_compose_dist(
         ));
     }
 
+    // Mixed workload: the query-side auditor (decode VK + prefix auditor),
+    // derived from public parameters before the timed run; the workers then
+    // ship each query's prefix certificate ([`CtxCollector`]).
+    let mut audit = if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m) };
+    let mut ctx = CtxCollector::new(audit.is_some(), mode, machines_eff);
+
     let t_start = Instant::now();
 
     // ── Witness pass: one sequential plaintext replay; record slice-start
@@ -1927,6 +2191,8 @@ pub fn measure_compose_dist(
                 start,
                 batches: slice,
                 first_index: a as u64 + 1,
+                checkpoints: ctx.checkpoints(query_at, (a, b)),
+                ship_root: ctx.ship_root(query_at, (a, b)),
             },
         )
         .map_err(|e| format!("scatter to {i}: {e}"))?;
@@ -1964,6 +2230,7 @@ pub fn measure_compose_dist(
                         cascade_ms,
                         cascade_merges,
                         proof,
+                        context,
                     } => {
                         let g = ranges[w].0 + idx as usize; // global leaf index
                         leaf_prove_ms[g] = prove_ms;
@@ -1978,12 +2245,14 @@ pub fn measure_compose_dist(
                             comm_bytes += bytes;
                             leaf_proofs[g] = Some(p);
                         }
+                        ctx.on_leaf(mode, g + 1, context)?;
                         pending_leaves -= 1;
                     }
-                    FromWorker::SliceDone { finalize_ms, finalize_merges } => {
+                    FromWorker::SliceDone { finalize_ms, finalize_merges, root } => {
                         busy[w] += finalize_ms;
                         fold[w] += finalize_ms;
                         merges_local += finalize_merges;
+                        ctx.on_slice(w, ranges[w], root)?;
                         pending_slices -= 1;
                     }
                     other => {
@@ -2201,7 +2470,19 @@ pub fn measure_compose_dist(
     // query cost stays in the separate `query_*` columns (S³'s sequential,
     // report-separately discipline), not folded into the distributed update
     // total. No-op (all zero) when the schedule is empty.
-    let q = measure_queries_dist(family, shape, batches, mode, cores, query_at, query_key_mode);
+    // Each answer is pinned to the decode VK and bound to the certified
+    // history by the certificates the workers shipped.
+    let store = ctx.finish(query_at, &ranges, &leaf_proofs)?;
+    let q = measure_queries_dist(
+        family,
+        shape,
+        batches,
+        mode,
+        cores,
+        query_at,
+        query_key_mode,
+        audit.as_mut().map(|a| (a, &store, &log)),
+    )?;
 
     // ── Network models (critical path): scatter (parallel links, max) +
     // composition-path proof transfers + root delivery.
@@ -2268,6 +2549,7 @@ pub fn measure_compose_dist(
         query_verify_ms: q.query_verify_ms,
         query_proof_bytes: q.query_proof_bytes,
         query_ctx_verifies: q.query_ctx_verifies,
+        query_bind_ms: q.query_bind_ms,
     })
 }
 
@@ -2393,6 +2675,12 @@ fn measure_compose_dist_staged(
         ));
     }
 
+    // Mixed workload: the query-side auditor (decode VK + prefix auditor),
+    // derived from public parameters before the timed run; the workers then
+    // ship each query's prefix certificate ([`CtxCollector`]).
+    let mut audit = if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m) };
+    let mut ctx = CtxCollector::new(audit.is_some(), mode, machines_eff);
+
     let t_start = Instant::now();
 
     // ── Witness pass (identical to the concurrent engine).
@@ -2494,6 +2782,8 @@ fn measure_compose_dist_staged(
                     start,
                     batches: slice,
                     first_index: a as u64 + 1,
+                    checkpoints: ctx.checkpoints(query_at, (a, b)),
+                    ship_root: ctx.ship_root(query_at, (a, b)),
                 },
             )
             .map_err(|e| format!("scatter to {i}: {e}"))?;
@@ -2511,7 +2801,7 @@ fn measure_compose_dist_staged(
                     let w = id as usize;
                     match msg {
                         FromWorker::LeafDone {
-                            idx, prove_ms, verify_ms, cascade_ms, cascade_merges, ..
+                            idx, prove_ms, verify_ms, cascade_ms, cascade_merges, context, ..
                         } => {
                             let g = ranges[w].0 + idx as usize;
                             leaf_prove_ms[g] = prove_ms;
@@ -2519,12 +2809,14 @@ fn measure_compose_dist_staged(
                             busy[w] += prove_ms + cascade_ms;
                             fold[w] += cascade_ms;
                             merges_local += cascade_merges;
+                            ctx.on_leaf(mode, g + 1, context)?;
                             pending_leaves -= 1;
                         }
-                        FromWorker::SliceDone { finalize_ms, finalize_merges } => {
+                        FromWorker::SliceDone { finalize_ms, finalize_merges, root } => {
                             busy[w] += finalize_ms;
                             fold[w] += finalize_ms;
                             merges_local += finalize_merges;
+                            ctx.on_slice(w, ranges[w], root)?;
                             pending_slices -= 1;
                         }
                         _ => return Err("unexpected worker message in staged slice phase".into()),
@@ -2686,7 +2978,24 @@ fn measure_compose_dist_staged(
     children.clear();
     let _ = std::fs::remove_file(&sock_path);
 
-    let q = measure_queries_dist(family, shape, batches, mode, cores, query_at, query_key_mode);
+    // Each answer is pinned to the decode VK and bound to the certified
+    // history by the certificates the workers shipped.
+    let store = ctx.finish(query_at, &ranges, &[])?;
+    let qlog = crate::recursion::recursive::expose_forest::batch_log(
+        &anchor,
+        &final_commit,
+        &batch_commits(family, m, batches),
+    );
+    let q = measure_queries_dist(
+        family,
+        shape,
+        batches,
+        mode,
+        cores,
+        query_at,
+        query_key_mode,
+        audit.as_mut().map(|a| (a, &store, &qlog)),
+    )?;
 
     // ── Network model (forest path only).
     let root_sz = root_bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
@@ -2737,6 +3046,7 @@ fn measure_compose_dist_staged(
         query_verify_ms: q.query_verify_ms,
         query_proof_bytes: q.query_proof_bytes,
         query_ctx_verifies: q.query_ctx_verifies,
+        query_bind_ms: q.query_bind_ms,
     })
 }
 
@@ -2763,6 +3073,13 @@ pub fn measure_compose_dist_gl(
     query_key_mode: QueryKeyMode,
 ) -> Result<DistCell, String> {
     let _ = query_key_mode;
+    if !family.is_gl() {
+        return Err(format!(
+            "{} has no Goldilocks leaf: the Goldilocks engine runs only the _gl families \
+             (cm_gl, hll_gl, ss_gl, gk_gl); use measure_compose_dist for BabyBear",
+            family.label()
+        ));
+    }
     assert!(!batches.is_empty(), "need at least one batch");
     let m = batches[0].len();
     let t = batches.len();
@@ -2861,6 +3178,8 @@ pub fn measure_compose_dist_gl(
                 start,
                 batches: slice,
                 first_index: a as u64 + 1,
+                checkpoints: Vec::new(),
+                ship_root: false,
             },
         )
         .map_err(|e| format!("scatter to {i}: {e}"))?;
@@ -2898,6 +3217,7 @@ pub fn measure_compose_dist_gl(
                         cascade_ms,
                         cascade_merges,
                         proof,
+                        ..
                     } => {
                         let g = ranges[w].0 + idx as usize; // global leaf index
                         leaf_prove_ms[g] = prove_ms;
@@ -2914,7 +3234,7 @@ pub fn measure_compose_dist_gl(
                         }
                         pending_leaves -= 1;
                     }
-                    FromWorker::SliceDone { finalize_ms, finalize_merges } => {
+                    FromWorker::SliceDone { finalize_ms, finalize_merges, .. } => {
                         busy[w] += finalize_ms;
                         fold[w] += finalize_ms;
                         merges_local += finalize_merges;
@@ -3203,6 +3523,7 @@ pub fn measure_compose_dist_gl(
         query_verify_ms: q.query_verify_ms,
         query_proof_bytes: q.query_proof_bytes,
         query_ctx_verifies: q.query_ctx_verifies,
+        query_bind_ms: q.query_bind_ms,
     })
 }
 
@@ -3211,7 +3532,7 @@ mod tests {
     use super::*;
 
     fn shape() -> StreamShape {
-        StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2 }
+        StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2, bloom_k: 3, bloom_log_w: 7 }
     }
 
     /// Every family's state survives the wire codec mid-stream: encode after
@@ -3226,6 +3547,7 @@ mod tests {
             StreamFamily::HllOmc,
             StreamFamily::SsCertified,
             StreamFamily::GkBandmerge2,
+            StreamFamily::BloomOmc,
         ] {
             let mut orig = FamState::empty(family, &sh, 4);
             orig.advance(&sh, &batch_a);
@@ -3267,6 +3589,7 @@ mod tests {
             StreamFamily::HllOmc,
             StreamFamily::SsCertified,
             StreamFamily::GkBandmerge2,
+            StreamFamily::BloomOmc,
         ] {
             let mut st = FamState::empty(family, &sh, m);
             let (setup, batch) = noop_leaf_input(family, m);
@@ -3354,6 +3677,48 @@ mod tests {
         assert_dist_root_vk_derivable(StreamFamily::HllOmc);
     }
 
+    #[test]
+    fn dist_root_vk_derivable_bloom_omc() {
+        assert_dist_root_vk_derivable(StreamFamily::BloomOmc);
+    }
+
+    /// The Bloom wire state is packed 8 bits per byte (an exact round trip,
+    /// including a partial last byte), and the Goldilocks engine rejects the
+    /// BabyBear-only Bloom family cleanly instead of reaching a gl-only
+    /// state constructor.
+    #[test]
+    fn bloom_wire_state_packs_bits_and_gl_engine_rejects_bloom() {
+        let sh = shape();
+        let m = 4;
+        let mut st = FamState::empty(StreamFamily::BloomOmc, &sh, m);
+        st.advance(&sh, &[3, 9, PAD_KEY, PAD_KEY]);
+        let WireState::Bloom { cells, packed, .. } = st.encode() else { panic!("bloom wire state") };
+        assert_eq!(cells as usize, sh.bloom_k << sh.bloom_log_w);
+        assert_eq!(packed.len(), (cells as usize).div_ceil(8), "8 bits per byte");
+        assert!(packed.iter().any(|&b| b != 0), "inserted bits survive packing");
+        let mut odd = FamState::Bloom(BloomOmcParams { k: 1, log_w: 7, batch: m }, vec![0u8; 128]);
+        if let FamState::Bloom(_, bits) = &mut odd {
+            bits[127] = 1;
+            bits[3] = 1;
+        }
+        let back = FamState::decode(&odd.encode(), m);
+        assert_eq!(back.commit(&sh), odd.commit(&sh), "exact bit round trip");
+        let r = measure_compose_dist_gl(
+            StreamFamily::BloomOmc,
+            sh,
+            &[vec![1, 2, 3, 4]],
+            StreamMode::Forest,
+            1,
+            1,
+            &std::env::temp_dir(),
+            200.0,
+            0.2,
+            &[],
+            QueryKeyMode::First,
+        );
+        assert!(r.as_ref().is_err_and(|e| e.contains("no Goldilocks leaf")), "{:?}", r.err());
+    }
+
     /// The coordinator's LEAF audit ([`audit_leaf_bytes`], per_batch and the
     /// lone leaf `t == 1`), for every family on both fields, over wire bytes:
     /// (1) the honest leaves (t = 1, 2) verify against the leaf VK derived
@@ -3380,6 +3745,7 @@ mod tests {
             StreamFamily::HllOmc,
             StreamFamily::SsCertified,
             StreamFamily::GkBandmerge2,
+            StreamFamily::BloomOmc,
         ] {
             let mut leaf = FamLeafCircuit::build(family, &sh, m);
             let mut st = FamState::empty(family, &sh, m);

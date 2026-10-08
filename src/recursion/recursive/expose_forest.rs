@@ -62,7 +62,7 @@ use crate::recursion::recursive::root_vk::{
 };
 use crate::recursion::recursive::statement::{
     BatchLog, Expose, Layout, Statement, TAG_MERGE, check_leaf_statements_against_log,
-    check_root_statement, hash_bb, parse_statement,
+    check_prefix_statements, check_root_statement, hash_bb, parse_statement,
 };
 
 const LOG_FINAL_POLY_LEN: usize = 6;
@@ -736,6 +736,35 @@ pub fn verify_bound_stark_proof_pinned(
     verify_bound_stark_proof(proof, &expected.commitment);
 }
 
+/// [`verify_bound_stark_proof_pinned`] returning the failure instead of
+/// panicking (the query-time prefix auditor checks proofs a verifier
+/// received, which may be malformed).
+pub fn try_verify_bound_stark_proof_pinned(
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+    expected: &RootVk<Challenge>,
+) -> Result<(), String> {
+    if let Some(shape) = &expected.shape {
+        if &bound_proof_shape(proof) != shape {
+            return Err("merge proof metadata (table packing / rows / non-primitive manifest / \
+                        degree bits / preprocessed layout) differs from the trusted VK"
+                .into());
+        }
+    }
+    if vk_pin_values(proof) != expected.commitment {
+        return Err("merge VK mismatch: the proof's preprocessed commitment is not the trusted \
+                    one for its bracketing (a forged or wrong-shape proof)"
+            .into());
+    }
+    let config = make_leaf_config();
+    let params = agg_params();
+    let mut verifier =
+        BatchStarkProver::new(config.clone()).with_table_packing(params.table_packing.clone());
+    verifier.register_poseidon2_table::<EXT_D>(Poseidon2Config::BABY_BEAR_D4_W16);
+    verifier.register_recompose_table::<EXT_D>(Poseidon2Config::BABY_BEAR_D4_W16.d() != EXT_D);
+    verifier.register_expose_table::<EXT_D>();
+    verifier.verify_all_tables(proof).map_err(|e| format!("merge STARK rejected: {e:?}"))
+}
+
 /// Verify a boundary-bound proof against a **trusted root verification key**
 /// (`expected_root_vk`, in [`vk_pin_values`] order) — the auditor path for a
 /// root that arrived as serialized bytes from another machine.
@@ -952,27 +981,159 @@ pub fn prove_forest_over(
     leaves: Vec<RecursionOutput<ConfigWithFriParams>>,
 ) -> RecursionOutput<ConfigWithFriParams> {
     assert!(leaves.len() >= 2, "need >= 2 leaves");
-    // (size, output) subtree stack — binary-counter cascade.
-    let mut roots: Vec<(u64, RecursionOutput<ConfigWithFriParams>)> = Vec::new();
+    let mut forest = ForestCascade::new(1);
     for leaf in leaves {
+        forest.push(leaf);
+    }
+    forest.finalize().0
+}
+
+/// The **online** proof forest (Bentley–Saxe cascade), one leaf at a time:
+/// [`Self::push`] appends a leaf as a new size-one peak and merges the two
+/// rightmost peaks while their sizes are equal (a binary-counter carry), so
+/// after `t` leaves the live peaks are one perfect composition tree per set
+/// bit of `t`, tiling `[first_index, first_index + t - 1]` left to right.
+/// [`Self::peaks`] exposes them (what a verifier checks at query time,
+/// [`PrefixAuditor`]); [`Self::finalize`] composes them left to right into
+/// the root. [`prove_forest_over`] and the distributed workers fold through
+/// this type, so the bracketing is [`ForestShape::forest`].
+pub struct ForestCascade {
+    first_index: u64,
+    /// `(size, proof)`, left to right.
+    peaks: Vec<(u64, RecursionOutput<ConfigWithFriParams>)>,
+}
+
+impl ForestCascade {
+    /// An empty forest whose first leaf will be batch `first_index` (1-based).
+    pub fn new(first_index: u64) -> Self {
+        Self { first_index, peaks: Vec::new() }
+    }
+
+    /// Number of leaves pushed so far.
+    pub fn len(&self) -> u64 {
+        self.peaks.iter().map(|(sz, _)| sz).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.peaks.is_empty()
+    }
+
+    /// Append the next leaf and run the composition cascade; returns the
+    /// number of merges it took.
+    pub fn push(&mut self, leaf: RecursionOutput<ConfigWithFriParams>) -> u32 {
         let mut node = (1u64, leaf);
-        while let Some((sz, _)) = roots.last() {
-            if *sz == node.0 {
-                let (_, left) = roots.pop().unwrap();
-                let merged = prove_hiding_merge(&left, &node.1);
-                node = (node.0 * 2, merged);
-            } else {
-                break;
-            }
+        let mut merges = 0u32;
+        while self.peaks.last().is_some_and(|(sz, _)| *sz == node.0) {
+            let (_, left) = self.peaks.pop().unwrap();
+            node = (node.0 * 2, prove_hiding_merge(&left, &node.1));
+            merges += 1;
         }
-        roots.push(node);
+        self.peaks.push(node);
+        merges
     }
-    // Finalize: chain surviving roots left-to-right.
-    let mut acc = roots.remove(0).1;
-    for (_, r) in roots {
-        acc = prove_hiding_merge(&acc, &r);
+
+    /// The live peaks as `(lo, hi, proof)`, left to right (each a perfect
+    /// tree, bracketing `ForestShape::forest(hi - lo + 1)`).
+    pub fn peaks(&self) -> Vec<(u64, u64, &RecursionOutput<ConfigWithFriParams>)> {
+        let mut lo = self.first_index;
+        self.peaks
+            .iter()
+            .map(|(sz, p)| {
+                let part = (lo, lo + sz - 1, p);
+                lo += sz;
+                part
+            })
+            .collect()
     }
-    acc
+
+    /// Compose the surviving peaks left to right into the root (the forest's
+    /// finalization); returns it with the number of merges. A one-leaf forest
+    /// returns the lone leaf.
+    pub fn finalize(mut self) -> (RecursionOutput<ConfigWithFriParams>, u32) {
+        assert!(!self.peaks.is_empty(), "finalize an empty forest");
+        let mut acc = self.peaks.remove(0).1;
+        let mut merges = 0u32;
+        for (_, r) in self.peaks {
+            acc = prove_hiding_merge(&acc, &r);
+            merges += 1;
+        }
+        (acc, merges)
+    }
+}
+
+// ─── Query-time prefix certification (Property 3) ───────────────────────────
+//
+// A query proof exposes `(Com(S), q, answer)`. The verifier accepts the answer
+// only once `Com(S)` is certified as the state at the query's version `t`: by
+// the interval proofs live at `t` (the forest's peaks, the chain's current
+// fold, or the per-batch leaves), each pinned to the VK of its bracketing,
+// STARK-verified, and their statements tiling `[1, t]` against the log, the
+// last one's final commitment being `Com(S_t)`.
+
+/// The verifier's half of Property 3 at query time: trusted VKs per
+/// bracketing, derived from public parameters only (a no-op leaf, as for the
+/// root), and the pinned verification of each interval proof.
+pub struct PrefixAuditor {
+    deriver: ShapeVkDeriver<ConfigWithFriParams, Challenge>,
+    vks: std::collections::HashMap<ForestShape, RootVk<Challenge>>,
+    leaf_verifier: BatchStarkProver<ConfigWithFriParams>,
+}
+
+impl PrefixAuditor {
+    /// `noop_leaf`: a proof of the deployment's leaf circuit over public no-op
+    /// records (see [`root_vk_deriver`]).
+    pub fn new(noop_leaf: BatchStarkProof<ConfigWithFriParams>) -> Self {
+        Self {
+            deriver: root_vk_deriver(noop_leaf),
+            vks: std::collections::HashMap::new(),
+            leaf_verifier: leaf_verifier(),
+        }
+    }
+
+    /// The trusted VK of `shape`, derived on first use (a one-time setup per
+    /// bracketing; callers that time verification derive it beforehand).
+    pub fn vk(&mut self, shape: &ForestShape) -> &RootVk<Challenge> {
+        if !self.vks.contains_key(shape) {
+            let vk = self.deriver.root_vk(shape);
+            self.vks.insert(shape.clone(), vk);
+        }
+        &self.vks[shape]
+    }
+
+    /// Pin `proof` to the trusted VK of `shape` and STARK-verify it: a lone
+    /// leaf (`ForestShape::Leaf`) with the leaf verifier, a composition with
+    /// the aggregation verifier. Returns its exposed statement.
+    pub fn verify_interval(
+        &mut self,
+        proof: &BatchStarkProof<ConfigWithFriParams>,
+        shape: &ForestShape,
+    ) -> Result<Statement<Val>, String> {
+        self.vk(shape);
+        let vk = &self.vks[shape];
+        match shape {
+            ForestShape::Leaf => pin_and_verify_leaf(&self.leaf_verifier, proof, vk)?,
+            ForestShape::Merge(..) => try_verify_bound_stark_proof_pinned(proof, vk)?,
+        }
+        Ok(read_exposed_statement(proof))
+    }
+
+    /// Certify version `t`: verify every part ([`Self::verify_interval`]),
+    /// then check that their statements tile `[1, t]` against `log`
+    /// ([`check_prefix_statements`]). Returns the certified `Com(S_t)`.
+    pub fn certify_prefix(
+        &mut self,
+        parts: &[(&BatchStarkProof<ConfigWithFriParams>, ForestShape)],
+        log: &BatchLog<Val>,
+        t: usize,
+    ) -> Result<Vec<Val>, String> {
+        let mut stmts = Vec::with_capacity(parts.len());
+        for (k, (proof, shape)) in parts.iter().enumerate() {
+            stmts.push(self.verify_interval(proof, shape).map_err(|e| format!("part {}: {e}", k + 1))?);
+        }
+        let refs: Vec<(&Statement<Val>, &ForestShape)> =
+            stmts.iter().zip(parts.iter().map(|(_, sh)| sh)).collect();
+        check_prefix_statements(&refs, log, t, &hash_bb, EXT_D)
+    }
 }
 
 /// Left-leaning **linear chain** fold over any boundary-exposing leaves — the

@@ -7,7 +7,8 @@
 # Compares the three §Streaming-Proof-Composition modes — per-batch chain,
 # recursive linear chain, and streaming forest — over four sketch families, each
 # pinned to one leaf variant:
-#     cm → omc, hll → omc, ss → certified, gk → bandmerge2.
+#     cm → omc, hll → omc, ss → certified, gk → bandmerge2,
+# plus the opt-in Bloom filter (bloom → omc; plonky3/BabyBear only).
 #
 # For a stream of N records cut into t = ceil(N/m) batches, each cell reports the
 # whole-stream prove time (leafgen + merge), the verifier-facing proof size +
@@ -48,7 +49,11 @@
 #                        (merge_wire tag in env.json), so its comm bytes run a
 #                        bit above plonky3's proof-only wire. Builds on nightly
 #                        (pinned by plonky2/rust-toolchain.toml, auto-selected).
-#   EXP_COMPOSE_FAMILY   cm|hll|ss|gk comma-list                 (default cm,hll,ss,gk)
+#   EXP_COMPOSE_FAMILY   cm|hll|ss|gk|bloom comma-list           (default cm,hll,ss,gk)
+#                        plus the Goldilocks cm_gl|hll_gl|ss_gl|gk_gl. bloom is
+#                        opt-in (not in the default list) and BabyBear only:
+#                        there is no bloom_gl (rejected with a message), and the
+#                        plonky2 backend has no Bloom family (it ignores 'bloom').
 #   EXP_COMPOSE_MODE     per_batch|chain|forest comma-list       (default all three;
 #                        `recursive` is accepted as an alias for forest)
 #   EXP_COMPOSE_N        total stream records — int or `2^k`      (default 32)
@@ -66,14 +71,20 @@
 #   EXP_COMPOSE_PROOF_DIR folder the per_batch mode stores proofs (default results/compose_per_batch_proofs)
 #   EXP_COMPOSE_QUERY_EVERY  MIXED updates+queries: prove one query leaf (the
 #                        family's decode circuit — cm point count, hll cardinality,
-#                        ss top-1 mass, gk rank) after every k-th batch, bound to
-#                        the state commitment at that point (default 0 = off).
+#                        ss top-1 mass, gk rank, bloom membership) after every
+#                        k-th batch, bound to the state commitment at that point
+#                        (default 0 = off).
 #                        Query costs land in the query_* columns, separate from
 #                        the update-side totals; query_ctx_verifies counts the
 #                        composition proofs the verifier checks at query time
 #                        (t' for per_batch, 1 for chain, popcount(t') peaks for
-#                        forest). (cm decode takes any power-of-two w, same as
-#                        the leaf — EXP_W is unconstrained by queries.)
+#                        forest). Each answer is bound to the certified history:
+#                        query_bind_ms is the measured cost of verifying those
+#                        interval proofs (pinned VKs) and matching the query's
+#                        Com(S); it reads `unbound` under the legacy opt-ins
+#                        (ZKSKETCH_BINDING=legacy, ZKSKETCH_STATEMENT=boundary,
+#                        EXP_ROOT_VK=self). (cm decode takes any power-of-two w,
+#                        same as the leaf — EXP_W is unconstrained by queries.)
 #                        Also emits amortized-per-query columns (query_*_avg =
 #                        Σ query_* / n_queries) — the headline proven cost of one
 #                        query. Runs under BOTH engines: sim interleaves the
@@ -90,8 +101,9 @@
 #                        needed. A query landing mid-batch seals the batch
 #                        EARLY and pads its tail with the family's provable
 #                        no-op records (cm value-0 update, ss circuit dummy,
-#                        gk E_MAX dummy via a short batch, hll repeated key —
-#                        max is idempotent), so the state is committed at the
+#                        gk E_MAX dummy via a short batch, bloom act=0 dummy
+#                        via a short batch, hll repeated key — max is
+#                        idempotent), so the state is committed at the
 #                        exact stream position with a uniform circuit shape.
 #                        The early-sealed leaves are the honest "query at any
 #                        point" premium (query_split_leaves/query_pad_records);
@@ -100,7 +112,8 @@
 #                        the stream tail is pad-sealed, not extended).
 #                        plonky3 only.
 #   EXP_QUERY_KEY_MODE   which probe key a KEYED query targets (cm point-count,
-#                        gk rank; no effect on hll/ss which are keyless):
+#                        gk rank, bloom membership; no effect on hll/ss which
+#                        are keyless):
 #                        first (default — the batch's first key, the baseline) |
 #                        uniform_stream (frequency-weighted sample of keys seen
 #                        so far, S³-style) | hot (most-frequent key) | absent
@@ -118,6 +131,11 @@
 #   EXP_GK_S             override the derived s (optional). A value too big for the
 #                        cap fragments and reports too_large (it's "cap too small
 #                        for s", not "too large"); unset it to auto-derive.
+#   EXP_BLOOM_K          Bloom slices = hash positions per key (default 7; 1..=8)
+#   EXP_BLOOM_LOGW       Bloom bits per slice W = 2^logw   (default 14; 7..=20)
+#                        Defaults are the deployed M = 7·2^14 filter; set e.g.
+#                        3 / 7 for quick smokes. An out-of-range value exits 2
+#                        with the reason. CSV shape column: k{k}_logw{logw}.
 #   EXP_DATASET          uniform|gaussian|zipf|aol|netflix        (default uniform)
 #   EXP_OUT / $1         rename output to results/<name>.csv
 #
@@ -132,7 +150,8 @@
 #   exec,procs,witness_pass_ms,scatter_ms,scatter_state_bytes,
 #   scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,local_fold_ms,
 #   merges_local,merges_cross,cross_rounds,comm_msgs,
-#   comm_bytes,comm_ms_measured,comm_model_ms,status
+#   comm_bytes,comm_ms_measured,comm_model_ms,merge_total_ms,
+#   query_bind_ms,query_bind_ms_avg,status
 #   (procs: total_time_ms = measured end-to-end wall (witness pass → root);
 #    leafgen_ms = real parallel slice-phase wall; merge_ms = cross-machine
 #    composition wall; proof_bytes/verify_ms are Θ(t) for per_batch vs O(1)

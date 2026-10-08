@@ -41,8 +41,10 @@ use p3_uni_stark::StarkGenericConfig;
 
 use crate::commitment::countmin::commit_countmin;
 use crate::config::{Challenge, LOG_BLOWUP, Val};
-use crate::decode::{DecodeProof, ReleasePolicy};
+use crate::decode::{DecodeProof, DecodeVk, ReleasePolicy};
 use crate::recursion::recursive::config::ConfigWithFriParams;
+use crate::recursion::recursive::expose_forest::vk_pin_values;
+use crate::recursion::recursive::root_vk::bound_proof_shape;
 use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
@@ -194,6 +196,33 @@ impl CmDecodeCircuit {
         self.prover.verify_all_tables(&proof).map_err(|e| format!("verify: {e:?}"))?;
         Ok(proof)
     }
+
+    /// This circuit's VK (preprocessed commitment + proof metadata), read off
+    /// a proof of its own honest witness.
+    fn derive_vk(&self) -> DecodeVk {
+        let proof = self
+            .prover
+            .prove_all_tables(&self.run(), &self.circuit_prover_data)
+            .expect("prove cm decode (VK derivation)");
+        self.prover.verify_all_tables(&proof).expect("self-verify cm decode (VK derivation)");
+        DecodeVk { commitment: vk_pin_values(&proof), shape: Some(bound_proof_shape(&proof)) }
+    }
+}
+
+/// The trusted VK of the Count-Min decode circuit at `params` and `binding`,
+/// derived from public parameters only: the circuit is built over the empty
+/// `d × w` state and key 0 (the cells are witnesses and the key a public
+/// input, so neither shapes the circuit), proved once, and its preprocessed
+/// commitment and metadata read off. A verifier pins every Count-Min query
+/// proof to it with [`crate::decode::verify_decode_proof`], never to the VK
+/// a proof carries.
+pub fn cm_decode_vk(params: CmDecodeParams, binding: Binding) -> DecodeVk {
+    use crate::sketch::Sketch;
+    let empty = crate::sketch::countmin::CountMin::new(&crate::sketch::countmin::CountMinParams {
+        d: params.d,
+        w: params.w,
+    });
+    build_cm_decode(params, &empty, 0, binding).derive_vk()
 }
 
 fn build_cm_decode(
@@ -530,6 +559,38 @@ mod tests {
     /// [`state_with`] the process default binding (what `prove_cm_decode` uses).
     fn state() -> CountMinState {
         state_with(bind::default_binding())
+    }
+
+    /// The pinned verifier with the VK derived from public parameters
+    /// accepts honest proofs over other states and keys and returns their
+    /// exposed statement; it rejects the Legacy circuit and another family's
+    /// decode proof.
+    #[test]
+    fn cm_decode_vk_pins_proofs() {
+        use crate::decode::{QueryStatement, verify_decode_proof};
+        let binding = bind::default_binding();
+        if binding == Binding::Legacy {
+            return;
+        }
+        let p = CmDecodeParams { d: 4, w: 8, release: ReleasePolicy::Identity };
+        let vk = cm_decode_vk(p, binding);
+        for key in [7u64, 11, 0xDEAD_BEEF_0042] {
+            let proof = prove_cm_decode(p, state(), key);
+            let want = QueryStatement::with_query(
+                commit_countmin(&state()).0,
+                key_hash_input(key, binding),
+                proof.answer,
+            );
+            assert_eq!(verify_decode_proof(&proof.output.0, &vk), Ok(want), "key {key}");
+        }
+        let legacy = prove_cm_decode_with(p, state_with(Binding::Legacy), 7, Binding::Legacy);
+        assert!(verify_decode_proof(&legacy.output.0, &vk).is_err(), "Legacy circuit");
+        let other = prove_cm_decode(CmDecodeParams { d: 4, w: 16, release: ReleasePolicy::Identity }, {
+            let mut s = CountMin::new(&CountMinParams { d: 4, w: 16 });
+            apply_update_prf_with(&mut s, &CountMinUpdate { key: 7, value: 1 }, binding);
+            s
+        }, 7);
+        assert!(verify_decode_proof(&other.output.0, &vk).is_err(), "another width's circuit");
     }
 
     #[test]

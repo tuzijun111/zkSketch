@@ -91,10 +91,21 @@
 //!   and they OR in bit `act = 0`, i.e. never change the state.
 //! * **Exposed boundary.** In this fork `alloc_public_input` values are *not*
 //!   visible to an outside verifier (the Public table is a committed trace).
-//!   The leaf therefore always surfaces `(init, final, batch)` commitments via
-//!   the Expose NPO (24 base values); [`read_exposed_commitments`] reads them
-//!   from a proof. (`hll_omc` exposes only `(init, final)`, so its batch is not
-//!   bound to the proof.)
+//!   The standalone leaf ([`build_bloom_omc_leaf`]) therefore always surfaces
+//!   `(init, final, batch)` commitments via the Expose NPO (24 base values);
+//!   [`read_exposed_commitments`] reads them from a proof. (`hll_omc` exposes
+//!   only `(init, final)`, so its batch is not bound to the proof.)
+//! * **Composable statement.** The 24-value layout is not one the proof forest
+//!   folds. [`build_bloom_omc_leaf_expose`] with [`Expose::Interval`] instead
+//!   exposes the composition layer's interval statement
+//!   `(Com(S_{t-1}), Com(S_t), (t, t, 0, 0), H(TAG_LEAF, t, Com(B_t)))`
+//!   (28 values, [`crate::recursion::recursive::statement`]): `t` is a public
+//!   input pinned to the base field, and `Com(B_t)` is the in-circuit batch
+//!   digest above, so the batch is still bound to the proof, now through `H`.
+//!   `H` is hashed with the bound sponge like every other hash here.
+//!   [`Expose::Boundary`] exposes `(init, final)` only (the pre-B6(b)
+//!   statement, for side-by-side runs); [`Expose::None`] is the standalone
+//!   24-value leaf, op for op.
 //!
 //! ## Open caveat: constants are not bound by the pinned fork
 //!
@@ -166,6 +177,8 @@ use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
+use crate::recursion::recursive::statement::{self, Expose, IndexPin};
+use crate::sketch::bind::Binding;
 
 const LOG_FINAL_POLY_LEN: usize = 6;
 /// Key limb width: the 64-bit key is four exact 16-bit limbs (injective, and
@@ -233,21 +246,34 @@ impl BloomOmcParams {
         self.k * self.batch
     }
     pub fn validate(&self) {
-        assert!(
-            (1..=MAX_K).contains(&self.k),
-            "k must be in 1..={MAX_K}, got {}",
-            self.k
-        );
+        if let Err(e) = self.check() {
+            panic!("{e}");
+        }
+    }
+    /// [`Self::validate`] without the panic: the reason a shape is rejected,
+    /// for callers that report bad configuration instead of aborting.
+    pub fn check(&self) -> Result<(), String> {
+        if !(1..=MAX_K).contains(&self.k) {
+            return Err(format!("k must be in 1..={MAX_K}, got {}", self.k));
+        }
         // log_w ≥ 7 keeps HI_MAX < 2^24 (aligned 24-bit check); log_w ≤ 20
         // keeps M ≤ 2^23 < 2^ADDR_RANGE_BITS.
-        assert!(
-            (7..=20).contains(&self.log_w),
-            "log_w must be in 7..=20, got {}",
-            self.log_w
-        );
-        assert!(self.batch >= 1, "batch must be ≥ 1");
-        assert!(self.m_cells().is_multiple_of(4));
-        assert!(self.m_cells() < (1usize << ADDR_RANGE_BITS));
+        if !(7..=20).contains(&self.log_w) {
+            return Err(format!("log_w must be in 7..=20, got {}", self.log_w));
+        }
+        if self.batch < 1 {
+            return Err("batch must be ≥ 1".into());
+        }
+        if !self.m_cells().is_multiple_of(4) {
+            return Err(format!("M = k·2^log_w = {} must be a multiple of 4", self.m_cells()));
+        }
+        if self.m_cells() >= (1usize << ADDR_RANGE_BITS) {
+            return Err(format!(
+                "M = k·2^log_w = {} must be below 2^{ADDR_RANGE_BITS}",
+                self.m_cells()
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -338,8 +364,15 @@ pub fn commit_bloom(bits: &[u8]) -> [Val; 8] {
 
 /// Batch commitment over the padded record sequence (`4·batch` values).
 pub fn commit_bloom_batch(params: &BloomOmcParams, keys: &[u64]) -> [Val; 8] {
+    bloom_batch_commit(params.batch, keys)
+}
+
+/// [`commit_bloom_batch`] from the slot count alone: `Com(B)` depends on the
+/// `batch` record slots (`keys` then canonical dummies), not on the filter
+/// shape `(k, log_w)`. What a public batch log lists for the leaf.
+pub fn bloom_batch_commit(batch: usize, keys: &[u64]) -> [Val; 8] {
     let hasher = MyHash::new(make_perm());
-    let flat: Vec<Val> = padded_records(params, keys)
+    let flat: Vec<Val> = padded_slots(batch, keys)
         .into_iter()
         .flat_map(record_vals)
         .collect();
@@ -347,14 +380,18 @@ pub fn commit_bloom_batch(params: &BloomOmcParams, keys: &[u64]) -> [Val; 8] {
 }
 
 fn padded_records(params: &BloomOmcParams, keys: &[u64]) -> Vec<Option<u64>> {
+    padded_slots(params.batch, keys)
+}
+
+fn padded_slots(batch: usize, keys: &[u64]) -> Vec<Option<u64>> {
     assert!(
-        keys.len() <= params.batch,
+        keys.len() <= batch,
         "{} keys exceed batch {}",
         keys.len(),
-        params.batch
+        batch
     );
     let mut recs: Vec<Option<u64>> = keys.iter().map(|&k| Some(k)).collect();
-    recs.resize(params.batch, None);
+    recs.resize(batch, None);
     recs
 }
 
@@ -378,7 +415,9 @@ fn canonical_split(x: u64, log_w: usize) -> (u64, u64, Val) {
 // ─── Exposed commitments ─────────────────────────────────────────────────
 
 /// Read `(init, final, batch)` from the proof's Expose table — what an
-/// outside verifier checks against the claimed commitments.
+/// outside verifier checks against the claimed commitments. Standalone
+/// ([`Expose::None`]) leaves only; a composable leaf's statement is read with
+/// [`crate::recursion::recursive::expose_forest::read_exposed_statement`].
 pub fn read_exposed_commitments(
     proof: &BatchStarkProof<ConfigWithFriParams>,
 ) -> ([Val; 8], [Val; 8], [Val; 8]) {
@@ -443,6 +482,9 @@ struct Wires {
 /// [`Self::prove_epoch`] swaps in the two per-batch permutations.
 pub struct BloomOmcLeafCircuit {
     params: BloomOmcParams,
+    expose: Expose,
+    /// Batch index `t` of the next proof (Interval statement only).
+    batch_index: u64,
     circuit: p3_circuit::Circuit<Challenge>,
     prover: BatchStarkProver<ConfigWithFriParams>,
     circuit_prover_data: Rc<CircuitProverData<ConfigWithFriParams>>,
@@ -692,8 +734,28 @@ fn canonical_split_gadget(
 
 // ─── Build ───────────────────────────────────────────────────────────────
 
-/// Build the reusable Bloom `omc` leaf circuit for a shape.
+/// Build the reusable Bloom `omc` leaf circuit for a shape (the standalone
+/// leaf exposing `(init, final, batch)`).
 pub fn build_bloom_omc_leaf(params: BloomOmcParams) -> BloomOmcLeafCircuit {
+    build_bloom_omc_leaf_expose(params, Expose::None)
+}
+
+/// Build the reusable Bloom `omc` leaf with an explicit statement layout:
+///
+/// * [`Expose::None`]: the standalone leaf, op for op [`build_bloom_omc_leaf`]
+///   — `(init, final, batch)`, 24 values, not composable;
+/// * [`Expose::Boundary`]: `(init, final)`, 16 values (the pre-B6(b)
+///   composition statement);
+/// * [`Expose::Interval`]: adds the batch index `t` (the 7th, last public
+///   input, pinned to the base field as the other leaves pin it,
+///   [`IndexPin::Range`]) and exposes `(init, final, (t, t, 0, 0), H)` with
+///   `H = Poseidon2(TAG_LEAF, t, Com(B_t))` over the in-circuit batch digest,
+///   28 values ([`statement::expose_leaf_interval`], bound sponge).
+///
+/// The update relation is identical in all three; only the exposed statement
+/// (and, for `Interval`, the index pin and one more digest) differ. Prove
+/// batch `t` with [`BloomOmcLeafCircuit::prove_epoch_at`].
+pub fn build_bloom_omc_leaf_expose(params: BloomOmcParams, expose: Expose) -> BloomOmcLeafCircuit {
     params.validate();
     let BloomOmcParams { k, log_w, batch } = params;
     let m = params.m_cells();
@@ -717,15 +779,25 @@ pub fn build_bloom_omc_leaf(params: BloomOmcParams) -> BloomOmcLeafCircuit {
         std::array::from_fn(|i| b.alloc_public_input(if i == 0 { "final_lo" } else { "final_hi" }));
     let batch_pis: [ExprId; DIGEST_PACKING] =
         std::array::from_fn(|i| b.alloc_public_input(if i == 0 { "batch_lo" } else { "batch_hi" }));
-    b.add_expose(&[
-        init_pis[0],
-        init_pis[1],
-        final_pis[0],
-        final_pis[1],
-        batch_pis[0],
-        batch_pis[1],
-    ])
-    .expect("expose (init, final, batch)");
+    match expose {
+        Expose::None => {
+            b.add_expose(&[
+                init_pis[0],
+                init_pis[1],
+                final_pis[0],
+                final_pis[1],
+                batch_pis[0],
+                batch_pis[1],
+            ])
+            .expect("expose (init, final, batch)");
+        }
+        Expose::Boundary => {
+            b.add_expose(&[init_pis[0], init_pis[1], final_pis[0], final_pis[1]])
+                .expect("expose (init, final)");
+        }
+        // After the in-circuit batch digest (Stage B).
+        Expose::Interval => {}
+    }
 
     let consts = Consts::new(&mut b, k, log_w);
     let c = &consts;
@@ -824,6 +896,21 @@ pub fn build_bloom_omc_leaf(params: BloomOmcParams) -> BloomOmcLeafCircuit {
     let hb = hash_slice_bound(&mut b, &cfg, &recs, c.zero);
     for i in 0..DIGEST_PACKING {
         b.connect(hb[i], batch_pis[i]);
+    }
+    // Interval statement (B6(b)): batch index t (7th public input) and
+    // H = Poseidon2(TAG_LEAF, t, hb), exposed with the boundary. `Bound` keeps
+    // this leaf's zero-IV sponge discipline for H too.
+    if expose.is_interval() {
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b,
+            &cfg,
+            &init_pis,
+            &final_pis,
+            &hb,
+            c.zero,
+            Binding::Bound,
+            IndexPin::Range,
+        );
     }
 
     // ── Stage C: sort pairs by address (placeholder σ, swapped per epoch) ──
@@ -940,6 +1027,8 @@ pub fn build_bloom_omc_leaf(params: BloomOmcParams) -> BloomOmcLeafCircuit {
 
     BloomOmcLeafCircuit {
         params,
+        expose,
+        batch_index: 1,
         circuit,
         prover,
         circuit_prover_data: Rc::new(circuit_prover_data),
@@ -1134,9 +1223,21 @@ impl BloomOmcLeafCircuit {
         &self.table_rows
     }
 
-    /// Prove one epoch; panics if any stage rejects.
+    /// The statement this leaf exposes ([`Expose`]).
+    pub fn expose(&self) -> Expose {
+        self.expose
+    }
+
+    /// Prove one epoch; panics if any stage rejects. (Batch index 1 under the
+    /// Interval statement; see [`Self::prove_epoch_at`].)
     pub fn prove_epoch(&mut self, initial: &[u8], keys: &[u64]) -> BloomOmcProof {
-        self.try_prove_epoch(initial, keys)
+        self.prove_epoch_at(1, initial, keys)
+    }
+
+    /// Prove the epoch of batch `t` (1-based); `t` is part of the Interval
+    /// statement (ignored by the other layouts). Panics if any stage rejects.
+    pub fn prove_epoch_at(&mut self, t: u64, initial: &[u8], keys: &[u64]) -> BloomOmcProof {
+        self.try_prove_epoch_at(t, initial, keys)
             .unwrap_or_else(|e| panic!("bloom_omc epoch rejected: {e:?}"))
     }
 
@@ -1148,6 +1249,17 @@ impl BloomOmcLeafCircuit {
         initial: &[u8],
         keys: &[u64],
     ) -> Result<BloomOmcProof, BloomProveError> {
+        self.try_prove_epoch_at(1, initial, keys)
+    }
+
+    /// [`Self::try_prove_epoch`] for batch `t` (1-based; Interval statement).
+    pub fn try_prove_epoch_at(
+        &mut self,
+        t: u64,
+        initial: &[u8],
+        keys: &[u64],
+    ) -> Result<BloomOmcProof, BloomProveError> {
+        self.batch_index = t;
         let params = self.params;
         let m = params.m_cells();
         let l = params.pairs();
@@ -1170,6 +1282,9 @@ impl BloomOmcLeafCircuit {
         public_inputs.extend_from_slice(&pack_commit_to_challenge(&CountMinCommit(initial_commit)));
         public_inputs.extend_from_slice(&pack_commit_to_challenge(&CountMinCommit(final_commit)));
         public_inputs.extend_from_slice(&pack_commit_to_challenge(&CountMinCommit(batch_commit)));
+        if self.expose.is_interval() {
+            public_inputs.push(Challenge::from_u64(self.batch_index));
+        }
 
         let bit = |x: u8| Challenge::from_u8(x);
         let base = |x: Val| Challenge::from(x);
@@ -1419,6 +1534,161 @@ mod tests {
         let proof = prove_bloom_omc(p, &bloom_empty(&p), &ks);
         assert_eq!(proof.final_commit.0, commit_bloom(&expect));
         check_exposed(&proof);
+    }
+
+    // ── composable statement ──
+
+    /// The three statement layouts over the same update. Interval: the leaf
+    /// of batch `t` exposes `(Com(S_{t-1}), Com(S_t), (t, t, 0, 0),
+    /// H(TAG_LEAF, t, Com(B_t)))` with the natively recomputed digest, and its
+    /// VK (commitment + metadata) does not depend on `t` or the data: it is
+    /// the VK of the no-op proof (empty filter, all-dummy batch) at `t = 1`.
+    /// Boundary: `(init, final)` only. None: the standalone 24-value leaf of
+    /// [`build_bloom_omc_leaf`] (which delegates to it, so their VKs agree by
+    /// construction; `standalone_leaf_vk_is_pinned` checks that VK against the
+    /// builder before the change). The three are distinct circuits.
+    #[test]
+    fn statement_layouts_interval_boundary_none() {
+        use crate::recursion::recursive::expose_forest::{read_exposed_statement, vk_pin_values};
+        use crate::recursion::recursive::root_vk::bound_proof_shape;
+        use crate::recursion::recursive::statement::{hash_bb, leaf_digest};
+        let p = SMALL;
+        let mut prior = bloom_empty(&p);
+        bloom_insert(&mut prior, &p, &keys(20, 7));
+        let ks = keys(6, 99);
+        let mut expect = prior.clone();
+        bloom_insert(&mut expect, &p, &ks);
+        let vk = |o: &BloomOmcProof| (vk_pin_values(&o.output.0), bound_proof_shape(&o.output.0));
+        let exposed_len = |o: &BloomOmcProof| -> Vec<usize> {
+            let lens = o.output.0.non_primitives.iter().map(|e| e.public_values.len());
+            lens.filter(|&n| n > 0).collect()
+        };
+
+        let mut iv = build_bloom_omc_leaf_expose(p, Expose::Interval);
+        assert_eq!(iv.expose(), Expose::Interval);
+        let proof = iv.prove_epoch_at(5, &prior, &ks);
+        assert_eq!(proof.final_bits, expect);
+        assert_eq!(exposed_len(&proof), vec![28], "Interval layout");
+        let st = read_exposed_statement(&proof.output.0);
+        assert_eq!(st.init, commit_bloom(&prior).to_vec(), "exposed Com(S_{{t-1}})");
+        assert_eq!(st.final_, commit_bloom(&expect).to_vec(), "exposed Com(S_t)");
+        let ip = st.interval.expect("interval part");
+        assert_eq!((ip.lo, ip.hi), (Val::from_u64(5), Val::from_u64(5)), "idx = (t, t)");
+        assert!(ip.idx_pad.iter().all(|&x| x == Val::ZERO), "idx padding");
+        let com_b = bloom_batch_commit(p.batch, &ks);
+        assert_eq!(com_b, commit_bloom_batch(&p, &ks));
+        assert_eq!(ip.digest, leaf_digest(&hash_bb, 4, 5, &com_b), "H(TAG_LEAF, t, Com(B_t))");
+        // The no-op proof the VK derivation starts from (same built leaf).
+        let noop = iv.prove_epoch_at(1, &bloom_empty(&p), &[]);
+        let sn = read_exposed_statement(&noop.output.0);
+        assert_eq!(sn.init, sn.final_, "all-dummy batch is a no-op");
+        assert_eq!(vk(&noop), vk(&proof), "VK independent of t and data");
+
+        let bd = build_bloom_omc_leaf_expose(p, Expose::Boundary).prove_epoch(&prior, &ks);
+        assert_eq!(exposed_len(&bd), vec![16], "Boundary layout");
+        let sb = read_exposed_statement(&bd.output.0);
+        assert_eq!((sb.init, sb.final_, sb.interval), (st.init.clone(), st.final_.clone(), None));
+
+        let std = build_bloom_omc_leaf(p).prove_epoch(&prior, &ks);
+        let none = build_bloom_omc_leaf_expose(p, Expose::None).prove_epoch(&prior, &ks);
+        assert_eq!(exposed_len(&std), vec![EXPOSED_LEN], "standalone layout");
+        check_exposed(&std);
+        check_exposed(&none);
+        assert_eq!(vk(&std), vk(&none), "Expose::None is the standalone leaf");
+        assert_ne!(vk(&std).0, vk(&proof).0);
+        assert_ne!(vk(&bd).0, vk(&proof).0);
+        assert_ne!(vk(&bd).0, vk(&std).0);
+    }
+
+    /// `check` reports exactly what `validate` panics on (runners use it to
+    /// reject a bad configured shape with its reason).
+    #[test]
+    fn params_check_matches_validate() {
+        let p = |k, log_w, batch| BloomOmcParams { k, log_w, batch };
+        for ok in [SMALL, p(1, 7, 1), p(7, 14, 16384), p(MAX_K, 20, 1)] {
+            assert_eq!(ok.check(), Ok(()), "{ok:?}");
+            ok.validate();
+        }
+        for (bad, why) in [
+            (p(0, 7, 8), "k must be in 1..=8, got 0"),
+            (p(9, 14, 8), "k must be in 1..=8, got 9"),
+            (p(3, 6, 8), "log_w must be in 7..=20, got 6"),
+            (p(3, 21, 8), "log_w must be in 7..=20, got 21"),
+            (p(3, 7, 0), "batch must be ≥ 1"),
+        ] {
+            assert_eq!(bad.check(), Err(why.to_string()), "{bad:?}");
+            let panic = std::panic::catch_unwind(|| bad.validate()).expect_err("validate panics");
+            let msg = panic.downcast_ref::<String>().cloned().unwrap_or_default();
+            assert_eq!(msg, why, "validate panics with the check reason");
+        }
+    }
+
+    /// FNV-1a-64 (a stable, dependency-free fingerprint for the VK pin below).
+    fn fnv1a64(bytes: impl IntoIterator<Item = u8>) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    /// `(commitment, metadata)` fingerprint of a leaf proof's VK: FNV-1a-64 of
+    /// the preprocessed commitment (`vk_pin_values` order, canonical `u32`
+    /// coefficients, little-endian) and of the postcard-encoded
+    /// `bound_proof_shape`.
+    fn vk_fingerprint(o: &BloomOmcProof) -> (u64, u64) {
+        use crate::recursion::recursive::expose_forest::vk_pin_values;
+        use crate::recursion::recursive::root_vk::bound_proof_shape;
+        use p3_field::PrimeField32;
+        let commit = fnv1a64(vk_pin_values(&o.output.0).iter().flat_map(|c| {
+            <Challenge as BasedVectorSpace<Val>>::as_basis_coefficients_slice(c)
+                .iter()
+                .flat_map(|x| x.as_canonical_u32().to_le_bytes())
+                .collect::<Vec<u8>>()
+        }));
+        let shape = postcard::to_allocvec(&bound_proof_shape(&o.output.0)).expect("serialize shape");
+        (commit, fnv1a64(shape))
+    }
+
+    /// Regression pin: the standalone 24-value leaf ([`build_bloom_omc_leaf`],
+    /// i.e. [`Expose::None`]) keeps the VK of the builder before the
+    /// composable [`Expose`] layouts were added. The constants were produced
+    /// by this fingerprint over that unmodified builder (the tree at commit
+    /// 7089f70, built side by side), at two small shapes; the VK does not
+    /// depend on the data, which the no-op proof re-checks. An edit to the
+    /// shared builder that moves the `None` path fails here. A deliberate
+    /// circuit change, a Plonky3-fork bump or a new `BoundProofShape` field
+    /// moves the pin too; re-pin only once that is confirmed as the cause.
+    #[test]
+    fn standalone_leaf_vk_is_pinned() {
+        // (k, log_w, batch, live keys) → (commitment, metadata) fingerprints.
+        const PINNED: [((usize, usize, usize, usize), (u64, u64)); 2] = [
+            ((3, 7, 8, 6), (0x5799_0f46_158c_a38e, 0xb2c4_1ac7_ed6a_d550)),
+            ((7, 8, 4, 3), (0x6e87_0de0_0d50_0e7b, 0xc986_76c8_919c_a78b)),
+        ];
+        for ((k, log_w, batch, live), pin) in PINNED {
+            let p = BloomOmcParams { k, log_w, batch };
+            let mut prior = bloom_empty(&p);
+            bloom_insert(&mut prior, &p, &keys(20, 7));
+            let proof = build_bloom_omc_leaf(p).prove_epoch(&prior, &keys(live, 99));
+            check_exposed(&proof);
+            let noop = build_bloom_omc_leaf(p).prove_epoch(&bloom_empty(&p), &[]);
+            let (got, got_noop) = (vk_fingerprint(&proof), vk_fingerprint(&noop));
+            assert_eq!(got, got_noop, "k={k} log_w={log_w} batch={batch}: VK independent of data");
+            assert_eq!(
+                got.0, pin.0,
+                "k={k} log_w={log_w} batch={batch}: standalone leaf VK commitment moved \
+                 (got 0x{:016x})",
+                got.0
+            );
+            assert_eq!(
+                got.1, pin.1,
+                "k={k} log_w={log_w} batch={batch}: standalone leaf proof metadata moved \
+                 (got 0x{:016x})",
+                got.1
+            );
+        }
     }
 
     // ── circuit: tamper ──

@@ -262,6 +262,98 @@ fn cm_honest_chain_fold_verifies_against_log() {
     assert!(legacy_auditor(&root.0, &vk, &log3).is_ok());
 }
 
+/// Property 3 at query time (the prefix certificate): after each leaf, the
+/// forest's live peaks, checked by the [`PrefixAuditor`] (VK derived per
+/// bracketing from a no-op leaf, pinned STARK verification, statements tiling
+/// `[1, t']` against the log), certify exactly `Com(S_{t'})`; so do the
+/// per-batch leaves and the chain's running fold. Rejected: the previous
+/// version's peaks offered for `t'`, a proof claimed under another
+/// bracketing, a leaf spliced from another stream whose boundary states match
+/// (only `Com(B_2)` differs), and a toy proof exposing the honest statement.
+///
+/// [`PrefixAuditor`]: crate::recursion::recursive::expose_forest::PrefixAuditor
+#[test]
+fn cm_query_prefix_certified_by_live_peaks() {
+    use crate::recursion::recursive::expose_forest::{
+        ForestCascade, PrefixAuditor, prove_exposing_leaf,
+    };
+    use p3_field::BasedVectorSpace;
+    let mut leaf = cm::leaf_circuit();
+    let bs = cm::honest_batches();
+    let s0 = cm::empty();
+    let (l4, s4) = cm::leaves_at(&mut leaf, &s0, &bs, &[1, 2, 3, 4]);
+    let log = cm::log(&s0, &s4, &bs);
+    let state_at =
+        |k: usize| cm_commit(&bs[..k].iter().fold(s0.clone(), |s, b| cm::apply(&s, b)));
+    let copy = |p: &Proof| -> Proof {
+        postcard::from_bytes(&postcard::to_allocvec(p).unwrap()).unwrap()
+    };
+    fn refs(parts: &[(Proof, ForestShape)]) -> Vec<(&Proof, ForestShape)> {
+        parts.iter().map(|(p, sh)| (p, sh.clone())).collect()
+    }
+    let mut auditor = PrefixAuditor::new(cm::noop());
+    let leaf_copies: Vec<(Proof, ForestShape)> =
+        l4.iter().map(|o| (copy(&o.0), ForestShape::Leaf)).collect();
+
+    let mut forest = ForestCascade::new(1);
+    let mut prev: Option<Vec<(Proof, ForestShape)>> = None;
+    for (k, l) in l4.into_iter().enumerate() {
+        let t = k + 1;
+        forest.push(l);
+        let peaks: Vec<(Proof, ForestShape)> = forest
+            .peaks()
+            .iter()
+            .map(|(lo, hi, p)| (copy(&p.0), ForestShape::forest((hi - lo + 1) as usize)))
+            .collect();
+        assert_eq!(peaks.len(), t.count_ones() as usize, "one peak per set bit of t'");
+        assert_eq!(auditor.certify_prefix(&refs(&peaks), &log, t), Ok(state_at(t)), "peaks at t'={t}");
+        assert_eq!(
+            auditor.certify_prefix(&refs(&leaf_copies[..t]), &log, t),
+            Ok(state_at(t)),
+            "per-batch leaves at t'={t}"
+        );
+        if let Some(p) = &prev {
+            let e = auditor.certify_prefix(&refs(p), &log, t);
+            assert!(e.as_ref().is_err_and(|e| e.contains("certify [1,")), "stale peaks at t'={t}: {e:?}");
+        }
+        prev = Some(peaks);
+    }
+    // t' = 4: the one peak is forest(4); under chain(4) its VK is wrong.
+    let p4 = prev.unwrap();
+    let e = auditor.certify_prefix(&[(&p4[0].0, ForestShape::chain(4))], &log, 4);
+    assert!(e.as_ref().is_err_and(|e| e.contains("VK")), "{e:?}");
+    // A size-2 peak claimed as a lone leaf fails the leaf pin.
+    let (l2, _) = cm::leaves_at(&mut leaf, &s0, &bs[..2], &[1, 2]);
+    let m12 = copy(&prove_hiding_merge(&l2[0], &l2[1]).0);
+    let e = auditor.certify_prefix(&[(&m12, ForestShape::Leaf)], &log, 2);
+    assert!(e.is_err(), "merge proof under the leaf VK");
+
+    // Splice: leaf 2 of a stream Y whose batch 2 is B_2 reordered (same
+    // states, different Com(B_2)).
+    let y_batches = vec![bs[0].clone(), rev(&bs[1])];
+    let (y, _) = cm::leaves_at(&mut leaf, &s0, &y_batches, &[1, 2]);
+    let spliced = vec![(copy(&leaf_copies[0].0), ForestShape::Leaf), (copy(&y[1].0), ForestShape::Leaf)];
+    let e = auditor.certify_prefix(&refs(&spliced), &log, 2);
+    assert!(e.as_ref().is_err_and(|e| e.contains("digest")), "{e:?}");
+
+    // A toy circuit exposing leaf 1's honest statement values.
+    let vals = read_exposed_statement(&leaf_copies[0].0).values();
+    let chals: Vec<crate::config::Challenge> = vals
+        .chunks(4)
+        .map(|c| crate::config::Challenge::from_basis_coefficients_slice(c).unwrap())
+        .collect();
+    let toy = prove_exposing_leaf(&chals);
+    assert_eq!(read_exposed_statement(&toy.0), read_exposed_statement(&leaf_copies[0].0));
+    let e = auditor.certify_prefix(&[(&toy.0, ForestShape::Leaf)], &log, 1);
+    assert!(e.is_err(), "the toy proof is not the leaf circuit");
+
+    // The chain's running fold Π_[1,4] certifies version 4 under chain(4).
+    let (l4b, _) = cm::leaves_at(&mut leaf, &s0, &bs, &[1, 2, 3, 4]);
+    let c4 = prove_chain_over(l4b);
+    assert_eq!(auditor.certify_prefix(&[(&c4.0, ForestShape::chain(4))], &log, 4), Ok(state_at(4)));
+    assert!(auditor.certify_prefix(&[(&c4.0, ForestShape::forest(4))], &log, 4).is_err());
+}
+
 // ─── Attacks: Count-Min omc ──────────────────────────────────────────────────
 
 fn rev(b: &[crate::sketch::countmin::CountMinUpdate]) -> Vec<crate::sketch::countmin::CountMinUpdate> {
@@ -687,6 +779,79 @@ fn hll_omc_and_gk2_interval_forest2() {
         let log = batch_log(&s0, &commit_gk2_state(&s).0, &commits);
         assert_family_interval_forest2("gk_bandmerge2", outs, gk2_noop_leaf_expose(p, Expose::Interval), log);
     }
+}
+
+/// Bloom-filter `omc` (an OR update with the timestamped rebind): two
+/// Interval leaves → forest(2). The root VK derived from the Bloom Interval
+/// no-op leaf (empty filter, all-dummy batch) equals the real root's, the
+/// honest root verifies against the log, and the reversed log is rejected
+/// ([`assert_family_interval_forest2`]). A substituted batch is rejected by
+/// the digest:
+/// (a1) `B'_2` with other keys, posted with its own final commitment;
+/// (a2) `B'_2` = `B_2` with its records reordered: OR is order-insensitive,
+///      so every posted state commitment is the HONEST one and only
+///      `Com(B'_2) != Com(B_2)` differs.
+/// Both substituted roots pass the pre-B6(b) auditor; the digest check
+/// rejects both, while (control) the reordered root verifies against its own
+/// log.
+#[test]
+fn bloom_omc_interval_forest2() {
+    use crate::recursion::recursive::noop_leaf::bloom_omc_noop_leaf_expose;
+    use crate::sketch::bloom_omc::{
+        BloomOmcLeafCircuit, BloomOmcParams, bloom_batch_commit, bloom_empty, bloom_insert,
+        build_bloom_omc_leaf_expose, commit_bloom,
+    };
+    let p = BloomOmcParams { k: 3, log_w: 7, batch: 4 };
+    /// Prove `bs` from the empty filter at indices 1, 2, …; returns the leaves,
+    /// the final filter and the log.
+    fn run(leaf: &mut BloomOmcLeafCircuit, p: &BloomOmcParams, bs: &[Vec<u64>]) -> (Vec<Out>, BatchLog<Val>) {
+        let s0 = bloom_empty(p);
+        let mut bits = s0.clone();
+        let mut outs = Vec::new();
+        for (i, ks) in bs.iter().enumerate() {
+            outs.push(leaf.prove_epoch_at(i as u64 + 1, &bits, ks).output);
+            bloom_insert(&mut bits, p, ks);
+        }
+        let commits: Vec<[Val; 8]> = bs.iter().map(|ks| bloom_batch_commit(p.batch, ks)).collect();
+        (outs, batch_log(&commit_bloom(&s0), &commit_bloom(&bits), &commits))
+    }
+    let mut leaf = build_bloom_omc_leaf_expose(p, Expose::Interval);
+    // Batch 1 leaves one dummy slot; batch 2 re-inserts key 7.
+    let bs = vec![vec![7u64, 11, 1 << 40], vec![13, 7, 99, 2]];
+    let (outs, log) = run(&mut leaf, &p, &bs);
+    assert_family_interval_forest2(
+        "bloom_omc",
+        outs,
+        bloom_omc_noop_leaf_expose(p, Expose::Interval),
+        log.clone(),
+    );
+    let shape = ForestShape::forest(2);
+    let vk = root_vk_deriver(bloom_omc_noop_leaf_expose(p, Expose::Interval)).root_vk(&shape);
+
+    // (a1)
+    let forged = vec![bs[0].clone(), vec![500, 501]];
+    let (fl, flog) = run(&mut leaf, &p, &forged);
+    assert_ne!(flog.final_, log.final_);
+    let root = prove_forest_over(fl);
+    let posted = BatchLog { final_: flog.final_.clone(), ..log.clone() };
+    let legacy = legacy_auditor(&root.0, &vk, &posted);
+    let new = new_auditor(&root.0, &vk, &posted, &shape);
+    println!("B6B bloom (a1) substituted batch: legacy={legacy:?} new={new:?}");
+    assert!(legacy.is_ok(), "the pre-B6(b) auditor accepts the substituted history");
+    assert!(new.as_ref().is_err_and(|e| e.contains("digest")), "{new:?}");
+
+    // (a2)
+    let reordered = vec![bs[0].clone(), bs[1].iter().rev().copied().collect::<Vec<_>>()];
+    let (rl, rlog) = run(&mut leaf, &p, &reordered);
+    assert_eq!(rlog.final_, log.final_, "OR is order-insensitive: same final state");
+    assert_ne!(rlog.batch_commits[1], log.batch_commits[1]);
+    let root = prove_forest_over(rl);
+    let legacy = legacy_auditor(&root.0, &vk, &log);
+    let new = new_auditor(&root.0, &vk, &log, &shape);
+    println!("B6B bloom (a2) same-state substituted batch: legacy={legacy:?} new={new:?}");
+    assert!(legacy.is_ok());
+    assert!(new.as_ref().is_err_and(|e| e.contains("digest")), "{new:?}");
+    assert!(new_auditor(&root.0, &vk, &rlog, &shape).is_ok(), "control: its own log");
 }
 
 #[test]

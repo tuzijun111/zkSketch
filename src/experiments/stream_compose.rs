@@ -3,7 +3,7 @@
 //!
 //! Benchmarks the three composition modes — **per-batch proof chain**, the
 //! **recursive linear chain**, and the **streaming forest** — over a stream of
-//! `t = ⌈N/m⌉` transition leaves, for four sketch families each pinned to one
+//! `t = ⌈N/m⌉` transition leaves, for five sketch families each pinned to one
 //! leaf variant:
 //!
 //! | family | variant           | leaf prover (exposed)          |
@@ -12,11 +12,16 @@
 //! | hll    | omc               | `prove_hll_omc_exposed`        |
 //! | ss     | certified         | `prove_ss_full_exposed`        |
 //! | gk     | bandmerge2        | `prove_gkb2_exposed`           |
+//! | bloom  | omc               | `build_bloom_omc_leaf_expose`  |
 //!
-//! All four leaves surface their `(Com(S_{i-1}), Com(S_i))` boundary via the
+//! (The first four are the measured families; the Bloom filter, a generality
+//! instance of the timestamped OR rebind, runs through the same harness.)
+//!
+//! All five leaves surface their `(Com(S_{i-1}), Com(S_i))` boundary via the
 //! Expose NPO, so the **family-agnostic** folds
 //! ([`prove_forest_over`](crate::recursion::recursive::expose_forest::prove_forest_over)
-//! Bentley–Saxe tree, [`prove_chain_over`] left-leaning linear) compose any of
+//! Bentley–Saxe tree, [`prove_chain_over`](crate::recursion::recursive::expose_forest::prove_chain_over)
+//! left-leaning linear) compose any of
 //! them and bind `left.final == right.initial` in-circuit. The per-batch mode
 //! folds nothing — it stores the `t` leaf proofs to a folder and the verifier
 //! holds all of them.
@@ -39,7 +44,7 @@
 //!
 //! With a non-empty `query_at` schedule (1-based batch indices), a **query
 //! leaf** (the family's `src/decode/*` circuit: cm point count, hll
-//! cardinality, ss top-1 mass, gk rank) is proved after each listed batch
+//! cardinality, ss top-1 mass, gk rank, bloom membership) is proved after each listed batch
 //! against the state at that point. Queries at ARBITRARY stream positions
 //! (the paper's operation-stream model: a query OCCUPIES a position, so `n`
 //! points carry `n − ⌊n/Q⌋` update records) are supported by building the
@@ -47,14 +52,20 @@
 //! a query landing mid-batch seals the batch early and pads its tail with the
 //! family's provable no-op records ([`PAD_KEY`]), so `Com(S_u)` becomes a real
 //! batch-boundary commitment at the exact query position. The query circuit
-//! re-hashes the state and binds the same `Com(S_{t'})` the update leaf just
-//! exposed (asserted by the harness), so the verifier checks the answer against
-//! the composition proof(s) live at `t'`: all `t'` leaves (per_batch), the
-//! current fold (chain), or the `popcount(t')` Bentley–Saxe peaks (forest).
-//! Query costs are reported separately (`query_*` fields) and the per-mode
-//! verifier context is the structural `query_ctx_verifies` count — interior
-//! boundaries are hidden by the final root, so mid-stream queries verify
-//! against the composition state at query time, not the end-of-stream root.
+//! re-hashes the state and exposes `(Com(S_{t'}), q, answer)`. The auditor
+//! ([`QueryAudit`]) pins every query proof to the decode circuit's VK derived
+//! from public parameters, then binds its `Com(S_{t'})` to the certified
+//! history (Property 3) with the interval proofs live at `t'`: all `t'` leaves
+//! (per_batch), the current fold `Π_[1,t']` (chain), or the `popcount(t')`
+//! Bentley–Saxe peaks (forest; under the procs engine with `M` machines, the
+//! earlier slices' roots plus the query slice's peaks). Each is pinned to the
+//! VK of its bracketing and STARK-verified, their statements must tile
+//! `[1, t']` against the batch log, and the last one's final commitment must
+//! equal the query's — interior boundaries are hidden by the final root, so
+//! mid-stream queries verify against the composition state at query time, not
+//! the end-of-stream root. Query costs are reported separately (`query_*`
+//! fields): `query_ctx_verifies` counts the certificate's proofs and
+//! `query_bind_ms` the measured binding cost.
 //!
 //! ## Cores and machines
 //!
@@ -73,34 +84,47 @@
 //! verify time are reported. `chain` is inherently sequential (each fold needs
 //! its predecessor), so it ignores `machines`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::time::Duration;
 
 use rayon::ThreadPoolBuilder;
 
 use crate::config::Val;
+use crate::decode::bloom::{bloom_decode_vk, bloom_query_input, prove_bloom_query};
 use crate::decode::countmin::{prove_cm_decode, CmDecodeParams};
 use crate::decode::gk_bandmerge::{prove_gk2_decode, Gkb2DecodeParams};
 use crate::decode::hyperloglog::{prove_hll_decode_omc, HllDecodeParams};
 use crate::decode::spacesaving::{prove_ss_decode, SsDecodeParams};
-use crate::decode::{DecodeProof, QueryStatement, ReleasePolicy, check_query_statement};
+use crate::decode::countmin::cm_decode_vk;
+use crate::decode::gk_bandmerge::gk2_decode_vk;
+use crate::decode::hyperloglog::hll_omc_decode_vk;
+use crate::decode::spacesaving::ss_decode_vk;
+use crate::decode::{
+    check_query_statement, verify_decode_proof, DecodeProof, DecodeVk, QueryStatement,
+    ReleasePolicy,
+};
 use crate::recursion::recursive::config::ConfigWithFriParams;
+use crate::recursion::recursive::config::D as EXT_D;
 use crate::recursion::recursive::expose_forest::{
-    check_leaves_against_log, check_root_against_log, prove_chain_over, prove_forest_over,
-    read_exposed_statement, verify_bound_proof, verify_bound_proof_against_log,
+    ForestCascade, PrefixAuditor, check_leaves_against_log, check_root_against_log,
+    prove_hiding_merge, read_exposed_statement, verify_bound_proof, verify_bound_proof_against_log,
     verify_bound_proof_self_pinned_legacy, verify_leaves_against_log,
 };
 use crate::recursion::recursive::root_vk::{
     exp_root_vk, warn_self_pinned_legacy, ExpRootVk, ForestShape, RootVk,
 };
 use crate::recursion::recursive::statement::{
-    composition_expose, warn_boundary_layout, BatchLog, Expose,
+    check_prefix_statements, composition_expose, hash_bb, warn_boundary_layout, BatchLog, Expose,
+    Statement,
 };
 use crate::recursion::recursive::timing;
 use crate::sketch::bind::{default_binding, Binding};
 use p3_recursion::RecursionOutput;
 
+use crate::sketch::bloom_omc::{
+    bloom_empty, bloom_insert, build_bloom_omc_leaf_expose, commit_bloom, BloomOmcParams,
+};
 use crate::sketch::countmin::CountMinUpdate;
 use crate::sketch::countmin_omc::{build_countmin_omc_leaf_expose, countmin_omc_advance, CmOmcParams};
 use crate::sketch::gk_bandmerge::{
@@ -120,7 +144,8 @@ use super::proof_size;
 
 use crate::commitment::countmin::commit_countmin;
 
-/// The four (family, variant) leaf types the composition benchmark folds.
+/// The (family, variant) leaf types the composition benchmark folds: the four
+/// measured families, their Goldilocks variants, and the Bloom filter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamFamily {
     /// Count-Min, offline-memory-checking rebind (`prove_countmin_omc_exposed`).
@@ -145,6 +170,11 @@ pub enum StreamFamily {
     /// Parallel to [`Self::CmOmc`]; same field caveat as [`Self::HllOmcGl`]
     /// (the Goldilocks PRF row hash is a distinct Count-Min instance).
     CmOmcGl,
+    /// Partitioned Bloom filter, timestamped offline-memory-checking rebind of
+    /// an OR update (`build_bloom_omc_leaf_expose`), `k` slices of
+    /// `2^log_w` bits ([`StreamShape::bloom_k`] / [`StreamShape::bloom_log_w`]).
+    /// BabyBear only: there is no Goldilocks Bloom leaf.
+    BloomOmc,
 }
 
 impl StreamFamily {
@@ -161,6 +191,7 @@ impl StreamFamily {
             "gk_gl" | "gk_bandmerge2_gl" | "bandmerge2_gl" => Some(Self::GkBandmerge2Gl),
             "hll_gl" | "hll_omc_gl" | "hyperloglog_gl" => Some(Self::HllOmcGl),
             "cm_gl" | "cm_omc_gl" | "countmin_gl" => Some(Self::CmOmcGl),
+            "bloom" | "bloom_omc" | "bloomfilter" | "bloom_filter" => Some(Self::BloomOmc),
             _ => None,
         }
     }
@@ -174,6 +205,7 @@ impl StreamFamily {
             Self::GkBandmerge2Gl => "gk_bandmerge2_gl",
             Self::HllOmcGl => "hll_omc_gl",
             Self::CmOmcGl => "cm_omc_gl",
+            Self::BloomOmc => "bloom_omc",
         }
     }
     pub fn family(self) -> &'static str {
@@ -188,6 +220,7 @@ impl StreamFamily {
             Self::GkBandmerge2Gl => "gk_gl",
             Self::HllOmcGl => "hll_gl",
             Self::CmOmcGl => "cm_gl",
+            Self::BloomOmc => "bloom",
         }
     }
     /// The base field of this family's recursion config.
@@ -262,6 +295,28 @@ pub struct StreamShape {
     pub capacity: usize,
     /// GK accuracy parameter `s = 1/ε`.
     pub gk_s: u64,
+    /// Bloom filter: number of slices = hash positions per key (`1..=8`).
+    pub bloom_k: usize,
+    /// Bloom filter: bits per slice `W = 2^bloom_log_w` (`7..=20`).
+    pub bloom_log_w: usize,
+}
+
+impl StreamShape {
+    /// The Bloom leaf / query parameters at batch size `m`. Panics on a bad
+    /// `(k, log_w)`; a runner that takes the shape from configuration calls
+    /// [`Self::check_bloom`] first so the reason is reported, not swallowed by
+    /// its panic guard.
+    pub fn bloom_params(&self, m: usize) -> BloomOmcParams {
+        self.check_bloom(m).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`Self::bloom_params`] without the panic: the parameters, or why
+    /// `(bloom_k, bloom_log_w, m)` is not a valid Bloom leaf shape.
+    pub fn check_bloom(&self, m: usize) -> Result<BloomOmcParams, String> {
+        let p = BloomOmcParams { k: self.bloom_k, log_w: self.bloom_log_w, batch: m };
+        p.check()?;
+        Ok(p)
+    }
 }
 
 /// One measured composition cell.
@@ -294,9 +349,17 @@ pub struct ComposeCell {
     /// Σ over query events of the number of COMPOSITION proofs the verifier must
     /// check at query time to trust the bound state commitment `Com(S_{t'})`:
     /// `t'` leaf proofs (per_batch), the 1 current fold (chain), or the
-    /// `popcount(t')` Bentley–Saxe peaks (forest). Structural count — the folds
-    /// exist at query time in a live stream; this harness does not re-time them.
+    /// `popcount(t')` Bentley–Saxe peaks (forest). With the prefix binding on
+    /// (the default) this is the number of proofs the auditor actually
+    /// verified for each answer ([`QueryAudit`]); under the legacy opt-ins it
+    /// is the structural count.
     pub query_ctx_verifies: u64,
+    /// Σ over query events of the measured cost of binding the answer's
+    /// `Com(S_{t'})` to the certified history: pinned STARK verification of
+    /// every proof in its prefix certificate plus the statement checks
+    /// against the log ([`QueryAudit::bind`]). `None` when the binding is off
+    /// (legacy opt-ins), so the answers are NOT tied to the certified history.
+    pub query_bind_ms: Option<f64>,
 }
 
 /// A boundary-exposing leaf proof plus the Send metrics we keep off-thread.
@@ -309,25 +372,266 @@ struct LeafArt {
 }
 
 /// One interleaved query event's Send metrics (the query proof itself is
-/// dropped — only its cost and size are kept).
-struct QueryArt {
+/// dropped — only its cost, size and verified statement are kept).
+pub(crate) struct QueryArt {
     /// Number of leaves covered when the query fired (`t'`, 1-based).
-    at_leaf: usize,
+    pub(crate) at_leaf: usize,
     prove_ms: f64,
+    /// The auditor's pinned verification of the query proof
+    /// ([`verify_decode_proof`]); the prover's self-verify under the legacy
+    /// opt-ins.
     verify_ms: f64,
     proof_bytes: u64,
+    /// The `(Com(S), q, answer)` the pinned verifier read off the query proof
+    /// (`None` under the legacy opt-ins).
+    statement: Option<QueryStatement>,
+    /// Set once [`QueryAudit::bind`] has certified `statement.commit` as
+    /// `Com(S_{t'})`.
+    bind: Option<QueryBind>,
 }
 
-/// Record one query event: take the decode prover's self-timings, check the
-/// harness-level binding (the state the query circuit hashed must be exactly
-/// the leaf-boundary commitment at `t'` — the decode proof binds it in-circuit
-/// via public inputs, this asserts the two sides agree), check the statement
-/// the query proof EXPOSES ([`check_query_exposure`]), and keep the metrics.
-/// `leaf_final` is the PROVER-side value of the update leaf at `t'`, not one
-/// the auditor verified: in chain/forest mode the composed root hides
-/// `Com(S_{t'})` and no prefix root or peak is verified at query time, so this
-/// binds the query to the stream only through the native replay (an open
-/// Property 3 gap; see [`prove_queries_only`]).
+/// The outcome of binding one answer to the certified history.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct QueryBind {
+    /// Interval proofs in the answer's prefix certificate.
+    pub(crate) ctx_proofs: u64,
+    /// Stateless verifier cost: Σ pinned verify time of those proofs + the
+    /// statement checks against the log.
+    pub(crate) ms: f64,
+}
+
+/// Where one part of a prefix certificate lives: an in-memory proof (the
+/// single-process engine) or the serialized bytes a worker shipped (procs).
+pub(crate) enum CtxProof<'a> {
+    Proof(&'a p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>),
+    Bytes(&'a [u8]),
+}
+
+/// One part of a prefix certificate: the interval `[lo, hi]` it covers, the
+/// bracketing it was folded under, and the proof.
+pub(crate) type CtxPart<'a> = (u64, u64, ForestShape, CtxProof<'a>);
+
+/// The verifier side of the mixed workload (Property 3): the trusted VK of
+/// the family's query circuit and a [`PrefixAuditor`] (trusted VKs per
+/// bracketing), all derived from public parameters. Every query proof is
+/// pinned to the decode VK ([`record_query`]), and its exposed `Com(S)` must
+/// equal the `Com(S_{t'})` certified by the interval proofs live at its
+/// version ([`Self::bind`]): the forest's peaks, the chain's current fold, or
+/// the per-batch leaves.
+///
+/// Each distinct interval proof is verified once and its time memoised: a
+/// stateless verifier answering one query pays the sum over that query's
+/// certificate, which is what [`QueryBind::ms`] reports, without the harness
+/// re-verifying a peak that several queries share.
+pub(crate) struct QueryAudit {
+    pub(crate) decode_vk: DecodeVk,
+    prefix: PrefixAuditor,
+    memo: HashMap<(u64, u64, ForestShape), (f64, Statement<Val>)>,
+}
+
+impl QueryAudit {
+    /// The family's auditor, or `None` under the legacy opt-ins that cannot
+    /// bind an answer (`ZKSKETCH_BINDING=legacy`: the decoders expose
+    /// nothing; `ZKSKETCH_STATEMENT=boundary`: no interval to tile;
+    /// `EXP_ROOT_VK=self`: no trusted VKs), with a loud warning.
+    pub(crate) fn new(family: StreamFamily, shape: &StreamShape, m: usize) -> Option<Self> {
+        let why = if default_binding() == Binding::Legacy {
+            Some("ZKSKETCH_BINDING=legacy (the decoders expose no statement)")
+        } else if composition_expose() != Expose::Interval {
+            Some("ZKSKETCH_STATEMENT=boundary (no interval statement to tile [1, t'])")
+        } else if exp_root_vk() == ExpRootVk::SelfPinnedLegacy {
+            Some("EXP_ROOT_VK=self (no VK derived from public parameters)")
+        } else if family.is_gl() {
+            Some("a Goldilocks family (no query path)")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            eprintln!(
+                "\n!!! WARNING: query answers are NOT bound to the certified history under {why}:\n\
+                 !!!   no prefix certificate is verified; query_bind_ms is reported as 'unbound'.\n"
+            );
+            return None;
+        }
+        let decode_vk = match family {
+            StreamFamily::CmOmc => cm_decode_vk(
+                CmDecodeParams { d: shape.d, w: shape.w, release: ReleasePolicy::Identity },
+                default_binding(),
+            ),
+            StreamFamily::HllOmc => hll_omc_decode_vk(
+                HllDecodeParams { b: shape.b, release: ReleasePolicy::Identity },
+                default_binding(),
+            ),
+            StreamFamily::SsCertified => ss_decode_vk(
+                SsDecodeParams { capacity: shape.capacity, c: 1, release: ReleasePolicy::Identity },
+                default_binding(),
+            ),
+            StreamFamily::GkBandmerge2 => gk2_decode_vk(
+                Gkb2DecodeParams { capacity: shape.capacity, release: ReleasePolicy::Identity },
+                default_binding(),
+            ),
+            // The membership circuit has one (bound) construction; it does
+            // not depend on the binding, nor on the batch size.
+            StreamFamily::BloomOmc => bloom_decode_vk(shape.bloom_params(m)),
+            _ => unreachable!("Goldilocks families are rejected above"),
+        };
+        let noop = super::dist_compose::prove_noop_leaf(family, shape, m);
+        Some(Self { decode_vk, prefix: PrefixAuditor::new(noop), memo: HashMap::new() })
+    }
+
+    /// Bind query `q` (its version `q.at_leaf`) to the certified history with
+    /// the prefix certificate `parts`: verify each part under the trusted VK
+    /// of its bracketing (memoised; the one-time VK derivation is outside the
+    /// timing), check that the statements tile `[1, t']` against `log`, and
+    /// require the query proof's exposed `Com(S)` to equal the certified
+    /// `Com(S_{t'})`. Fails closed.
+    pub(crate) fn bind(
+        &mut self,
+        q: &mut QueryArt,
+        parts: &[CtxPart<'_>],
+        log: &BatchLog<Val>,
+    ) -> Result<(), String> {
+        let stmt = q.statement.ok_or("the query proof exposes no statement")?;
+        let mut ms = 0.0f64;
+        let mut stmts: Vec<Statement<Val>> = Vec::with_capacity(parts.len());
+        for (k, (lo, hi, shape, src)) in parts.iter().enumerate() {
+            let key = (*lo, *hi, shape.clone());
+            if !self.memo.contains_key(&key) {
+                self.prefix.vk(shape);
+                let t0 = std::time::Instant::now();
+                let owned: p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>;
+                let proof = match src {
+                    CtxProof::Proof(p) => *p,
+                    CtxProof::Bytes(b) => {
+                        owned = postcard::from_bytes(b)
+                            .map_err(|e| format!("part {} [{lo}, {hi}]: decode: {e}", k + 1))?;
+                        &owned
+                    }
+                };
+                let st = self
+                    .prefix
+                    .verify_interval(proof, shape)
+                    .map_err(|e| format!("part {} [{lo}, {hi}]: {e}", k + 1))?;
+                self.memo.insert(key.clone(), (t0.elapsed().as_secs_f64() * 1000.0, st));
+            }
+            let (part_ms, st) = &self.memo[&key];
+            ms += part_ms;
+            stmts.push(st.clone());
+        }
+        let t0 = std::time::Instant::now();
+        let refs: Vec<(&Statement<Val>, &ForestShape)> =
+            stmts.iter().zip(parts.iter().map(|(_, _, sh, _)| sh)).collect();
+        let certified = check_prefix_statements(&refs, log, q.at_leaf, &hash_bb, EXT_D)?;
+        if certified != stmt.commit.to_vec() {
+            return Err(format!(
+                "the query proof's Com(S) is not the certified Com(S_{}) of the history",
+                q.at_leaf
+            ));
+        }
+        ms += t0.elapsed().as_secs_f64() * 1000.0;
+        q.bind = Some(QueryBind { ctx_proofs: parts.len() as u64, ms });
+        Ok(())
+    }
+}
+
+/// Bind every query whose version is `g` (in the single-process engine's
+/// folds, right after leaf `g`): `parts` builds `g`'s prefix certificate,
+/// only when some query is due. Returns the wall time spent, which the caller
+/// keeps out of its fold timing. No-op without an auditor.
+fn bind_due<'a>(
+    audit: &mut Option<QueryAudit>,
+    arts: &mut [QueryArt],
+    g: usize,
+    parts: impl FnOnce() -> Vec<CtxPart<'a>>,
+    log: &BatchLog<Val>,
+) -> f64 {
+    let Some(audit) = audit.as_mut() else { return 0.0 };
+    if !arts.iter().any(|q| q.at_leaf == g) {
+        return 0.0;
+    }
+    let t0 = std::time::Instant::now();
+    let parts = parts();
+    for q in arts.iter_mut().filter(|q| q.at_leaf == g) {
+        audit
+            .bind(q, &parts, log)
+            .unwrap_or_else(|e| panic!("query at t'={g} not bound to the certified history: {e}"));
+    }
+    t0.elapsed().as_secs_f64() * 1000.0
+}
+
+/// The procs engine's prefix certificates, assembled by the coordinator from
+/// what the workers shipped: per query version `g`, the parts `(lo, hi,
+/// bracketing)` in order, and each distinct part's serialized proof.
+#[derive(Default)]
+pub(crate) struct ContextStore {
+    pub(crate) parts: BTreeMap<usize, Vec<(u64, u64, ForestShape)>>,
+    bytes: HashMap<(u64, u64, ForestShape), Vec<u8>>,
+}
+
+impl ContextStore {
+    /// Store the proof of one interval (a worker ships each peak once).
+    /// Rejects a second, different proof for the same interval.
+    pub(crate) fn insert(
+        &mut self,
+        key: (u64, u64, ForestShape),
+        bytes: Vec<u8>,
+    ) -> Result<(), String> {
+        match self.bytes.get(&key) {
+            Some(old) if *old != bytes => {
+                Err(format!("two different proofs shipped for interval [{}, {}]", key.0, key.1))
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.bytes.insert(key, bytes);
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn has(&self, key: &(u64, u64, ForestShape)) -> bool {
+        self.bytes.contains_key(key)
+    }
+
+    /// Bind every query in `arts` with its stored certificate.
+    pub(crate) fn bind_all(
+        &self,
+        audit: &mut QueryAudit,
+        arts: &mut [QueryArt],
+        log: &BatchLog<Val>,
+    ) -> Result<(), String> {
+        for q in arts.iter_mut() {
+            let list = self
+                .parts
+                .get(&q.at_leaf)
+                .ok_or_else(|| format!("no prefix certificate shipped for t'={}", q.at_leaf))?;
+            let parts: Vec<CtxPart<'_>> = list
+                .iter()
+                .map(|(lo, hi, sh)| {
+                    let b = self
+                        .bytes
+                        .get(&(*lo, *hi, sh.clone()))
+                        .ok_or_else(|| format!("interval [{lo}, {hi}] was never shipped"))?;
+                    Ok((*lo, *hi, sh.clone(), CtxProof::Bytes(b.as_slice())))
+                })
+                .collect::<Result<_, String>>()?;
+            audit
+                .bind(q, &parts, log)
+                .map_err(|e| format!("query at t'={}: {e}", q.at_leaf))?;
+        }
+        Ok(())
+    }
+}
+
+/// Record one query event: take the decode prover's timings, check the
+/// prover-side consistency (the state the query circuit hashed must be
+/// exactly the leaf-boundary commitment at `t'`), and, with a trusted
+/// `decode_vk`, have the auditor verify the query proof pinned to it and
+/// check the exposed query and answer ([`verify_decode_proof`], timed as the
+/// query verify); the exposed `Com(S)` is kept for [`QueryAudit::bind`],
+/// which ties it to the certified history. `leaf_final` is a PROVER-side
+/// value, never what binds the answer. Without a VK (legacy opt-ins) the
+/// exposure is checked against the native replay only and the prover's
+/// self-verify time is reported.
 /// `query` is the keyed families' query as the decoder exposes it
 /// ([`cm_query`] for a cm key, [`scalar_query`] for ss `c` / gk value);
 /// `None` for hll (cardinality, no query).
@@ -338,18 +642,38 @@ fn record_query(
     native_commit: [Val; 8],
     leaf_final: [Val; 8],
     query: Option<[Val; 4]>,
+    decode_vk: Option<&DecodeVk>,
 ) {
     let tm = timing::take();
     assert_eq!(
         native_commit, leaf_final,
         "query state commitment must equal the leaf boundary at t'={at_leaf}"
     );
-    check_query_exposure(dp, leaf_final, query, at_leaf);
+    let (verify_ms, statement) = match decode_vk {
+        Some(vk) => {
+            let t0 = std::time::Instant::now();
+            let st = verify_decode_proof(&dp.output.0, vk)
+                .unwrap_or_else(|e| panic!("query proof at t'={at_leaf}: {e}"));
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            use p3_field::PrimeCharacteristicRing;
+            let want_q = query.unwrap_or([Val::ZERO; 4]);
+            assert_eq!(st.query, want_q, "query proof at t'={at_leaf}: exposed query");
+            let want = QueryStatement::with_query(st.commit, want_q, dp.answer);
+            assert_eq!(st.answer, want.answer, "query proof at t'={at_leaf}: exposed answer");
+            (ms, Some(st))
+        }
+        None => {
+            check_query_exposure(dp, leaf_final, query, at_leaf);
+            (tm.verify.as_secs_f64() * 1000.0, None)
+        }
+    };
     queries.push(QueryArt {
         at_leaf,
         prove_ms: (tm.witness + tm.prove).as_secs_f64() * 1000.0,
-        verify_ms: tm.verify.as_secs_f64() * 1000.0,
+        verify_ms,
         proof_bytes: dp.proof_size() as u64,
+        statement,
+        bind: None,
     });
 }
 
@@ -396,9 +720,17 @@ fn cm_query(key: u64) -> [Val; 4] {
     crate::sketch::countmin_final::key_hash_input(key, default_binding())
 }
 
+/// The exposed query of the Bloom membership decoder for `key`: the active
+/// record `[k0, k1, k2, k3 + 2^16]` (exact 16-bit limbs plus the `act` bit;
+/// the decoder has no Legacy variant).
+fn bloom_query(key: u64) -> [Val; 4] {
+    bloom_query_input(key)
+}
+
 /// How the probe key for a **keyed** decode query is chosen at each query event.
-/// Only the keyed families use it — cm (point-count) and gk (rank); hll
-/// (cardinality) and ss (top-1) take no probe key and ignore the mode.
+/// Only the keyed families use it — cm (point-count), gk (rank) and bloom
+/// (membership); hll (cardinality) and ss (top-1) take no probe key and ignore
+/// the mode.
 ///
 /// `First` is the baseline (the batch's first key, matching the original
 /// behaviour); the others sample against the multiset of keys seen so far,
@@ -518,6 +850,8 @@ pub const PAD_KEY: u32 = u32::MAX;
 //   gk  → stripped (a short batch: `fresh_tuples` pads with `E_MAX` dummies
 //         natively and `n` advances by the real count only)
 //   hll → no sentinel (pads are repeated real keys; `max` is idempotent)
+//   bloom → stripped (a short batch: the leaf fills its free record slots
+//           with the canonical `act = 0` dummy, which ORs in nothing)
 
 pub fn cm_updates_of(batch: &[u32]) -> Vec<CountMinUpdate> {
     batch
@@ -556,6 +890,14 @@ pub fn gk_vals_of(batch: &[u32]) -> Vec<u32> {
 
 pub fn hll_keys_of(batch: &[u32]) -> Vec<u64> {
     batch.iter().map(|&k| k as u64).collect()
+}
+
+/// Bloom records of a wire batch: the real keys, in order. `PAD_KEY` slots
+/// are stripped, so the leaf (and the batch commitment,
+/// [`crate::sketch::bloom_omc::bloom_batch_commit`]) fills them with the
+/// canonical dummy record (`act = 0`, all-zero limbs), a provable no-op.
+pub fn bloom_keys_of(batch: &[u32]) -> Vec<u64> {
+    batch.iter().filter(|&&k| k != PAD_KEY).map(|&k| k as u64).collect()
 }
 
 /// Build the batch list for a **mixed workload over an operation stream**:
@@ -652,11 +994,21 @@ pub struct QueryAgg {
     /// time to trust `Com(S_{t'})`: `t'` (per_batch), `1` (chain), `popcount(t')`
     /// Bentley–Saxe peaks (forest).
     pub query_ctx_verifies: u64,
+    /// Σ measured binding cost ([`QueryBind::ms`]); `None` when unbound.
+    pub query_bind_ms: Option<f64>,
 }
 
-/// Fold the raw per-event query artifacts into the reported metrics; the
-/// verifier-context count is per composition mode.
-fn aggregate_queries(query_arts: &[QueryArt], mode: StreamMode) -> QueryAgg {
+/// Fold the raw per-event query artifacts into the reported metrics. Bound
+/// queries report the certificate sizes the auditor verified; unbound ones
+/// (legacy opt-ins) the structural per-mode count.
+pub(crate) fn aggregate_queries(query_arts: &[QueryArt], mode: StreamMode) -> QueryAgg {
+    let bound = query_arts.iter().filter(|q| q.bind.is_some()).count();
+    assert!(
+        bound == 0 || bound == query_arts.len(),
+        "{bound} of {} queries bound: the binding must cover every query or none",
+        query_arts.len()
+    );
+    let bound = bound > 0;
     QueryAgg {
         n_queries: query_arts.len(),
         query_prove_ms: query_arts.iter().map(|q| q.prove_ms).sum(),
@@ -664,12 +1016,14 @@ fn aggregate_queries(query_arts: &[QueryArt], mode: StreamMode) -> QueryAgg {
         query_proof_bytes: query_arts.iter().map(|q| q.proof_bytes).sum(),
         query_ctx_verifies: query_arts
             .iter()
-            .map(|q| match mode {
-                StreamMode::PerBatch => q.at_leaf as u64,
-                StreamMode::Chain => 1u64,
-                StreamMode::Forest => q.at_leaf.count_ones() as u64,
+            .map(|q| match (q.bind, mode) {
+                (Some(b), _) => b.ctx_proofs,
+                (None, StreamMode::PerBatch) => q.at_leaf as u64,
+                (None, StreamMode::Chain) => 1u64,
+                (None, StreamMode::Forest) => q.at_leaf.count_ones() as u64,
             })
             .sum(),
+        query_bind_ms: bound.then(|| query_arts.iter().filter_map(|q| q.bind).map(|b| b.ms).sum()),
     }
 }
 
@@ -680,21 +1034,18 @@ fn aggregate_queries(query_arts: &[QueryArt], mode: StreamMode) -> QueryAgg {
 /// one decode query after each `query_at`-listed batch. Mirrors `prove_leaves`'
 /// query logic exactly (same `query_key_mode` probes, same per-family circuits).
 ///
-/// The query decode circuit binds its in-circuit state hash to `Com(S_{t'})`,
-/// and `record_query` checks that the proof EXPOSES the natively recomputed
-/// `Com(S_{t'})` (there is no update leaf here, so the "leaf boundary" it
-/// compares with is that same recomputed commit). What is NOT done: the
-/// auditor verifies no composition proof at `t'` (no prefix root and no
-/// Bentley–Saxe peaks; the whole-stream root hides `Com(S_{t'})`), so the
-/// query answer is tied to the update proofs only through the auditor's own
-/// native replay of the stream, not through a verified proof (an open
-/// Property 3 gap; `query_ctx_verifies` is a structural count only).
+/// The replay is the PROVER's: it needs the state to answer. The answer is
+/// tied to the update proofs by the auditor, not by this replay: each query
+/// proof is pinned to `decode_vk` ([`record_query`]) and its exposed `Com(S)`
+/// is later bound by [`ContextStore::bind_all`] to the `Com(S_{t'})` that the
+/// interval proofs the workers shipped certify ([`QueryAudit::bind`]).
 fn prove_queries_only(
     family: StreamFamily,
     shape: StreamShape,
     batches: &[Vec<u32>],
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
+    decode_vk: Option<&DecodeVk>,
 ) -> Vec<QueryArt> {
     let mut queries: Vec<QueryArt> = Vec::new();
     if query_at.is_empty() {
@@ -731,7 +1082,7 @@ fn prove_queries_only(
                         key,
                     );
                     let commit = commit_countmin(&state).0;
-                    record_query(&mut queries, bi + 1, &dp, commit, commit, Some(cm_query(key)));
+                    record_query(&mut queries, bi + 1, &dp, commit, commit, Some(cm_query(key)), decode_vk);
                 }
             }
         }
@@ -748,7 +1099,7 @@ fn prove_queries_only(
                         0,
                     );
                     let commit = commit_hll_omc(&regs, b);
-                    record_query(&mut queries, bi + 1, &dp, commit, commit, None);
+                    record_query(&mut queries, bi + 1, &dp, commit, commit, None, decode_vk);
                 }
             }
         }
@@ -766,7 +1117,7 @@ fn prove_queries_only(
                         1,
                     );
                     let commit = commit_ss_state(&state).0;
-                    record_query(&mut queries, bi + 1, &dp, commit, commit, Some(scalar_query(1)));
+                    record_query(&mut queries, bi + 1, &dp, commit, commit, Some(scalar_query(1)), decode_vk);
                 }
             }
         }
@@ -798,7 +1149,28 @@ fn prove_queries_only(
                         qval,
                     );
                     let commit = commit_gk2_state(&state).0;
-                    record_query(&mut queries, bi + 1, &dp, commit, commit, Some(scalar_query(qval as u64)));
+                    record_query(&mut queries, bi + 1, &dp, commit, commit, Some(scalar_query(qval as u64)), decode_vk);
+                }
+            }
+        }
+        StreamFamily::BloomOmc => {
+            let params = shape.bloom_params(batches[0].len());
+            let mut bits = bloom_empty(&params);
+            let mut freq: BTreeMap<u64, u64> = BTreeMap::new();
+            for (bi, batch) in batches.iter().enumerate() {
+                let keys = bloom_keys_of(batch);
+                bloom_insert(&mut bits, &params, &keys);
+                if track_freq {
+                    for &k in &keys {
+                        *freq.entry(k).or_insert(0) += 1;
+                    }
+                }
+                if query_due(bi) {
+                    let key =
+                        select_query_key(query_key_mode, &freq, batch[0] as u64, (bi + 1) as u64, 0xFFFF_FFFF);
+                    let dp = prove_bloom_query(params, &bits, key);
+                    let commit = commit_bloom(&bits);
+                    record_query(&mut queries, bi + 1, &dp, commit, commit, Some(bloom_query(key)), decode_vk);
                 }
             }
         }
@@ -820,6 +1192,13 @@ fn prove_queries_only(
 /// inside a `cores`-thread pool (one machine's budget). The update leaves are
 /// proved by the workers, so this covers only the query side; its cost lands in
 /// the `query_*` columns, separate from the distributed update makespan.
+///
+/// With `bind = Some((audit, store, log))` (the procs coordinators' default),
+/// every query proof is pinned to the auditor's decode VK and its answer is
+/// bound to the certified history with the prefix certificates the workers
+/// shipped ([`ContextStore::bind_all`]), inside the same pool. Without it the
+/// answers are unbound (legacy opt-ins, and the engine-free unit test).
+#[allow(clippy::too_many_arguments)]
 pub fn measure_queries_dist(
     family: StreamFamily,
     shape: StreamShape,
@@ -828,17 +1207,34 @@ pub fn measure_queries_dist(
     cores: usize,
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
-) -> QueryAgg {
+    bind: Option<(&mut QueryAudit, &ContextStore, &BatchLog<Val>)>,
+) -> Result<QueryAgg, String> {
     if query_at.is_empty() || batches.is_empty() {
-        return QueryAgg::default();
+        return Ok(QueryAgg::default());
     }
     let pool = ThreadPoolBuilder::new()
         .num_threads(cores.max(1))
         .build()
         .expect("query pool");
     pool.install(|| {
-        let arts = prove_queries_only(family, shape, batches, query_at, query_key_mode);
-        aggregate_queries(&arts, mode)
+        match bind {
+            Some((audit, store, log)) => {
+                let mut arts = prove_queries_only(
+                    family,
+                    shape,
+                    batches,
+                    query_at,
+                    query_key_mode,
+                    Some(&audit.decode_vk),
+                );
+                store.bind_all(audit, &mut arts, log)?;
+                Ok(aggregate_queries(&arts, mode))
+            }
+            None => {
+                let arts = prove_queries_only(family, shape, batches, query_at, query_key_mode, None);
+                Ok(aggregate_queries(&arts, mode))
+            }
+        }
     })
 }
 
@@ -854,14 +1250,15 @@ pub fn measure_queries_dist(
 /// boundary (asserted here), so a verifier holding the composition proof(s) at
 /// `t'` can check the answer against `Com(S_{t'})`. The keyed probes (cm point
 /// count, gk rank) target the key chosen by `query_key_mode` (default `First` =
-/// the batch's first key); hll = cardinality and ss = top-1 heavy-hitter mass
-/// are keyless and ignore the mode.
+/// the batch's first key), as does bloom membership; hll = cardinality and
+/// ss = top-1 heavy-hitter mass are keyless and ignore the mode.
 fn prove_leaves(
     family: StreamFamily,
     shape: StreamShape,
     batches: &[Vec<u32>],
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
+    decode_vk: Option<&DecodeVk>,
 ) -> (Vec<LeafArt>, [Val; 8], Vec<QueryArt>) {
     let m = batches[0].len();
     let mut leaves: Vec<LeafArt> = Vec::with_capacity(batches.len());
@@ -923,7 +1320,7 @@ fn prove_leaves(
                         state.clone(),
                         key,
                     );
-                    record_query(&mut queries, bi + 1, &dp, commit_countmin(&state).0, leaf_final, Some(cm_query(key)));
+                    record_query(&mut queries, bi + 1, &dp, commit_countmin(&state).0, leaf_final, Some(cm_query(key)), decode_vk);
                 }
             }
             e
@@ -951,7 +1348,7 @@ fn prove_leaves(
                         regs.clone(),
                         0,
                     );
-                    record_query(&mut queries, bi + 1, &dp, commit_hll_omc(&regs, b), leaf_final, None);
+                    record_query(&mut queries, bi + 1, &dp, commit_hll_omc(&regs, b), leaf_final, None, decode_vk);
                 }
             }
             e
@@ -977,7 +1374,7 @@ fn prove_leaves(
                         state.clone(),
                         1,
                     );
-                    record_query(&mut queries, bi + 1, &dp, commit_ss_state(&state).0, leaf_final, Some(scalar_query(1)));
+                    record_query(&mut queries, bi + 1, &dp, commit_ss_state(&state).0, leaf_final, Some(scalar_query(1)), decode_vk);
                 }
             }
             e
@@ -1019,7 +1416,43 @@ fn prove_leaves(
                         state.clone(),
                         qval,
                     );
-                    record_query(&mut queries, bi + 1, &dp, commit_gk2_state(&state).0, leaf_final, Some(scalar_query(qval as u64)));
+                    record_query(&mut queries, bi + 1, &dp, commit_gk2_state(&state).0, leaf_final, Some(scalar_query(qval as u64)), decode_vk);
+                }
+            }
+            e
+        }
+        StreamFamily::BloomOmc => {
+            let params = shape.bloom_params(m);
+            let mut bits = bloom_empty(&params);
+            let e = commit_bloom(&bits);
+            let mut freq: BTreeMap<u64, u64> = BTreeMap::new();
+            for (bi, batch) in batches.iter().enumerate() {
+                // PAD_KEY slots stripped into the leaf's canonical dummies
+                // (the canonical `bloom_keys_of` mapping).
+                let keys = bloom_keys_of(batch);
+                let leaf = build_bloom_omc_leaf_expose(params, composition_expose())
+                    .prove_epoch_at(bi as u64 + 1, &bits, &keys);
+                let leaf_final = leaf.final_commit.0;
+                push(leaf.output, leaf.initial_commit.0, leaf_final);
+                bloom_insert(&mut bits, &params, &keys);
+                if track_freq {
+                    for &k in &keys {
+                        *freq.entry(k).or_insert(0) += 1;
+                    }
+                }
+                if query_due(bi) {
+                    // Membership query. Probe key chosen by `query_key_mode`
+                    // (default = the batch's first key); `absent` may hit a
+                    // false positive, which the proof certifies as such.
+                    let key = select_query_key(
+                        query_key_mode,
+                        &freq,
+                        batch[0] as u64,
+                        (bi + 1) as u64,
+                        0xFFFF_FFFF,
+                    );
+                    let dp = prove_bloom_query(params, &bits, key);
+                    record_query(&mut queries, bi + 1, &dp, commit_bloom(&bits), leaf_final, Some(bloom_query(key)), decode_vk);
                 }
             }
             e
@@ -1177,16 +1610,24 @@ pub fn measure_compose(
         // Auditor's trusted root VK: derived from public parameters before (and
         // outside) the measured pass; never read from the root it verifies.
         let root_vk = compose_trusted_vk(family, &shape, m, mode, batches.len());
+        // Mixed workload: the query-side auditor (decode VK + prefix
+        // auditor), likewise derived from public parameters up front.
+        let mut audit =
+            if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m) };
         bench(BenchCfg { warmup: 0, trials: 1 }, || {
-            let (leaves, empty_commit, query_arts) =
-                prove_leaves(family, shape, batches, query_at, query_key_mode);
+            let (leaves, empty_commit, mut query_arts) = prove_leaves(
+                family,
+                shape,
+                batches,
+                query_at,
+                query_key_mode,
+                audit.as_ref().map(|a| &a.decode_vk),
+            );
             let prove_ms: Vec<f64> = leaves.iter().map(|l| l.prove_ms).collect();
             let leafgen_seq: f64 = prove_ms.iter().sum();
             leafgen_seq_out = leafgen_seq;
-            // Mixed-workload aggregates (same fold the procs engine uses).
-            q_out = aggregate_queries(&query_arts, mode);
 
-            match mode {
+            let outcome = match mode {
                 StreamMode::PerBatch => {
                     // Store each leaf proof to the folder (fresh per run); the
                     // verifier holds all t (Θ(t) size + verify).
@@ -1225,6 +1666,17 @@ pub fn measure_compose(
                     let proofs: Vec<_> = leaves.iter().map(|l| &l.output.0).collect();
                     let total_verify =
                         audit_leaves(&proofs, root_vk.as_ref(), &log, layout, self_verify);
+                    // Mixed workload: a query at t' is certified by leaves 1..t'.
+                    for g in query_arts.iter().map(|q| q.at_leaf).collect::<BTreeSet<_>>() {
+                        bind_due(&mut audit, &mut query_arts, g, || {
+                            (1..=g)
+                                .map(|k| {
+                                    let p = CtxProof::Proof(&leaves[k - 1].output.0);
+                                    (k as u64, k as u64, ForestShape::Leaf, p)
+                                })
+                                .collect()
+                        }, &log);
+                    }
 
                     // machines: parallel independent leaf proving (no fold).
                     let leafgen = makespan(&prove_ms, machines);
@@ -1249,22 +1701,58 @@ pub fn measure_compose(
                     let single_verify_ms = leaves[0].verify_ms;
                     let outputs: Vec<RecursionOutput<ConfigWithFriParams>> =
                         leaves.into_iter().map(|l| l.output).collect();
-                    // Real recursive fold → one O(1) root. Timed as merge.
-                    let t0 = std::time::Instant::now();
-                    let root = if !single_leaf {
-                        match mode {
-                            StreamMode::Chain => prove_chain_over(outputs),
-                            _ => prove_forest_over(outputs),
-                        }
-                    } else {
-                        outputs.into_iter().next().expect(">=1 leaf")
-                    };
-                    let merge_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                    let bytes = proof_size(&root.0) as u64;
                     // The public batch log (Com(S_0), Com(S_T), Com(B_1..B_T)),
-                    // computed natively from the batches, and the bracketing
-                    // the fold used.
+                    // computed natively from the batches.
                     let log = super::dist_compose::stream_batch_log(family, &shape, m, batches);
+                    // Real recursive fold → one O(1) root. Timed as merge.
+                    // Mixed workload: right after leaf t' the interval proofs
+                    // live at t' (the chain's fold Π_[1,t'] or the forest's
+                    // peaks) certify each query at t' ([`bind_due`]); that
+                    // time is kept out of the merge timing.
+                    let t0 = std::time::Instant::now();
+                    let mut bind_wall = 0.0f64;
+                    let mut outputs = outputs.into_iter();
+                    let first = outputs.next().expect(">=1 leaf");
+                    let root = match mode {
+                        StreamMode::Chain => {
+                            let mut acc = first;
+                            bind_wall += bind_due(&mut audit, &mut query_arts, 1, || {
+                                vec![(1, 1, ForestShape::Leaf, CtxProof::Proof(&acc.0))]
+                            }, &log);
+                            for (k, leaf) in outputs.enumerate() {
+                                let g = k + 2;
+                                acc = prove_hiding_merge(&acc, &leaf);
+                                bind_wall += bind_due(&mut audit, &mut query_arts, g, || {
+                                    let sh = ForestShape::chain(g);
+                                    vec![(1, g as u64, sh, CtxProof::Proof(&acc.0))]
+                                }, &log);
+                            }
+                            acc
+                        }
+                        _ => {
+                            let mut forest = ForestCascade::new(1);
+                            let mut push_and_bind = |leaf, g: usize, forest: &mut ForestCascade| {
+                                forest.push(leaf);
+                                bind_due(&mut audit, &mut query_arts, g, || {
+                                    forest
+                                        .peaks()
+                                        .into_iter()
+                                        .map(|(lo, hi, p)| {
+                                            let sh = ForestShape::forest((hi - lo + 1) as usize);
+                                            (lo, hi, sh, CtxProof::Proof(&p.0))
+                                        })
+                                        .collect()
+                                }, &log)
+                            };
+                            bind_wall += push_and_bind(first, 1, &mut forest);
+                            for (k, leaf) in outputs.enumerate() {
+                                bind_wall += push_and_bind(leaf, k + 2, &mut forest);
+                            }
+                            forest.finalize().0
+                        }
+                    };
+                    let merge_ms = t0.elapsed().as_secs_f64() * 1000.0 - bind_wall;
+                    let bytes = proof_size(&root.0) as u64;
                     let tree = match mode {
                         StreamMode::Chain => ForestShape::chain(batches.len()),
                         _ => ForestShape::forest(batches.len()),
@@ -1323,7 +1811,10 @@ pub fn measure_compose(
                         num_columns: 0,
                     }
                 }
-            }
+            };
+            // Mixed-workload aggregates (same fold the procs engine uses).
+            q_out = aggregate_queries(&query_arts, mode);
+            outcome
         })
     });
 
@@ -1346,6 +1837,7 @@ pub fn measure_compose(
         query_verify_ms: q_out.query_verify_ms,
         query_proof_bytes: q_out.query_proof_bytes,
         query_ctx_verifies: q_out.query_ctx_verifies,
+        query_bind_ms: q_out.query_bind_ms,
     }
 }
 
@@ -1354,7 +1846,7 @@ mod tests {
     use super::*;
 
     fn shape() -> StreamShape {
-        StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2 }
+        StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2, bloom_k: 3, bloom_log_w: 7 }
     }
 
     /// The query-key sampler is deterministic and honours each mode: `First`
@@ -1405,8 +1897,9 @@ mod tests {
         let batches: Vec<Vec<u32>> = vec![(1..=4).collect(), (5..=8).collect()];
         let run = |mode, query_at: &[usize]| {
             measure_queries_dist(
-                StreamFamily::CmOmc, shape(), &batches, mode, 1, query_at, QueryKeyMode::First,
+                StreamFamily::CmOmc, shape(), &batches, mode, 1, query_at, QueryKeyMode::First, None,
             )
+            .expect("unbound query phase")
         };
         // forest ctx = popcount(1)+popcount(2) = 1+1 = 2.
         let f = run(StreamMode::Forest, &[1, 2]);
@@ -1432,6 +1925,7 @@ mod tests {
             StreamFamily::HllOmc,
             StreamFamily::SsCertified,
             StreamFamily::GkBandmerge2,
+            StreamFamily::BloomOmc,
         ] {
             for mode in [StreamMode::PerBatch, StreamMode::Chain, StreamMode::Forest] {
                 let dir = std::env::temp_dir()
@@ -1457,9 +1951,10 @@ mod tests {
 
     /// Mixed updates+queries: every batch is followed by a query leaf. Checks
     /// the query events fire, carry real costs, bind the leaf boundary (a
-    /// mismatch would panic `record_query`'s assert), and the per-mode verifier
-    /// context counts are the structural values: forest peaks = popcount(t'),
-    /// per_batch = t', chain = 1.
+    /// mismatch would panic `record_query`'s assert), and every answer is
+    /// bound to the certified history with the certificate a verifier holds at
+    /// t' — forest peaks = popcount(t'), per_batch = t' leaves, chain = 1 fold
+    /// — at a measured cost.
     #[test]
     fn mixed_queries_smoke() {
         let batches: Vec<Vec<u32>> =
@@ -1469,6 +1964,7 @@ mod tests {
             StreamFamily::HllOmc,
             StreamFamily::SsCertified,
             StreamFamily::GkBandmerge2,
+            StreamFamily::BloomOmc,
         ] {
             let dir = std::env::temp_dir().join(format!("zksketch_mixed_{}", family.label()));
             let _ = std::fs::remove_dir_all(&dir);
@@ -1481,6 +1977,7 @@ mod tests {
             assert!(cell.query_proof_bytes > 0, "query artifact ({family:?})");
             // Forest peaks at t'=1 and t'=2: popcount(1)+popcount(2) = 1+1.
             assert_eq!(cell.query_ctx_verifies, 2, "forest peaks ctx ({family:?})");
+            assert!(cell.query_bind_ms.is_some_and(|ms| ms > 0.0), "answers bound ({family:?})");
             let _ = std::fs::remove_dir_all(&dir);
         }
         // Mode-dependent ctx on one family: per_batch = 1+2, chain = 1+1.
@@ -1490,11 +1987,13 @@ mod tests {
             QueryKeyMode::First,
         );
         assert_eq!(cell.query_ctx_verifies, 3, "per_batch ctx = t' sum");
+        assert!(cell.query_bind_ms.is_some(), "per_batch answers bound");
         let cell = measure_compose(
             StreamFamily::CmOmc, shape(), &batches, StreamMode::Chain, 1, 1, &dir, &[1, 2],
             QueryKeyMode::First,
         );
         assert_eq!(cell.query_ctx_verifies, 2, "chain ctx = 1 per query");
+        assert!(cell.query_bind_ms.is_some(), "chain answers bound");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1548,6 +2047,7 @@ mod tests {
             StreamFamily::HllOmc,
             StreamFamily::SsCertified,
             StreamFamily::GkBandmerge2,
+            StreamFamily::BloomOmc,
         ] {
             // n=10 stream positions, Q=3, m=4 ⇒ queries occupy positions
             // 3,6,9 (7 update records) ⇒ leaves [2r+2p][2r+2p][2r+2p][1r+3p],
@@ -1564,6 +2064,9 @@ mod tests {
             );
             assert_eq!(cell.n_queries, 3, "3 mid-batch queries ({family:?})");
             assert!(cell.query_prove_ms > 0.0, "real query proofs ({family:?})");
+            // Peaks at t' = 1, 2, 3: 1 + 1 + 2 proofs, all verified.
+            assert_eq!(cell.query_ctx_verifies, 4, "forest peaks ctx ({family:?})");
+            assert!(cell.query_bind_ms.is_some(), "mid-batch answers bound ({family:?})");
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
@@ -1668,7 +2171,7 @@ mod tests {
         }
         let vk = compose_trusted_vk(StreamFamily::CmOmc, &sh, m, StreamMode::PerBatch, 3)
             .expect("derived leaf VK");
-        let (leaves, _, _) = prove_leaves(StreamFamily::CmOmc, sh, &batches, &[], QueryKeyMode::First);
+        let (leaves, _, _) = prove_leaves(StreamFamily::CmOmc, sh, &batches, &[], QueryKeyMode::First, None);
         let log = super::super::dist_compose::stream_batch_log(StreamFamily::CmOmc, &sh, m, &batches);
         let layout = composition_expose();
         assert!(audit_leaves(&[&leaves[0].output.0], Some(&vk), &log, layout, -1.0) >= 0.0);
@@ -1682,5 +2185,110 @@ mod tests {
         let r = crate::sketch::forge::catch_msg(|| audit_leaves(&[&toy.0], Some(&vk), &log, layout, -1.0));
         println!("B6B sim leaf audit toy: {r:?}");
         assert!(r.is_err_and(|e| e.contains("leaf audit")));
+    }
+
+    /// The binding fails closed, for Count-Min and the Bloom filter: a query
+    /// answered against the state at t' is rejected with the certificate of
+    /// t'-1 (stale peaks), with a certificate over a different batch log, and
+    /// when its exposed Com(S) is not the certified one. Without an auditor
+    /// (legacy opt-ins) nothing is bound.
+    #[test]
+    fn query_binding_rejects_mismatched_certificates() {
+        if std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive") {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        let (sh, m) = (shape(), 4usize);
+        for fam in [StreamFamily::CmOmc, StreamFamily::BloomOmc] {
+            let batches: Vec<Vec<u32>> =
+                (0..3u32).map(|i| (1..=4).map(|k| k * 5 + i * 11).collect()).collect();
+            let Some(mut audit) = QueryAudit::new(fam, &sh, m) else {
+                eprintln!("skipped: binding off under a legacy opt-in");
+                return;
+            };
+            let (leaves, _, arts) =
+                prove_leaves(fam, sh, &batches, &[2, 3], QueryKeyMode::First, Some(&audit.decode_vk));
+            let log = super::super::dist_compose::stream_batch_log(fam, &sh, m, &batches);
+            let other: Vec<Vec<u32>> = batches.iter().rev().cloned().collect();
+            let other_log = super::super::dist_compose::stream_batch_log(fam, &sh, m, &other);
+            let leaf = |k: usize| (k as u64, k as u64, ForestShape::Leaf, CtxProof::Proof(&leaves[k - 1].output.0));
+            let fresh = |a: &QueryArt| QueryArt {
+                at_leaf: a.at_leaf,
+                prove_ms: 0.0,
+                verify_ms: 0.0,
+                proof_bytes: 0,
+                statement: a.statement,
+                bind: None,
+            };
+            // Honest: query at t'=2 with leaves 1..2 (per-batch certificate).
+            let mut q2 = fresh(&arts[0]);
+            assert_eq!(q2.at_leaf, 2);
+            audit.bind(&mut q2, &[leaf(1), leaf(2)], &log).expect("honest certificate");
+            assert_eq!(q2.bind.map(|b| b.ctx_proofs), Some(2), "{fam:?}");
+            // Stale: the query at t'=3 with the certificate of t'=2.
+            let mut q3 = fresh(&arts[1]);
+            let e = audit.bind(&mut q3, &[leaf(1), leaf(2)], &log).unwrap_err();
+            assert!(e.contains("certify [1, 2]"), "{fam:?}: {e}");
+            // The query at t'=2 answered against S_2 but offered leaves 1..3.
+            let mut q2b = fresh(&arts[0]);
+            assert!(audit.bind(&mut q2b, &[leaf(1), leaf(2), leaf(3)], &log).is_err(), "{fam:?}: past t'");
+            // A log with other batches: the leaves' digests no longer match.
+            let mut q2c = fresh(&arts[0]);
+            let e = audit.bind(&mut q2c, &[leaf(1), leaf(2)], &other_log).unwrap_err();
+            assert!(e.contains("digest") || e.contains("Com(S_0)"), "{fam:?}: {e}");
+            // The query proof's Com(S) is not the certified one (S_3 vs S_2).
+            let mut q3b = fresh(&arts[1]);
+            q3b.at_leaf = 2;
+            let e = audit.bind(&mut q3b, &[leaf(1), leaf(2)], &log).unwrap_err();
+            assert!(e.contains("not the certified"), "{fam:?}: {e}");
+            // Nothing exposed (legacy decoder): nothing to bind.
+            let mut q0 = fresh(&arts[0]);
+            q0.statement = None;
+            assert!(audit.bind(&mut q0, &[leaf(1), leaf(2)], &log).is_err(), "{fam:?}");
+        }
+    }
+
+    /// The procs engine's query replay ([`prove_queries_only`], no update
+    /// leaf) and the sim engine's interleaved queries ([`prove_leaves`]) pin
+    /// to the same Bloom decode VK and expose the SAME statements
+    /// `(Com(S_{t'}), record(key), answer)` for every query-key mode, and the
+    /// replay's answers bind to the certified history with the leaves' prefix
+    /// certificate (what the coordinator assembles from the workers' bytes).
+    #[test]
+    fn bloom_query_replay_matches_sim_and_binds() {
+        if std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive") {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        let (sh, m, fam) = (shape(), 4usize, StreamFamily::BloomOmc);
+        let Some(mut audit) = QueryAudit::new(fam, &sh, m) else {
+            eprintln!("skipped: binding off under a legacy opt-in");
+            return;
+        };
+        let base: Vec<u32> = (1..=10).map(|k| k * 7 + 1).collect();
+        let (batches, query_at, _, _) = build_query_schedule_batches(&base, 10, 4, 3, fam);
+        let log = super::super::dist_compose::stream_batch_log(fam, &sh, m, &batches);
+        for mode in [QueryKeyMode::First, QueryKeyMode::UniformStream, QueryKeyMode::Absent] {
+            let (leaves, _, sim) =
+                prove_leaves(fam, sh, &batches, &query_at, mode, Some(&audit.decode_vk));
+            let mut replay =
+                prove_queries_only(fam, sh, &batches, &query_at, mode, Some(&audit.decode_vk));
+            assert_eq!(replay.len(), query_at.len(), "{mode:?}");
+            for (a, b) in sim.iter().zip(&replay) {
+                assert_eq!((a.at_leaf, a.statement), (b.at_leaf, b.statement), "{mode:?}");
+            }
+            for q in replay.iter_mut() {
+                let parts: Vec<CtxPart<'_>> = (1..=q.at_leaf)
+                    .map(|k| (k as u64, k as u64, ForestShape::Leaf, CtxProof::Proof(&leaves[k - 1].output.0)))
+                    .collect();
+                audit.bind(q, &parts, &log).expect("replayed answer binds");
+            }
+            if mode == QueryKeyMode::First {
+                // The first key of every batch is a member: no false negative.
+                use p3_field::PrimeCharacteristicRing;
+                let one = crate::decode::QueryStatement::new([Val::ZERO; 8], 0, 1).answer;
+                assert!(replay.iter().all(|q| q.statement.unwrap().answer == one));
+            }
+        }
     }
 }

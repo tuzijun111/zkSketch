@@ -1,7 +1,8 @@
 //! **Streaming proof-composition comparison** — the three §Streaming-Proof-
 //! Composition modes (**per-batch chain**, **recursive linear chain**,
 //! **streaming forest**) over four sketch families, each pinned to one leaf
-//! variant: cm/omc, hll/omc, ss/certified, gk/bandmerge2.
+//! variant: cm/omc, hll/omc, ss/certified, gk/bandmerge2 — plus the Bloom
+//! filter (bloom/omc, opt-in via `EXP_COMPOSE_FAMILY=bloom`, BabyBear only).
 //!
 //! Fixes a total stream size `N`, derives `t = ⌈N/m⌉` leaves per batch size `m`,
 //! draws keys from a chosen dataset, and for each (family, mode, cores,
@@ -46,22 +47,41 @@
 //!        space-accuracy coupling `cap ≳ s·log(N/s)`), so cap alone sets the GK
 //!        size like the other families. Set `EXP_GK_S` only to override (a value
 //!        too big for the cap fragments → too_large; unset it to auto-derive).
+//! - bloom: `EXP_BLOOM_K` (slices = hash positions per key, default 7, `1..=8`),
+//!        `EXP_BLOOM_LOGW` (bits per slice `W = 2^logw`, default 14, `7..=20`)
+//!        — the deployed `M = 7·2^14` filter (~1% FPR at 12k keys). The CSV
+//!        shape reads `k{k}_logw{logw}`. There is no Goldilocks Bloom leaf
+//!        (`bloom_gl` is rejected).
 //!
-//! Config: `EXP_COMPOSE_FAMILY` (cm,hll,ss,gk; default all four),
+//! Config: `EXP_COMPOSE_FAMILY` (cm,hll,ss,gk,bloom and the `_gl` variants of
+//! the first four; default cm,hll,ss,gk),
 //! `EXP_COMPOSE_N` (`2^k` ok; default 32), `EXP_COMPOSE_BATCHES` (m list;
 //! default 8), `EXP_DATASET` (uniform|gaussian|zipf|aol|netflix; default
 //! uniform), `EXP_OUT`/`$1` (rename CSV).
 //!
 //! ## Mixed updates + queries (`EXP_COMPOSE_QUERY_EVERY`, default 0 = off)
 //! With `EXP_COMPOSE_QUERY_EVERY=k`, one **query leaf** (the family's decode
-//! circuit: cm point count, hll cardinality, ss top-1 mass, gk rank) is proved
+//! circuit: cm point count, hll cardinality, ss top-1 mass, gk rank, bloom
+//! membership) is proved
 //! after every `k`-th batch against the state commitment the update leaf just
 //! exposed. Query costs land in the `query_*` columns (kept separate from the
-//! update-side totals); `query_ctx_verifies` counts the composition proofs the
-//! verifier checks at query time to trust `Com(S_{t'})` — `t'` (per_batch),
-//! `1` (chain), `popcount(t')` Bentley–Saxe peaks (forest). The cm decode
-//! circuit takes any power-of-two `w` (cost ∝ `d·w`), same as the leaf.
-//! The `query_*_avg` columns report the amortized proven cost of ONE query
+//! update-side totals). The auditor verifies each query proof pinned to the
+//! decode circuit's VK derived from public parameters (`query_verify_ms`),
+//! then binds its exposed `Com(S)` to the certified history: it verifies the
+//! interval proofs live at the query's version `t'` — the leaves `1..t'`
+//! (per_batch), the running fold `Π_[1,t']` (chain), or the Bentley–Saxe
+//! peaks (forest; with `M` machines, the earlier slices' roots plus the query
+//! slice's peaks) — each pinned to the VK of its bracketing, checks that they
+//! tile `[1, t']` against the batch log, and requires the last one's final
+//! commitment to equal the query's `Com(S)`. `query_ctx_verifies` counts
+//! those proofs; `query_bind_ms` is the measured cost a stateless verifier
+//! pays for that binding (each distinct proof is verified once and its time
+//! charged to every query that relies on it). Under the legacy opt-ins
+//! (`ZKSKETCH_BINDING=legacy`, `ZKSKETCH_STATEMENT=boundary`,
+//! `EXP_ROOT_VK=self`) answers are NOT bound: `query_bind_ms` reads `unbound`
+//! and `query_ctx_verifies` is the structural count. The cm decode circuit
+//! takes any power-of-two `w` (cost ∝ `d·w`), same as the leaf. The
+//! `query_*_avg` columns report the amortized cost of ONE query
 //! (`Σ query_* / n_queries`) — the headline mixed-workload number.
 //!
 //! `EXP_COMPOSE_QUERY_EVERY_OPS=Q` (mutually exclusive with the above) runs
@@ -71,8 +91,9 @@
 //! records (100 points with Q=10 ⇒ 10 queries + 90 updates). No batch
 //! alignment required: a query landing mid-batch seals the batch early and
 //! pads its tail with the family's provable no-op records (cm value-0 update,
-//! ss circuit dummy, gk E_MAX dummy via a short batch, hll repeated key —
-//! `max` is idempotent), so the state is committed at the exact stream
+//! ss circuit dummy, gk E_MAX dummy via a short batch, bloom `act = 0` dummy
+//! via a short batch, hll repeated key — `max` is idempotent), so the state is
+//! committed at the exact stream
 //! position and the circuit shape stays uniform. The early-sealed leaves are
 //! the honest "query at any point" premium, reported in `query_split_leaves`
 //! / `query_pad_records`; the stream tail is pad-sealed too (no phantom
@@ -89,8 +110,8 @@
 //! updates on a live-stream critical path; that is a deliberate first cut.
 //!
 //! `EXP_QUERY_KEY_MODE` (default `first`) picks the probe key a KEYED query
-//! targets — cm point-count / gk rank (hll cardinality and ss top-1 are keyless
-//! and ignore it): `first` = the batch's first key (baseline); `uniform_stream`
+//! targets — cm point-count / gk rank / bloom membership (hll cardinality and
+//! ss top-1 are keyless and ignore it): `first` = the batch's first key (baseline); `uniform_stream`
 //! = a frequency-weighted sample of keys seen so far (S³-style); `hot` = the
 //! most-frequent key; `absent` = an in-domain key NOT in the stream. All modes
 //! are deterministic in the query index, so runs are reproducible.
@@ -105,7 +126,8 @@
 //!   query_pad_records,exec,procs,witness_pass_ms,scatter_ms,
 //!   scatter_state_bytes,scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,
 //!   local_fold_ms,merges_local,merges_cross,cross_rounds,
-//!   comm_msgs,comm_bytes,comm_ms_measured,comm_model_ms,status
+//!   comm_msgs,comm_bytes,comm_ms_measured,comm_model_ms,merge_total_ms,
+//!   query_bind_ms,query_bind_ms_avg,status
 //!
 //! RUNTIME WARNING: every leaf and every merge is a real STARK proof. Under
 //! `sim` everything proves sequentially (the k-machine split is a makespan
@@ -170,6 +192,24 @@ fn env_str(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
+/// The two prefix-binding columns: `query_bind_ms` and its per-query average,
+/// `unbound` when queries ran without the binding (legacy opt-ins).
+fn bind_cols(bind_ms: Option<f64>, n: usize) -> [String; 2] {
+    match bind_ms {
+        Some(ms) => [format!("{ms:.3}"), format!("{:.3}", q_avg(ms, n))],
+        None if n > 0 => ["unbound".into(), "unbound".into()],
+        None => ["0.000".into(), "0.000".into()],
+    }
+}
+
+/// The per-query binding cost for the stderr summary: `<ms>ms`, or `unbound`.
+fn bind_avg_str(bind_ms: Option<f64>, n: usize) -> String {
+    match bind_ms {
+        Some(ms) => format!("{:.1}ms", q_avg(ms, n)),
+        None => "unbound".into(),
+    }
+}
+
 /// Amortized-per-query value: `total / n`, or 0 when there were no queries.
 fn q_avg(total: f64, n: usize) -> f64 {
     if n > 0 {
@@ -218,6 +258,7 @@ fn shape_str(family: StreamFamily, s: &StreamShape) -> String {
         StreamFamily::GkBandmerge2 | StreamFamily::GkBandmerge2Gl => {
             format!("cap{}_s{}", s.capacity, s.gk_s)
         }
+        StreamFamily::BloomOmc => format!("k{}_logw{}", s.bloom_k, s.bloom_log_w),
     }
 }
 
@@ -373,7 +414,8 @@ fn main() {
         eprintln!("EXP_COMPOSE_QUERY_EVERY_OPS=1 makes EVERY stream position a query (no updates)");
         std::process::exit(2);
     }
-    // Which probe key a keyed query (cm point-count, gk rank) targets: first
+    // Which probe key a keyed query (cm point-count, gk rank, bloom
+    // membership) targets: first
     // (baseline, the batch's first key) | uniform_stream (frequency-weighted
     // sample of seen keys, S³-style) | hot (most-frequent key) | absent (an
     // in-domain key NOT in the stream). No effect on hll/ss (keyless queries).
@@ -435,7 +477,14 @@ fn main() {
             let s = s.trim();
             let f = StreamFamily::parse(s);
             if f.is_none() && !s.is_empty() {
-                eprintln!("ignoring unknown family '{s}' (cm|hll|ss|gk)");
+                if s.to_ascii_lowercase().starts_with("bloom") {
+                    eprintln!(
+                        "ignoring family '{s}': the Bloom filter has a BabyBear leaf only \
+                         (no Goldilocks variant); use 'bloom'"
+                    );
+                } else {
+                    eprintln!("ignoring unknown family '{s}' (cm|hll|ss|gk|bloom, or cm_gl|hll_gl|ss_gl|gk_gl)");
+                }
             }
             f
         })
@@ -497,6 +546,9 @@ fn main() {
         b: env_size("EXP_HLL_B", 4),
         capacity: gk_cap, // overridden per-family below (ss uses ss_cap, gk uses gk_cap)
         gk_s,
+        // Bloom: the deployed k = 7 slices of 2^14 bits by default.
+        bloom_k: env_size("EXP_BLOOM_K", 7),
+        bloom_log_w: env_size("EXP_BLOOM_LOGW", 14),
     };
 
     let dataset_str = env_str("EXP_DATASET", "uniform");
@@ -509,6 +561,19 @@ fn main() {
     if families.is_empty() || modes.is_empty() || batches_m.is_empty() || n == 0 {
         eprintln!("need non-empty EXP_COMPOSE_FAMILY / _MODE / _BATCHES and N > 0");
         std::process::exit(2);
+    }
+    // Reject a bad Bloom shape up front: inside the sim engine's panic guard it
+    // would otherwise surface as a silent `too_large` row with no reason.
+    if families.contains(&StreamFamily::BloomOmc) {
+        for &m in &batches_m {
+            if let Err(e) = shape.check_bloom(m) {
+                eprintln!(
+                    "bad Bloom shape (EXP_BLOOM_K={}, EXP_BLOOM_LOGW={}, m={m}): {e}",
+                    shape.bloom_k, shape.bloom_log_w
+                );
+                std::process::exit(2);
+            }
+        }
     }
 
     let dir = results_dir();
@@ -597,7 +662,10 @@ fn main() {
         "exec", "procs", "witness_pass_ms", "scatter_ms", "scatter_state_bytes",
         "scatter_data_bytes", "leaf_busy_min_ms", "leaf_busy_max_ms", "local_fold_ms",
         "merges_local", "merges_cross", "cross_rounds", "comm_msgs",
-        "comm_bytes", "comm_ms_measured", "comm_model_ms", "merge_total_ms", "status",
+        "comm_bytes", "comm_ms_measured", "comm_model_ms", "merge_total_ms",
+        // Measured cost of binding each answer to the certified history
+        // (prefix certificate at t'); `unbound` under the legacy opt-ins.
+        "query_bind_ms", "query_bind_ms_avg", "status",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -693,6 +761,7 @@ fn main() {
                             };
                             const N_LEGACY_METRICS: usize = 19; // total_time..query_ctx + 4 amortized + split/pad
                             const N_EXT_AFTER_EXEC: usize = 16; // procs..comm_model_ms, merge_total_ms
+                            const N_BIND: usize = 2; // query_bind_ms, query_bind_ms_avg
 
                             if exec_procs {
                                 // The Goldilocks (`_gl`) families run the same
@@ -761,16 +830,18 @@ fn main() {
                                             // Bentley–Saxe folds (in-worker) + cross-machine
                                             // merges. `merge_ms` alone is only the cross part.
                                             format!("{:.3}", c.local_fold_ms + c.merge_ms),
-                                            "ok".into(),
                                         ]);
+                                        row.extend(bind_cols(c.query_bind_ms, c.n_queries));
+                                        row.push("ok".into());
                                         write_row(&csv, &row);
                                         let qstr = if c.n_queries > 0 {
                                             format!(
-                                                " | q={} /query: {:.1}ms prove, {:.1}KB, {:.1} ctx{}",
+                                                " | q={} /query: {:.1}ms prove, {:.1}KB, {:.1} ctx, bind {}{}",
                                                 c.n_queries,
                                                 q_avg(c.query_prove_ms, c.n_queries),
                                                 q_avg(c.query_proof_bytes as f64, c.n_queries) / 1024.0,
                                                 q_avg(c.query_ctx_verifies as f64, c.n_queries),
+                                                bind_avg_str(c.query_bind_ms, c.n_queries),
                                                 if split_leaves > 0 {
                                                     format!(" (split={split_leaves} pad={pad_records})")
                                                 } else {
@@ -805,6 +876,9 @@ fn main() {
                                         row.extend(
                                             std::iter::repeat("n/a".to_string())
                                                 .take(N_EXT_AFTER_EXEC),
+                                        );
+                                        row.extend(
+                                            std::iter::repeat("n/a".to_string()).take(N_BIND),
                                         );
                                         row.push(status.into());
                                         write_row(&csv, &row);
@@ -854,11 +928,12 @@ fn main() {
                                             std::iter::repeat("n/a".to_string())
                                                 .take(N_EXT_AFTER_EXEC),
                                         );
+                                        row.extend(bind_cols(c.query_bind_ms, c.n_queries));
                                         row.push("ok".into());
                                         write_row(&csv, &row);
                                         let qstr = if c.n_queries > 0 {
                                             format!(
-                                                " q={} qprove={:.2}s qverify={:.3}s qproof={:.1}KB qctx={} | /query: {:.1}ms prove, {:.1}KB, {:.1} ctx{}",
+                                                " q={} qprove={:.2}s qverify={:.3}s qproof={:.1}KB qctx={} | /query: {:.1}ms prove, {:.1}KB, {:.1} ctx, bind {}{}",
                                                 c.n_queries, c.query_prove_ms / 1000.0,
                                                 c.query_verify_ms / 1000.0,
                                                 c.query_proof_bytes as f64 / 1024.0,
@@ -866,6 +941,7 @@ fn main() {
                                                 q_avg(c.query_prove_ms, c.n_queries),
                                                 q_avg(c.query_proof_bytes as f64, c.n_queries) / 1024.0,
                                                 q_avg(c.query_ctx_verifies as f64, c.n_queries),
+                                                bind_avg_str(c.query_bind_ms, c.n_queries),
                                                 if split_leaves > 0 {
                                                     format!(" (split={split_leaves} pad={pad_records})")
                                                 } else {
@@ -893,6 +969,9 @@ fn main() {
                                         row.extend(
                                             std::iter::repeat("n/a".to_string())
                                                 .take(N_EXT_AFTER_EXEC),
+                                        );
+                                        row.extend(
+                                            std::iter::repeat("n/a".to_string()).take(N_BIND),
                                         );
                                         row.push("too_large".into());
                                         write_row(&csv, &row);

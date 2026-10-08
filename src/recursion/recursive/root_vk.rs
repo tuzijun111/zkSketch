@@ -283,16 +283,19 @@ pub fn warn_self_pinned_legacy(context: &str) {
 /// A proof's VK as the commitment OBJECT (what a parent merge bakes in).
 pub type VkCommitment<SC> = p3_batch_stark::Commitment<SC>;
 
-type MergeProver<SC> = Box<dyn Fn(&BatchStarkProof<SC>, &BatchStarkProof<SC>) -> BatchStarkProof<SC>>;
+type MergeProver<SC> =
+    Box<dyn Fn(&BatchStarkProof<SC>, &BatchStarkProof<SC>) -> BatchStarkProof<SC> + Send + Sync>;
 type MergeVkWith<SC> = Box<
     dyn Fn(
         &BatchStarkProof<SC>,
         &VkCommitment<SC>,
         &BatchStarkProof<SC>,
         &VkCommitment<SC>,
-    ) -> VkCommitment<SC>,
+    ) -> VkCommitment<SC>
+        + Send
+        + Sync,
 >;
-type CommitValues<SC, C> = Box<dyn Fn(&VkCommitment<SC>) -> Vec<C>>;
+type CommitValues<SC, C> = Box<dyn Fn(&VkCommitment<SC>) -> Vec<C> + Send + Sync>;
 
 /// Derives root VKs of arbitrary [`ForestShape`]s from one no-op dummy leaf.
 ///
