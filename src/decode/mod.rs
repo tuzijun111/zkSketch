@@ -17,13 +17,15 @@
 //! prove, as the E1/E3 runners do).
 //!
 //! Families: [`countmin`] (point-frequency = min of `d` cells). SS/HLL/GK decode
-//! mirror the same harness over their respective relations.
+//! mirror the same harness over their respective relations; [`kmv`] certifies
+//! the bottom-`k` distinct-count estimate.
 
 pub mod bloom;
 pub mod countmin;
 pub mod gk_bandmerge;
 pub mod greenwald_khanna;
 pub mod hyperloglog;
+pub mod kmv;
 pub mod spacesaving;
 
 use std::rc::Rc;
@@ -102,8 +104,8 @@ impl DecodeProof {
 /// answer Challenge (4). The Count-Min, SpaceSaving and both GK decoders use
 /// it, and so does the Bloom membership decoder: its 16-value `(Com(S),
 /// record(key), answer)` is this layout with `query = record(key)`
-/// ([`bloom::bloom_query_input`]). HyperLogLog (no query) exposes `(Com(S),
-/// answer)` (12).
+/// ([`bloom::bloom_query_input`]). HyperLogLog and KMV (no query) expose
+/// `(Com(S), answer)` (12).
 pub const QUERY_STATEMENT_LEN: usize = 16;
 
 /// The `(Com(S), query, answer)` statement a decode proof exposes.
@@ -233,6 +235,20 @@ pub fn verify_decode_proof(
     proof: &BatchStarkProof<ConfigWithFriParams>,
     vk: &DecodeVk,
 ) -> Result<QueryStatement, String> {
+    verify_pinned_decode_stark(proof, vk)?;
+    read_exposed_statement(proof).ok_or_else(|| "decode proof exposes no statement".into())
+}
+
+/// Steps (1) and (2) of [`verify_decode_proof`], shared by every pinned
+/// decode verifier whatever statement layout it then reads (the 16-value
+/// query statement there, the keyless 12-value one in
+/// [`kmv::verify_kmv_decode_proof`]): pin the proof's metadata and
+/// preprocessed commitment to the trusted `vk`, then verify the STARK with a
+/// verifier configured from the fixed decode table set.
+pub(crate) fn verify_pinned_decode_stark(
+    proof: &BatchStarkProof<ConfigWithFriParams>,
+    vk: &DecodeVk,
+) -> Result<(), String> {
     if let Some(shape) = &vk.shape {
         if &bound_proof_shape(proof) != shape {
             return Err("decode proof metadata differs from the trusted decoder VK".into());
@@ -243,8 +259,7 @@ pub fn verify_decode_proof(
     }
     decode_verifier()
         .verify_all_tables(proof)
-        .map_err(|e| format!("decode proof STARK rejected: {e:?}"))?;
-    read_exposed_statement(proof).ok_or_else(|| "decode proof exposes no statement".into())
+        .map_err(|e| format!("decode proof STARK rejected: {e:?}"))
 }
 
 /// Deep copy of a proof (postcard round trip; `BatchStarkProof` is not

@@ -38,6 +38,7 @@ pub mod hll_merkle;
 pub mod hll_omc;
 pub mod hll_omc_gl;
 pub mod hyperloglog;
+pub mod kmv;
 pub mod spacesaving;
 pub mod spacesaving_naive;
 pub mod ss_final;

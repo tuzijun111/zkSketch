@@ -194,3 +194,19 @@ pub fn bloom_omc_noop_leaf_expose(
         .output
         .0
 }
+
+/// KMV / bottom-`k` leaf with an explicit statement ([`Expose`]) and
+/// binding: the empty state and an all-dummy batch (dummies never change the
+/// state, so the leaf exposes `initial == final`). An Interval no-op leaf is
+/// proved at batch index 1.
+pub fn kmv_noop_leaf_expose(
+    params: crate::sketch::kmv::KmvParams,
+    expose: Expose,
+    binding: crate::sketch::bind::Binding,
+) -> Proof {
+    use crate::sketch::kmv::{KmvState, build_kmv_leaf_expose};
+    build_kmv_leaf_expose(params, expose, binding)
+        .prove_records_at(1, KmvState::empty(params.k), vec![None; params.batch])
+        .output
+        .0
+}
