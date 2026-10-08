@@ -85,8 +85,11 @@ use p3_recursion::RecursionOutput;
 use p3_uni_stark::StarkGenericConfig;
 
 use crate::commitment::CountMinCommit;
-use crate::commitment::countmin::commit_countmin;
-use crate::commitment::countmin_batch::{commit_batch, commit_batch_limbs};
+use crate::commitment::countmin::commit_countmin_with;
+use crate::commitment::countmin_batch::{
+    commit_batch, commit_batch_limbs, commit_batch_limbs_with, commit_batch_with,
+};
+use crate::commitment::hiding::{self, CommitFamily, CommitKind, CommitMode, Openings, SaltBb};
 use crate::config::{Challenge, LOG_BLOWUP, Val};
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::countmin_leaf::{
@@ -311,6 +314,7 @@ pub struct CmOmcLeafCircuit {
     params: CmOmcParams,
     binding: Binding,
     expose: Expose,
+    mode: CommitMode,
     circuit: p3_circuit::Circuit<Challenge>,
     prover: BatchStarkProver<ConfigWithFriParams>,
     circuit_prover_data: Rc<CircuitProverData<ConfigWithFriParams>>,
@@ -375,11 +379,30 @@ pub fn build_countmin_omc_leaf_with(
 /// `(init, final, (t, t, 0, 0), Poseidon2(TAG_LEAF, t, Com(B_t)))`, where
 /// `Com(B_t)` is the in-circuit batch digest (see
 /// [`crate::recursion::recursive::statement`]); prove with
-/// [`CmOmcLeafCircuit::prove_epoch_at`].
+/// [`CmOmcLeafCircuit::prove_epoch_at`]. Plain commitments
+/// ([`build_countmin_omc_leaf_commit`] with [`CommitMode::Plain`]).
 pub fn build_countmin_omc_leaf_expose(
     params: CmOmcParams,
     expose: Expose,
     binding: Binding,
+) -> CmOmcLeafCircuit {
+    build_countmin_omc_leaf_commit(params, expose, binding, CommitMode::Plain)
+}
+
+/// [`build_countmin_omc_leaf_expose`] with an explicit [`CommitMode`]
+/// (revision B2, [`crate::commitment::hiding`]). `Plain` is the pre-B2
+/// circuit byte for byte (same VK). `Hiding` adds 9 private inputs, the
+/// salts of `Com(S_{t-1})`, `Com(S_t)` and `Com(B_t)` (init, final, batch;
+/// three Challenges each), allocated as the FIRST private inputs, and
+/// hashes each commitment as `[tag, salt…, inputs…]`, i.e.
+/// [`commit_countmin_with`] / [`countmin_omc_batch_commit_salted`]. The salts
+/// are witnesses, so the VK does not depend on them; prove with
+/// [`CmOmcLeafCircuit::prove_epoch_commit`].
+pub fn build_countmin_omc_leaf_commit(
+    params: CmOmcParams,
+    expose: Expose,
+    binding: Binding,
+    mode: CommitMode,
 ) -> CmOmcLeafCircuit {
     let expose_boundary = expose == Expose::Boundary;
     params.validate();
@@ -468,6 +491,10 @@ pub fn build_countmin_omc_leaf_expose(
     };
     let split_c = bound.then(|| bind::SplitConsts::new::<Val, Challenge>(&mut b, w_log2, one, zero));
 
+    // B2: the salts of (init, final, batch) are the FIRST 9 private inputs
+    // under `Hiding` ([`Openings::private_inputs`] order); `Plain` allocates
+    // nothing, so its circuit is byte-identical.
+    let salts = hiding::alloc_leaf_salts(&mut b, mode);
     let initial_packed: Vec<ExprId> = (0..cell_packing)
         .map(|_| b.alloc_private_input("init_cell_packed"))
         .collect();
@@ -511,12 +538,33 @@ pub fn build_countmin_omc_leaf_expose(
         b.tag(f0, "cm_final_packed_0").expect("tag");
     }
 
-    // Stage A — bind both states + batch to commitments.
-    let digest_init = bind::hash_slice(&mut b, &cfg, &initial_packed, zero, binding);
+    // Stage A — bind both states + batch to commitments (salted under
+    // `Hiding`: `[tag, salt…, inputs…]`; exactly `bind::hash_slice(inputs)`
+    // under `Plain`).
+    let fam = CommitFamily::CountMin;
+    let digest_init = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::State,
+        fam,
+        salts.as_ref().map(|s| &s.init),
+        &initial_packed,
+        zero,
+        binding,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(digest_init[i], init_commit_pis[i]);
     }
-    let digest_final = bind::hash_slice(&mut b, &cfg, &final_packed, zero, binding);
+    let digest_final = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::State,
+        fam,
+        salts.as_ref().map(|s| &s.final_),
+        &final_packed,
+        zero,
+        binding,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(digest_final[i], final_commit_pis[i]);
     }
@@ -542,7 +590,16 @@ pub fn build_countmin_omc_leaf_expose(
     if let Some(&b0) = batch_input.first() {
         b.tag(b0, "cm_batch_packed_0").expect("tag");
     }
-    let digest_batch = bind::hash_slice(&mut b, &cfg, &batch_input, zero, binding);
+    let digest_batch = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::Batch,
+        fam,
+        salts.as_ref().map(|s| &s.batch),
+        &batch_input,
+        zero,
+        binding,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(digest_batch[i], batch_commit_pis[i]);
     }
@@ -842,6 +899,15 @@ pub fn build_countmin_omc_leaf_expose(
             ConstraintProfile::Standard,
         )
         .expect("get_airs_and_degrees_with_prep (omc)");
+    // E-0 table probe (read-only; a no-op unless armed).
+    crate::experiments::table_probe::record_leaf(
+        "countmin_omc",
+        &table_packing,
+        &airs_degrees,
+        &non_primitive_columns,
+        &primitive_columns,
+    );
+    crate::experiments::table_probe::maybe_stop();
     let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
     let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
@@ -865,6 +931,7 @@ pub fn build_countmin_omc_leaf_expose(
         params,
         binding,
         expose,
+        mode,
         circuit,
         prover,
         circuit_prover_data: Rc::new(circuit_prover_data),
@@ -904,6 +971,10 @@ impl CmOmcLeafCircuit {
     pub fn binding(&self) -> Binding {
         self.binding
     }
+    /// The commitment mode the circuit was built with.
+    pub fn commit_mode(&self) -> CommitMode {
+        self.mode
+    }
     /// `Σ 2^degree` over all tables.
     pub fn trace_rows(&self) -> u64 {
         self.trace_rows
@@ -915,7 +986,14 @@ impl CmOmcLeafCircuit {
 
     /// Native side of one epoch: route + sort + multiset matching, the two
     /// permutation hints swapped into the graph, and the runner inputs.
-    fn epoch(&mut self, t: u64, initial_state: &CountMinState, batch: &[CountMinUpdate]) -> CmOmcEpoch {
+    /// `openings` are the commitment salts (ignored under `Plain`).
+    fn epoch(
+        &mut self,
+        t: u64,
+        initial_state: &CountMinState,
+        batch: &[CountMinUpdate],
+        openings: &Openings,
+    ) -> CmOmcEpoch {
         let params = self.params;
         assert_eq!(initial_state.params.d, params.d);
         assert_eq!(initial_state.params.w, params.w);
@@ -1033,9 +1111,10 @@ impl CmOmcLeafCircuit {
         if TAMPER_FINAL_CELL.with(|f| f.get()) {
             committed_final.counters[0][0] = committed_final.counters[0][0].wrapping_add(1);
         }
-        let initial_commit = commit_countmin(initial_state);
-        let final_commit = commit_countmin(&committed_final);
-        let batch_commit = if binding.is_bound() { commit_batch_limbs(batch) } else { commit_batch(batch) };
+        let mode = self.mode;
+        let initial_commit = commit_countmin_with(initial_state, mode, &openings.init);
+        let final_commit = commit_countmin_with(&committed_final, mode, &openings.final_);
+        let batch_commit = countmin_omc_batch_commit_salted(batch, binding, mode, &openings.batch);
 
         // Native multiset elements. None = zero dummy (inactive W/R row); a real
         // element is keyed by (addr, value) and carries the coord-2 tag in-circuit.
@@ -1084,12 +1163,16 @@ impl CmOmcLeafCircuit {
         let mut public_inputs: Vec<Challenge> = Vec::new();
         public_inputs.extend_from_slice(&pack_commit_to_challenge(&initial_commit));
         public_inputs.extend_from_slice(&pack_commit_to_challenge(&final_commit));
-        public_inputs.extend_from_slice(&pack_commit_to_challenge(&CountMinCommit(batch_commit.0)));
+        public_inputs.extend_from_slice(&pack_commit_to_challenge(&CountMinCommit(batch_commit)));
         if self.expose.is_interval() {
             public_inputs.push(Challenge::from_u64(t));
         }
 
         let mut private_inputs: Vec<Challenge> = Vec::new();
+        if mode.is_hiding() {
+            // The salts come first (see `build_countmin_omc_leaf_commit`).
+            private_inputs.extend(openings.private_inputs());
+        }
         private_inputs.extend_from_slice(&pack_cells_to_challenge(initial_state));
         private_inputs.extend_from_slice(&pack_cells_to_challenge(&committed_final));
         if binding.is_bound() {
@@ -1164,7 +1247,7 @@ impl CmOmcLeafCircuit {
             private_inputs,
             initial_commit,
             final_commit,
-            batch_commit: CountMinCommit(batch_commit.0),
+            batch_commit: CountMinCommit(batch_commit),
         }
     }
 
@@ -1179,13 +1262,25 @@ impl CmOmcLeafCircuit {
     }
 
     /// [`Self::run_epoch`] for batch index `t` (Interval statement only).
+    #[allow(dead_code)] // test-only since B2: `prove_epoch_commit` runs `run_epoch_commit`
     fn run_epoch_at(
         &mut self,
         t: u64,
         initial_state: &CountMinState,
         batch: &[CountMinUpdate],
     ) -> (p3_circuit::tables::Traces<Challenge>, CmOmcEpoch) {
-        let ep = self.epoch(t, initial_state, batch);
+        self.run_epoch_commit(t, initial_state, batch, &Openings::plain())
+    }
+
+    /// [`Self::run_epoch_at`] with explicit commitment openings.
+    fn run_epoch_commit(
+        &mut self,
+        t: u64,
+        initial_state: &CountMinState,
+        batch: &[CountMinUpdate],
+        openings: &Openings,
+    ) -> (p3_circuit::tables::Traces<Challenge>, CmOmcEpoch) {
+        let ep = self.epoch(t, initial_state, batch, openings);
         let traces = {
             let mut runner = self.circuit.runner();
             runner.set_public_inputs(&ep.public_inputs).expect("set pubs");
@@ -1228,16 +1323,114 @@ impl CmOmcLeafCircuit {
     }
 
     /// Prove the epoch of batch `t` (1-based) on the prebuilt circuit. `t` is
-    /// part of the Interval statement (ignored by the other layouts).
+    /// part of the Interval statement (ignored by the other layouts). `Plain`
+    /// circuits only: on a `Hiding` circuit this would open every commitment
+    /// with the public zero salt, so it panics; use
+    /// [`Self::prove_epoch_commit`] (or, for the no-op leaf,
+    /// [`Self::prove_epoch_public_zero`]).
     pub fn prove_epoch_at(
         &mut self,
         t: u64,
         initial_state: CountMinState,
         batch: Vec<CountMinUpdate>,
     ) -> CountMinOmcProof {
+        assert!(
+            !self.mode.is_hiding(),
+            "prove_epoch_at on a Hiding leaf would publish Com(S; 0): use prove_epoch_commit with \
+             Openings::for_leaf(..)"
+        );
+        self.prove_epoch_opened(t, initial_state, batch, &Openings::plain())
+    }
+
+    /// [`Self::prove_epoch_at`] with the commitment openings of leaf `t`
+    /// (`Openings::for_leaf(seed, CommitFamily::CountMin, t)` for an honest
+    /// prover; ignored by a `Plain` circuit). The proof's `initial_commit`,
+    /// `final_commit` and `batch_commit` are then `Com(S_{t-1}; ρ^S_{t-1})`,
+    /// `Com(S_t; ρ^S_t)` and `Com(B_t; ρ^B_t)`. A `Hiding` circuit panics when
+    /// `openings.final_` or `openings.batch` is the public zero salt (never an
+    /// honest PRF output): a forgotten opening would otherwise give a
+    /// consistent, deterministic chain that nothing downstream detects. The
+    /// init salt may be zero only at `t = 1` on the empty genesis state (leaf 1
+    /// of the genesis history opens the public `Com(S_0; 0)`); a zero init on
+    /// any other input panics
+    /// ([`assert_zero_init_opens_public_state`](crate::commitment::hiding::assert_zero_init_opens_public_state)).
+    pub fn prove_epoch_commit(
+        &mut self,
+        t: u64,
+        initial_state: CountMinState,
+        batch: Vec<CountMinUpdate>,
+        openings: &Openings,
+    ) -> CountMinOmcProof {
+        if self.mode.is_hiding() {
+            assert!(
+                !openings.final_.is_zero() && !openings.batch.is_zero(),
+                "Hiding leaf t = {t}: the final and batch commitments need secret randomizers \
+                 (Openings::for_leaf), not the public zero salt"
+            );
+            crate::commitment::hiding::assert_zero_init_opens_public_state(t, openings.init.is_zero(), || {
+                initial_state
+                    == CountMinState {
+                        counters: vec![vec![0u32; self.params.w]; self.params.d],
+                        params: CountMinParams { d: self.params.d, w: self.params.w },
+                    }
+            });
+        }
+        self.prove_epoch_opened(t, initial_state, batch, openings)
+    }
+
+    /// The no-op VK-derivation leaf's epoch: all three commitments opened
+    /// with [`Openings::public_zero`], so a batch that changes nothing
+    /// exposes `init == final` in either mode. The only path that proves a
+    /// `Hiding` leaf with zero final/batch salts, so it accepts exactly the
+    /// VK-derivation leaf's public input
+    /// ([`cm_omc_noop_leaf_commit`](crate::recursion::recursive::noop_leaf::cm_omc_noop_leaf_commit),
+    /// and the harness's `PAD_KEY` no-op batch): batch index `t = 1`, the
+    /// EMPTY initial state (whose `Com(S_0; 0)` the verifier recomputes
+    /// itself) and a batch of `{ key: 0, value: 0 }` updates. It publishes
+    /// only `Com(S_0; 0)` and the zero-salt commitment of that public batch.
+    /// "Every value is 0" alone would not do: a value-0 batch leaves ANY
+    /// state unchanged, so a real state would publish the deterministic,
+    /// guess-checkable `Com(S_t; 0)` as both init and final. The checks are
+    /// on the inputs only (the circuit and its VK are unchanged) and apply
+    /// in both modes.
+    pub fn prove_epoch_public_zero(
+        &mut self,
+        t: u64,
+        initial_state: CountMinState,
+        batch: Vec<CountMinUpdate>,
+    ) -> CountMinOmcProof {
+        assert!(
+            batch.iter().all(|u| u.value == 0),
+            "prove_epoch_public_zero is for the no-op leaf: every update must have value 0"
+        );
+        assert_eq!(t, 1, "prove_epoch_public_zero is for the no-op leaf: it is proved at batch index 1");
+        assert!(
+            batch.iter().all(|u| *u == CountMinUpdate { key: 0, value: 0 }),
+            "prove_epoch_public_zero is for the no-op leaf: every update must be the public no-op \
+             {{ key: 0, value: 0 }}"
+        );
+        let (d, w) = (self.params.d, self.params.w);
+        let empty = CountMinState { counters: vec![vec![0u32; w]; d], params: CountMinParams { d, w } };
+        assert!(
+            initial_state == empty,
+            "prove_epoch_public_zero is for the no-op leaf: the initial state must be the empty genesis \
+             state (a real state would publish the guess-checkable Com(S; 0))"
+        );
+        self.prove_epoch_opened(t, initial_state, batch, &Openings::public_zero())
+    }
+
+    /// Shared body of the three `prove_epoch_*` entry points (no opening
+    /// checks).
+    fn prove_epoch_opened(
+        &mut self,
+        t: u64,
+        initial_state: CountMinState,
+        batch: Vec<CountMinUpdate>,
+        openings: &Openings,
+    ) -> CountMinOmcProof {
         let params = self.params;
         let __t_w = std::time::Instant::now();
-        let (traces, ep) = self.run_epoch_at(t, &initial_state, &batch);
+        let (traces, ep) = self.run_epoch_commit(t, &initial_state, &batch, openings);
         let __witness = __t_w.elapsed();
 
         let __t_p = std::time::Instant::now();
@@ -1321,6 +1514,39 @@ pub fn countmin_omc_batch_commit_with(batch: &[CountMinUpdate], binding: Binding
     }
 }
 
+/// [`countmin_omc_batch_commit_with`] under a [`CommitMode`]: `Plain` is
+/// exactly [`countmin_omc_batch_commit_with`] (the salt is ignored); `Hiding`
+/// is `Com(B_t; ρ)` over the same binding-dependent encoding
+/// ([`commit_batch_limbs_with`] / [`commit_batch_with`]), the value a
+/// `Hiding` leaf opened with `batch = ρ` binds.
+pub fn countmin_omc_batch_commit_salted(
+    batch: &[CountMinUpdate],
+    binding: Binding,
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> [Val; 8] {
+    if binding.is_bound() {
+        commit_batch_limbs_with(batch, mode, salt).0
+    } else {
+        commit_batch_with(batch, mode, salt).0
+    }
+}
+
+/// [`prove_countmin_omc_interval`] with an explicit [`CommitMode`] and the
+/// openings of leaf `t` (process default [`Binding`]). Under `Hiding`,
+/// zero final/batch salts panic ([`CmOmcLeafCircuit::prove_epoch_commit`]).
+pub fn prove_countmin_omc_interval_commit(
+    params: CmOmcParams,
+    t: u64,
+    initial_state: CountMinState,
+    batch: Vec<CountMinUpdate>,
+    mode: CommitMode,
+    openings: &Openings,
+) -> CountMinOmcProof {
+    build_countmin_omc_leaf_commit(params, Expose::Interval, bind::default_binding(), mode)
+        .prove_epoch_commit(t, initial_state, batch, openings)
+}
+
 /// Native single-batch advance: exactly the update the omc leaf proves
 /// under the process default [`Binding`], so the resulting state feeds the
 /// next leaf's `initial_state` and the boundaries chain.
@@ -1340,6 +1566,7 @@ pub fn countmin_omc_advance_with(state: &mut CountMinState, batch: &[CountMinUpd
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commitment::countmin::commit_countmin;
     use crate::config::make_perm;
     use crate::sketch::countmin_final::{apply_update_prf, hash_cell_prf, hash_cell_prf_with};
 
@@ -2222,6 +2449,520 @@ mod tests {
             eprintln!("{what} forged: {out:?}");
             out.assert_verifier_rejects(&what);
         }
+    }
+
+    // ── B2: hiding commitments (`crate::commitment::hiding`) ─────────────────
+
+    use crate::commitment::hiding::{SaltSeed, rho_batch_bb, rho_state_bb};
+    use crate::recursion::recursive::expose_forest::{
+        batch_log, check_leaves_against_log, check_root_against_log, prove_hiding_merge,
+        read_exposed_statement, root_vk_deriver, verify_bound_stark_proof_against_log,
+        vk_pin_values,
+    };
+    use crate::recursion::recursive::noop_leaf::cm_omc_noop_leaf_commit;
+    use crate::recursion::recursive::root_vk::ForestShape;
+    use crate::recursion::recursive::statement::{hash_bb, leaf_digest};
+
+    const HP: CmOmcParams = CmOmcParams { d: 2, w: 4, batch: 2 };
+    const CM: CommitFamily = CommitFamily::CountMin;
+
+    fn hiding_leaf(binding: Binding) -> CmOmcLeafCircuit {
+        build_countmin_omc_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding)
+    }
+
+    fn hp_prior() -> CountMinState {
+        let mut prior = empty(HP.d, HP.w);
+        apply_update_prf(&mut prior, &CountMinUpdate { key: 3, value: 4 });
+        prior
+    }
+
+    fn hp_batches() -> Vec<Vec<CountMinUpdate>> {
+        vec![
+            vec![CountMinUpdate { key: 7, value: 3 }, CountMinUpdate { key: 11, value: 5 }],
+            vec![CountMinUpdate { key: 13, value: 2 }, CountMinUpdate { key: 7, value: 4 }],
+        ]
+    }
+
+    /// Flat basis coefficients of VK pin values.
+    fn vk_flat(vk: &[Challenge]) -> Vec<u64> {
+        vk.iter()
+            .flat_map(|c| {
+                <Challenge as BasedVectorSpace<Val>>::as_basis_coefficients_slice(c)
+                    .iter()
+                    .map(|x| <Val as p3_field::PrimeField64>::as_canonical_u64(x))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// A VK recorded at main@7089f70 (pre-B2): 8 base values, each the first
+    /// coefficient of one pin Challenge.
+    fn vk_literal(v: [u64; 8]) -> Vec<u64> {
+        v.iter().flat_map(|&x| [x, 0, 0, 0]).collect()
+    }
+
+    /// (1) A hiding leaf's commitments (the proof's `initial/final/batch`
+    /// fields and the exposed Interval statement) equal the NATIVE hiding
+    /// commitments under the leaf-`t` openings, under every binding.
+    #[test]
+    fn hiding_leaf_exposes_native_hiding_commitments() {
+        let seed = SaltSeed::for_tests(21);
+        let t = 3u64;
+        let ups = hp_batches()[0].clone();
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let mut leaf = hiding_leaf(binding);
+            assert_eq!(leaf.commit_mode(), CommitMode::Hiding);
+            let r = leaf.prove_epoch_commit(t, hp_prior(), ups.clone(), &Openings::for_leaf(&seed, CM, t));
+            let expect = advanced(&hp_prior(), &ups, binding);
+            let init = commit_countmin_with(&hp_prior(), CommitMode::Hiding, &rho_state_bb(&seed, CM, t - 1));
+            let fin = commit_countmin_with(&expect, CommitMode::Hiding, &rho_state_bb(&seed, CM, t));
+            let bc = countmin_omc_batch_commit_salted(&ups, binding, CommitMode::Hiding, &rho_batch_bb(&seed, CM, t));
+            assert_eq!(r.initial_commit, init, "{binding:?}");
+            assert_eq!(r.final_commit, fin, "{binding:?}");
+            assert_eq!(r.batch_commit.0, bc, "{binding:?}");
+            assert_ne!(init, commit_countmin(&hp_prior()), "{binding:?}: hiding != plain");
+            assert_ne!(fin, commit_countmin(&expect), "{binding:?}: hiding != plain");
+            assert_ne!(bc, countmin_omc_batch_commit_with(&ups, binding), "{binding:?}: hiding != plain");
+            let st = read_exposed_statement(&r.output.0);
+            assert_eq!(st.init, init.0.to_vec(), "{binding:?}");
+            assert_eq!(st.final_, fin.0.to_vec(), "{binding:?}");
+            let iv = st.interval.expect("interval layout");
+            assert_eq!((iv.lo, iv.hi), (Val::from_u64(t), Val::from_u64(t)));
+            assert_eq!(iv.digest, leaf_digest(&hash_bb, 4, t, &bc), "{binding:?}: H(TAG_LEAF, t, Com(B_t; ρ))");
+        }
+        // The one-call API (process default binding).
+        let dflt = bind::default_binding();
+        let o = Openings::for_leaf(&seed, CM, t);
+        let r = prove_countmin_omc_interval_commit(HP, t, hp_prior(), ups.clone(), CommitMode::Hiding, &o);
+        let fin = commit_countmin_with(&advanced(&hp_prior(), &ups, dflt), CommitMode::Hiding, &o.final_);
+        assert_eq!(r.final_commit, fin);
+        // Boundary layout: the exposed pair is the hiding pair too (leaf 1 of
+        // the genesis history, from the empty S_0: its zero init salt opens
+        // only that public state).
+        let s0 = empty(HP.d, HP.w);
+        let mut bleaf = build_countmin_omc_leaf_commit(HP, Expose::Boundary, Binding::Semantic, CommitMode::Hiding);
+        let r = bleaf.prove_epoch_commit(1, s0.clone(), ups.clone(), &Openings::for_leaf(&seed, CM, 1));
+        let (i, f) = exposed(&r.output.0);
+        assert_eq!(i, commit_countmin_with(&s0, CommitMode::Hiding, &SaltBb::ZERO).0);
+        assert_eq!(f, r.final_commit.0);
+    }
+
+    /// (2) The hiding leaf's VK does not depend on the salts (two different
+    /// openings, and the zero-salt no-op leaf, give one VK), differs from the
+    /// Plain VK, and the Plain circuit is the pre-B2 circuit: its VK equals
+    /// the value recorded at main@7089f70, through both the old builder and
+    /// `build_countmin_omc_leaf_commit(.., Plain)`.
+    #[test]
+    fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+        let recorded = [
+            (Expose::Interval, Binding::Semantic, [311146798, 1251184148, 67745973, 1950185229, 813267801, 1800539963, 440903848, 825798510]),
+            (Expose::Interval, Binding::Bound, [609245164, 1860305887, 1884344271, 1329743628, 615658389, 735468151, 734990312, 1891164946]),
+            (Expose::Boundary, Binding::Legacy, [1736090810, 1831588262, 662316068, 1368614943, 306038768, 912717005, 886156929, 1189438024]),
+            (Expose::None, Binding::Semantic, [1834649507, 1407219679, 827127958, 416953406, 1951498694, 439518398, 1447935561, 760283013]),
+        ];
+        for (expose, binding, vk) in recorded {
+            let old = build_countmin_omc_leaf_expose(HP, expose, binding).vk_pin_values();
+            let plain = build_countmin_omc_leaf_commit(HP, expose, binding, CommitMode::Plain).vk_pin_values();
+            assert_eq!(vk_flat(&old), vk_literal(vk), "{expose:?}/{binding:?}: Plain VK drifted from main@7089f70");
+            assert_eq!(plain, old, "{expose:?}/{binding:?}");
+            let hid = build_countmin_omc_leaf_commit(HP, expose, binding, CommitMode::Hiding).vk_pin_values();
+            assert_ne!(hid, old, "{expose:?}/{binding:?}: the hiding circuit differs");
+        }
+        let mut leaf = hiding_leaf(Binding::Semantic);
+        let vk = leaf.vk_pin_values();
+        let ups = hp_batches()[0].clone();
+        // Leaf 1 starts from the empty S_0 (its zero init salt opens only that
+        // public state); leaf 5 from a real prior.
+        let a = leaf.prove_epoch_commit(1, empty(HP.d, HP.w), ups.clone(), &Openings::for_leaf(&SaltSeed::for_tests(1), CM, 1));
+        let b = leaf.prove_epoch_commit(5, hp_prior(), ups, &Openings::for_leaf(&SaltSeed::for_tests(2), CM, 5));
+        assert_ne!(a.final_commit, b.final_commit);
+        assert_eq!(vk_pin_values(&a.output.0), vk);
+        assert_eq!(vk_pin_values(&b.output.0), vk);
+        let noop = cm_omc_noop_leaf_commit(HP, Expose::Interval, Binding::Semantic, CommitMode::Hiding);
+        assert_eq!(vk_pin_values(&noop), vk, "the zero-salt no-op leaf has the real leaves' VK");
+    }
+
+    /// (3) Equal states at two versions get different hiding commitments,
+    /// both different from the plain one; at the proof level, two no-op
+    /// (value-0) leaves at `t = 1, 2` from the empty genesis state `S_0`
+    /// (leaf 1's zero init salt opens only that public state) expose
+    /// `Com(S_0; 0) → Com(S_0; ρ_1) → Com(S_0; ρ_2)`: three distinct values
+    /// for one state, chained.
+    #[test]
+    fn equal_states_get_unlinkable_hiding_commitments() {
+        let seed = SaltSeed::for_tests(33);
+        let s = hp_prior();
+        let (r1, r2) = (rho_state_bb(&seed, CM, 1), rho_state_bb(&seed, CM, 2));
+        let (c1, c2) = (
+            commit_countmin_with(&s, CommitMode::Hiding, &r1),
+            commit_countmin_with(&s, CommitMode::Hiding, &r2),
+        );
+        assert_ne!(c1, c2);
+        assert_ne!(c1, commit_countmin(&s));
+        assert_ne!(c2, commit_countmin(&s));
+        assert_eq!(commit_countmin_with(&s, CommitMode::Plain, &r1), commit_countmin(&s), "Plain ignores the salt");
+
+        let s = empty(HP.d, HP.w);
+        let (c1, c2) = (
+            commit_countmin_with(&s, CommitMode::Hiding, &r1),
+            commit_countmin_with(&s, CommitMode::Hiding, &r2),
+        );
+        let zero_batch = vec![CountMinUpdate { key: 1, value: 0 }, CountMinUpdate { key: 2, value: 0 }];
+        let mut leaf = hiding_leaf(Binding::Semantic);
+        let l1 = leaf.prove_epoch_commit(1, s.clone(), zero_batch.clone(), &Openings::for_leaf(&seed, CM, 1));
+        let l2 = leaf.prove_epoch_commit(2, s.clone(), zero_batch, &Openings::for_leaf(&seed, CM, 2));
+        let (s1, s2) = (read_exposed_statement(&l1.output.0), read_exposed_statement(&l2.output.0));
+        assert_eq!(s1.init, commit_countmin_with(&s, CommitMode::Hiding, &SaltBb::ZERO).0.to_vec());
+        assert_eq!(s1.final_, c1.0.to_vec());
+        assert_eq!(s2.init, s1.final_, "leaf 2 opens Com(S_1) with the same ρ_1");
+        assert_eq!(s2.final_, c2.0.to_vec());
+        assert_ne!(s1.init, s1.final_, "the state did not move, the commitment did");
+        assert_ne!(s2.init, s2.final_);
+    }
+
+    /// (4) Binding in Hiding mode, through the auditor paths. Control: two
+    /// honest leaves (seed A) pass the per-batch log check, merge, and the
+    /// root verifies against the log with the root VK derived from the
+    /// zero-salt no-op leaf. A log recomputed with another seed rejects both;
+    /// a leaf opened with a wrong batch or final randomizer mismatches the
+    /// log; and a leaf 2 whose init uses a different `ρ_1` than leaf 1's
+    /// final cannot be merged (the in-circuit `left.final == right.init`).
+    #[test]
+    fn wrong_rho_rejected_by_log_and_inconsistent_rho_breaks_merge() {
+        let binding = Binding::Semantic;
+        let (a, b) = (SaltSeed::for_tests(41), SaltSeed::for_tests(42));
+        let bs = hp_batches();
+        let s0 = empty(HP.d, HP.w);
+        let s1 = advanced(&s0, &bs[0], binding);
+        let s2 = advanced(&s1, &bs[1], binding);
+        let log_for = |seed: &SaltSeed| {
+            let bc: Vec<[Val; 8]> = (0..2)
+                .map(|k| {
+                    countmin_omc_batch_commit_salted(&bs[k], binding, CommitMode::Hiding, &rho_batch_bb(seed, CM, k as u64 + 1))
+                })
+                .collect();
+            batch_log(
+                &commit_countmin_with(&s0, CommitMode::Hiding, &SaltBb::ZERO).0,
+                &commit_countmin_with(&s2, CommitMode::Hiding, &rho_state_bb(seed, CM, 2)).0,
+                &bc,
+            )
+        };
+        let (log_a, log_b) = (log_for(&a), log_for(&b));
+        let mut leaf = hiding_leaf(binding);
+        let l1 = leaf.prove_epoch_commit(1, s0.clone(), bs[0].clone(), &Openings::for_leaf(&a, CM, 1)).output;
+        let l2 = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &Openings::for_leaf(&a, CM, 2)).output;
+        assert_eq!(check_leaves_against_log(&[&l1.0, &l2.0], &log_a, Expose::Interval), Ok(()));
+        assert!(check_leaves_against_log(&[&l1.0, &l2.0], &log_b, Expose::Interval).is_err(), "another seed's log");
+
+        // Leaf 2 opened with a wrong batch randomizer: its digest H(TAG_LEAF, 2,
+        // Com(B_2; ρ')) is not the log's.
+        let bad_batch = Openings { batch: rho_batch_bb(&b, CM, 2), ..Openings::for_leaf(&a, CM, 2) };
+        let l2b = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_batch).output;
+        let e = check_leaves_against_log(&[&l1.0, &l2b.0], &log_a, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|e| e.contains("digest")), "{e:?}");
+        // … with a wrong final randomizer: Com(S_2; ρ') is not the log's Com(S_T).
+        let bad_final = Openings { final_: rho_state_bb(&b, CM, 2), ..Openings::for_leaf(&a, CM, 2) };
+        let l2f = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_final).output;
+        let e = check_leaves_against_log(&[&l1.0, &l2f.0], &log_a, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|e| e.contains("Com(S_T)")), "{e:?}");
+
+        // Composition: the honest pair merges and verifies against log A.
+        let shape = ForestShape::forest(2);
+        let root = prove_hiding_merge(&l1, &l2);
+        let noop = cm_omc_noop_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding);
+        let vk = root_vk_deriver(noop).root_vk(&shape);
+        verify_bound_stark_proof_against_log(&root.0, &vk, &log_a, &shape);
+        assert!(check_root_against_log(&root.0, &log_b, &shape).is_err());
+
+        // Inconsistent ρ_1 across the boundary: the merge is unprovable.
+        let bad_init = Openings { init: rho_state_bb(&b, CM, 1), ..Openings::for_leaf(&a, CM, 2) };
+        let l2i = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_init).output;
+        assert_ne!(read_exposed_statement(&l2i.0).init, read_exposed_statement(&l1.0).final_);
+        let e = forge::catch_msg(|| prove_hiding_merge(&l1, &l2i)).map(|_| ());
+        println!("B2 inconsistent ρ_1 merge: {e:?}");
+        assert!(
+            e.as_ref().is_err_and(|m| m.contains("WitnessConflict")),
+            "leaf 2's init must use leaf 1's final randomizer: {e:?}"
+        );
+    }
+
+    /// (5) The zero-salt no-op leaf of a Hiding circuit still exposes
+    /// `init == final` (`= Com(S_0; 0)`, the public anchor), so the twin-merge
+    /// root-VK derivation works unchanged.
+    #[test]
+    fn hiding_noop_leaf_has_init_eq_final() {
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let noop = cm_omc_noop_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding);
+            let st = read_exposed_statement(&noop);
+            let anchor = commit_countmin_with(&empty(HP.d, HP.w), CommitMode::Hiding, &SaltBb::ZERO);
+            assert_eq!(st.init, st.final_, "{binding:?}");
+            assert_eq!(st.init, anchor.0.to_vec(), "{binding:?}");
+            assert_ne!(anchor, commit_countmin(&empty(HP.d, HP.w)), "{binding:?}");
+        }
+    }
+
+    /// (8, with `commitment::hiding::tests::salt_private_inputs_have_alu_creators`)
+    /// Build and prove the Hiding leaf at a tiny shape. Under the DEBUG
+    /// profile (`cargo test --lib countmin_omc::tests::hiding_leaf_tiny_debug`)
+    /// the fork debug-asserts, during the build, that each of the 9 salt
+    /// private inputs has an ALU creator.
+    #[test]
+    fn hiding_leaf_tiny_debug() {
+        let p = CmOmcParams { d: 2, w: 4, batch: 1 };
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let mut leaf = build_countmin_omc_leaf_commit(p, Expose::Interval, binding, CommitMode::Hiding);
+            let ups = vec![CountMinUpdate { key: 9, value: 2 }];
+            let seed = SaltSeed::for_tests(8);
+            let r = leaf.prove_epoch_commit(1, empty(2, 4), ups.clone(), &Openings::for_leaf(&seed, CM, 1));
+            let fin = advanced(&empty(2, 4), &ups, binding);
+            assert_eq!(r.final_commit, commit_countmin_with(&fin, CommitMode::Hiding, &rho_state_bb(&seed, CM, 1)));
+        }
+    }
+
+    /// (F3, F5) The Hiding leaf costs exactly +2 Poseidon2 rows and +3 ALU
+    /// rows per commitment over the Plain leaf (3 commitments: +6 and +9)
+    /// under every binding, and none of its 36 salt values is a public value
+    /// of the proof (the scan's positive control: a "salt" equal to an
+    /// exposed commitment value is found).
+    #[test]
+    fn hiding_leaf_row_overhead_and_no_salt_in_public_values() {
+        use crate::commitment::hiding::probe::{leaked_salts, proof_alu_rows, trace_rows};
+        let seed = SaltSeed::for_tests(91);
+        let t = 3u64;
+        let ups = hp_batches()[0].clone();
+        let o = Openings::for_leaf(&seed, CM, t);
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let mut plain = build_countmin_omc_leaf_commit(HP, Expose::Interval, binding, CommitMode::Plain);
+            let mut leaf = hiding_leaf(binding);
+            let (p0, a0) = trace_rows(&plain.run_epoch_at(t, &hp_prior(), &ups).0);
+            let (p1, a1) = trace_rows(&leaf.run_epoch_commit(t, &hp_prior(), &ups, &o).0);
+            println!("B2 leaf rows {binding:?}: Poseidon2 {p0} -> {p1}, ALU {a0} -> {a1}");
+            assert_eq!(p1, p0 + 6, "{binding:?}: Poseidon2 rows");
+            assert_eq!(a1, a0 + 9, "{binding:?}: ALU rows");
+            let hid = leaf.prove_epoch_commit(t, hp_prior(), ups.clone(), &o);
+            assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
+            assert_eq!(leaked_salts(&hid.output.0, &[o.init, o.final_, o.batch]), vec![], "{binding:?}");
+            let mut control = SaltBb::ZERO;
+            control.0[0] = hid.initial_commit.0[0];
+            assert!(!leaked_salts(&hid.output.0, &[control]).is_empty(), "{binding:?}: the scan sees the statement");
+        }
+    }
+
+    /// (F1) A Hiding leaf never falls back to zero salts silently: the old
+    /// `prove_epoch_at` / `prove_epoch` entry points panic on it, and so does
+    /// `prove_epoch_commit` (and the one-call API) handed a zero final or
+    /// batch salt. The explicit no-op path refuses a batch that moves the
+    /// state. Controls: a zero INIT salt is leaf 1's honest opening (from the
+    /// empty genesis state; a zero init on a real state is refused, test
+    /// `hiding_leaf_refuses_zero_init_on_a_real_state`), and a Plain leaf
+    /// still ignores its openings.
+    #[test]
+    fn hiding_leaf_rejects_zero_openings_outside_the_noop_path() {
+        let seed = SaltSeed::for_tests(81);
+        let ups = hp_batches()[0].clone();
+        let mut leaf = hiding_leaf(Binding::Semantic);
+        let msg = forge::catch_msg(|| leaf.prove_epoch_at(2, hp_prior(), ups.clone()).final_commit).unwrap_err();
+        assert!(msg.contains("prove_epoch_at on a Hiding leaf"), "{msg}");
+        assert!(forge::catch(|| leaf.prove_epoch(hp_prior(), ups.clone()).final_commit).is_none());
+        let honest = Openings::for_leaf(&seed, CM, 2);
+        for (what, o) in [
+            ("plain", Openings::plain()),
+            ("public_zero", Openings::public_zero()),
+            ("zero final", Openings { final_: SaltBb::ZERO, ..honest }),
+            ("zero batch", Openings { batch: SaltBb::ZERO, ..honest }),
+        ] {
+            let msg = forge::catch_msg(|| leaf.prove_epoch_commit(2, hp_prior(), ups.clone(), &o).final_commit)
+                .unwrap_err();
+            assert!(msg.contains("public zero salt"), "{what}: {msg}");
+        }
+        let msg = forge::catch_msg(|| {
+            prove_countmin_omc_interval_commit(HP, 2, hp_prior(), ups.clone(), CommitMode::Hiding, &Openings::plain())
+                .final_commit
+        })
+        .unwrap_err();
+        assert!(msg.contains("public zero salt"), "{msg}");
+        let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(1, hp_prior(), ups.clone()).final_commit).unwrap_err();
+        assert!(msg.contains("value 0"), "{msg}");
+
+        let o1 = Openings::for_leaf(&seed, CM, 1);
+        assert!(o1.init.is_zero());
+        let r = leaf.prove_epoch_commit(1, empty(HP.d, HP.w), ups.clone(), &o1);
+        assert_eq!(r.initial_commit, commit_countmin_with(&empty(HP.d, HP.w), CommitMode::Hiding, &SaltBb::ZERO));
+        let mut plain = build_countmin_omc_leaf_commit(HP, Expose::Interval, Binding::Semantic, CommitMode::Plain);
+        let p = plain.prove_epoch_commit(2, hp_prior(), ups, &Openings::plain());
+        assert_eq!(p.initial_commit, commit_countmin(&hp_prior()));
+        assert_eq!(p.final_commit, commit_countmin(&advanced(&hp_prior(), &hp_batches()[0], Binding::Semantic)));
+    }
+
+    /// (F1, init salt) Under `Hiding` a zero INIT salt opens only the public
+    /// genesis `Com(S_0; 0)`: batch index 1 and the empty state. Refused,
+    /// under both non-legacy bindings and Legacy: a forgotten init opening
+    /// on a real prior (`t = 2`), a worker that numbers its leaves locally
+    /// (`for_leaf(.., 1)` at global `t = 5` on a real state), leaf 1's
+    /// openings on a real prior at `t = 1`, and a zero init at `t = 2` even
+    /// on the empty state (its `Com(·; 0)` would reveal `S_1 = S_0`). Each
+    /// would otherwise prove a leaf exposing the guess-checkable
+    /// `Com(S; 0)` of a secret state (the review probe's cases (a), (b)).
+    /// Controls: leaf 1 of the genesis history (empty state, zero init)
+    /// proves and exposes `Com(S_0; 0)`, and a Plain leaf ignores its
+    /// openings on the same inputs.
+    #[test]
+    fn hiding_leaf_refuses_zero_init_on_a_real_state() {
+        let seed = SaltSeed::for_tests(83);
+        let ups = hp_batches()[0].clone();
+        let s0 = empty(HP.d, HP.w);
+        assert_ne!(hp_prior(), s0, "precondition: a real (secret) prior");
+        let forgot = Openings { init: SaltBb::ZERO, ..Openings::for_leaf(&seed, CM, 2) };
+        let local = Openings::for_leaf(&seed, CM, 1);
+        let cases = [
+            ("forgotten init, real prior", 2u64, hp_prior(), forgot),
+            ("local numbering at global t = 5", 5, hp_prior(), local),
+            ("leaf-1 openings on a real prior", 1, hp_prior(), local),
+            ("zero init at t = 2 on the empty state", 2, s0.clone(), forgot),
+        ];
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let mut leaf = hiding_leaf(binding);
+            for (what, t, prior, o) in &cases {
+                let msg = forge::catch_msg(|| leaf.prove_epoch_commit(*t, prior.clone(), ups.clone(), o).final_commit)
+                    .unwrap_err();
+                assert!(msg.contains("zero init salt"), "{binding:?}/{what}: {msg}");
+            }
+            let r = leaf.prove_epoch_commit(1, s0.clone(), ups.clone(), &local);
+            assert_eq!(r.initial_commit, commit_countmin_with(&s0, CommitMode::Hiding, &SaltBb::ZERO), "{binding:?}");
+        }
+        let mut plain = build_countmin_omc_leaf_commit(HP, Expose::Interval, Binding::Semantic, CommitMode::Plain);
+        for (what, t, prior, o) in &cases {
+            let p = plain.prove_epoch_commit(*t, prior.clone(), ups.clone(), o);
+            assert_eq!(p.initial_commit, commit_countmin(prior), "Plain/{what}");
+        }
+    }
+
+    /// The zero-salt no-op path accepts only the public no-op input (batch
+    /// index 1, the empty state, every update `{ key: 0, value: 0 }`), not
+    /// merely "every value is 0": a value-0 batch leaves ANY state unchanged,
+    /// so a real state would otherwise publish the deterministic,
+    /// guess-checkable `Com(S_t; 0)` as both init and final. Rejected, under
+    /// every binding and in either mode: a real state with the canonical
+    /// no-op batch (an all-pad leaf of a live stream, whose state needs its
+    /// `ρ_t`), the empty state with value-0 updates on real keys, and the
+    /// canonical input at another batch index. Control: the canonical input
+    /// proves and exposes `Com(S_0; 0)` as init and final and the zero-salt
+    /// commitment of the public batch.
+    #[test]
+    fn noop_path_accepts_only_the_public_noop_input() {
+        let noop = vec![CountMinUpdate { key: 0, value: 0 }; HP.batch];
+        let real_keys: Vec<CountMinUpdate> =
+            hp_batches()[0].iter().map(|u| CountMinUpdate { key: u.key, value: 0 }).collect();
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let cases = [
+                ("real state, canonical no-op batch", 1u64, hp_prior(), noop.clone(), "empty genesis state"),
+                ("empty state, value-0 real keys", 1, empty(HP.d, HP.w), real_keys.clone(), "public no-op"),
+                ("canonical input at t = 2", 2, empty(HP.d, HP.w), noop.clone(), "batch index 1"),
+            ];
+            for mode in [CommitMode::Hiding, CommitMode::Plain] {
+                let mut leaf = build_countmin_omc_leaf_commit(HP, Expose::Interval, binding, mode);
+                for (what, t, init, ups, want) in &cases {
+                    let msg = forge::catch_msg(|| {
+                        leaf.prove_epoch_public_zero(*t, init.clone(), ups.clone()).final_commit
+                    })
+                    .unwrap_err();
+                    assert!(msg.contains(want), "{binding:?}/{mode:?}/{what}: {msg}");
+                }
+            }
+            let mut leaf = hiding_leaf(binding);
+            let r = leaf.prove_epoch_public_zero(1, empty(HP.d, HP.w), noop.clone());
+            let anchor = commit_countmin_with(&empty(HP.d, HP.w), CommitMode::Hiding, &SaltBb::ZERO);
+            assert_eq!(r.initial_commit, anchor, "{binding:?}");
+            assert_eq!(r.final_commit, anchor, "{binding:?}");
+            assert_eq!(
+                r.batch_commit.0,
+                countmin_omc_batch_commit_salted(&noop, binding, CommitMode::Hiding, &SaltBb::ZERO),
+                "{binding:?}"
+            );
+        }
+    }
+
+    /// The harness's Count-Min VK-derivation input (`dist_compose`'s
+    /// `noop_leaf_input` / `prove_noop_leaf`: the empty state
+    /// `families::cm_empty` and a batch of `PAD_KEY` records mapped by
+    /// `stream_compose::cm_updates_of`, proved at batch index 1) is exactly
+    /// the canonical public no-op input, so it passes the tightened
+    /// `prove_epoch_public_zero` in either mode and under every binding, and
+    /// exposes `init == final`; the harness code itself is not changed here.
+    #[test]
+    fn harness_noop_input_is_the_public_noop_input() {
+        use crate::experiments::families::cm_empty;
+        use crate::experiments::stream_compose::{PAD_KEY, cm_updates_of};
+        let batch = cm_updates_of(&vec![PAD_KEY; HP.batch]);
+        assert!(batch.iter().all(|u| *u == CountMinUpdate { key: 0, value: 0 }));
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            for mode in [CommitMode::Hiding, CommitMode::Plain] {
+                let mut leaf = build_countmin_omc_leaf_commit(HP, Expose::Interval, binding, mode);
+                let r = leaf.prove_epoch_public_zero(1, cm_empty(HP.d, HP.w), batch.clone());
+                assert_eq!(r.initial_commit, r.final_commit, "{binding:?}/{mode:?}");
+                assert_eq!(
+                    r.initial_commit,
+                    commit_countmin_with(&empty(HP.d, HP.w), mode, &SaltBb::ZERO),
+                    "{binding:?}/{mode:?}"
+                );
+            }
+        }
+    }
+
+    /// (F2) A continued history (e.g. after a GK rotation) is anchored on the
+    /// previous history's certified final commitment: history 0 ends at
+    /// `Com(S_2; ρ_{0,2})`; history 1 restarts `t` at 1 from `S_2`, its leaf 1
+    /// opens the init with that anchor salt ([`Openings::for_leaf_after`]) and
+    /// exposes exactly the certified value, and both leaves pass the per-batch
+    /// check against history 1's log, whose `Com(S_0)` is that anchor (taken
+    /// from history 0, not recomputed). The same batch at the same `t` gets
+    /// another commitment in each history. The pre-fix opening (init salt 0,
+    /// what `for_leaf(.., 1)` gives) would expose the guess-checkable
+    /// `Com(S_2; 0)`: the leaf refuses it. A nonzero WRONG anchor salt (not
+    /// detectable by the leaf) exposes another commitment, and the log
+    /// rejects it.
+    #[test]
+    fn continued_history_leaf_opens_the_previous_final_commitment() {
+        use crate::commitment::hiding::{rho_batch_bb_in, rho_state_bb_in};
+        let binding = Binding::Semantic;
+        let seed = SaltSeed::for_tests(71);
+        let bs = hp_batches();
+        let s1 = advanced(&empty(HP.d, HP.w), &bs[0], binding);
+        let s2 = advanced(&s1, &bs[1], binding);
+        let mut leaf = hiding_leaf(binding);
+        let h0_last = leaf.prove_epoch_commit(2, s1, bs[1].clone(), &Openings::for_leaf(&seed, CM, 2));
+        let anchor_salt = rho_state_bb(&seed, CM, 2);
+        let anchor = h0_last.final_commit;
+        assert_eq!(anchor, commit_countmin_with(&s2, CommitMode::Hiding, &anchor_salt));
+
+        let h = 1u64;
+        let s3 = advanced(&s2, &bs[0], binding);
+        let s4 = advanced(&s3, &bs[1], binding);
+        let o1 = Openings::for_leaf_after(&anchor_salt, &seed, CM, h);
+        let l1 = leaf.prove_epoch_commit(1, s2.clone(), bs[0].clone(), &o1).output;
+        let l2 = leaf.prove_epoch_commit(2, s3, bs[1].clone(), &Openings::for_leaf_in(&seed, CM, h, 2)).output;
+        assert_eq!(read_exposed_statement(&l1.0).init, anchor.0.to_vec(), "history 1 starts at history 0's final");
+        assert_eq!(read_exposed_statement(&l2.0).init, read_exposed_statement(&l1.0).final_);
+        let bc: Vec<[Val; 8]> = (0..2)
+            .map(|k| {
+                let salt = rho_batch_bb_in(&seed, CM, h, k as u64 + 1);
+                countmin_omc_batch_commit_salted(&bs[k], binding, CommitMode::Hiding, &salt)
+            })
+            .collect();
+        let fin = commit_countmin_with(&s4, CommitMode::Hiding, &rho_state_bb_in(&seed, CM, h, 2));
+        let log1 = batch_log(&anchor.0, &fin.0, &bc);
+        assert_eq!(check_leaves_against_log(&[&l1.0, &l2.0], &log1, Expose::Interval), Ok(()));
+        let h0_bc1 = countmin_omc_batch_commit_salted(&bs[0], binding, CommitMode::Hiding, &rho_batch_bb(&seed, CM, 1));
+        assert_ne!(bc[0], h0_bc1, "t restarted, the randomizer did not");
+
+        let zero_init = Openings { init: SaltBb::ZERO, ..o1 };
+        let msg = forge::catch_msg(|| leaf.prove_epoch_commit(1, s2.clone(), bs[0].clone(), &zero_init).final_commit)
+            .unwrap_err();
+        assert!(msg.contains("zero init salt"), "{msg}");
+        let wrong_init = Openings { init: rho_state_bb(&seed, CM, 1), ..o1 };
+        let l1w = leaf.prove_epoch_commit(1, s2, bs[0].clone(), &wrong_init).output;
+        let e = check_leaves_against_log(&[&l1w.0, &l2.0], &log1, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|m| m.contains("Com(S_0)")), "{e:?}");
     }
 
     /// Measurement (explicit): legacy vs semantic vs bound at one shape.

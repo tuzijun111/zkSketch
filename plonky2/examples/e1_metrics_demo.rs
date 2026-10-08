@@ -7,7 +7,9 @@
 //! `prove_timed`), `prove_total` median+p95, proof size, trace_rows·num_columns,
 //! and **peak RSS** — and appends one row per `(family, m)` to
 //! `plonky2/results/e1_circuit.csv` plus an `env.json`. The schema matches the
-//! plonky3 runner (`../examples/exp_e1.rs`) so the two CSVs merge directly.
+//! plonky3 runner (`../examples/exp_e1.rs`) so the two CSVs merge directly,
+//! including its per-row `commit` column (the commitment mode a row was proved
+//! under): always `plain` here, since this backend has no hiding commitments.
 //!
 //! Run (small slice, default): `cargo run --release --example e1_metrics_demo` (from plonky2/; the pinned nightly is auto-selected)
 //! Configure (env): EXP_DATASET=uniform|gaussian|zipf|aol|netflix
@@ -56,6 +58,8 @@ fn hdr() -> Vec<String> {
     let mut h: Vec<String> = ["backend", "dataset", "family", "variant", "m", "d", "w", "s"]
         .iter().map(|s| s.to_string()).collect();
     h.extend(AggRow::header().iter().map(|s| s.to_string()));
+    // The plonky3 runner's per-row commitment mode; plonky2 is plain-only.
+    h.push("commit".into());
     h.push("status".into());
     h
 }
@@ -111,6 +115,7 @@ fn main() {
                 m.to_string(), d.to_string(), w.to_string(), s.to_string(),
             ];
             r.extend(agg.fields());
+            r.push("plain".into());
             r.push("ok".into());
             r
         };
@@ -120,6 +125,7 @@ fn main() {
                 m.to_string(), d.to_string(), w.to_string(), s.to_string(),
             ];
             r.extend(std::iter::repeat("n/a".to_string()).take(AggRow::header().len()));
+            r.push("plain".into());
             r.push(status.into());
             r
         };

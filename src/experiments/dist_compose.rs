@@ -64,15 +64,29 @@
 //! worker proves its slice's leaves at their GLOBAL batch indices, shipped as
 //! `ToWorker::Task::first_index`); the coordinator's auditor pins the derived
 //! root VK, verifies the root, and checks its statement against the public
-//! batch log (`Com(S_0)`, `Com(S_T)`, `Com(B_1..B_T)` computed natively from
-//! the batches, [`batch_commits`]) under `dist_tree_shape(mode, t, M)`.
-//! Where the auditor receives LEAF proofs directly (per_batch, and the lone
-//! leaf of a one-batch stream) it pins each one to the trusted leaf VK
-//! (derived from a no-op leaf, [`derive_dist_leaf_vk`]), STARK-verifies it with
-//! a verifier configured from public parameters, and checks its statement
-//! against its log entry and the boundary chain ([`audit_leaf_bytes`]); the
-//! reported verify time is that audit, not the workers' self-verify (except
-//! under the legacy `EXP_ROOT_VK=self` opt-in).
+//! batch log (`Com(S_0)`, `Com(S_T)`, `Com(B_1..B_T)`) under
+//! `dist_tree_shape(mode, t, M)`. Where the auditor receives LEAF proofs
+//! directly (per_batch, and the lone leaf of a one-batch stream) it pins each
+//! one to the trusted leaf VK (derived from a no-op leaf,
+//! [`derive_dist_leaf_vk`]), STARK-verifies it with a verifier configured
+//! from public parameters, and checks its statement against its log entry
+//! and the boundary chain ([`audit::audit_leaf_bytes`]); the reported verify
+//! time is that audit, not the workers' self-verify (except under the legacy
+//! `EXP_ROOT_VK=self` opt-in).
+//!
+//! **Hiding commitments (B2).** The run's commitment context
+//! ([`ProverCommit`]: `ZKSKETCH_COMMIT`, default `hiding`, plus the salt seed)
+//! is PROVER state. The coordinator is the prover's front end: it builds the
+//! published batch log itself ([`publish_batch_log`] /
+//! [`batch_commits_with`]: `Com(S_0; 0)`, `Com(S_T; ρ^S_T)`,
+//! `Com(B_t; ρ^B_t)` at the global index `t`) and ships the seed to its own
+//! workers inside `ToWorker::Task` (prover-internal), which open leaf `t` with
+//! `Openings::for_leaf(seed, family, t)`. The auditor half
+//! ([`super::audit`]) takes the published log, the proof bytes and
+//! [`PublicParams`] (family, shape, batch size, commitment mode) only; it
+//! recomputes the genesis `Com(S_0; 0)` itself and takes `Com(S_T)` and every
+//! `Com(B_t)` from the log. `ZKSKETCH_COMMIT=plain` runs the pre-B2 code
+//! path, commitments and VKs byte for byte.
 //!
 //! Cross-machine merging is possible because a merge consumes only the
 //! children's `BatchStarkProof`s (see
@@ -109,9 +123,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::Val;
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::expose_forest::{
-    check_leaves_against_log, leaf_vk, prove_hiding_merge, prove_hiding_merge_proofs, ForestCascade,
-    read_exposed_boundary_proof, root_vk_deriver, verify_bound_stark_proof_against_log,
-    verify_bound_stark_proof_pinned, verify_leaves_against_log, vk_pin_values,
+    leaf_vk, prove_hiding_merge, prove_hiding_merge_proofs, read_exposed_boundary_proof,
+    root_vk_deriver, ForestCascade,
 };
 use crate::recursion::recursive::root_vk::{ForestShape, RootVk};
 use crate::recursion::recursive::statement::{
@@ -122,64 +135,75 @@ use p3_circuit_prover::BatchStarkProof;
 use p3_recursion::RecursionOutput;
 
 use crate::sketch::bloom_omc::{
-    bloom_batch_commit, bloom_empty, bloom_insert, build_bloom_omc_leaf_expose, commit_bloom,
+    bloom_batch_commit, bloom_batch_commit_with, bloom_empty, bloom_insert,
+    build_bloom_omc_leaf_commit, commit_bloom, commit_bloom_with,
     BloomOmcLeafCircuit, BloomOmcParams,
 };
 use crate::sketch::countmin::{CountMinParams, CountMinState};
 use crate::sketch::countmin_omc::{
-    build_countmin_omc_leaf_expose, countmin_omc_advance, countmin_omc_batch_commit,
-    CmOmcLeafCircuit, CmOmcParams,
+    build_countmin_omc_leaf_commit, countmin_omc_advance, countmin_omc_batch_commit,
+    countmin_omc_batch_commit_salted, CmOmcLeafCircuit, CmOmcParams,
 };
 use crate::sketch::gk_bandmerge::{
-    apply_batch2, build_gkb2_leaf_expose, commit_gk2_batch, commit_gk2_state, Gk2State, Gk2Tuple,
-    Gkb2LeafCircuit, GkbParams,
+    apply_batch2, build_gkb2_leaf_commit, commit_gk2_batch, commit_gk2_batch_with,
+    commit_gk2_state, commit_gk2_state_with, Gk2State, Gk2Tuple, Gkb2LeafCircuit, GkbParams,
 };
 use crate::sketch::hll_omc::{
-    build_hll_omc_leaf_expose, commit_hll_omc, hll_omc_advance, hll_omc_batch_commit,
-    hll_omc_empty, HllOmcLeafCircuit, HllOmcParams,
+    build_hll_omc_leaf_commit, commit_hll_omc, commit_hll_omc_with, hll_omc_advance,
+    hll_omc_batch_commit, hll_omc_batch_commit_salted, hll_omc_empty, HllOmcLeafCircuit,
+    HllOmcParams,
 };
 use crate::sketch::ss_final_full::{
-    apply_batch_ss_full, build_ss_full_leaf_expose, commit_ss_batch, commit_ss_state,
-    SsFullLeafCircuit, SsFullParams, SsFullRow, SsFullState,
+    apply_batch_ss_full, build_ss_full_leaf_commit, commit_ss_batch, commit_ss_batch_with,
+    commit_ss_state, commit_ss_state_with, SsFullLeafCircuit, SsFullParams, SsFullRow, SsFullState,
 };
+use crate::commitment::hiding::{CommitFamily, CommitMode, SaltBb, SaltGl, SaltSeedWire};
+use crate::sketch::bind::default_binding;
 
 // ── Goldilocks (`_gl`) leaf + config imports, aliased so they never clash with
 // the BabyBear types above. These back the parallel `FamStateGl` /
 // `FamLeafCircuitGl` / `worker_main_gl` / `measure_compose_dist_gl` path.
 use crate::recursion::recursive::config_gl::ConfigWithFriParamsGl;
 use crate::sketch::gk_bandmerge_gl::{
-    apply_batch2 as apply_batch2_gl, build_gkb2_leaf_expose as build_gkb2_leaf_expose_gl,
-    commit_gk2_batch as commit_gk2_batch_gl, commit_gk2_state as commit_gk2_state_gl,
+    apply_batch2 as apply_batch2_gl, build_gkb2_leaf_commit as build_gkb2_leaf_commit_gl,
+    commit_gk2_batch as commit_gk2_batch_gl, commit_gk2_batch_with as commit_gk2_batch_with_gl,
+    commit_gk2_state as commit_gk2_state_gl, commit_gk2_state_with as commit_gk2_state_with_gl,
     Gk2State as Gk2StateGl, Gk2Tuple as Gk2TupleGl, Gkb2LeafCircuit as Gkb2LeafCircuitGl,
     GkbParams as GkbParamsGl,
 };
 use crate::sketch::countmin_omc_gl::{
     CmOmcLeafCircuit as CmOmcLeafCircuitGl, CmOmcParams as CmOmcParamsGl,
     apply_update_prf as apply_update_prf_gl,
-    build_countmin_omc_leaf_expose as build_countmin_omc_leaf_expose_gl, cm_gl_empty,
-    commit_batch as commit_batch_gl, commit_countmin as commit_countmin_gl,
+    build_countmin_omc_leaf_commit as build_countmin_omc_leaf_commit_gl, cm_gl_empty,
+    commit_batch as commit_batch_gl, commit_batch_salted as commit_batch_salted_gl,
+    commit_countmin as commit_countmin_gl, commit_countmin_with as commit_countmin_with_gl,
 };
 use crate::sketch::hll_omc_gl::{
-    build_hll_omc_leaf_expose as build_hll_omc_leaf_expose_gl, commit_hll_omc as commit_hll_omc_gl,
-    hll_omc_advance as hll_omc_advance_gl, hll_omc_batch_commit as hll_omc_batch_commit_gl,
+    build_hll_omc_leaf_commit as build_hll_omc_leaf_commit_gl, commit_hll_omc as commit_hll_omc_gl,
+    commit_hll_omc_with as commit_hll_omc_with_gl, hll_omc_advance as hll_omc_advance_gl,
+    hll_omc_batch_commit as hll_omc_batch_commit_gl,
+    hll_omc_batch_commit_salted as hll_omc_batch_commit_salted_gl,
     hll_omc_empty as hll_omc_empty_gl, HllOmcLeafCircuit as HllOmcLeafCircuitGl,
     HllOmcParams as HllOmcParamsGl,
 };
 use crate::sketch::ss_final_full_gl::{
     apply_batch_ss_full as apply_batch_ss_full_gl,
-    build_ss_full_leaf_expose as build_ss_full_leaf_expose_gl,
-    commit_ss_batch as commit_ss_batch_gl, commit_ss_state as commit_ss_state_gl,
+    build_ss_full_leaf_commit as build_ss_full_leaf_commit_gl,
+    commit_ss_batch as commit_ss_batch_gl, commit_ss_batch_with as commit_ss_batch_with_gl,
+    commit_ss_state as commit_ss_state_gl, commit_ss_state_with as commit_ss_state_with_gl,
     SsFullLeafCircuit as SsFullLeafCircuitGl, SsFullParams as SsFullParamsGl,
     SsFullRow as SsFullRowGl, SsFullState as SsFullStateGl, SsFullUpdate as SsFullUpdateGl,
 };
 
+use super::audit::{self, PublicParams};
 use super::families::cm_empty;
+use super::prover_commit::ProverCommit;
 use super::stream_compose::{
     bloom_keys_of, cm_updates_of, gk_vals_of, hll_keys_of, measure_queries_dist, ss_updates_of,
     ContextStore, QueryAudit, QueryKeyMode, StreamFamily, StreamMode, StreamShape, PAD_KEY,
 };
 
-use crate::commitment::countmin::commit_countmin;
+use crate::commitment::countmin::{commit_countmin, commit_countmin_with};
 
 type Proof = BatchStarkProof<ConfigWithFriParams>;
 /// Goldilocks analog of [`Proof`]: gl leaves/merges emit proofs over
@@ -286,7 +310,7 @@ impl FamState {
         }
     }
 
-    /// Native state commitment (the auditor's anchor / final reference).
+    /// Native state commitment, `Plain` (the pre-B2 value, byte for byte).
     fn commit(&self, shape: &StreamShape) -> [Val; 8] {
         match self {
             Self::Cm(state) => commit_countmin(state).0,
@@ -294,6 +318,39 @@ impl FamState {
             Self::Ss(state) => commit_ss_state(state).0,
             Self::Gk(state) => commit_gk2_state(state).0,
             Self::Bloom(_, bits) => commit_bloom(bits),
+        }
+    }
+
+    /// Native state commitment under `mode` with randomizer `salt` (PROVER
+    /// side: the salt of a version `t ≥ 1` is secret). `Plain` is exactly
+    /// [`Self::commit`] (the salt is ignored); `Hiding` is the value a hiding
+    /// leaf exposes for `Com(S; salt)`.
+    fn commit_with(&self, shape: &StreamShape, mode: CommitMode, salt: &SaltBb) -> [Val; 8] {
+        match mode {
+            CommitMode::Plain => self.commit(shape),
+            CommitMode::Hiding => match self {
+                Self::Cm(state) => commit_countmin_with(state, mode, salt).0,
+                Self::Hll(regs) => commit_hll_omc_with(regs, shape.b, mode, salt),
+                Self::Ss(state) => commit_ss_state_with(state, mode, salt).0,
+                Self::Gk(state) => commit_gk2_state_with(state, mode, salt).0,
+                Self::Bloom(_, bits) => commit_bloom_with(bits, mode, salt),
+            },
+        }
+    }
+}
+
+impl StreamFamily {
+    /// The commitment family tag a hiding commitment of this family absorbs
+    /// (and the PRF domain of its randomizers); shared by the BabyBear and
+    /// Goldilocks twins.
+    pub fn commit_family(self) -> CommitFamily {
+        match self.base_family() {
+            StreamFamily::CmOmc => CommitFamily::CountMin,
+            StreamFamily::HllOmc => CommitFamily::HyperLogLog,
+            StreamFamily::SsCertified => CommitFamily::SpaceSaving,
+            StreamFamily::GkBandmerge2 => CommitFamily::GreenwaldKhanna,
+            StreamFamily::BloomOmc => CommitFamily::Bloom,
+            other => unreachable!("base_family() is a BabyBear family, got {other:?}"),
         }
     }
 }
@@ -329,7 +386,8 @@ pub(crate) fn batch_commits(
 }
 
 /// The public batch log of a BabyBear stream: `Com(S_0)` and `Com(S_T)` from
-/// the plaintext witness pass plus [`batch_commits`].
+/// the plaintext witness pass plus [`batch_commits`] (`Plain` commitments;
+/// the `Plain` arm of [`publish_batch_log`]).
 pub(crate) fn stream_batch_log(
     family: StreamFamily,
     shape: &StreamShape,
@@ -343,6 +401,76 @@ pub(crate) fn stream_batch_log(
     }
     let commits = batch_commits(family, m, batches);
     crate::recursion::recursive::expose_forest::batch_log(&init, &st.commit(shape), &commits)
+}
+
+/// **PROVER side.** `Com(B_t)` of every batch of a BabyBear stream under the
+/// run's commitment context: `Plain` is exactly [`batch_commits`]; `Hiding`
+/// is `Com(B_t; ρ^B_t)` at the GLOBAL 1-based batch index `t` (the index of
+/// the interval statement), the value hiding leaf `t` binds. Needs the seed.
+pub(crate) fn batch_commits_with(
+    family: StreamFamily,
+    m: usize,
+    batches: &[Vec<u32>],
+    commit: &ProverCommit,
+) -> Vec<[Val; 8]> {
+    if !commit.is_hiding() {
+        return batch_commits(family, m, batches);
+    }
+    let (mode, cf) = (commit.mode(), family.commit_family());
+    let mut n_prev = 0u64;
+    batches
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let salt = commit.batch_salt(cf, i as u64 + 1);
+            match family {
+                StreamFamily::CmOmc => {
+                    countmin_omc_batch_commit_salted(&cm_updates_of(b), default_binding(), mode, &salt)
+                }
+                StreamFamily::HllOmc => {
+                    hll_omc_batch_commit_salted(&hll_keys_of(b), default_binding(), mode, &salt)
+                }
+                StreamFamily::SsCertified => commit_ss_batch_with(&ss_updates_of(b), mode, &salt).0,
+                StreamFamily::GkBandmerge2 => {
+                    let vals = gk_vals_of(b);
+                    let c = commit_gk2_batch_with(&vals, m, n_prev, mode, &salt).0;
+                    n_prev += vals.len() as u64;
+                    c
+                }
+                // `m` record slots: the real keys, then canonical dummies.
+                StreamFamily::BloomOmc => bloom_batch_commit_with(m, &bloom_keys_of(b), mode, &salt),
+                _ => unreachable!("gl families use batch_commits_gl_with"),
+            }
+        })
+        .collect()
+}
+
+/// **PROVER side: the batch log the prover PUBLISHES** for a BabyBear stream
+/// (`Com(S_0)`, `Com(S_T)`, every `Com(B_t)`), which the auditor then takes as
+/// given. `Plain` is exactly [`stream_batch_log`]. `Hiding`: `Com(S_0; 0)`
+/// (the genesis anchor, which the auditor recomputes itself),
+/// `Com(S_T; ρ^S_T)` from the plaintext replay, and [`batch_commits_with`];
+/// the randomizers come from the prover's seed, so only the prover can build
+/// this log.
+pub(crate) fn publish_batch_log(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+    batches: &[Vec<u32>],
+    commit: &ProverCommit,
+) -> BatchLog<Val> {
+    if !commit.is_hiding() {
+        return stream_batch_log(family, shape, m, batches);
+    }
+    let mode = commit.mode();
+    let mut st = FamState::empty(family, shape, m);
+    let init = st.commit_with(shape, mode, &SaltBb::ZERO);
+    for b in batches {
+        st.advance(shape, b);
+    }
+    let fin = st.commit_with(shape, mode, &commit.state_salt(family.commit_family(), batches.len() as u64));
+    let commits = batch_commits_with(family, m, batches, commit);
+    crate::recursion::recursive::expose_forest::batch_log(&init, &fin, &commits)
 }
 
 /// Goldilocks analog of [`batch_commits`].
@@ -375,34 +503,136 @@ pub(crate) fn batch_commits_gl(
         .collect()
 }
 
+/// The shared (BabyBear-typed) SS records as the Goldilocks update type.
+fn ss_updates_gl(batch: &[u32]) -> Vec<SsFullUpdateGl> {
+    ss_updates_of(batch)
+        .iter()
+        .map(|u| SsFullUpdateGl { key: u.key, value: u.value, active: u.active })
+        .collect()
+}
+
+/// **PROVER side.** Goldilocks analog of [`batch_commits_with`] (`Plain` is
+/// exactly [`batch_commits_gl`]).
+pub(crate) fn batch_commits_gl_with(
+    family: StreamFamily,
+    m: usize,
+    batches: &[Vec<u32>],
+    commit: &ProverCommit,
+) -> Vec<[crate::config_gl::Val; 4]> {
+    if !commit.is_hiding() {
+        return batch_commits_gl(family, m, batches);
+    }
+    let (mode, cf) = (commit.mode(), family.commit_family());
+    let mut n_prev = 0u64;
+    batches
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let salt = commit.batch_salt_gl(cf, i as u64 + 1);
+            match family {
+                StreamFamily::CmOmcGl => {
+                    commit_batch_salted_gl(&cm_updates_of(b), default_binding(), mode, &salt).0
+                }
+                StreamFamily::HllOmcGl => {
+                    hll_omc_batch_commit_salted_gl(&hll_keys_of(b), default_binding(), mode, &salt)
+                }
+                StreamFamily::SsCertifiedGl => commit_ss_batch_with_gl(&ss_updates_gl(b), mode, &salt).0,
+                StreamFamily::GkBandmerge2Gl => {
+                    let vals = gk_vals_of(b);
+                    let c = commit_gk2_batch_with_gl(&vals, m, n_prev, mode, &salt).0;
+                    n_prev += vals.len() as u64;
+                    c
+                }
+                _ => unreachable!("BabyBear families use batch_commits_with"),
+            }
+        })
+        .collect()
+}
+
+/// **PROVER side.** Goldilocks analog of [`publish_batch_log`] (`Plain`: the
+/// pre-B2 log, `Com(S_0)` / `Com(S_T)` from the replay plus
+/// [`batch_commits_gl`]). The Goldilocks coordinator builds the same log from
+/// its witness pass inline; this standalone form serves the tests.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn publish_batch_log_gl(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+    batches: &[Vec<u32>],
+    commit: &ProverCommit,
+) -> BatchLog<crate::config_gl::Val> {
+    let mode = commit.mode();
+    let mut st = FamStateGl::empty(family, shape, m);
+    let init = st.commit_with(shape, mode, &SaltGl::ZERO);
+    for b in batches {
+        st.advance(shape, b);
+    }
+    let fin = st.commit_with(shape, mode, &commit.state_salt_gl(family.commit_family(), batches.len() as u64));
+    let commits = batch_commits_gl_with(family, m, batches, commit);
+    crate::recursion::recursive::expose_forest_gl::batch_log(&init, &fin, &commits)
+}
+
+/// How a harness leaf opens its three commitments (`Com(S_{t-1})`,
+/// `Com(S_t)`, `Com(B_t)`).
+#[derive(Clone, Copy)]
+enum LeafOpen<'a> {
+    /// A REAL leaf of the run (every stream batch, including query-sealed,
+    /// split and padded ones): `Plain` → `prove_epoch_at` (the pre-B2 path);
+    /// `Hiding` → `prove_epoch_commit` with the prover's honest openings of
+    /// leaf `t` (`Openings::for_leaf(seed, family, t)`).
+    Real(&'a ProverCommit),
+    /// The public, data-free no-op VK-derivation leaf ([`noop_leaf_input`]):
+    /// `Plain` → `prove_epoch_at`; `Hiding` → `prove_epoch_public_zero` (all
+    /// three salts the public zero, so `init == final`). Never a real batch.
+    NoOp(CommitMode),
+    /// Tests only: hiding openings chosen by the caller (a prover that does
+    /// not follow [`ProverCommit`], e.g. the inflated-genesis attack).
+    #[cfg(test)]
+    Explicit(crate::commitment::hiding::Openings),
+    /// Goldilocks twin of [`LeafOpen::Explicit`].
+    #[cfg(test)]
+    ExplicitGl(crate::commitment::hiding::OpeningsGl),
+}
+
 impl FamState {
 
     /// Prove one transition leaf — batch `t` (1-based, the global stream
     /// index; part of the Interval statement) — from the current state over
-    /// `batch`, on the worker's prebuilt leaf circuit. Returns the
+    /// `batch`, on the worker's prebuilt leaf circuit, opening its
+    /// commitments as `open` says ([`LeafOpen`]). Returns the
     /// statement-exposing output plus the prover's self-timings.
     fn prove_leaf(
         &self,
         leaf: &mut FamLeafCircuit,
         t: u64,
         batch: &[u32],
+        open: LeafOpen<'_>,
     ) -> (RecursionOutput<ConfigWithFriParams>, f64, f64) {
+        // `None`: the pre-B2 `prove_epoch_at` path (Plain, real or no-op).
+        // `Some(None)`: the public-zero no-op path. `Some(Some(o))`: real
+        // hiding openings.
+        let hiding: Option<Option<crate::commitment::hiding::Openings>> = match open {
+            LeafOpen::Real(c) if c.is_hiding() => Some(Some(c.openings(self.commit_family(), t))),
+            LeafOpen::NoOp(CommitMode::Hiding) => Some(None),
+            #[cfg(test)]
+            LeafOpen::Explicit(o) => Some(Some(o)),
+            _ => None,
+        };
+        macro_rules! prove {
+            ($l:expr, $state:expr, $batch:expr) => {
+                match &hiding {
+                    None => $l.prove_epoch_at(t, $state, $batch).output,
+                    Some(None) => $l.prove_epoch_public_zero(t, $state, $batch).output,
+                    Some(Some(o)) => $l.prove_epoch_commit(t, $state, $batch, o).output,
+                }
+            };
+        }
         let output = match (leaf, self) {
-            (FamLeafCircuit::Cm(l), Self::Cm(state)) => {
-                l.prove_epoch_at(t, state.clone(), cm_updates_of(batch)).output
-            }
-            (FamLeafCircuit::Hll(l), Self::Hll(regs)) => {
-                l.prove_epoch_at(t, regs.clone(), hll_keys_of(batch)).output
-            }
-            (FamLeafCircuit::Ss(l), Self::Ss(state)) => {
-                l.prove_epoch_at(t, state.clone(), ss_updates_of(batch)).output
-            }
-            (FamLeafCircuit::Gk(l), Self::Gk(state)) => {
-                l.prove_epoch_at(t, state.clone(), gk_vals_of(batch)).output
-            }
-            (FamLeafCircuit::Bloom(l), Self::Bloom(_, bits)) => {
-                l.prove_epoch_at(t, bits, &bloom_keys_of(batch)).output
-            }
+            (FamLeafCircuit::Cm(l), Self::Cm(state)) => prove!(l, state.clone(), cm_updates_of(batch)),
+            (FamLeafCircuit::Hll(l), Self::Hll(regs)) => prove!(l, regs.clone(), hll_keys_of(batch)),
+            (FamLeafCircuit::Ss(l), Self::Ss(state)) => prove!(l, state.clone(), ss_updates_of(batch)),
+            (FamLeafCircuit::Gk(l), Self::Gk(state)) => prove!(l, state.clone(), gk_vals_of(batch)),
+            (FamLeafCircuit::Bloom(l), Self::Bloom(_, bits)) => prove!(l, bits, &bloom_keys_of(batch)),
             _ => panic!("FamLeafCircuit/FamState family mismatch"),
         };
         let tm = timing::take();
@@ -411,6 +641,17 @@ impl FamState {
             (tm.witness + tm.prove).as_secs_f64() * 1000.0,
             tm.verify.as_secs_f64() * 1000.0,
         )
+    }
+
+    /// The commitment family of this state.
+    fn commit_family(&self) -> CommitFamily {
+        match self {
+            Self::Cm(_) => CommitFamily::CountMin,
+            Self::Hll(_) => CommitFamily::HyperLogLog,
+            Self::Ss(_) => CommitFamily::SpaceSaving,
+            Self::Gk(_) => CommitFamily::GreenwaldKhanna,
+            Self::Bloom(..) => CommitFamily::Bloom,
+        }
     }
 
     fn encode(&self) -> WireState {
@@ -515,32 +756,39 @@ enum FamLeafCircuit {
 impl FamLeafCircuit {
     /// Build the family's composable leaf with the harness composition
     /// statement ([`composition_expose`]: Interval by default; Boundary for
-    /// the explicit legacy opt-ins).
-    fn build(family: StreamFamily, shape: &StreamShape, m: usize) -> Self {
+    /// the explicit legacy opt-ins) under the commitment mode `mode`
+    /// (`Plain` is the pre-B2 circuit byte for byte: each `*_expose` builder
+    /// the harness used is its `*_commit` twin with `CommitMode::Plain`).
+    fn build(family: StreamFamily, shape: &StreamShape, m: usize, mode: CommitMode) -> Self {
         let expose = composition_expose();
         let binding = crate::sketch::bind::default_binding();
         match family {
-            StreamFamily::CmOmc => Self::Cm(build_countmin_omc_leaf_expose(
+            StreamFamily::CmOmc => Self::Cm(build_countmin_omc_leaf_commit(
                 CmOmcParams { d: shape.d, w: shape.w, batch: m },
                 expose,
                 binding,
+                mode,
             )),
-            StreamFamily::HllOmc => Self::Hll(build_hll_omc_leaf_expose(
+            StreamFamily::HllOmc => Self::Hll(build_hll_omc_leaf_commit(
                 HllOmcParams { b: shape.b, batch: m },
                 expose,
                 binding,
+                mode,
             )),
-            StreamFamily::SsCertified => Self::Ss(build_ss_full_leaf_expose(
+            StreamFamily::SsCertified => Self::Ss(build_ss_full_leaf_commit(
                 SsFullParams { capacity: shape.capacity, batch: m },
                 expose,
+                mode,
             )),
-            StreamFamily::GkBandmerge2 => Self::Gk(build_gkb2_leaf_expose(
+            StreamFamily::GkBandmerge2 => Self::Gk(build_gkb2_leaf_commit(
                 GkbParams { capacity: shape.capacity, batch: m, s: shape.gk_s },
                 expose,
+                binding,
+                mode,
             )),
             // One (bound) construction: no binding switch.
             StreamFamily::BloomOmc => {
-                Self::Bloom(build_bloom_omc_leaf_expose(shape.bloom_params(m), expose))
+                Self::Bloom(build_bloom_omc_leaf_commit(shape.bloom_params(m), expose, mode))
             }
             StreamFamily::SsCertifiedGl
             | StreamFamily::GkBandmerge2Gl
@@ -617,7 +865,7 @@ impl FamStateGl {
         }
     }
 
-    /// Native state commitment (Goldilocks digest width 4).
+    /// Native state commitment (Goldilocks digest width 4), `Plain`.
     fn commit(&self, shape: &StreamShape) -> [crate::config_gl::Val; 4] {
         match self {
             Self::CmGl(state) => commit_countmin_gl(state).0,
@@ -627,31 +875,66 @@ impl FamStateGl {
         }
     }
 
+    /// Goldilocks twin of [`FamState::commit_with`] (`Plain` is exactly
+    /// [`Self::commit`]).
+    fn commit_with(
+        &self,
+        shape: &StreamShape,
+        mode: CommitMode,
+        salt: &SaltGl,
+    ) -> [crate::config_gl::Val; 4] {
+        match mode {
+            CommitMode::Plain => self.commit(shape),
+            CommitMode::Hiding => match self {
+                Self::CmGl(state) => commit_countmin_with_gl(state, mode, salt).0,
+                Self::SsGl(state) => commit_ss_state_with_gl(state, mode, salt).0,
+                Self::GkGl(state) => commit_gk2_state_with_gl(state, mode, salt).0,
+                Self::HllGl(regs) => commit_hll_omc_with_gl(regs, shape.b, mode, salt),
+            },
+        }
+    }
+
+    /// The commitment family of this state.
+    fn commit_family(&self) -> CommitFamily {
+        match self {
+            Self::CmGl(_) => CommitFamily::CountMin,
+            Self::SsGl(_) => CommitFamily::SpaceSaving,
+            Self::GkGl(_) => CommitFamily::GreenwaldKhanna,
+            Self::HllGl(_) => CommitFamily::HyperLogLog,
+        }
+    }
+
     /// Prove one transition leaf (batch `t`), mirroring
-    /// [`FamState::prove_leaf`] exactly.
+    /// [`FamState::prove_leaf`] exactly (same [`LeafOpen`] semantics, with
+    /// the Goldilocks openings).
     fn prove_leaf(
         &self,
         leaf: &mut FamLeafCircuitGl,
         t: u64,
         batch: &[u32],
+        open: LeafOpen<'_>,
     ) -> (RecursionOutput<ConfigWithFriParamsGl>, f64, f64) {
+        let hiding: Option<Option<crate::commitment::hiding::OpeningsGl>> = match open {
+            LeafOpen::Real(c) if c.is_hiding() => Some(Some(c.openings_gl(self.commit_family(), t))),
+            LeafOpen::NoOp(CommitMode::Hiding) => Some(None),
+            #[cfg(test)]
+            LeafOpen::ExplicitGl(o) => Some(Some(o)),
+            _ => None,
+        };
+        macro_rules! prove {
+            ($l:expr, $state:expr, $batch:expr) => {
+                match &hiding {
+                    None => $l.prove_epoch_at(t, $state, $batch).output,
+                    Some(None) => $l.prove_epoch_public_zero(t, $state, $batch).output,
+                    Some(Some(o)) => $l.prove_epoch_commit(t, $state, $batch, o).output,
+                }
+            };
+        }
         let output = match (leaf, self) {
-            (FamLeafCircuitGl::CmGl(l), Self::CmGl(state)) => {
-                l.prove_epoch_at(t, state.clone(), cm_updates_of(batch)).output
-            }
-            (FamLeafCircuitGl::SsGl(l), Self::SsGl(state)) => {
-                let ups: Vec<SsFullUpdateGl> = ss_updates_of(batch)
-                    .iter()
-                    .map(|u| SsFullUpdateGl { key: u.key, value: u.value, active: u.active })
-                    .collect();
-                l.prove_epoch_at(t, state.clone(), ups).output
-            }
-            (FamLeafCircuitGl::GkGl(l), Self::GkGl(state)) => {
-                l.prove_epoch_at(t, state.clone(), gk_vals_of(batch)).output
-            }
-            (FamLeafCircuitGl::HllGl(l), Self::HllGl(regs)) => {
-                l.prove_epoch_at(t, regs.clone(), hll_keys_of(batch)).output
-            }
+            (FamLeafCircuitGl::CmGl(l), Self::CmGl(state)) => prove!(l, state.clone(), cm_updates_of(batch)),
+            (FamLeafCircuitGl::SsGl(l), Self::SsGl(state)) => prove!(l, state.clone(), ss_updates_gl(batch)),
+            (FamLeafCircuitGl::GkGl(l), Self::GkGl(state)) => prove!(l, state.clone(), gk_vals_of(batch)),
+            (FamLeafCircuitGl::HllGl(l), Self::HllGl(regs)) => prove!(l, regs.clone(), hll_keys_of(batch)),
             _ => panic!("FamLeafCircuitGl/FamStateGl family mismatch"),
         };
         let tm = timing::take();
@@ -739,28 +1022,34 @@ enum FamLeafCircuitGl {
 
 impl FamLeafCircuitGl {
     /// Goldilocks analog of [`FamLeafCircuit::build`] (harness composition
-    /// statement, [`composition_expose`]).
-    fn build(family: StreamFamily, shape: &StreamShape, m: usize) -> Self {
+    /// statement, [`composition_expose`]; commitment mode `mode`, `Plain`
+    /// being the pre-B2 circuit byte for byte).
+    fn build(family: StreamFamily, shape: &StreamShape, m: usize, mode: CommitMode) -> Self {
         let expose = composition_expose();
         let binding = crate::sketch::bind::default_binding();
         match family {
-            StreamFamily::SsCertifiedGl => Self::SsGl(build_ss_full_leaf_expose_gl(
+            StreamFamily::SsCertifiedGl => Self::SsGl(build_ss_full_leaf_commit_gl(
                 SsFullParamsGl { capacity: shape.capacity, batch: m },
                 expose,
+                mode,
             )),
-            StreamFamily::GkBandmerge2Gl => Self::GkGl(build_gkb2_leaf_expose_gl(
+            StreamFamily::GkBandmerge2Gl => Self::GkGl(build_gkb2_leaf_commit_gl(
                 GkbParamsGl { capacity: shape.capacity, batch: m, s: shape.gk_s },
                 expose,
+                binding,
+                mode,
             )),
-            StreamFamily::HllOmcGl => Self::HllGl(build_hll_omc_leaf_expose_gl(
+            StreamFamily::HllOmcGl => Self::HllGl(build_hll_omc_leaf_commit_gl(
                 HllOmcParamsGl { b: shape.b, batch: m },
                 expose,
                 binding,
+                mode,
             )),
-            StreamFamily::CmOmcGl => Self::CmGl(build_countmin_omc_leaf_expose_gl(
+            StreamFamily::CmOmcGl => Self::CmGl(build_countmin_omc_leaf_commit_gl(
                 CmOmcParamsGl { d: shape.d, w: shape.w, batch: m },
                 expose,
                 binding,
+                mode,
             )),
             _ => unreachable!("FamLeafCircuitGl only for gl families"),
         }
@@ -837,6 +1126,15 @@ enum ToWorker {
         /// Forest: ship the finalized slice root in `SliceDone::root` (a
         /// query in a later slice needs this slice certified).
         ship_root: bool,
+        /// Commitment mode label (`plain` / `hiding`) of the run.
+        commit: String,
+        /// PROVER-SIDE ONLY: the run's salt seed (`Hiding`; `None` under
+        /// `Plain`). It crosses this socket because the workers are the
+        /// prover's own machines: each derives its slice's openings from
+        /// `(seed, family, t)`, so leaf `t` and leaf `t + 1` agree on `ρ^S_t`
+        /// even on different machines. It never reaches the auditor, the
+        /// published log or any proof statement, and is never printed.
+        salt_seed: Option<SaltSeedWire>,
     },
     /// Forest reduction round: merge this (right-adjacent) peer root into the
     /// local root. Reply: `Merged`.
@@ -845,6 +1143,46 @@ enum ToWorker {
     FetchRoot,
     /// Report peak RSS and exit. Reply: `Done`.
     Exit,
+}
+
+impl ToWorker {
+    /// The coordinator's `Task` for one machine: its slice `batches` (the
+    /// global 1-based index of `batches[0]` is `first_index`), its slice-start
+    /// state, the prover's commitment context (mode + seed: the prover's own
+    /// machines only), and the mixed workload's query checkpoints (local leaf
+    /// indices after which the worker ships the interval proofs live there)
+    /// and whether to ship the finalized slice root ([`CtxCollector`]). The
+    /// one constructor every scatter site uses (the BabyBear concurrent and
+    /// staged engines, the Goldilocks engine), and so do the in-process worker
+    /// tests.
+    #[allow(clippy::too_many_arguments)]
+    fn task(
+        family: StreamFamily,
+        mode: StreamMode,
+        shape: &StreamShape,
+        m: usize,
+        start: WireState,
+        batches: Vec<Vec<u32>>,
+        first_index: u64,
+        commit: &ProverCommit,
+        checkpoints: Vec<u32>,
+        ship_root: bool,
+    ) -> Self {
+        let (commit_label, salt_seed) = commit.to_prover_wire();
+        ToWorker::Task {
+            family: family.label().into(),
+            mode: mode.label().into(),
+            shape: WireShape::from(shape),
+            m: m as u32,
+            start,
+            batches,
+            first_index,
+            checkpoints,
+            ship_root,
+            commit: commit_label,
+            salt_seed,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -883,6 +1221,17 @@ enum FromWorker {
     },
     Fatal {
         msg: String,
+    },
+    /// BabyBear workers: the FINAL commitment `Com(S_t)` leaf `t` EXPOSES in
+    /// its proof's statement (read back from the proof, not recomputed), sent
+    /// just before that leaf's `LeafDone` in every mode. The coordinator's
+    /// query replay ([`measure_queries_dist`]) holds each query at version
+    /// `t'` to leaf `t'`'s reported final, so a query that opens another
+    /// version (or another state) fails the cell. Internal bookkeeping: not
+    /// counted in `comm_msgs` / `comm_bytes`.
+    LeafFinal {
+        idx: u32,
+        final_commit: [Val; 8],
     },
 }
 
@@ -971,163 +1320,188 @@ fn serve_guarded(stream: UnixStream, cores: usize, f: impl FnOnce(&mut UnixStrea
 fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
     let mut stream = UnixStream::connect(sock).expect("worker connect");
     send_msg(&mut stream, &FromWorker::Hello { id }).expect("hello");
-    serve_guarded(stream, cores, move |s| {
-        let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
-        let ToWorker::Task {
-            family, mode, shape, m, start, batches, first_index, checkpoints, ship_root,
-        } = task
-        else {
-            panic!("first message must be Task");
-        };
-        let checkpoints: std::collections::BTreeSet<u32> = checkpoints.into_iter().collect();
-        // The state's wire tag fixes the family; parse validates agreement.
-        let family = StreamFamily::parse(&family).expect("family");
-        let mode = StreamMode::parse(&mode).expect("mode");
-        let shape = shape.to_shape();
-        let m = m as usize;
-        let mut state = FamState::decode(&start, m);
-        // Build the leaf circuit ONCE; every epoch below reuses it.
-        let mut leaf = FamLeafCircuit::build(family, &shape, m);
+    serve_guarded(stream, cores, worker_session)
+}
 
-        // Forest: the online Bentley–Saxe cascade, folded as we go.
-        let mut forest = ForestCascade::new(first_index);
-        // Peaks already shipped to the coordinator (`(lo, hi)`).
-        let mut shipped: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
-        // Chain: the running left-leaning prefix proof.
-        let mut chain_acc: Option<RecursionOutput<ConfigWithFriParams>> = None;
-        let mut root: Option<RecursionOutput<ConfigWithFriParams>> = None;
+/// One BabyBear machine's whole session after its `Hello`: receive the
+/// `Task`, prove (and fold) its slice, then serve the command loop until
+/// `Exit`. Factored out of [`worker_main`] so the in-process tests drive the
+/// exact code a worker process runs over a socket pair (the seed path: the
+/// openings come from the Task's `salt_seed`, never from this process's
+/// environment). Mixed workload: after each query checkpoint the worker
+/// ships the interval proofs live at that version (`LeafDone::context`:
+/// forest peaks, each once; chain the running fold), and with
+/// `Task::ship_root` the finalized slice root (`SliceDone::root`).
+fn worker_session(s: &mut UnixStream) {
+    let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
+    let ToWorker::Task {
+        family,
+        mode,
+        shape,
+        m,
+        start,
+        batches,
+        first_index,
+        checkpoints,
+        ship_root,
+        commit,
+        salt_seed,
+    } = task
+    else {
+        panic!("first message must be Task");
+    };
+    let checkpoints: std::collections::BTreeSet<u32> = checkpoints.into_iter().collect();
+    // The state's wire tag fixes the family; parse validates agreement.
+    let family = StreamFamily::parse(&family).expect("family");
+    let mode = StreamMode::parse(&mode).expect("mode");
+    let shape = shape.to_shape();
+    let m = m as usize;
+    // The prover's commitment context (mode + seed), as the coordinator
+    // holds it.
+    let commit = ProverCommit::from_prover_wire(&commit, salt_seed);
+    let mut state = FamState::decode(&start, m);
+    // Build the leaf circuit ONCE; every epoch below reuses it.
+    let mut leaf = FamLeafCircuit::build(family, &shape, m, commit.mode());
 
-        for (i, batch) in batches.iter().enumerate() {
-            let (output, prove_ms, verify_ms) =
-                state.prove_leaf(&mut leaf, first_index + i as u64, batch);
-            state.advance(&shape, batch);
+    // Forest: the online Bentley–Saxe cascade, folded as we go.
+    let mut forest = ForestCascade::new(first_index);
+    // Peaks already shipped to the coordinator (`(lo, hi)`).
+    let mut shipped: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+    // Chain: the running left-leaning prefix proof.
+    let mut chain_acc: Option<RecursionOutput<ConfigWithFriParams>> = None;
+    let mut root: Option<RecursionOutput<ConfigWithFriParams>> = None;
 
-            let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
-            let proof_bytes = match mode {
-                StreamMode::PerBatch => {
-                    Some(postcard::to_allocvec(&output.0).expect("serialize leaf"))
-                }
-                StreamMode::Chain => {
-                    // Sequential fold into the running prefix. The fold waits on
-                    // the previous prefix proof (the chain's inherent bottleneck)
-                    // — timed as this step's composition, not shipped anywhere.
-                    let t0 = Instant::now();
-                    chain_acc = Some(match chain_acc.take() {
-                        None => output, // Π_{[1,1]}
-                        Some(acc) => {
-                            cascade_merges = 1;
-                            prove_hiding_merge(&acc, &output)
-                        }
-                    });
-                    cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                    None
-                }
-                StreamMode::Forest => {
-                    // The paper's composition cascade: merge equal-size peaks
-                    // (binary-counter carry), off the leaf critical path but
-                    // measured within the slice phase.
-                    let t0 = Instant::now();
-                    cascade_merges = forest.push(output);
-                    cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                    None
-                }
-            };
-            // A query fires after this leaf: ship what certifies it (outside
-            // the cascade timing; peaks are immutable, so each goes once).
-            let ser = |p: &RecursionOutput<ConfigWithFriParams>| {
-                postcard::to_allocvec(&p.0).expect("serialize context proof")
-            };
-            let context = checkpoints.contains(&(i as u32)).then(|| match mode {
-                StreamMode::Forest => forest
-                    .peaks()
-                    .into_iter()
-                    .map(|(lo, hi, p)| WireInterval {
-                        lo,
-                        hi,
-                        proof: shipped.insert((lo, hi)).then(|| ser(p)),
-                    })
-                    .collect(),
-                StreamMode::Chain => vec![WireInterval {
-                    lo: first_index,
-                    hi: first_index + i as u64,
-                    proof: Some(ser(chain_acc.as_ref().expect("chain prefix"))),
-                }],
-                // per_batch: the leaf proofs themselves are the certificate.
-                StreamMode::PerBatch => Vec::new(),
-            });
-            send_msg(
-                s,
-                &FromWorker::LeafDone {
-                    idx: i as u32,
-                    prove_ms,
-                    verify_ms,
-                    cascade_ms,
-                    cascade_merges,
-                    proof: proof_bytes,
-                    context,
-                },
-            )
-            .expect("send LeafDone");
-        }
+    for (i, batch) in batches.iter().enumerate() {
+        let (output, prove_ms, verify_ms) =
+            state.prove_leaf(&mut leaf, first_index + i as u64, batch, LeafOpen::Real(&commit));
+        state.advance(&shape, batch);
+        // The final commitment this leaf's proof EXPOSES (the value a query
+        // at this version must open), reported before its `LeafDone`.
+        let final_commit = read_exposed_boundary_proof(&output.0).1 .0;
+        send_msg(s, &FromWorker::LeafFinal { idx: i as u32, final_commit })
+            .expect("send LeafFinal");
 
-        match mode {
+        let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
+        let proof_bytes = match mode {
+            StreamMode::PerBatch => {
+                Some(postcard::to_allocvec(&output.0).expect("serialize leaf"))
+            }
             StreamMode::Chain => {
-                // The prefix proof is already the whole-stream root.
-                root = chain_acc;
-                send_msg(
-                    s,
-                    &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0, root: None },
-                )
-                .expect("send SliceDone");
+                // Sequential fold into the running prefix. The fold waits on
+                // the previous prefix proof (the chain's inherent bottleneck)
+                // — timed as this step's composition, not shipped anywhere.
+                let t0 = Instant::now();
+                chain_acc = Some(match chain_acc.take() {
+                    None => output, // Π_{[1,1]}
+                    Some(acc) => {
+                        cascade_merges = 1;
+                        prove_hiding_merge(&acc, &output)
+                    }
+                });
+                cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                None
             }
             StreamMode::Forest => {
-                // Finalize surviving peaks left-to-right into the slice root.
+                // The paper's composition cascade: merge equal-size peaks
+                // (binary-counter carry), off the leaf critical path but
+                // measured within the slice phase.
                 let t0 = Instant::now();
-                let (acc, merges) = forest.finalize();
-                let finalize_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                let root_bytes =
-                    ship_root.then(|| postcard::to_allocvec(&acc.0).expect("serialize slice root"));
-                root = Some(acc);
-                send_msg(
-                    s,
-                    &FromWorker::SliceDone {
-                        finalize_ms,
-                        finalize_merges: merges,
-                        root: root_bytes,
-                    },
-                )
-                .expect("send SliceDone");
+                cascade_merges = forest.push(output);
+                cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                None
             }
-            StreamMode::PerBatch => {}
-        }
+        };
+        // A query fires after this leaf: ship what certifies it (outside
+        // the cascade timing; peaks are immutable, so each goes once).
+        let ser = |p: &RecursionOutput<ConfigWithFriParams>| {
+            postcard::to_allocvec(&p.0).expect("serialize context proof")
+        };
+        let context = checkpoints.contains(&(i as u32)).then(|| match mode {
+            StreamMode::Forest => forest
+                .peaks()
+                .into_iter()
+                .map(|(lo, hi, p)| WireInterval {
+                    lo,
+                    hi,
+                    proof: shipped.insert((lo, hi)).then(|| ser(p)),
+                })
+                .collect(),
+            StreamMode::Chain => vec![WireInterval {
+                lo: first_index,
+                hi: first_index + i as u64,
+                proof: Some(ser(chain_acc.as_ref().expect("chain prefix"))),
+            }],
+            // per_batch: the leaf proofs themselves are the certificate.
+            StreamMode::PerBatch => Vec::new(),
+        });
+        send_msg(
+            s,
+            &FromWorker::LeafDone {
+                idx: i as u32,
+                prove_ms,
+                verify_ms,
+                cascade_ms,
+                cascade_merges,
+                proof: proof_bytes,
+                context,
+            },
+        )
+        .expect("send LeafDone");
+    }
 
-        // Command loop: forest reduction merges / root shipping / exit.
-        loop {
-            let (cmd, _) = recv_msg::<ToWorker>(s).expect("recv cmd");
-            match cmd {
-                ToWorker::MergeWith { right_proof } => {
-                    let right: Proof =
-                        postcard::from_bytes(&right_proof).expect("deserialize peer root");
-                    let t0 = Instant::now();
-                    let left = root.take().expect("local root for merge");
-                    root = Some(prove_hiding_merge_proofs(&left.0, &right));
-                    send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
-                        .expect("send Merged");
-                }
-                ToWorker::FetchRoot => {
-                    let r = root.as_ref().expect("local root to ship");
-                    let bytes = postcard::to_allocvec(&r.0).expect("serialize root");
-                    send_msg(s, &FromWorker::Root { proof: bytes }).expect("send Root");
-                }
-                ToWorker::Exit => {
-                    send_msg(s, &FromWorker::Done { peak_rss_mb: read_vmhwm_mb() })
-                        .expect("send Done");
-                    break;
-                }
-                ToWorker::Task { .. } => panic!("duplicate Task"),
-            }
+    match mode {
+        StreamMode::Chain => {
+            // The prefix proof is already the whole-stream root.
+            root = chain_acc;
+            send_msg(
+                s,
+                &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0, root: None },
+            )
+            .expect("send SliceDone");
         }
-    })
+        StreamMode::Forest => {
+            // Finalize surviving peaks left-to-right into the slice root.
+            let t0 = Instant::now();
+            let (acc, merges) = forest.finalize();
+            let finalize_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let root_bytes =
+                ship_root.then(|| postcard::to_allocvec(&acc.0).expect("serialize slice root"));
+            root = Some(acc);
+            send_msg(
+                s,
+                &FromWorker::SliceDone { finalize_ms, finalize_merges: merges, root: root_bytes },
+            )
+            .expect("send SliceDone");
+        }
+        StreamMode::PerBatch => {}
+    }
+
+    // Command loop: forest reduction merges / root shipping / exit.
+    loop {
+        let (cmd, _) = recv_msg::<ToWorker>(s).expect("recv cmd");
+        match cmd {
+            ToWorker::MergeWith { right_proof } => {
+                let right: Proof =
+                    postcard::from_bytes(&right_proof).expect("deserialize peer root");
+                let t0 = Instant::now();
+                let left = root.take().expect("local root for merge");
+                root = Some(prove_hiding_merge_proofs(&left.0, &right));
+                send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
+                    .expect("send Merged");
+            }
+            ToWorker::FetchRoot => {
+                let r = root.as_ref().expect("local root to ship");
+                let bytes = postcard::to_allocvec(&r.0).expect("serialize root");
+                send_msg(s, &FromWorker::Root { proof: bytes }).expect("send Root");
+            }
+            ToWorker::Exit => {
+                send_msg(s, &FromWorker::Done { peak_rss_mb: read_vmhwm_mb() })
+                    .expect("send Done");
+                break;
+            }
+            ToWorker::Task { .. } => panic!("duplicate Task"),
+        }
+    }
 }
 
 
@@ -1140,155 +1514,166 @@ fn worker_main(sock: &str, id: u32, cores: usize) -> ! {
 fn worker_main_gl(sock: &str, id: u32, cores: usize) -> ! {
     let mut stream = UnixStream::connect(sock).expect("worker connect");
     send_msg(&mut stream, &FromWorker::Hello { id }).expect("hello");
-    serve_guarded(stream, cores, move |s| {
-        let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
-        let ToWorker::Task { family, mode, shape, m, start, batches, first_index, .. } = task else {
-            panic!("first message must be Task");
-        };
-        // The state's wire tag fixes the family; parse validates agreement.
-        let family = StreamFamily::parse(&family).expect("family");
-        let mode = StreamMode::parse(&mode).expect("mode");
-        let shape = shape.to_shape();
-        let m = m as usize;
-        let mut state = FamStateGl::decode(&start, m);
-        // Build the leaf circuit ONCE; every epoch below reuses it.
-        let mut leaf = FamLeafCircuitGl::build(family, &shape, m);
+    serve_guarded(stream, cores, worker_session_gl)
+}
 
-        // Forest: Bentley–Saxe peak stack `(size, root)`, folded as we go.
-        let mut peaks: Vec<(u64, RecursionOutput<ConfigWithFriParamsGl>)> = Vec::new();
-        // Chain: the running left-leaning prefix proof.
-        let mut chain_acc: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
-        let mut root: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
+/// Goldilocks twin of [`worker_session`] (no `LeafFinal`: the query replay
+/// is BabyBear-only).
+fn worker_session_gl(s: &mut UnixStream) {
+    let (task, _) = recv_msg::<ToWorker>(s).expect("recv task");
+    // The Goldilocks engine runs no query phase: no checkpoints, no slice
+    // root shipped.
+    let ToWorker::Task { family, mode, shape, m, start, batches, first_index, commit, salt_seed, .. } =
+        task
+    else {
+        panic!("first message must be Task");
+    };
+    // The state's wire tag fixes the family; parse validates agreement.
+    let family = StreamFamily::parse(&family).expect("family");
+    let mode = StreamMode::parse(&mode).expect("mode");
+    let shape = shape.to_shape();
+    let m = m as usize;
+    // The prover's commitment context (mode + seed), as the coordinator
+    // holds it.
+    let commit = ProverCommit::from_prover_wire(&commit, salt_seed);
+    let mut state = FamStateGl::decode(&start, m);
+    // Build the leaf circuit ONCE; every epoch below reuses it.
+    let mut leaf = FamLeafCircuitGl::build(family, &shape, m, commit.mode());
 
-        for (i, batch) in batches.iter().enumerate() {
-            let (output, prove_ms, verify_ms) =
-                state.prove_leaf(&mut leaf, first_index + i as u64, batch);
-            state.advance(&shape, batch);
+    // Forest: Bentley–Saxe peak stack `(size, root)`, folded as we go.
+    let mut peaks: Vec<(u64, RecursionOutput<ConfigWithFriParamsGl>)> = Vec::new();
+    // Chain: the running left-leaning prefix proof.
+    let mut chain_acc: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
+    let mut root: Option<RecursionOutput<ConfigWithFriParamsGl>> = None;
 
-            let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
-            let proof_bytes = match mode {
-                StreamMode::PerBatch => {
-                    Some(postcard::to_allocvec(&output.0).expect("serialize leaf"))
-                }
-                StreamMode::Chain => {
-                    // Sequential fold into the running prefix. The fold waits on
-                    // the previous prefix proof (the chain's inherent bottleneck)
-                    // — timed as this step's composition, not shipped anywhere.
-                    let t0 = Instant::now();
-                    chain_acc = Some(match chain_acc.take() {
-                        None => output, // Π_{[1,1]}
-                        Some(acc) => {
-                            cascade_merges = 1;
-                            crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
-                                &acc, &output,
-                            )
-                        }
-                    });
-                    cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                    None
-                }
-                StreamMode::Forest => {
-                    // The paper's composition cascade: merge equal-size peaks
-                    // (binary-counter carry), off the leaf critical path but
-                    // measured within the slice phase.
-                    let t0 = Instant::now();
-                    let mut node = (1u64, output);
-                    while peaks.last().is_some_and(|(sz, _)| *sz == node.0) {
-                        let (_, left) = peaks.pop().unwrap();
-                        node = (
-                            node.0 * 2,
-                            crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
-                                &left, &node.1,
-                            ),
-                        );
-                        cascade_merges += 1;
-                    }
-                    peaks.push(node);
-                    cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                    None
-                }
-            };
-            send_msg(
-                s,
-                &FromWorker::LeafDone {
-                    idx: i as u32,
-                    prove_ms,
-                    verify_ms,
-                    cascade_ms,
-                    cascade_merges,
-                    proof: proof_bytes,
-                    context: None,
-                },
-            )
-            .expect("send LeafDone");
-        }
+    for (i, batch) in batches.iter().enumerate() {
+        let (output, prove_ms, verify_ms) =
+            state.prove_leaf(&mut leaf, first_index + i as u64, batch, LeafOpen::Real(&commit));
+        state.advance(&shape, batch);
 
-        match mode {
+        let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
+        let proof_bytes = match mode {
+            StreamMode::PerBatch => {
+                Some(postcard::to_allocvec(&output.0).expect("serialize leaf"))
+            }
             StreamMode::Chain => {
-                // The prefix proof is already the whole-stream root.
-                root = chain_acc;
-                send_msg(
-                    s,
-                    &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0, root: None },
-                )
-                .expect("send SliceDone");
+                // Sequential fold into the running prefix. The fold waits on
+                // the previous prefix proof (the chain's inherent bottleneck)
+                // — timed as this step's composition, not shipped anywhere.
+                let t0 = Instant::now();
+                chain_acc = Some(match chain_acc.take() {
+                    None => output, // Π_{[1,1]}
+                    Some(acc) => {
+                        cascade_merges = 1;
+                        crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
+                            &acc, &output,
+                        )
+                    }
+                });
+                cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                None
             }
             StreamMode::Forest => {
-                // Finalize surviving peaks left-to-right into the slice root.
+                // The paper's composition cascade: merge equal-size peaks
+                // (binary-counter carry), off the leaf critical path but
+                // measured within the slice phase.
                 let t0 = Instant::now();
-                let mut merges = 0u32;
-                let mut acc = peaks.remove(0).1;
-                for (_, r) in peaks.drain(..) {
-                    acc = crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
-                        &acc, &r,
-                    );
-                    merges += 1;
-                }
-                root = Some(acc);
-                send_msg(
-                    s,
-                    &FromWorker::SliceDone {
-                        finalize_ms: t0.elapsed().as_secs_f64() * 1000.0,
-                        finalize_merges: merges,
-                        root: None,
-                    },
-                )
-                .expect("send SliceDone");
-            }
-            StreamMode::PerBatch => {}
-        }
-
-        // Command loop: forest reduction merges / root shipping / exit.
-        loop {
-            let (cmd, _) = recv_msg::<ToWorker>(s).expect("recv cmd");
-            match cmd {
-                ToWorker::MergeWith { right_proof } => {
-                    let right: ProofGl =
-                        postcard::from_bytes(&right_proof).expect("deserialize peer root");
-                    let t0 = Instant::now();
-                    let left = root.take().expect("local root for merge");
-                    root = Some(
-                        crate::recursion::recursive::expose_forest_gl::prove_hiding_merge_proofs(
-                            &left.0, &right,
+                let mut node = (1u64, output);
+                while peaks.last().is_some_and(|(sz, _)| *sz == node.0) {
+                    let (_, left) = peaks.pop().unwrap();
+                    node = (
+                        node.0 * 2,
+                        crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
+                            &left, &node.1,
                         ),
                     );
-                    send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
-                        .expect("send Merged");
+                    cascade_merges += 1;
                 }
-                ToWorker::FetchRoot => {
-                    let r = root.as_ref().expect("local root to ship");
-                    let bytes = postcard::to_allocvec(&r.0).expect("serialize root");
-                    send_msg(s, &FromWorker::Root { proof: bytes }).expect("send Root");
-                }
-                ToWorker::Exit => {
-                    send_msg(s, &FromWorker::Done { peak_rss_mb: read_vmhwm_mb() })
-                        .expect("send Done");
-                    break;
-                }
-                ToWorker::Task { .. } => panic!("duplicate Task"),
+                peaks.push(node);
+                cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                None
             }
+        };
+        send_msg(
+            s,
+            &FromWorker::LeafDone {
+                idx: i as u32,
+                prove_ms,
+                verify_ms,
+                cascade_ms,
+                cascade_merges,
+                proof: proof_bytes,
+                context: None,
+            },
+        )
+        .expect("send LeafDone");
+    }
+
+    match mode {
+        StreamMode::Chain => {
+            // The prefix proof is already the whole-stream root.
+            root = chain_acc;
+            send_msg(
+                s,
+                &FromWorker::SliceDone { finalize_ms: 0.0, finalize_merges: 0, root: None },
+            )
+            .expect("send SliceDone");
         }
-    })
+        StreamMode::Forest => {
+            // Finalize surviving peaks left-to-right into the slice root.
+            let t0 = Instant::now();
+            let mut merges = 0u32;
+            let mut acc = peaks.remove(0).1;
+            for (_, r) in peaks.drain(..) {
+                acc = crate::recursion::recursive::expose_forest_gl::prove_hiding_merge(
+                    &acc, &r,
+                );
+                merges += 1;
+            }
+            root = Some(acc);
+            send_msg(
+                s,
+                &FromWorker::SliceDone {
+                    finalize_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                    finalize_merges: merges,
+                    root: None,
+                },
+            )
+            .expect("send SliceDone");
+        }
+        StreamMode::PerBatch => {}
+    }
+
+    // Command loop: forest reduction merges / root shipping / exit.
+    loop {
+        let (cmd, _) = recv_msg::<ToWorker>(s).expect("recv cmd");
+        match cmd {
+            ToWorker::MergeWith { right_proof } => {
+                let right: ProofGl =
+                    postcard::from_bytes(&right_proof).expect("deserialize peer root");
+                let t0 = Instant::now();
+                let left = root.take().expect("local root for merge");
+                root = Some(
+                    crate::recursion::recursive::expose_forest_gl::prove_hiding_merge_proofs(
+                        &left.0, &right,
+                    ),
+                );
+                send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
+                    .expect("send Merged");
+            }
+            ToWorker::FetchRoot => {
+                let r = root.as_ref().expect("local root to ship");
+                let bytes = postcard::to_allocvec(&r.0).expect("serialize root");
+                send_msg(s, &FromWorker::Root { proof: bytes }).expect("send Root");
+            }
+            ToWorker::Exit => {
+                send_msg(s, &FromWorker::Done { peak_rss_mb: read_vmhwm_mb() })
+                    .expect("send Done");
+                break;
+            }
+            ToWorker::Task { .. } => panic!("duplicate Task"),
+        }
+    }
 }
 
 
@@ -1564,7 +1949,7 @@ fn root_vk_source() -> RootVkSource {
 }
 
 /// The merge tree a dist run folds its `t` leaves into.
-fn dist_tree_shape(mode: StreamMode, t: usize, machines: usize) -> ForestShape {
+pub(crate) fn dist_tree_shape(mode: StreamMode, t: usize, machines: usize) -> ForestShape {
     match mode {
         StreamMode::Chain => ForestShape::chain(t),
         StreamMode::Forest | StreamMode::PerBatch => ForestShape::dist_forest(t, machines),
@@ -1591,7 +1976,7 @@ fn noop_leaf_input(family: StreamFamily, m: usize) -> (Vec<u32>, Vec<u32>) {
 /// `EXP_ROOT_VK_SAVE` when set); a file path reads it. Used for the composed
 /// root and, on the paths where the auditor receives LEAF proofs directly
 /// (per_batch; a one-batch stream), for the leaf VK.
-fn resolve_trusted_vk<C: Serialize + DeserializeOwned>(
+pub(crate) fn resolve_trusted_vk<C: Serialize + DeserializeOwned>(
     derive: impl FnOnce() -> RootVk<C>,
 ) -> Result<Option<RootVk<C>>, String> {
     match root_vk_source() {
@@ -1624,7 +2009,7 @@ fn resolve_trusted_vk<C: Serialize + DeserializeOwned>(
 
 /// Resolve the auditor's trusted root VK (see [`RootVkSource`]); under the
 /// legacy `self` opt-in the VK is `self_pin()` (read from the root itself).
-fn resolve_root_vk<C: Serialize + DeserializeOwned>(
+pub(crate) fn resolve_root_vk<C: Serialize + DeserializeOwned>(
     self_pin: impl FnOnce() -> Vec<C>,
     derive: impl FnOnce() -> RootVk<C>,
 ) -> Result<RootVk<C>, String> {
@@ -1635,51 +2020,63 @@ fn resolve_root_vk<C: Serialize + DeserializeOwned>(
 /// the workers build it, [`FamLeafCircuit::build`]) over public, data-free
 /// input ([`noop_leaf_input`]) at batch index 1 — the starting point of every
 /// VK derivation.
-pub(crate) fn prove_noop_leaf(family: StreamFamily, shape: &StreamShape, m: usize) -> Proof {
-    let mut leaf = FamLeafCircuit::build(family, shape, m);
+/// Under `Hiding` it is proved through the one explicit zero-salt path
+/// (`prove_epoch_public_zero`: all three randomizers the public zero, so it
+/// still exposes `init == final`); the salts are witnesses, so its VK is the
+/// real hiding leaf's. Public parameters only: no seed is involved.
+pub(crate) fn prove_noop_leaf(
+    family: StreamFamily,
+    shape: &StreamShape,
+    m: usize,
+    commit_mode: CommitMode,
+) -> Proof {
+    let mut leaf = FamLeafCircuit::build(family, shape, m, commit_mode);
     let mut state = FamState::empty(family, shape, m);
     let (setup, batch) = noop_leaf_input(family, m);
     if !setup.is_empty() {
         state.advance(shape, &setup);
     }
-    state.prove_leaf(&mut leaf, 1, &batch).0 .0
+    state.prove_leaf(&mut leaf, 1, &batch, LeafOpen::NoOp(commit_mode)).0 .0
 }
 
 /// Goldilocks analog of [`prove_noop_leaf`].
-fn prove_noop_leaf_gl(family: StreamFamily, shape: &StreamShape, m: usize) -> ProofGl {
-    let mut leaf = FamLeafCircuitGl::build(family, shape, m);
+fn prove_noop_leaf_gl(family: StreamFamily, shape: &StreamShape, m: usize, commit_mode: CommitMode) -> ProofGl {
+    let mut leaf = FamLeafCircuitGl::build(family, shape, m, commit_mode);
     let mut state = FamStateGl::empty(family, shape, m);
     let (setup, batch) = noop_leaf_input(family, m);
     if !setup.is_empty() {
         state.advance(shape, &setup);
     }
-    state.prove_leaf(&mut leaf, 1, &batch).0 .0
+    state.prove_leaf(&mut leaf, 1, &batch, LeafOpen::NoOp(commit_mode)).0 .0
 }
 
 /// The trusted LEAF VK (commitment + metadata) of the family's harness leaf
-/// circuit, from public parameters only: the no-op leaf's own VK. The auditor
-/// pins every leaf proof it receives directly (per_batch; a one-batch stream)
-/// to it ([`verify_leaves_against_log`]).
+/// circuit under `commit_mode`, from public parameters only: the no-op
+/// leaf's own VK. The auditor pins every leaf proof it receives directly
+/// (per_batch; a one-batch stream) to it ([`verify_leaves_against_log`]).
 pub(crate) fn derive_dist_leaf_vk(
     family: StreamFamily,
     shape: &StreamShape,
     m: usize,
+    commit_mode: CommitMode,
 ) -> RootVk<crate::config::Challenge> {
-    leaf_vk(&prove_noop_leaf(family, shape, m))
+    leaf_vk(&prove_noop_leaf(family, shape, m, commit_mode))
 }
 
 /// Goldilocks analog of [`derive_dist_leaf_vk`].
-fn derive_dist_leaf_vk_gl(
+pub(crate) fn derive_dist_leaf_vk_gl(
     family: StreamFamily,
     shape: &StreamShape,
     m: usize,
+    commit_mode: CommitMode,
 ) -> RootVk<crate::config_gl::Challenge> {
-    crate::recursion::recursive::expose_forest_gl::leaf_vk(&prove_noop_leaf_gl(family, shape, m))
+    crate::recursion::recursive::expose_forest_gl::leaf_vk(&prove_noop_leaf_gl(family, shape, m, commit_mode))
 }
 
-/// Derive the BabyBear root VK of a dist run from public parameters only.
-/// (Also used by `stream_compose::measure_compose` with `machines = 1`, whose
-/// forest is `ForestShape::dist_forest(t, 1) == ForestShape::forest(t)`.)
+/// Derive the BabyBear root VK of a dist run from public parameters only
+/// (`commit_mode` selects the leaf circuit). (Also used by
+/// `stream_compose::measure_compose` with `machines = 1`, whose forest is
+/// `ForestShape::dist_forest(t, 1) == ForestShape::forest(t)`.)
 pub(crate) fn derive_dist_root_vk(
     family: StreamFamily,
     shape: &StreamShape,
@@ -1687,99 +2084,34 @@ pub(crate) fn derive_dist_root_vk(
     mode: StreamMode,
     t: usize,
     machines: usize,
+    commit_mode: CommitMode,
 ) -> RootVk<crate::config::Challenge> {
-    root_vk_deriver(prove_noop_leaf(family, shape, m)).root_vk(&dist_tree_shape(mode, t, machines))
+    root_vk_deriver(prove_noop_leaf(family, shape, m, commit_mode))
+        .root_vk(&dist_tree_shape(mode, t, machines))
 }
 
 /// Goldilocks analog of [`derive_dist_root_vk`].
-fn derive_dist_root_vk_gl(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn derive_dist_root_vk_gl(
     family: StreamFamily,
     shape: &StreamShape,
     m: usize,
     mode: StreamMode,
     t: usize,
     machines: usize,
+    commit_mode: CommitMode,
 ) -> RootVk<crate::config_gl::Challenge> {
-    crate::recursion::recursive::expose_forest_gl::root_vk_deriver(prove_noop_leaf_gl(family, shape, m))
-        .root_vk(&dist_tree_shape(mode, t, machines))
+    crate::recursion::recursive::expose_forest_gl::root_vk_deriver(prove_noop_leaf_gl(
+        family,
+        shape,
+        m,
+        commit_mode,
+    ))
+    .root_vk(&dist_tree_shape(mode, t, machines))
 }
 
-/// The auditor's check of LEAF proofs it receives directly, as postcard bytes
-/// (per_batch: all `t` leaves; chain/forest with `t == 1`: the lone leaf).
-///
-/// Default (`EXP_ROOT_VK` unset / `derive`, or a VK file): the trusted leaf VK
-/// is resolved OUTSIDE the timed verify ([`derive_dist_leaf_vk`]), the bytes
-/// are decoded, and then every leaf is pinned to it, STARK-verified, and its
-/// statement checked against `log` ([`verify_leaves_against_log`]); returns the
-/// measured verify time in ms. Legacy `EXP_ROOT_VK=self` (warned): the leaves
-/// are only decoded and their statements checked, which authenticates nothing,
-/// and the workers' self-verify total `self_verify_ms` is reported, exactly as
-/// before the pin existed.
-#[allow(clippy::too_many_arguments)]
-fn audit_leaf_bytes(
-    family: StreamFamily,
-    shape: &StreamShape,
-    m: usize,
-    bytes: &[&[u8]],
-    log: &BatchLog<Val>,
-    layout: Expose,
-    self_verify_ms: f64,
-) -> Result<f64, String> {
-    let vk = resolve_trusted_vk(|| derive_dist_leaf_vk(family, shape, m))?;
-    let proofs: Vec<Proof> = bytes
-        .iter()
-        .map(|b| postcard::from_bytes(b))
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("leaf decode: {e}"))?;
-    let refs: Vec<&Proof> = proofs.iter().collect();
-    match &vk {
-        Some(vk) => {
-            let v0 = Instant::now();
-            verify_leaves_against_log(&refs, vk, log, layout)
-                .map_err(|e| format!("leaf audit: {e}"))?;
-            Ok(v0.elapsed().as_secs_f64() * 1000.0)
-        }
-        None => {
-            check_leaves_against_log(&refs, log, layout)
-                .map_err(|e| format!("leaf statements vs log: {e}"))?;
-            Ok(self_verify_ms)
-        }
-    }
-}
-
-/// Goldilocks analog of [`audit_leaf_bytes`].
-#[allow(clippy::too_many_arguments)]
-fn audit_leaf_bytes_gl(
-    family: StreamFamily,
-    shape: &StreamShape,
-    m: usize,
-    bytes: &[&[u8]],
-    log: &BatchLog<crate::config_gl::Val>,
-    layout: Expose,
-    self_verify_ms: f64,
-) -> Result<f64, String> {
-    use crate::recursion::recursive::expose_forest_gl as efg;
-    let vk = resolve_trusted_vk(|| derive_dist_leaf_vk_gl(family, shape, m))?;
-    let proofs: Vec<ProofGl> = bytes
-        .iter()
-        .map(|b| postcard::from_bytes(b))
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("leaf decode: {e}"))?;
-    let refs: Vec<&ProofGl> = proofs.iter().collect();
-    match &vk {
-        Some(vk) => {
-            let v0 = Instant::now();
-            efg::verify_leaves_against_log(&refs, vk, log, layout)
-                .map_err(|e| format!("leaf audit: {e}"))?;
-            Ok(v0.elapsed().as_secs_f64() * 1000.0)
-        }
-        None => {
-            efg::check_leaves_against_log(&refs, log, layout)
-                .map_err(|e| format!("leaf statements vs log: {e}"))?;
-            Ok(self_verify_ms)
-        }
-    }
-}
+// The auditor's leaf / root checks live in [`super::audit`] (public inputs
+// only: the published log, the proofs and [`PublicParams`]).
 
 // ─── Coordinator ─────────────────────────────────────────────────────────────
 
@@ -2050,6 +2382,16 @@ fn fatal_msg(msg: &FromWorker) -> Option<String> {
     }
 }
 
+/// Every leaf's reported exposed final (`FromWorker::LeafFinal`), in global
+/// leaf order; a leaf whose machine never reported it fails the cell.
+fn reported_leaf_finals(finals: Vec<Option<[Val; 8]>>) -> Result<Vec<[Val; 8]>, String> {
+    finals
+        .into_iter()
+        .enumerate()
+        .map(|(g, f)| f.ok_or_else(|| format!("leaf {}: its machine reported no exposed final", g + 1)))
+        .collect()
+}
+
 /// Measure one `(family, shape, mode)` cell under the process-level
 /// distributed emulation: up to `machines` pinned worker processes × `cores`
 /// CPUs each. The **chain is pinned to a single machine** regardless of
@@ -2071,6 +2413,7 @@ pub fn measure_compose_dist(
     rtt_ms: f64,
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
+    commit: &ProverCommit,
 ) -> Result<DistCell, String> {
     // Staged-wave mode (forest only): machines execute in gated waves so each
     // gets a full NUMA node with no co-resident sibling from this experiment;
@@ -2082,7 +2425,7 @@ pub fn measure_compose_dist(
             if ws >= 1 && ws < eff {
                 return measure_compose_dist_staged(
                     family, shape, batches, cores, machines, proof_dir, mbps, rtt_ms, query_at,
-                    query_key_mode, ws,
+                    query_key_mode, ws, commit,
                 );
             }
         }
@@ -2106,7 +2449,8 @@ pub fn measure_compose_dist(
     // Mixed workload: the query-side auditor (decode VK + prefix auditor),
     // derived from public parameters before the timed run; the workers then
     // ship each query's prefix certificate ([`CtxCollector`]).
-    let mut audit = if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m) };
+    let mut audit =
+        if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m, commit.mode()) };
     let mut ctx = CtxCollector::new(audit.is_some(), mode, machines_eff);
 
     let t_start = Instant::now();
@@ -2114,8 +2458,10 @@ pub fn measure_compose_dist(
     // ── Witness pass: one sequential plaintext replay; record slice-start
     // states and the native anchor/final commitments.
     let wp0 = Instant::now();
+    // PROVER side: `Com(S_0; 0)` and `Com(S_T; ρ^S_T)` (the seed's
+    // randomizer; `Plain`: the pre-B2 values).
     let mut state = FamState::empty(family, &shape, m);
-    let anchor = state.commit(&shape);
+    let anchor = state.commit_with(&shape, commit.mode(), &SaltBb::ZERO);
     let mut slice_starts: Vec<WireState> = Vec::with_capacity(machines_eff);
     let mut next_slice = 0usize;
     for (i, batch) in batches.iter().enumerate() {
@@ -2125,7 +2471,8 @@ pub fn measure_compose_dist(
         }
         state.advance(&shape, batch);
     }
-    let final_commit = state.commit(&shape);
+    let final_commit =
+        state.commit_with(&shape, commit.mode(), &commit.state_salt(family.commit_family(), t as u64));
     let witness_pass_ms = wp0.elapsed().as_secs_f64() * 1000.0;
 
     // ── Spawn the machines.
@@ -2140,6 +2487,9 @@ pub fn measure_compose_dist(
     let _ = std::fs::remove_file(&sock_path);
     let listener = UnixListener::bind(&sock_path).map_err(|e| format!("bind socket: {e}"))?;
     let exe = stable_self_exe()?;
+    // PROVER-internal: the commitment context every worker needs travels
+    // inside `ToWorker::Task` ([`ToWorker::task`]; the seed goes to the
+    // prover's own machines only).
 
     let spawn_child = |role: &str, id: usize, lo: usize, hi: usize| -> Result<ChildGuard, String> {
         let mut cmd = pinned_command(&exe, lo, hi);
@@ -2183,17 +2533,18 @@ pub fn measure_compose_dist(
         scatter_data_bytes += postcard::to_allocvec(&slice).map(|v| v.len() as u64).unwrap_or(0);
         send_msg(
             &mut worker_tx[i],
-            &ToWorker::Task {
-                family: family.label().into(),
-                mode: mode.label().into(),
-                shape: WireShape::from(&shape),
-                m: m as u32,
+            &ToWorker::task(
+                family,
+                mode,
+                &shape,
+                m,
                 start,
-                batches: slice,
-                first_index: a as u64 + 1,
-                checkpoints: ctx.checkpoints(query_at, (a, b)),
-                ship_root: ctx.ship_root(query_at, (a, b)),
-            },
+                slice,
+                a as u64 + 1,
+                commit,
+                ctx.checkpoints(query_at, (a, b)),
+                ctx.ship_root(query_at, (a, b)),
+            ),
         )
         .map_err(|e| format!("scatter to {i}: {e}"))?;
     }
@@ -2204,6 +2555,9 @@ pub fn measure_compose_dist(
     let mut leaf_prove_ms = vec![0.0f64; t]; // by global leaf index
     let mut leaf_verify_sum = 0.0f64;
     let mut leaf_proofs: Vec<Option<Vec<u8>>> = (0..t).map(|_| None).collect();
+    // Each leaf's EXPOSED final commitment, as its machine reported it
+    // (`LeafFinal`, by global leaf index): what the query replay binds to.
+    let mut leaf_finals: Vec<Option<[Val; 8]>> = vec![None; t];
     let mut busy = vec![0.0f64; machines_eff];
     let mut fold = vec![0.0f64; machines_eff];
     let mut merges_local = 0u32;
@@ -2223,6 +2577,9 @@ pub fn measure_compose_dist(
                 }
                 let w = id as usize;
                 match msg {
+                    FromWorker::LeafFinal { idx, final_commit } => {
+                        leaf_finals[ranges[w].0 + idx as usize] = Some(final_commit);
+                    }
                     FromWorker::LeafDone {
                         idx,
                         prove_ms,
@@ -2380,14 +2737,28 @@ pub fn measure_compose_dist(
     let merge_ms = mp0.elapsed().as_secs_f64() * 1000.0;
     let total_time_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
-    // ── Auditor: verify the received proof bytes against a trusted VK and
-    // bind their exposed statement to the public batch log (Com(S_0),
-    // Com(S_T), Com(B_1..B_T)), recomputed natively from the batches.
+    // ── PROVER side: publish the batch log (Com(S_0), Com(S_T), every
+    // Com(B_t)) under the run's commitment context: the one place the seed's
+    // randomizers meet the log. Then a prover-side SANITY check: the root
+    // the workers produced must end at the prover's own replay commitments
+    // (its Com(S_0; 0) and Com(S_T; ρ^S_T)) before it is handed over.
     let log = crate::recursion::recursive::expose_forest::batch_log(
         &anchor,
         &final_commit,
-        &batch_commits(family, m, batches),
+        &batch_commits_with(family, m, batches, commit),
     );
+    if let Some(bytes) = &root_bytes {
+        let proof: Proof = postcard::from_bytes(bytes).map_err(|e| format!("root decode: {e}"))?;
+        let (ini, fin) = read_exposed_boundary_proof(&proof);
+        if ini.0 != anchor || fin.0 != final_commit {
+            return Err("root boundary != native (Com(S_0), Com(S_E))".into());
+        }
+    }
+
+    // ── AUDITOR (public parameters, the published log and the received
+    // bytes only; no seed): verify against a trusted VK derived from public
+    // parameters and bind the exposed statement to the log (`super::audit`).
+    let pp = PublicParams { family, shape, m, commit_mode: commit.mode() };
     let layout = composition_expose();
     if layout != Expose::Interval {
         warn_boundary_layout("dist_compose auditor");
@@ -2396,53 +2767,20 @@ pub fn measure_compose_dist(
         None => {
             // per_batch: the Θ(t) artifact. Every leaf proof is verified
             // against the trusted LEAF VK, derived from public parameters
-            // outside the timed verify ([`audit_leaf_bytes`]).
+            // outside the timed verify ([`audit::audit_leaf_bytes`]).
             let bytes: Vec<&[u8]> = leaf_proofs
                 .iter()
                 .map(|p| p.as_deref().expect("per_batch leaf proof"))
                 .collect();
             let sum: u64 = bytes.iter().map(|p| p.len() as u64).sum();
-            (sum, audit_leaf_bytes(family, &shape, m, &bytes, &log, layout, leaf_verify_sum)?)
+            (sum, audit::audit_leaf_bytes(&pp, &bytes, &log, layout, leaf_verify_sum)?)
         }
-        Some(bytes) => {
-            let proof: Proof =
-                postcard::from_bytes(bytes).map_err(|e| format!("root decode: {e}"))?;
-            let (ini, fin) = read_exposed_boundary_proof(&proof);
-            if ini.0 != anchor || fin.0 != final_commit {
-                return Err("root boundary != native (Com(S_0), Com(S_E))".into());
-            }
-            // The bracketing the machines composed.
-            let tree = dist_tree_shape(mode, t, machines);
-            let interval = layout == Expose::Interval;
-            if t == 1 {
-                // A one-batch stream: the "root" is the lone LEAF proof. The
-                // aggregation verifier cannot check it (it lacks the sketch's
-                // tables), so it is verified like a per_batch leaf: pinned to
-                // the trusted leaf VK, STARK-verified, statement vs the log.
-                (bytes.len() as u64, audit_leaf_bytes(family, &shape, m, &[bytes], &log, layout, leaf_verify_sum)?)
-            } else {
-                // The auditor pins the root's VK (commitment + metadata) to a
-                // trusted copy from `EXP_ROOT_VK` (see [`RootVkSource`]),
-                // resolved outside the timed verify; the pin is a fixed-size
-                // equality check, negligible next to STARK-table verification.
-                // Interval layout (default): the root statement is then
-                // checked against the log (lo = 1, hi = T, Com(S_0), Com(S_T),
-                // and the ordered-batch digest recomputed natively under the
-                // dist bracketing) — O(T) native hashes, inside the timed
-                // verify.
-                let expected_root_vk = resolve_root_vk(
-                    || vk_pin_values(&proof),
-                    || derive_dist_root_vk(family, &shape, m, mode, t, machines),
-                )?;
-                let v0 = Instant::now();
-                if interval {
-                    verify_bound_stark_proof_against_log(&proof, &expected_root_vk, &log, &tree);
-                } else {
-                    verify_bound_stark_proof_pinned(&proof, &expected_root_vk);
-                }
-                (bytes.len() as u64, v0.elapsed().as_secs_f64() * 1000.0)
-            }
-        }
+        // The bracketing the machines composed is `dist_tree_shape(mode, t,
+        // machines)`; a one-batch stream's lone leaf is audited as a leaf.
+        Some(bytes) => (
+            bytes.len() as u64,
+            audit::audit_root_bytes(&pp, bytes, &log, mode, t, machines, layout, leaf_verify_sum)?,
+        ),
     };
 
     // ── Wind down children; collect peak RSS.
@@ -2470,8 +2808,11 @@ pub fn measure_compose_dist(
     // query cost stays in the separate `query_*` columns (S³'s sequential,
     // report-separately discipline), not folded into the distributed update
     // total. No-op (all zero) when the schedule is empty.
-    // Each answer is pinned to the decode VK and bound to the certified
-    // history by the certificates the workers shipped.
+    // Each query at version `t'` must open exactly leaf `t'`'s exposed final
+    // (prover side); each answer is pinned to the decode VK of the run's
+    // commitment mode and bound to the certified history by the
+    // certificates the workers shipped, against the published log `log`.
+    let leaf_finals = reported_leaf_finals(leaf_finals)?;
     let store = ctx.finish(query_at, &ranges, &leaf_proofs)?;
     let q = measure_queries_dist(
         family,
@@ -2481,6 +2822,8 @@ pub fn measure_compose_dist(
         cores,
         query_at,
         query_key_mode,
+        commit,
+        &leaf_finals,
         audit.as_mut().map(|a| (a, &store, &log)),
     )?;
 
@@ -2658,6 +3001,7 @@ fn measure_compose_dist_staged(
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
     wave_size: usize,
+    commit: &ProverCommit,
 ) -> Result<DistCell, String> {
     assert!(!batches.is_empty(), "need at least one batch");
     assert!(wave_size.is_power_of_two(), "EXP_COMPOSE_WAVE_SIZE must be a power of two");
@@ -2678,15 +3022,18 @@ fn measure_compose_dist_staged(
     // Mixed workload: the query-side auditor (decode VK + prefix auditor),
     // derived from public parameters before the timed run; the workers then
     // ship each query's prefix certificate ([`CtxCollector`]).
-    let mut audit = if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m) };
+    let mut audit =
+        if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m, commit.mode()) };
     let mut ctx = CtxCollector::new(audit.is_some(), mode, machines_eff);
 
     let t_start = Instant::now();
 
     // ── Witness pass (identical to the concurrent engine).
     let wp0 = Instant::now();
+    // PROVER side: `Com(S_0; 0)` and `Com(S_T; ρ^S_T)` (the seed's
+    // randomizer; `Plain`: the pre-B2 values).
     let mut state = FamState::empty(family, &shape, m);
-    let anchor = state.commit(&shape);
+    let anchor = state.commit_with(&shape, commit.mode(), &SaltBb::ZERO);
     let mut slice_starts: Vec<WireState> = Vec::with_capacity(machines_eff);
     let mut next_slice = 0usize;
     for (i, batch) in batches.iter().enumerate() {
@@ -2696,7 +3043,8 @@ fn measure_compose_dist_staged(
         }
         state.advance(&shape, batch);
     }
-    let final_commit = state.commit(&shape);
+    let final_commit =
+        state.commit_with(&shape, commit.mode(), &commit.state_salt(family.commit_family(), t as u64));
     let witness_pass_ms = wp0.elapsed().as_secs_f64() * 1000.0;
 
     // ── Spawn ALL machines up front; they block awaiting their Task.
@@ -2711,6 +3059,9 @@ fn measure_compose_dist_staged(
     let _ = std::fs::remove_file(&sock_path);
     let listener = UnixListener::bind(&sock_path).map_err(|e| format!("bind socket: {e}"))?;
     let exe = stable_self_exe()?;
+    // PROVER-internal: the commitment context every worker needs travels
+    // inside `ToWorker::Task` ([`ToWorker::task`]; the seed goes to the
+    // prover's own machines only).
     let spawn_child = |role: &str, id: usize, lo: usize, hi: usize| -> Result<ChildGuard, String> {
         let mut cmd = pinned_command(&exe, lo, hi);
         cmd.env(ENV_ROLE, role)
@@ -2747,6 +3098,8 @@ fn measure_compose_dist_staged(
     let (mut scatter_state_bytes, mut scatter_data_bytes) = (0u64, 0u64);
     let mut leaf_prove_ms = vec![0.0f64; t];
     let mut leaf_verify_sum = 0.0f64;
+    // Each leaf's reported exposed final (`LeafFinal`), for the query replay.
+    let mut leaf_finals: Vec<Option<[Val; 8]>> = vec![None; t];
     let mut busy = vec![0.0f64; machines_eff];
     let mut fold = vec![0.0f64; machines_eff];
     let mut merges_local = 0u32;
@@ -2774,17 +3127,18 @@ fn measure_compose_dist_staged(
                 postcard::to_allocvec(&slice).map(|v| v.len() as u64).unwrap_or(0);
             send_msg(
                 &mut worker_tx[i],
-                &ToWorker::Task {
-                    family: family.label().into(),
-                    mode: mode.label().into(),
-                    shape: WireShape::from(&shape),
-                    m: m as u32,
+                &ToWorker::task(
+                    family,
+                    mode,
+                    &shape,
+                    m,
                     start,
-                    batches: slice,
-                    first_index: a as u64 + 1,
-                    checkpoints: ctx.checkpoints(query_at, (a, b)),
-                    ship_root: ctx.ship_root(query_at, (a, b)),
-                },
+                    slice,
+                    a as u64 + 1,
+                    commit,
+                    ctx.checkpoints(query_at, (a, b)),
+                    ctx.ship_root(query_at, (a, b)),
+                ),
             )
             .map_err(|e| format!("scatter to {i}: {e}"))?;
         }
@@ -2800,6 +3154,9 @@ fn measure_compose_dist_staged(
                     }
                     let w = id as usize;
                     match msg {
+                        FromWorker::LeafFinal { idx, final_commit } => {
+                            leaf_finals[ranges[w].0 + idx as usize] = Some(final_commit);
+                        }
                         FromWorker::LeafDone {
                             idx, prove_ms, verify_ms, cascade_ms, cascade_merges, context, ..
                         } => {
@@ -2919,45 +3276,36 @@ fn measure_compose_dist_staged(
         t_start.elapsed().as_secs_f64(),
     );
 
-    // ── Auditor verify (identical to the concurrent engine, forest root path).
-    let (proof_bytes, verify_ms) = {
-        let bytes = root_bytes.as_ref().expect("forest root");
+    // ── PROVER side (identical to the concurrent engine): publish the batch
+    // log with the seed's randomizers, and sanity-check the root against the
+    // prover's own replay commitments.
+    let log = crate::recursion::recursive::expose_forest::batch_log(
+        &anchor,
+        &final_commit,
+        &batch_commits_with(family, m, batches, commit),
+    );
+    let bytes = root_bytes.as_ref().expect("forest root");
+    {
         let proof: Proof = postcard::from_bytes(bytes).map_err(|e| format!("root decode: {e}"))?;
         let (ini, fin) = read_exposed_boundary_proof(&proof);
         if ini.0 != anchor || fin.0 != final_commit {
             return Err("root boundary != native (Com(S_0), Com(S_E))".into());
         }
-        let log = crate::recursion::recursive::expose_forest::batch_log(
-            &anchor,
-            &final_commit,
-            &batch_commits(family, m, batches),
-        );
-        let tree = dist_tree_shape(mode, t, machines);
-        let layout = composition_expose();
-        let interval = layout == Expose::Interval;
-        if !interval {
-            warn_boundary_layout("dist_compose (staged) auditor");
-        }
-        if t == 1 {
-            // Lone leaf (unreachable in practice: staging needs >= 2 slices):
-            // verified like a per_batch leaf ([`audit_leaf_bytes`]).
-            (bytes.len() as u64, audit_leaf_bytes(family, &shape, m, &[bytes], &log, layout, leaf_verify_sum)?)
-        } else {
-            // Staged waves pair aligned power-of-two machine blocks, so the
-            // tree is the concurrent engine's `dist_forest(t, machines)`.
-            let expected_root_vk = resolve_root_vk(
-                || vk_pin_values(&proof),
-                || derive_dist_root_vk(family, &shape, m, mode, t, machines),
-            )?;
-            let v0 = Instant::now();
-            if interval {
-                verify_bound_stark_proof_against_log(&proof, &expected_root_vk, &log, &tree);
-            } else {
-                verify_bound_stark_proof_pinned(&proof, &expected_root_vk);
-            }
-            (bytes.len() as u64, v0.elapsed().as_secs_f64() * 1000.0)
-        }
-    };
+    }
+    // ── AUDITOR verify (identical to the concurrent engine, forest root
+    // path; public inputs only). Staged waves pair aligned power-of-two
+    // machine blocks, so the tree is the concurrent engine's
+    // `dist_forest(t, machines)`; a lone leaf (unreachable in practice:
+    // staging needs >= 2 slices) is audited as a leaf.
+    let pp = PublicParams { family, shape, m, commit_mode: commit.mode() };
+    let layout = composition_expose();
+    if layout != Expose::Interval {
+        warn_boundary_layout("dist_compose (staged) auditor");
+    }
+    let (proof_bytes, verify_ms) = (
+        bytes.len() as u64,
+        audit::audit_root_bytes(&pp, bytes, &log, mode, t, machines, layout, leaf_verify_sum)?,
+    );
 
     // ── Wind down; collect peak RSS.
     let mut peak_rss_mb = 0.0f64;
@@ -2978,14 +3326,12 @@ fn measure_compose_dist_staged(
     children.clear();
     let _ = std::fs::remove_file(&sock_path);
 
-    // Each answer is pinned to the decode VK and bound to the certified
-    // history by the certificates the workers shipped.
+    // Each query at version `t'` must open exactly leaf `t'`'s exposed final
+    // (prover side); each answer is pinned to the decode VK of the run's
+    // commitment mode and bound to the certified history by the
+    // certificates the workers shipped, against the published log `log`.
+    let leaf_finals = reported_leaf_finals(leaf_finals)?;
     let store = ctx.finish(query_at, &ranges, &[])?;
-    let qlog = crate::recursion::recursive::expose_forest::batch_log(
-        &anchor,
-        &final_commit,
-        &batch_commits(family, m, batches),
-    );
     let q = measure_queries_dist(
         family,
         shape,
@@ -2994,7 +3340,9 @@ fn measure_compose_dist_staged(
         cores,
         query_at,
         query_key_mode,
-        audit.as_mut().map(|a| (a, &store, &qlog)),
+        commit,
+        &leaf_finals,
+        audit.as_mut().map(|a| (a, &store, &log)),
     )?;
 
     // ── Network model (forest path only).
@@ -3071,6 +3419,7 @@ pub fn measure_compose_dist_gl(
     rtt_ms: f64,
     query_at: &[usize],
     query_key_mode: QueryKeyMode,
+    commit: &ProverCommit,
 ) -> Result<DistCell, String> {
     let _ = query_key_mode;
     if !family.is_gl() {
@@ -3101,8 +3450,9 @@ pub fn measure_compose_dist_gl(
     // ── Witness pass: one sequential plaintext replay; record slice-start
     // states and the native anchor/final commitments.
     let wp0 = Instant::now();
+    // PROVER side: `Com(S_0; 0)` and `Com(S_T; ρ^S_T)` (`Plain`: pre-B2).
     let mut state = FamStateGl::empty(family, &shape, m);
-    let anchor = state.commit(&shape);
+    let anchor = state.commit_with(&shape, commit.mode(), &SaltGl::ZERO);
     let mut slice_starts: Vec<WireState> = Vec::with_capacity(machines_eff);
     let mut next_slice = 0usize;
     for (i, batch) in batches.iter().enumerate() {
@@ -3112,7 +3462,11 @@ pub fn measure_compose_dist_gl(
         }
         state.advance(&shape, batch);
     }
-    let final_commit = state.commit(&shape);
+    let final_commit = state.commit_with(
+        &shape,
+        commit.mode(),
+        &commit.state_salt_gl(family.commit_family(), t as u64),
+    );
     let witness_pass_ms = wp0.elapsed().as_secs_f64() * 1000.0;
 
     // ── Spawn the machines.
@@ -3127,6 +3481,9 @@ pub fn measure_compose_dist_gl(
     let _ = std::fs::remove_file(&sock_path);
     let listener = UnixListener::bind(&sock_path).map_err(|e| format!("bind socket: {e}"))?;
     let exe = stable_self_exe()?;
+    // PROVER-internal: the commitment context every worker needs travels
+    // inside `ToWorker::Task` ([`ToWorker::task`]; the seed goes to the
+    // prover's own machines only).
 
     let spawn_child = |role: &str, id: usize, lo: usize, hi: usize| -> Result<ChildGuard, String> {
         let mut cmd = pinned_command(&exe, lo, hi);
@@ -3170,17 +3527,18 @@ pub fn measure_compose_dist_gl(
         scatter_data_bytes += postcard::to_allocvec(&slice).map(|v| v.len() as u64).unwrap_or(0);
         send_msg(
             &mut worker_tx[i],
-            &ToWorker::Task {
-                family: family.label().into(),
-                mode: mode.label().into(),
-                shape: WireShape::from(&shape),
-                m: m as u32,
+            &ToWorker::task(
+                family,
+                mode,
+                &shape,
+                m,
                 start,
-                batches: slice,
-                first_index: a as u64 + 1,
-                checkpoints: Vec::new(),
-                ship_root: false,
-            },
+                slice,
+                a as u64 + 1,
+                commit,
+                Vec::new(),
+                false,
+            ),
         )
         .map_err(|e| format!("scatter to {i}: {e}"))?;
     }
@@ -3365,14 +3723,23 @@ pub fn measure_compose_dist_gl(
     let merge_ms = mp0.elapsed().as_secs_f64() * 1000.0;
     let total_time_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
-    // ── Auditor: verify the received proof bytes against a trusted VK and
-    // bind their exposed statement to the public batch log, recomputed
-    // natively from the batches.
+    // ── PROVER side: publish the batch log with the seed's randomizers, and
+    // sanity-check the root against the prover's own replay commitments.
     let log = crate::recursion::recursive::expose_forest_gl::batch_log(
         &anchor,
         &final_commit,
-        &batch_commits_gl(family, m, batches),
+        &batch_commits_gl_with(family, m, batches, commit),
     );
+    if let Some(bytes) = &root_bytes {
+        let proof: ProofGl = postcard::from_bytes(bytes).map_err(|e| format!("root decode: {e}"))?;
+        let (ini, fin) =
+            crate::recursion::recursive::expose_forest_gl::read_exposed_boundary_proof(&proof);
+        if ini.0 != anchor || fin.0 != final_commit {
+            return Err("root boundary != native (Com(S_0), Com(S_E))".into());
+        }
+    }
+    // ── AUDITOR (public inputs only; `super::audit`).
+    let pp = PublicParams { family, shape, m, commit_mode: commit.mode() };
     let layout = composition_expose();
     if layout != Expose::Interval {
         warn_boundary_layout("dist_compose (gl) auditor");
@@ -3380,54 +3747,18 @@ pub fn measure_compose_dist_gl(
     let (proof_bytes, verify_ms) = match &root_bytes {
         None => {
             // per_batch: the Θ(t) artifact; every leaf is verified against
-            // the trusted leaf VK ([`audit_leaf_bytes_gl`]).
+            // the trusted leaf VK ([`audit::audit_leaf_bytes_gl`]).
             let bytes: Vec<&[u8]> = leaf_proofs
                 .iter()
                 .map(|p| p.as_deref().expect("per_batch leaf proof"))
                 .collect();
             let sum: u64 = bytes.iter().map(|p| p.len() as u64).sum();
-            (sum, audit_leaf_bytes_gl(family, &shape, m, &bytes, &log, layout, leaf_verify_sum)?)
+            (sum, audit::audit_leaf_bytes_gl(&pp, &bytes, &log, layout, leaf_verify_sum)?)
         }
-        Some(bytes) => {
-            let proof: ProofGl =
-                postcard::from_bytes(bytes).map_err(|e| format!("root decode: {e}"))?;
-            let (ini, fin) =
-                crate::recursion::recursive::expose_forest_gl::read_exposed_boundary_proof(&proof);
-            if ini.0 != anchor || fin.0 != final_commit {
-                return Err("root boundary != native (Com(S_0), Com(S_E))".into());
-            }
-            let tree = dist_tree_shape(mode, t, machines);
-            let interval = layout == Expose::Interval;
-            if t == 1 {
-                // A one-batch stream: the lone LEAF proof, verified like a
-                // per_batch leaf (pinned leaf VK, STARK, statement vs log).
-                (bytes.len() as u64, audit_leaf_bytes_gl(family, &shape, m, &[bytes], &log, layout, leaf_verify_sum)?)
-            } else {
-                // The auditor pins the root's VK (commitment + metadata) to a
-                // trusted copy from `EXP_ROOT_VK` (see [`RootVkSource`]),
-                // resolved outside the timed verify; Interval layout (default)
-                // then checks the root statement against the batch log.
-                let expected_root_vk = resolve_root_vk(
-                    || crate::recursion::recursive::expose_forest_gl::vk_pin_values(&proof),
-                    || derive_dist_root_vk_gl(family, &shape, m, mode, t, machines),
-                )?;
-                let v0 = Instant::now();
-                if interval {
-                    crate::recursion::recursive::expose_forest_gl::verify_bound_stark_proof_against_log(
-                        &proof,
-                        &expected_root_vk,
-                        &log,
-                        &tree,
-                    );
-                } else {
-                    crate::recursion::recursive::expose_forest_gl::verify_bound_stark_proof_pinned(
-                        &proof,
-                        &expected_root_vk,
-                    );
-                }
-                (bytes.len() as u64, v0.elapsed().as_secs_f64() * 1000.0)
-            }
-        }
+        Some(bytes) => (
+            bytes.len() as u64,
+            audit::audit_root_bytes_gl(&pp, bytes, &log, mode, t, machines, layout, leaf_verify_sum)?,
+        ),
     };
 
     // ── Wind down children; collect peak RSS.
@@ -3530,35 +3861,101 @@ pub fn measure_compose_dist_gl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commitment::hiding::SaltSeed;
+    use crate::recursion::recursive::expose_forest::{
+        check_leaves_against_log, verify_bound_stark_proof_against_log,
+        verify_bound_stark_proof_pinned, vk_pin_values,
+    };
 
     fn shape() -> StreamShape {
         StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2, bloom_k: 3, bloom_log_w: 7 }
     }
 
+    const BB_FAMILIES: [StreamFamily; 5] = [
+        StreamFamily::CmOmc,
+        StreamFamily::HllOmc,
+        StreamFamily::SsCertified,
+        StreamFamily::GkBandmerge2,
+        StreamFamily::BloomOmc,
+    ];
+    const GL_FAMILIES: [StreamFamily; 4] = [
+        StreamFamily::CmOmcGl,
+        StreamFamily::HllOmcGl,
+        StreamFamily::SsCertifiedGl,
+        StreamFamily::GkBandmerge2Gl,
+    ];
+
+    /// Both commitment contexts the harness tests run under: `Plain` (the
+    /// pre-B2 path) and `Hiding` under a fixed, public test seed.
+    fn both_modes() -> [ProverCommit; 2] {
+        [ProverCommit::plain(), ProverCommit::hiding(SaltSeed::for_tests(1))]
+    }
+
+    /// Skip a derived-VK test when `EXP_ROOT_VK` overrides the derivation.
+    fn root_vk_overridden() -> bool {
+        std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive")
+    }
+
     /// Every family's state survives the wire codec mid-stream: encode after
-    /// some batches, decode, and both sides advance to identical commitments.
+    /// some batches, decode, and both sides advance to identical commitments
+    /// (the pre-B2 `Plain` commitment, and under both modes the commitment
+    /// with the version's randomizer).
     #[test]
     fn wire_state_round_trips_all_families() {
         let sh = shape();
         let batch_a: Vec<u32> = (1..=4).collect();
         let batch_b: Vec<u32> = (5..=8).collect();
-        for family in [
-            StreamFamily::CmOmc,
-            StreamFamily::HllOmc,
-            StreamFamily::SsCertified,
-            StreamFamily::GkBandmerge2,
-            StreamFamily::BloomOmc,
-        ] {
-            let mut orig = FamState::empty(family, &sh, 4);
-            orig.advance(&sh, &batch_a);
-            let wire = orig.encode();
-            let bytes = postcard::to_allocvec(&wire).unwrap();
-            let decoded_wire: WireState = postcard::from_bytes(&bytes).unwrap();
-            let mut copy = FamState::decode(&decoded_wire, 4);
-            assert_eq!(copy.commit(&sh), orig.commit(&sh), "{family:?} decode == encode");
-            copy.advance(&sh, &batch_b);
-            orig.advance(&sh, &batch_b);
-            assert_eq!(copy.commit(&sh), orig.commit(&sh), "{family:?} advance after round-trip");
+        for commit in both_modes() {
+            for family in BB_FAMILIES {
+                let cf = family.commit_family();
+                let mut orig = FamState::empty(family, &sh, 4);
+                orig.advance(&sh, &batch_a);
+                let wire = orig.encode();
+                let bytes = postcard::to_allocvec(&wire).unwrap();
+                let decoded_wire: WireState = postcard::from_bytes(&bytes).unwrap();
+                let mut copy = FamState::decode(&decoded_wire, 4);
+                assert_eq!(copy.commit(&sh), orig.commit(&sh), "{family:?} decode == encode");
+                let s1 = commit.state_salt(cf, 1);
+                assert_eq!(
+                    copy.commit_with(&sh, commit.mode(), &s1),
+                    orig.commit_with(&sh, commit.mode(), &s1),
+                    "{family:?} {}: decode == encode",
+                    commit.label()
+                );
+                copy.advance(&sh, &batch_b);
+                orig.advance(&sh, &batch_b);
+                assert_eq!(copy.commit(&sh), orig.commit(&sh), "{family:?} advance after round-trip");
+                let s2 = commit.state_salt(cf, 2);
+                assert_eq!(
+                    copy.commit_with(&sh, commit.mode(), &s2),
+                    orig.commit_with(&sh, commit.mode(), &s2),
+                    "{family:?} {}: advance after round-trip",
+                    commit.label()
+                );
+            }
+            for family in GL_FAMILIES {
+                let cf = family.commit_family();
+                let mut orig = FamStateGl::empty(family, &sh, 4);
+                orig.advance(&sh, &batch_a);
+                let bytes = postcard::to_allocvec(&orig.encode()).unwrap();
+                let mut copy = FamStateGl::decode(&postcard::from_bytes(&bytes).unwrap(), 4);
+                let s1 = commit.state_salt_gl(cf, 1);
+                assert_eq!(
+                    copy.commit_with(&sh, commit.mode(), &s1),
+                    orig.commit_with(&sh, commit.mode(), &s1),
+                    "{family:?} {}: decode == encode",
+                    commit.label()
+                );
+                copy.advance(&sh, &batch_b);
+                orig.advance(&sh, &batch_b);
+                let s2 = commit.state_salt_gl(cf, 2);
+                assert_eq!(
+                    copy.commit_with(&sh, commit.mode(), &s2),
+                    orig.commit_with(&sh, commit.mode(), &s2),
+                    "{family:?} {}: advance after round-trip",
+                    commit.label()
+                );
+            }
         }
     }
 
@@ -3579,41 +3976,200 @@ mod tests {
 
     /// The auditor's VK-derivation leaf input is a provable NO-OP for every
     /// family (native commitment unchanged), so the no-op leaf's boundary is
-    /// self-contiguous — which `root_vk_deriver` requires.
+    /// self-contiguous — which `root_vk_deriver` requires. Under both modes
+    /// the no-op leaf opens init and final with the same public zero
+    /// randomizer, so `Com(S; 0)` is unchanged too.
     #[test]
     fn noop_leaf_input_is_a_noop_for_all_families() {
         let sh = shape();
         let m = 4;
-        for family in [
-            StreamFamily::CmOmc,
-            StreamFamily::HllOmc,
-            StreamFamily::SsCertified,
-            StreamFamily::GkBandmerge2,
-            StreamFamily::BloomOmc,
-        ] {
+        for family in BB_FAMILIES {
             let mut st = FamState::empty(family, &sh, m);
             let (setup, batch) = noop_leaf_input(family, m);
             if !setup.is_empty() {
                 st.advance(&sh, &setup);
             }
             let before = st.commit(&sh);
+            let before_modes: Vec<_> = both_modes()
+                .iter()
+                .map(|c| st.commit_with(&sh, c.mode(), &SaltBb::ZERO))
+                .collect();
             st.advance(&sh, &batch);
             assert_eq!(st.commit(&sh), before, "{family:?}: no-op leaf input must not move the state");
+            for (c, b) in both_modes().iter().zip(&before_modes) {
+                assert_eq!(
+                    &st.commit_with(&sh, c.mode(), &SaltBb::ZERO),
+                    b,
+                    "{family:?} {}: no-op leaf input must not move Com(S; 0)",
+                    c.label()
+                );
+            }
         }
-        for family in [
-            StreamFamily::CmOmcGl,
-            StreamFamily::HllOmcGl,
-            StreamFamily::SsCertifiedGl,
-            StreamFamily::GkBandmerge2Gl,
-        ] {
+        for family in GL_FAMILIES {
             let mut st = FamStateGl::empty(family, &sh, m);
             let (setup, batch) = noop_leaf_input(family, m);
             if !setup.is_empty() {
                 st.advance(&sh, &setup);
             }
             let before = st.commit(&sh);
+            let before_modes: Vec<_> = both_modes()
+                .iter()
+                .map(|c| st.commit_with(&sh, c.mode(), &SaltGl::ZERO))
+                .collect();
             st.advance(&sh, &batch);
             assert_eq!(st.commit(&sh), before, "{family:?}: no-op leaf input must not move the state");
+            for (c, b) in both_modes().iter().zip(&before_modes) {
+                assert_eq!(
+                    &st.commit_with(&sh, c.mode(), &SaltGl::ZERO),
+                    b,
+                    "{family:?} {}: no-op leaf input must not move Com(S; 0)",
+                    c.label()
+                );
+            }
+        }
+    }
+
+    /// The genesis anchor the AUDITOR recomputes from public parameters
+    /// ([`audit::genesis_commit_bb`] / `_gl`) is the prover's `Com(S_0)` in
+    /// both modes (the empty state under the public zero randomizer; `Plain`:
+    /// the pre-B2 commitment), and the two modes' anchors differ.
+    #[test]
+    fn genesis_anchor_matches_the_prover_in_both_modes() {
+        let (sh, m) = (shape(), 4);
+        for family in BB_FAMILIES {
+            let st = FamState::empty(family, &sh, m);
+            let pp = |commit_mode| PublicParams { family, shape: sh, m, commit_mode };
+            assert_eq!(audit::genesis_commit_bb(&pp(CommitMode::Plain)), st.commit(&sh), "{family:?}");
+            let hid = audit::genesis_commit_bb(&pp(CommitMode::Hiding));
+            assert_eq!(hid, st.commit_with(&sh, CommitMode::Hiding, &SaltBb::ZERO), "{family:?}");
+            assert_ne!(hid, st.commit(&sh), "{family:?}: the hiding anchor carries the tag prefix");
+        }
+        for family in GL_FAMILIES {
+            let st = FamStateGl::empty(family, &sh, m);
+            let pp = |commit_mode| PublicParams { family, shape: sh, m, commit_mode };
+            assert_eq!(audit::genesis_commit_gl(&pp(CommitMode::Plain)), st.commit(&sh), "{family:?}");
+            let hid = audit::genesis_commit_gl(&pp(CommitMode::Hiding));
+            assert_eq!(hid, st.commit_with(&sh, CommitMode::Hiding, &SaltGl::ZERO), "{family:?}");
+            assert_ne!(hid, st.commit(&sh), "{family:?}: the hiding anchor carries the tag prefix");
+        }
+    }
+
+    /// `Plain` is the pre-B2 path: the published log and the batch
+    /// commitments equal the old Plain functions' values, and a state
+    /// commitment ignores any randomizer. Under `Hiding` every `Com(B_t)` and
+    /// `Com(S_T)` moves, `Com(S_0)` stays the (hiding) genesis anchor, and a
+    /// log published under another seed differs everywhere but its anchor.
+    #[test]
+    fn plain_log_is_pre_b2_and_hiding_log_depends_on_the_seed() {
+        let (sh, m) = (shape(), 4);
+        let batches: Vec<Vec<u32>> = (0..3u32).map(|i| (1..=4).map(|k| k * 7 + i * 13).collect()).collect();
+        let (plain, hid) = (ProverCommit::plain(), ProverCommit::hiding(SaltSeed::for_tests(1)));
+        let other = ProverCommit::hiding(SaltSeed::for_tests(2));
+        for family in BB_FAMILIES {
+            assert_eq!(publish_batch_log(family, &sh, m, &batches, &plain), stream_batch_log(family, &sh, m, &batches));
+            assert_eq!(batch_commits_with(family, m, &batches, &plain), batch_commits(family, m, &batches));
+            let st = FamState::empty(family, &sh, m);
+            assert_eq!(st.commit_with(&sh, CommitMode::Plain, &hid.state_salt(family.commit_family(), 1)), st.commit(&sh));
+            let (p, h, o) = (
+                publish_batch_log(family, &sh, m, &batches, &plain),
+                publish_batch_log(family, &sh, m, &batches, &hid),
+                publish_batch_log(family, &sh, m, &batches, &other),
+            );
+            assert_eq!(h.init, o.init, "{family:?}: Com(S_0; 0) is seed-independent");
+            assert_ne!(h.init, p.init, "{family:?}");
+            assert_ne!(h.final_, o.final_, "{family:?}: Com(S_T) depends on the seed");
+            for t in 0..batches.len() {
+                assert_ne!(h.batch_commits[t], p.batch_commits[t], "{family:?} Com(B_{t})");
+                assert_ne!(h.batch_commits[t], o.batch_commits[t], "{family:?} Com(B_{t}) per seed");
+            }
+        }
+        for family in GL_FAMILIES {
+            let st0 = FamStateGl::empty(family, &sh, m);
+            let mut st = FamStateGl::empty(family, &sh, m);
+            for b in &batches {
+                st.advance(&sh, b);
+            }
+            let old = crate::recursion::recursive::expose_forest_gl::batch_log(
+                &st0.commit(&sh),
+                &st.commit(&sh),
+                &batch_commits_gl(family, m, &batches),
+            );
+            assert_eq!(publish_batch_log_gl(family, &sh, m, &batches, &plain), old, "{family:?}");
+            let (h, o) = (
+                publish_batch_log_gl(family, &sh, m, &batches, &hid),
+                publish_batch_log_gl(family, &sh, m, &batches, &other),
+            );
+            assert_eq!(h.init, o.init, "{family:?}");
+            assert_ne!(h.final_, o.final_, "{family:?}");
+            assert_ne!(h.batch_commits, o.batch_commits, "{family:?}");
+        }
+    }
+
+    /// `Plain` leaves proved through the harness's new path (`*_commit`
+    /// builder with `CommitMode::Plain`, `LeafOpen::Real(plain)`) are the
+    /// pre-B2 leaves: same VK and the same exposed statement as the old
+    /// `*_expose` builder + `prove_epoch_at`, for every family on both
+    /// fields.
+    #[test]
+    fn plain_harness_leaves_equal_the_pre_b2_leaves() {
+        use crate::sketch::countmin_omc::build_countmin_omc_leaf_expose;
+        use crate::sketch::gk_bandmerge::build_gkb2_leaf_expose;
+        use crate::sketch::hll_omc::build_hll_omc_leaf_expose;
+        use crate::sketch::ss_final_full::build_ss_full_leaf_expose;
+        let (sh, m) = (shape(), 4);
+        let batch: Vec<u32> = (1..=4).map(|k| k * 7).collect();
+        let (expose, binding) = (composition_expose(), default_binding());
+        let plain = ProverCommit::plain();
+        for family in BB_FAMILIES {
+            let st = FamState::empty(family, &sh, m);
+            let new = st.prove_leaf(&mut FamLeafCircuit::build(family, &sh, m, CommitMode::Plain), 1, &batch, LeafOpen::Real(&plain)).0;
+            let old = match &st {
+                FamState::Cm(s) => build_countmin_omc_leaf_expose(CmOmcParams { d: sh.d, w: sh.w, batch: m }, expose, binding)
+                    .prove_epoch_at(1, s.clone(), cm_updates_of(&batch))
+                    .output,
+                FamState::Hll(r) => build_hll_omc_leaf_expose(HllOmcParams { b: sh.b, batch: m }, expose, binding)
+                    .prove_epoch_at(1, r.clone(), hll_keys_of(&batch))
+                    .output,
+                FamState::Ss(s) => build_ss_full_leaf_expose(SsFullParams { capacity: sh.capacity, batch: m }, expose)
+                    .prove_epoch_at(1, s.clone(), ss_updates_of(&batch))
+                    .output,
+                FamState::Gk(s) => build_gkb2_leaf_expose(GkbParams { capacity: sh.capacity, batch: m, s: sh.gk_s }, expose)
+                    .prove_epoch_at(1, s.clone(), gk_vals_of(&batch))
+                    .output,
+                FamState::Bloom(p, bits) => crate::sketch::bloom_omc::build_bloom_omc_leaf_expose(*p, expose)
+                    .prove_epoch_at(1, bits, &bloom_keys_of(&batch))
+                    .output,
+            };
+            assert_eq!(vk_pin_values(&new.0), vk_pin_values(&old.0), "{family:?}: Plain VK unchanged");
+            let rs = crate::recursion::recursive::expose_forest::read_exposed_statement;
+            assert_eq!(rs(&new.0), rs(&old.0), "{family:?}: Plain statement unchanged");
+        }
+        {
+            use crate::recursion::recursive::expose_forest_gl as efg;
+            use crate::sketch::countmin_omc_gl::build_countmin_omc_leaf_expose as cm_old;
+            use crate::sketch::gk_bandmerge_gl::build_gkb2_leaf_expose as gk_old;
+            use crate::sketch::hll_omc_gl::build_hll_omc_leaf_expose as hll_old;
+            use crate::sketch::ss_final_full_gl::build_ss_full_leaf_expose as ss_old;
+            for family in GL_FAMILIES {
+                let st = FamStateGl::empty(family, &sh, m);
+                let new = st.prove_leaf(&mut FamLeafCircuitGl::build(family, &sh, m, CommitMode::Plain), 1, &batch, LeafOpen::Real(&plain)).0;
+                let old = match &st {
+                    FamStateGl::CmGl(s) => cm_old(CmOmcParamsGl { d: sh.d, w: sh.w, batch: m }, expose, binding)
+                        .prove_epoch_at(1, s.clone(), cm_updates_of(&batch))
+                        .output,
+                    FamStateGl::HllGl(r) => hll_old(HllOmcParamsGl { b: sh.b, batch: m }, expose, binding)
+                        .prove_epoch_at(1, r.clone(), hll_keys_of(&batch))
+                        .output,
+                    FamStateGl::SsGl(s) => ss_old(SsFullParamsGl { capacity: sh.capacity, batch: m }, expose)
+                        .prove_epoch_at(1, s.clone(), ss_updates_gl(&batch))
+                        .output,
+                    FamStateGl::GkGl(s) => gk_old(GkbParamsGl { capacity: sh.capacity, batch: m, s: sh.gk_s }, expose)
+                        .prove_epoch_at(1, s.clone(), gk_vals_of(&batch))
+                        .output,
+                };
+                assert_eq!(efg::vk_pin_values(&new.0), efg::vk_pin_values(&old.0), "{family:?}: Plain VK unchanged");
+                assert_eq!(efg::read_exposed_statement(&new.0), efg::read_exposed_statement(&old.0), "{family:?}");
+            }
         }
     }
 
@@ -3622,17 +4178,19 @@ mod tests {
     /// then stride-doubling rounds over WIRE-ROUND-TRIPPED roots — and check
     /// that `derive_dist_root_vk` (public parameters only) reproduces the real
     /// root's VK and metadata, and that the auditor's pinned verify accepts it.
-    /// `t = 3` leaves on `M = 2` machines: slices of 2 and 1 leaves.
-    fn assert_dist_root_vk_derivable(family: StreamFamily) {
+    /// `t = 3` leaves on `M = 2` machines: slices of 2 and 1 leaves. Run under
+    /// both commitment modes (the hiding leaves open with the seed's
+    /// randomizers, the log is the prover's published one).
+    fn assert_dist_root_vk_derivable(family: StreamFamily, commit: &ProverCommit) {
         let sh = shape();
         let m = 4;
         let (t, machines) = (3usize, 2usize);
         let batches: Vec<Vec<u32>> = (0..t as u32).map(|i| (1..=4).map(|k| k * 7 + i * 13).collect()).collect();
-        let mut leaf = FamLeafCircuit::build(family, &sh, m);
+        let mut leaf = FamLeafCircuit::build(family, &sh, m, commit.mode());
         let mut st = FamState::empty(family, &sh, m);
         let mut outputs = Vec::new();
         for (i, b) in batches.iter().enumerate() {
-            outputs.push(st.prove_leaf(&mut leaf, i as u64 + 1, b).0);
+            outputs.push(st.prove_leaf(&mut leaf, i as u64 + 1, b, LeafOpen::Real(commit)).0);
             st.advance(&sh, b);
         }
         let wire = |p: &Proof| -> Proof {
@@ -3643,7 +4201,7 @@ mod tests {
         let root = prove_hiding_merge_proofs(&slice0.0, &wire(&outputs[2].0));
         let tree = dist_tree_shape(StreamMode::Forest, t, machines);
         assert_eq!(tree.num_leaves(), t);
-        let derived = derive_dist_root_vk(family, &sh, m, StreamMode::Forest, t, machines);
+        let derived = derive_dist_root_vk(family, &sh, m, StreamMode::Forest, t, machines, commit.mode());
         assert_eq!(derived.commitment, vk_pin_values(&root.0), "{family:?}: derived dist root VK");
         assert_eq!(
             derived.shape,
@@ -3652,14 +4210,17 @@ mod tests {
         );
         verify_bound_stark_proof_pinned(&wire(&root.0), &derived);
         // (e) The default auditor path: derived VK + the batch log the
-        // harness computes natively (Interval statement, the default layout).
+        // prover publishes (Interval statement, the default layout).
         assert_eq!(composition_expose(), Expose::Interval, "default layout");
-        let log = stream_batch_log(family, &sh, m, &batches);
+        let log = publish_batch_log(family, &sh, m, &batches, commit);
         verify_bound_stark_proof_against_log(&wire(&root.0), &derived, &log, &tree);
         // A log with batches 1 and 2 swapped is rejected.
         let mut swapped = batches.clone();
         swapped.swap(0, 1);
-        let bad = BatchLog { batch_commits: batch_commits(family, m, &swapped).iter().map(|c| c.to_vec()).collect(), ..log.clone() };
+        let bad = BatchLog {
+            batch_commits: batch_commits_with(family, m, &swapped, commit).iter().map(|c| c.to_vec()).collect(),
+            ..log.clone()
+        };
         assert!(
             crate::recursion::recursive::expose_forest::check_root_against_log(&root.0, &bad, &tree)
                 .is_err(),
@@ -3669,17 +4230,23 @@ mod tests {
 
     #[test]
     fn dist_root_vk_derivable_cm_omc() {
-        assert_dist_root_vk_derivable(StreamFamily::CmOmc);
+        for commit in both_modes() {
+            assert_dist_root_vk_derivable(StreamFamily::CmOmc, &commit);
+        }
     }
 
     #[test]
     fn dist_root_vk_derivable_hll_omc() {
-        assert_dist_root_vk_derivable(StreamFamily::HllOmc);
+        for commit in both_modes() {
+            assert_dist_root_vk_derivable(StreamFamily::HllOmc, &commit);
+        }
     }
 
     #[test]
     fn dist_root_vk_derivable_bloom_omc() {
-        assert_dist_root_vk_derivable(StreamFamily::BloomOmc);
+        for commit in both_modes() {
+            assert_dist_root_vk_derivable(StreamFamily::BloomOmc, &commit);
+        }
     }
 
     /// The Bloom wire state is packed 8 bits per byte (an exact round trip,
@@ -3703,34 +4270,38 @@ mod tests {
         }
         let back = FamState::decode(&odd.encode(), m);
         assert_eq!(back.commit(&sh), odd.commit(&sh), "exact bit round trip");
-        let r = measure_compose_dist_gl(
-            StreamFamily::BloomOmc,
-            sh,
-            &[vec![1, 2, 3, 4]],
-            StreamMode::Forest,
-            1,
-            1,
-            &std::env::temp_dir(),
-            200.0,
-            0.2,
-            &[],
-            QueryKeyMode::First,
-        );
-        assert!(r.as_ref().is_err_and(|e| e.contains("no Goldilocks leaf")), "{:?}", r.err());
+        for commit in both_modes() {
+            let r = measure_compose_dist_gl(
+                StreamFamily::BloomOmc,
+                sh,
+                &[vec![1, 2, 3, 4]],
+                StreamMode::Forest,
+                1,
+                1,
+                &std::env::temp_dir(),
+                200.0,
+                0.2,
+                &[],
+                QueryKeyMode::First,
+                &commit,
+            );
+            assert!(r.as_ref().is_err_and(|e| e.contains("no Goldilocks leaf")), "{:?}", r.err());
+        }
     }
 
-    /// The coordinator's LEAF audit ([`audit_leaf_bytes`], per_batch and the
-    /// lone leaf `t == 1`), for every family on both fields, over wire bytes:
-    /// (1) the honest leaves (t = 1, 2) verify against the leaf VK derived
-    /// from public parameters — so the one public-parameter leaf verifier
-    /// serves each family's leaf circuit; (2) THE REVIEWED ATTACK: a toy
-    /// circuit that only exposes leaf 1's honest statement passes the pre-fix
-    /// statement-only check and is rejected by the audit; (3) a one-leaf log
-    /// (the lone-leaf path) is audited the same way. Skipped when
-    /// `EXP_ROOT_VK` overrides the derived VK.
+    /// The coordinator's LEAF audit ([`audit::audit_leaf_bytes`], per_batch
+    /// and the lone leaf `t == 1`), for every family on both fields and under
+    /// both commitment modes, over wire bytes: (1) the honest leaves (t = 1,
+    /// 2) verify against the leaf VK derived from public parameters — so the
+    /// one public-parameter leaf verifier serves each family's leaf circuit;
+    /// (2) THE REVIEWED ATTACK: a toy circuit that only exposes leaf 1's
+    /// honest statement passes the pre-fix statement-only check and is
+    /// rejected by the audit; (3) a one-leaf log (the lone-leaf path) is
+    /// audited the same way. Skipped when `EXP_ROOT_VK` overrides the derived
+    /// VK.
     #[test]
     fn dist_leaf_audit_pins_leaf_vk_all_families() {
-        if std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive") {
+        if root_vk_overridden() {
             eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
             return;
         }
@@ -3740,83 +4311,954 @@ mod tests {
         let batches: Vec<Vec<u32>> = (0..2u32).map(|i| (1..=4).map(|k| k * 7 + i * 13).collect()).collect();
         let layout = composition_expose();
         assert_eq!(layout, Expose::Interval, "default layout");
-        for family in [
-            StreamFamily::CmOmc,
-            StreamFamily::HllOmc,
-            StreamFamily::SsCertified,
-            StreamFamily::GkBandmerge2,
-            StreamFamily::BloomOmc,
-        ] {
-            let mut leaf = FamLeafCircuit::build(family, &sh, m);
-            let mut st = FamState::empty(family, &sh, m);
-            let mut bytes = Vec::new();
-            for (i, b) in batches.iter().enumerate() {
-                bytes.push(postcard::to_allocvec(&st.prove_leaf(&mut leaf, i as u64 + 1, b).0 .0).unwrap());
-                st.advance(&sh, b);
+        for commit in both_modes() {
+            let mode = commit.label();
+            for family in BB_FAMILIES {
+                let pp = PublicParams { family, shape: sh, m, commit_mode: commit.mode() };
+                let mut leaf = FamLeafCircuit::build(family, &sh, m, commit.mode());
+                let mut st = FamState::empty(family, &sh, m);
+                let mut bytes = Vec::new();
+                for (i, b) in batches.iter().enumerate() {
+                    bytes.push(
+                        postcard::to_allocvec(&st.prove_leaf(&mut leaf, i as u64 + 1, b, LeafOpen::Real(&commit)).0 .0)
+                            .unwrap(),
+                    );
+                    st.advance(&sh, b);
+                }
+                let refs: Vec<&[u8]> = bytes.iter().map(|b| b.as_slice()).collect();
+                let log = publish_batch_log(family, &sh, m, &batches, &commit);
+                let ms = audit::audit_leaf_bytes(&pp, &refs, &log, layout, -1.0);
+                assert!(ms.as_ref().is_ok_and(|&ms| ms >= 0.0), "{family:?} {mode} honest per_batch: {ms:?}");
+                let lone_log = publish_batch_log(family, &sh, m, &batches[..1], &commit);
+                assert!(
+                    audit::audit_leaf_bytes(&pp, &refs[..1], &lone_log, layout, -1.0).is_ok(),
+                    "{family:?} {mode} lone leaf"
+                );
+                // The toy mimicking leaf 1's statement.
+                let l1: Proof = postcard::from_bytes(&bytes[0]).unwrap();
+                let v = crate::recursion::recursive::expose_forest::read_exposed_statement(&l1).values();
+                let cs: Vec<crate::config::Challenge> = v
+                    .chunks(4)
+                    .map(|c| crate::config::Challenge::from_basis_coefficients_slice(c).unwrap())
+                    .collect();
+                let toy = crate::recursion::recursive::expose_forest::prove_exposing_leaf(&cs);
+                let toy_bytes = postcard::to_allocvec(&toy.0).unwrap();
+                assert_eq!(
+                    check_leaves_against_log(&[&toy.0], &lone_log, layout),
+                    Ok(()),
+                    "{family:?} {mode}: the pre-fix statement-only check accepts the toy"
+                );
+                for (what, set, lg) in [
+                    ("per_batch", vec![toy_bytes.as_slice(), refs[1]], &log),
+                    ("lone leaf", vec![toy_bytes.as_slice()], &lone_log),
+                ] {
+                    let r = audit::audit_leaf_bytes(&pp, &set, lg, layout, -1.0);
+                    println!("B6B dist leaf audit {family:?} {mode} {what} toy: {r:?}");
+                    assert!(r.is_err_and(|e| e.contains("leaf 1")), "{family:?} {mode} {what}");
+                }
             }
-            let refs: Vec<&[u8]> = bytes.iter().map(|b| b.as_slice()).collect();
-            let log = stream_batch_log(family, &sh, m, &batches);
-            let ms = audit_leaf_bytes(family, &sh, m, &refs, &log, layout, -1.0);
-            assert!(ms.as_ref().is_ok_and(|&ms| ms >= 0.0), "{family:?} honest per_batch: {ms:?}");
-            let lone_log = stream_batch_log(family, &sh, m, &batches[..1]);
-            assert!(audit_leaf_bytes(family, &sh, m, &refs[..1], &lone_log, layout, -1.0).is_ok(), "{family:?} lone leaf");
-            // The toy mimicking leaf 1's statement.
-            let l1: Proof = postcard::from_bytes(&bytes[0]).unwrap();
-            let v = crate::recursion::recursive::expose_forest::read_exposed_statement(&l1).values();
-            let cs: Vec<crate::config::Challenge> = v
-                .chunks(4)
-                .map(|c| crate::config::Challenge::from_basis_coefficients_slice(c).unwrap())
-                .collect();
-            let toy = crate::recursion::recursive::expose_forest::prove_exposing_leaf(&cs);
-            let toy_bytes = postcard::to_allocvec(&toy.0).unwrap();
-            assert_eq!(
-                check_leaves_against_log(&[&toy.0], &lone_log, layout),
-                Ok(()),
-                "{family:?}: the pre-fix statement-only check accepts the toy"
-            );
-            for (what, set, lg) in [
-                ("per_batch", vec![toy_bytes.as_slice(), refs[1]], &log),
-                ("lone leaf", vec![toy_bytes.as_slice()], &lone_log),
-            ] {
-                let r = audit_leaf_bytes(family, &sh, m, &set, lg, layout, -1.0);
-                println!("B6B dist leaf audit {family:?} {what} toy: {r:?}");
-                assert!(r.is_err_and(|e| e.contains("leaf 1")), "{family:?} {what}");
+            for family in GL_FAMILIES {
+                use crate::recursion::recursive::expose_forest_gl as efg;
+                let pp = PublicParams { family, shape: sh, m, commit_mode: commit.mode() };
+                let mut leaf = FamLeafCircuitGl::build(family, &sh, m, commit.mode());
+                let mut st = FamStateGl::empty(family, &sh, m);
+                let mut bytes = Vec::new();
+                for (i, b) in batches.iter().enumerate() {
+                    bytes.push(
+                        postcard::to_allocvec(&st.prove_leaf(&mut leaf, i as u64 + 1, b, LeafOpen::Real(&commit)).0 .0)
+                            .unwrap(),
+                    );
+                    st.advance(&sh, b);
+                }
+                let refs: Vec<&[u8]> = bytes.iter().map(|b| b.as_slice()).collect();
+                let log = publish_batch_log_gl(family, &sh, m, &batches, &commit);
+                let ms = audit::audit_leaf_bytes_gl(&pp, &refs, &log, layout, -1.0);
+                assert!(ms.as_ref().is_ok_and(|&ms| ms >= 0.0), "{family:?} {mode} honest per_batch: {ms:?}");
+                let l1: ProofGl = postcard::from_bytes(&bytes[0]).unwrap();
+                let v = efg::read_exposed_statement(&l1).values();
+                let cs: Vec<crate::config_gl::Challenge> = v
+                    .chunks(2)
+                    .map(|c| crate::config_gl::Challenge::from_basis_coefficients_slice(c).unwrap())
+                    .collect();
+                let toy_bytes = postcard::to_allocvec(&efg::prove_exposing_leaf(&cs).0).unwrap();
+                let set = vec![toy_bytes.as_slice(), refs[1]];
+                let decoded: Vec<ProofGl> = set.iter().map(|b| postcard::from_bytes(b).unwrap()).collect();
+                let drefs: Vec<&ProofGl> = decoded.iter().collect();
+                assert_eq!(efg::check_leaves_against_log(&drefs, &log, layout), Ok(()), "{family:?} {mode}: pre-fix accepts");
+                let r = audit::audit_leaf_bytes_gl(&pp, &set, &log, layout, -1.0);
+                println!("B6B dist leaf audit {family:?} {mode} per_batch toy: {r:?}");
+                assert!(r.is_err_and(|e| e.contains("leaf 1")), "{family:?} {mode}");
             }
         }
-        for family in [
-            StreamFamily::CmOmcGl,
-            StreamFamily::HllOmcGl,
-            StreamFamily::SsCertifiedGl,
-            StreamFamily::GkBandmerge2Gl,
-        ] {
-            use crate::recursion::recursive::expose_forest_gl as efg;
-            let mut leaf = FamLeafCircuitGl::build(family, &sh, m);
+    }
+
+    // ─── B2 end to end: prover publishes, auditor verifies (no seed) ─────────
+
+    /// The PUBLIC artifacts of one small distributed run (what reaches the
+    /// auditor): the per_batch leaf proofs, the chain root, the `M = 2`
+    /// forest root (all as wire bytes) and the prover's published batch log.
+    struct PublishedRun<V> {
+        leaves: Vec<Vec<u8>>,
+        chain: Vec<u8>,
+        forest: Vec<u8>,
+        log: BatchLog<V>,
+    }
+
+    const E2E_T: usize = 3;
+    const E2E_MACHINES: usize = 2;
+
+    fn e2e_batches() -> Vec<Vec<u32>> {
+        (0..E2E_T as u32).map(|i| (1..=4).map(|k| k * 7 + i * 13).collect()).collect()
+    }
+
+    /// PROVER side of a BabyBear run, exactly as the workers do it: one
+    /// reusable leaf circuit under the context's mode, leaf `t` opened with
+    /// the context's openings, the chain folded left-leaning, the forest as
+    /// machine 0's cascade over leaves 1-2 merged with machine 1's
+    /// wire-round-tripped leaf 3; plus the published log. Returns only public
+    /// artifacts: the seed stays in `commit`.
+    fn prove_run_bb(family: StreamFamily, commit: &ProverCommit) -> PublishedRun<Val> {
+        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        let mut leaf = FamLeafCircuit::build(family, &sh, m, commit.mode());
+        let mut st = FamState::empty(family, &sh, m);
+        let mut outs = Vec::new();
+        for (i, b) in batches.iter().enumerate() {
+            outs.push(st.prove_leaf(&mut leaf, i as u64 + 1, b, LeafOpen::Real(commit)).0);
+            st.advance(&sh, b);
+        }
+        let bytes = |p: &Proof| postcard::to_allocvec(p).unwrap();
+        let wire = |p: &Proof| -> Proof { postcard::from_bytes(&bytes(p)).unwrap() };
+        let prefix2 = prove_hiding_merge(&outs[0], &outs[1]); // chain Π^(2) == machine 0's slice root
+        let chain = prove_hiding_merge(&prefix2, &outs[2]);
+        let forest = prove_hiding_merge_proofs(&prefix2.0, &wire(&outs[2].0));
+        PublishedRun {
+            leaves: outs.iter().map(|o| bytes(&o.0)).collect(),
+            chain: bytes(&chain.0),
+            forest: bytes(&forest.0),
+            log: publish_batch_log(family, &sh, m, &batches, commit),
+        }
+    }
+
+    /// Goldilocks twin of [`prove_run_bb`].
+    fn prove_run_gl(family: StreamFamily, commit: &ProverCommit) -> PublishedRun<crate::config_gl::Val> {
+        use crate::recursion::recursive::expose_forest_gl as efg;
+        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        let mut leaf = FamLeafCircuitGl::build(family, &sh, m, commit.mode());
+        let mut st = FamStateGl::empty(family, &sh, m);
+        let mut outs = Vec::new();
+        for (i, b) in batches.iter().enumerate() {
+            outs.push(st.prove_leaf(&mut leaf, i as u64 + 1, b, LeafOpen::Real(commit)).0);
+            st.advance(&sh, b);
+        }
+        let bytes = |p: &ProofGl| postcard::to_allocvec(p).unwrap();
+        let wire = |p: &ProofGl| -> ProofGl { postcard::from_bytes(&bytes(p)).unwrap() };
+        let prefix2 = efg::prove_hiding_merge(&outs[0], &outs[1]);
+        let chain = efg::prove_hiding_merge(&prefix2, &outs[2]);
+        let forest = efg::prove_hiding_merge_proofs(&prefix2.0, &wire(&outs[2].0));
+        PublishedRun {
+            leaves: outs.iter().map(|o| bytes(&o.0)).collect(),
+            chain: bytes(&chain.0),
+            forest: bytes(&forest.0),
+            log: publish_batch_log_gl(family, &sh, m, &batches, commit),
+        }
+    }
+
+    /// AUDITOR side: public parameters, a published log and the proof bytes
+    /// ONLY — this function has no access to any seed. per_batch (leaf VK),
+    /// chain (`ForestShape::chain(3)`, one machine) and forest
+    /// (`dist_forest(3, 2)`) through the coordinator's audit entry points; a
+    /// rejection (an `Err` or a panicking pinned verify) is returned as
+    /// `Err`.
+    fn audit_run_bb(pp: &PublicParams, leaves: &[Vec<u8>], chain: &[u8], forest: &[u8], log: &BatchLog<Val>) -> [Result<f64, String>; 3] {
+        let layout = composition_expose();
+        let refs: Vec<&[u8]> = leaves.iter().map(|b| b.as_slice()).collect();
+        let flat = |r: Result<Result<f64, String>, String>| r.and_then(|x| x);
+        [
+            flat(crate::sketch::forge::catch_msg(|| audit::audit_leaf_bytes(pp, &refs, log, layout, -1.0))),
+            flat(crate::sketch::forge::catch_msg(|| {
+                audit::audit_root_bytes(pp, chain, log, StreamMode::Chain, E2E_T, 1, layout, -1.0)
+            })),
+            flat(crate::sketch::forge::catch_msg(|| {
+                audit::audit_root_bytes(pp, forest, log, StreamMode::Forest, E2E_T, E2E_MACHINES, layout, -1.0)
+            })),
+        ]
+    }
+
+    /// Goldilocks twin of [`audit_run_bb`].
+    fn audit_run_gl(
+        pp: &PublicParams,
+        leaves: &[Vec<u8>],
+        chain: &[u8],
+        forest: &[u8],
+        log: &BatchLog<crate::config_gl::Val>,
+    ) -> [Result<f64, String>; 3] {
+        let layout = composition_expose();
+        let refs: Vec<&[u8]> = leaves.iter().map(|b| b.as_slice()).collect();
+        let flat = |r: Result<Result<f64, String>, String>| r.and_then(|x| x);
+        [
+            flat(crate::sketch::forge::catch_msg(|| audit::audit_leaf_bytes_gl(pp, &refs, log, layout, -1.0))),
+            flat(crate::sketch::forge::catch_msg(|| {
+                audit::audit_root_bytes_gl(pp, chain, log, StreamMode::Chain, E2E_T, 1, layout, -1.0)
+            })),
+            flat(crate::sketch::forge::catch_msg(|| {
+                audit::audit_root_bytes_gl(pp, forest, log, StreamMode::Forest, E2E_T, E2E_MACHINES, layout, -1.0)
+            })),
+        ]
+    }
+
+    /// B2 end to end for one family in `Hiding` mode: the prover publishes
+    /// the log and the artifacts (per_batch, chain, forest over `M = 2`); the
+    /// auditor, holding no seed, accepts all three. NEGATIVE: the same
+    /// artifacts against (a) a log published under ANOTHER seed (same
+    /// `Com(S_0; 0)`, different `Com(S_T)` and `Com(B_t)`), (b) the honest
+    /// log's boundary with the other seed's batch commitments spliced in, and
+    /// (c) the `Plain` log of the same stream are all rejected in every mode.
+    fn assert_hiding_end_to_end(family: StreamFamily) {
+        if root_vk_overridden() {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        assert_eq!(composition_expose(), Expose::Interval, "default layout");
+        let (sh, m) = (shape(), 4);
+        let honest = ProverCommit::hiding(SaltSeed::for_tests(1));
+        let other = ProverCommit::hiding(SaltSeed::for_tests(2));
+        let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Hiding };
+        let modes = ["per_batch", "chain", "forest"];
+        macro_rules! run {
+            ($prove:ident, $audit:ident, $publish:ident) => {{
+                // The prover's run: the seed never leaves `honest`.
+                let run = $prove(family, &honest);
+                // Auditor: public artifacts only.
+                for (r, mode) in $audit(&pp, &run.leaves, &run.chain, &run.forest, &run.log).iter().zip(modes) {
+                    println!("B2 e2e {family:?} hiding {mode}: {r:?}");
+                    assert!(r.as_ref().is_ok_and(|&ms| ms >= 0.0), "{family:?} {mode}: honest run accepted: {r:?}");
+                }
+                let batches = e2e_batches();
+                let wrong = $publish(family, &sh, m, &batches, &other);
+                assert_eq!(wrong.init, run.log.init, "same genesis anchor under any seed");
+                let spliced = BatchLog { batch_commits: wrong.batch_commits.clone(), ..run.log.clone() };
+                let plain_log = $publish(family, &sh, m, &batches, &ProverCommit::plain());
+                for (what, lg) in [("other-seed log", &wrong), ("spliced batch commits", &spliced), ("plain log", &plain_log)] {
+                    for (r, mode) in $audit(&pp, &run.leaves, &run.chain, &run.forest, lg).iter().zip(modes) {
+                        println!("B2 e2e {family:?} {what} {mode}: {r:?}");
+                        assert!(r.is_err(), "{family:?} {mode}: the auditor must reject the {what}");
+                    }
+                }
+            }};
+        }
+        if family.is_gl() {
+            run!(prove_run_gl, audit_run_gl, publish_batch_log_gl);
+        } else {
+            run!(prove_run_bb, audit_run_bb, publish_batch_log);
+        }
+    }
+
+    #[test]
+    fn hiding_end_to_end_cm_omc() {
+        assert_hiding_end_to_end(StreamFamily::CmOmc);
+    }
+
+    #[test]
+    fn hiding_end_to_end_hll_omc() {
+        assert_hiding_end_to_end(StreamFamily::HllOmc);
+    }
+
+    #[test]
+    fn hiding_end_to_end_ss_certified() {
+        assert_hiding_end_to_end(StreamFamily::SsCertified);
+    }
+
+    #[test]
+    fn hiding_end_to_end_gk_bandmerge2() {
+        assert_hiding_end_to_end(StreamFamily::GkBandmerge2);
+    }
+
+    #[test]
+    fn hiding_end_to_end_bloom_omc() {
+        assert_hiding_end_to_end(StreamFamily::BloomOmc);
+    }
+
+    #[test]
+    fn hiding_end_to_end_cm_omc_gl() {
+        assert_hiding_end_to_end(StreamFamily::CmOmcGl);
+    }
+
+    #[test]
+    fn hiding_end_to_end_hll_omc_gl() {
+        assert_hiding_end_to_end(StreamFamily::HllOmcGl);
+    }
+
+    #[test]
+    fn hiding_end_to_end_ss_certified_gl() {
+        assert_hiding_end_to_end(StreamFamily::SsCertifiedGl);
+    }
+
+    #[test]
+    fn hiding_end_to_end_gk_bandmerge2_gl() {
+        assert_hiding_end_to_end(StreamFamily::GkBandmerge2Gl);
+    }
+
+    /// The audit entry points run with NO seed in scope: the prover's run is
+    /// produced inside a helper whose seed is dropped on return, and this
+    /// test body (which never constructs a seed or a prover context) hands
+    /// the auditor only public data. `audit_run_bb` / `_gl` and the
+    /// `super::audit` functions they call take no seed by signature, so this
+    /// compiles only because the audit path never needs one.
+    #[test]
+    fn auditor_runs_without_any_seed_in_scope() {
+        if root_vk_overridden() {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        fn published(family: StreamFamily) -> PublishedRun<Val> {
+            prove_run_bb(family, &ProverCommit::hiding(SaltSeed::for_tests(9)))
+        }
+        fn published_gl(family: StreamFamily) -> PublishedRun<crate::config_gl::Val> {
+            prove_run_gl(family, &ProverCommit::hiding(SaltSeed::for_tests(9)))
+        }
+        let pp = |family| PublicParams { family, shape: shape(), m: 4, commit_mode: CommitMode::Hiding };
+        let PublishedRun { leaves, chain, forest, log } = published(StreamFamily::SsCertified);
+        let bb = audit_run_bb(&pp(StreamFamily::SsCertified), &leaves, &chain, &forest, &log);
+        assert!(bb.iter().all(|r| r.is_ok()), "{bb:?}");
+        assert!(audit::check_log_genesis_bb(&pp(StreamFamily::SsCertified), &log).is_ok());
+        let PublishedRun { leaves, chain, forest, log } = published_gl(StreamFamily::CmOmcGl);
+        let gl = audit_run_gl(&pp(StreamFamily::CmOmcGl), &leaves, &chain, &forest, &log);
+        assert!(gl.iter().all(|r| r.is_ok()), "{gl:?}");
+        assert!(audit::check_log_genesis_gl(&pp(StreamFamily::CmOmcGl), &log).is_ok());
+    }
+
+    // ─── The genesis anchor rejects an inflated start ────────────────────────
+
+    /// Records a dishonest prover applies natively BEFORE leaf 1 (never
+    /// proved, never logged), so that its stream starts from `S_0' != S_0`.
+    const INFLATE: [u32; 4] = [999, 999, 999, 999];
+
+    /// The rejection must come from the genesis-anchor check itself.
+    fn assert_genesis_rejection(what: &str, r: Result<f64, String>) {
+        match r {
+            Ok(ms) => panic!("{what}: the auditor accepted an inflated genesis ({ms} ms)"),
+            Err(e) => assert!(e.contains("genesis anchor"), "{what}: rejected, but not by the genesis check: {e}"),
+        }
+    }
+
+    /// The genesis anchor is the auditor's only defence against a prover that
+    /// starts from a false initial state (the log's `Com(S_0)` comes from the
+    /// prover). The attack: apply [`INFLATE`] natively, then behave honestly
+    /// from `S_0'`: every leaf opened with the context's openings of its
+    /// index, the chain and the `M = 2` forest folded as the workers fold
+    /// them, and a log anchored at `Com(S_0'; ρ_0')` with `Com(S_T'; ρ^S_T)`
+    /// and every `Com(B_t; ρ^B_t)`. Under Plain `ρ_0'` is the public zero;
+    /// under Hiding the library refuses a zero init salt on a non-genesis
+    /// state (checked), so the attacker opens leaf 1's init with its own
+    /// nonzero `ρ_0'` instead.
+    /// That log is consistent with every leaf and root statement (checked);
+    /// every auditor entry point (dist per_batch / chain / forest, sim leaves
+    /// / root) must still reject it, AT the genesis check, in both modes.
+    /// BabyBear families.
+    #[test]
+    fn inflated_genesis_rejected_by_the_anchor_check_bb() {
+        assert_eq!(composition_expose(), Expose::Interval, "default layout");
+        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        let layout = composition_expose();
+        for commit in both_modes() {
+            let mode = commit.mode();
+            for family in BB_FAMILIES {
+                let tag = format!("{family:?} {}", commit.label());
+                let pp = PublicParams { family, shape: sh, m, commit_mode: mode };
+                // PROVER: the inflated start, then honest leaves and folds.
+                let mut leaf = FamLeafCircuit::build(family, &sh, m, mode);
+                let mut st = FamState::empty(family, &sh, m);
+                st.advance(&sh, &INFLATE);
+                // Under Hiding the library refuses the public zero init salt
+                // on a non-genesis state, so the attacker opens leaf 1's init
+                // with its own nonzero salt and anchors the log there.
+                let cf = family.commit_family();
+                let init_salt = if commit.is_hiding() {
+                    let refused = crate::sketch::forge::catch_msg(|| {
+                        st.prove_leaf(&mut leaf, 1, &batches[0], LeafOpen::Real(&commit));
+                        0.0
+                    });
+                    assert!(refused.is_err(), "{tag}: a zero init salt on S_0' must be refused by the prover");
+                    commit.state_salt(cf, 99)
+                } else {
+                    SaltBb::ZERO
+                };
+                let init = st.commit_with(&sh, mode, &init_salt);
+                assert_ne!(init, audit::genesis_commit_bb(&pp), "{tag}: S_0' must differ from S_0");
+                let mut outs = Vec::new();
+                for (i, b) in batches.iter().enumerate() {
+                    let t = i as u64 + 1;
+                    let open = if t == 1 && commit.is_hiding() {
+                        LeafOpen::Explicit(crate::commitment::hiding::Openings { init: init_salt, ..commit.openings(cf, t) })
+                    } else {
+                        LeafOpen::Real(&commit)
+                    };
+                    outs.push(st.prove_leaf(&mut leaf, t, b, open).0);
+                    st.advance(&sh, b);
+                }
+                let fin = st.commit_with(&sh, mode, &commit.state_salt(family.commit_family(), E2E_T as u64));
+                // GK's Com(B_t) binds the arrival count before the batch, which
+                // the inflated start shifts; the other families' do not.
+                let commits = if family == StreamFamily::GkBandmerge2 {
+                    let mut n_prev = gk_vals_of(&INFLATE).len() as u64;
+                    let cf = family.commit_family();
+                    batches
+                        .iter()
+                        .enumerate()
+                        .map(|(i, b)| {
+                            let vals = gk_vals_of(b);
+                            let salt = commit.batch_salt(cf, i as u64 + 1);
+                            let c = commit_gk2_batch_with(&vals, m, n_prev, mode, &salt).0;
+                            n_prev += vals.len() as u64;
+                            c
+                        })
+                        .collect()
+                } else {
+                    batch_commits_with(family, m, &batches, &commit)
+                };
+                let log = crate::recursion::recursive::expose_forest::batch_log(&init, &fin, &commits);
+                let prefix2 = prove_hiding_merge(&outs[0], &outs[1]);
+                let chain = prove_hiding_merge(&prefix2, &outs[2]);
+                let forest = prove_hiding_merge_proofs(&prefix2.0, &outs[2].0);
+                // Consistent with every statement: only the anchor stands in the way.
+                let leaf_refs: Vec<&Proof> = outs.iter().map(|o| &o.0).collect();
+                check_leaves_against_log(&leaf_refs, &log, layout)
+                    .unwrap_or_else(|e| panic!("{tag}: the inflated leaves match their log: {e}"));
+                for (root, tree) in [
+                    (&chain.0, dist_tree_shape(StreamMode::Chain, E2E_T, 1)),
+                    (&forest.0, dist_tree_shape(StreamMode::Forest, E2E_T, E2E_MACHINES)),
+                ] {
+                    crate::recursion::recursive::expose_forest::check_root_against_log(root, &log, &tree)
+                        .unwrap_or_else(|e| panic!("{tag}: the inflated root matches its log: {e}"));
+                }
+                // AUDITOR, distributed entry points (wire bytes).
+                let bytes = |p: &Proof| postcard::to_allocvec(p).unwrap();
+                let leaves: Vec<Vec<u8>> = outs.iter().map(|o| bytes(&o.0)).collect();
+                let dist = audit_run_bb(&pp, &leaves, &bytes(&chain.0), &bytes(&forest.0), &log);
+                for (r, what) in dist.into_iter().zip(["per_batch", "chain", "forest"]) {
+                    assert_genesis_rejection(&format!("{tag} dist {what}"), r);
+                }
+                // AUDITOR, sim entry points (proofs in memory).
+                let r = crate::sketch::forge::catch_msg(|| {
+                    audit::audit_leaves(&pp, &leaf_refs, None, &log, layout, -1.0)
+                });
+                assert_genesis_rejection(&format!("{tag} sim leaves"), r);
+                let r = crate::sketch::forge::catch_msg(|| {
+                    audit::audit_root(&pp, &chain, None, &log, &ForestShape::chain(E2E_T), layout)
+                });
+                assert_genesis_rejection(&format!("{tag} sim root"), r);
+            }
+        }
+    }
+
+    /// Goldilocks twin of [`inflated_genesis_rejected_by_the_anchor_check_bb`]
+    /// (the distributed entry points: the sim engine is BabyBear-only).
+    #[test]
+    fn inflated_genesis_rejected_by_the_anchor_check_gl() {
+        use crate::recursion::recursive::expose_forest_gl as efg;
+        assert_eq!(composition_expose(), Expose::Interval, "default layout");
+        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        let layout = composition_expose();
+        for commit in both_modes() {
+            let mode = commit.mode();
+            for family in GL_FAMILIES {
+                let tag = format!("{family:?} {}", commit.label());
+                let pp = PublicParams { family, shape: sh, m, commit_mode: mode };
+                let mut leaf = FamLeafCircuitGl::build(family, &sh, m, mode);
+                let mut st = FamStateGl::empty(family, &sh, m);
+                st.advance(&sh, &INFLATE);
+                // See the BabyBear twin: under Hiding the attacker anchors at
+                // its own nonzero init salt.
+                let cf = family.commit_family();
+                let init_salt = if commit.is_hiding() {
+                    let refused = crate::sketch::forge::catch_msg(|| {
+                        st.prove_leaf(&mut leaf, 1, &batches[0], LeafOpen::Real(&commit));
+                        0.0
+                    });
+                    assert!(refused.is_err(), "{tag}: a zero init salt on S_0' must be refused by the prover");
+                    commit.state_salt_gl(cf, 99)
+                } else {
+                    SaltGl::ZERO
+                };
+                let init = st.commit_with(&sh, mode, &init_salt);
+                assert_ne!(init, audit::genesis_commit_gl(&pp), "{tag}: S_0' must differ from S_0");
+                let mut outs = Vec::new();
+                for (i, b) in batches.iter().enumerate() {
+                    let t = i as u64 + 1;
+                    let open = if t == 1 && commit.is_hiding() {
+                        LeafOpen::ExplicitGl(crate::commitment::hiding::OpeningsGl { init: init_salt, ..commit.openings_gl(cf, t) })
+                    } else {
+                        LeafOpen::Real(&commit)
+                    };
+                    outs.push(st.prove_leaf(&mut leaf, t, b, open).0);
+                    st.advance(&sh, b);
+                }
+                let fin =
+                    st.commit_with(&sh, mode, &commit.state_salt_gl(family.commit_family(), E2E_T as u64));
+                let commits = if family == StreamFamily::GkBandmerge2Gl {
+                    let mut n_prev = gk_vals_of(&INFLATE).len() as u64;
+                    let cf = family.commit_family();
+                    batches
+                        .iter()
+                        .enumerate()
+                        .map(|(i, b)| {
+                            let vals = gk_vals_of(b);
+                            let salt = commit.batch_salt_gl(cf, i as u64 + 1);
+                            let c = commit_gk2_batch_with_gl(&vals, m, n_prev, mode, &salt).0;
+                            n_prev += vals.len() as u64;
+                            c
+                        })
+                        .collect()
+                } else {
+                    batch_commits_gl_with(family, m, &batches, &commit)
+                };
+                let log = efg::batch_log(&init, &fin, &commits);
+                let prefix2 = efg::prove_hiding_merge(&outs[0], &outs[1]);
+                let chain = efg::prove_hiding_merge(&prefix2, &outs[2]);
+                let forest = efg::prove_hiding_merge_proofs(&prefix2.0, &outs[2].0);
+                let leaf_refs: Vec<&ProofGl> = outs.iter().map(|o| &o.0).collect();
+                efg::check_leaves_against_log(&leaf_refs, &log, layout)
+                    .unwrap_or_else(|e| panic!("{tag}: the inflated leaves match their log: {e}"));
+                for (root, tree) in [
+                    (&chain.0, dist_tree_shape(StreamMode::Chain, E2E_T, 1)),
+                    (&forest.0, dist_tree_shape(StreamMode::Forest, E2E_T, E2E_MACHINES)),
+                ] {
+                    efg::check_root_against_log(root, &log, &tree)
+                        .unwrap_or_else(|e| panic!("{tag}: the inflated root matches its log: {e}"));
+                }
+                let bytes = |p: &ProofGl| postcard::to_allocvec(p).unwrap();
+                let leaves: Vec<Vec<u8>> = outs.iter().map(|o| bytes(&o.0)).collect();
+                let dist = audit_run_gl(&pp, &leaves, &bytes(&chain.0), &bytes(&forest.0), &log);
+                for (r, what) in dist.into_iter().zip(["per_batch", "chain", "forest"]) {
+                    assert_genesis_rejection(&format!("{tag} dist {what}"), r);
+                }
+            }
+        }
+    }
+
+    // ─── In-process workers: the real worker session over socket pairs ──────
+
+    /// What an in-process distributed run hands back: the per_batch leaf
+    /// proofs (global order; empty for chain/forest), the chain/forest root,
+    /// and every leaf's reported exposed final (`LeafFinal`; BabyBear only).
+    struct InprocRun {
+        leaves: Vec<Vec<u8>>,
+        root: Option<Vec<u8>>,
+        leaf_finals: Vec<Option<[Val; 8]>>,
+        /// Per global leaf `g` (1-based): the query context its worker shipped.
+        contexts: Vec<(usize, Option<Vec<WireInterval>>)>,
+        /// Per machine: the slice root it shipped (`Task::ship_root`).
+        slice_roots: Vec<Option<Vec<u8>>>,
+    }
+
+    fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
+        p.downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".into())
+    }
+
+    fn recv_from(s: &mut UnixStream, w: usize) -> FromWorker {
+        match recv_msg::<FromWorker>(s) {
+            Ok((FromWorker::Fatal { msg }, _)) => panic!("worker {w}: {msg}"),
+            Ok((msg, _)) => msg,
+            Err(e) => panic!("worker {w} closed its socket: {e}"),
+        }
+    }
+
+    /// The PROVER's witness pass for an in-process run: one `ToWorker::task`
+    /// per machine slice (chain: one machine), exactly as the coordinator
+    /// scatters it (the Task carries `commit`'s mode and seed). No queries.
+    fn inproc_tasks(
+        family: StreamFamily,
+        mode: StreamMode,
+        machines: usize,
+        batches: &[Vec<u32>],
+        commit: &ProverCommit,
+    ) -> (Vec<ToWorker>, Vec<(usize, usize)>) {
+        inproc_tasks_q(family, mode, machines, batches, commit, &[])
+    }
+
+    /// [`inproc_tasks`] with a query schedule: each Task also carries its
+    /// query checkpoints and whether to ship its slice root, as the
+    /// coordinator's [`CtxCollector`] sets them.
+    fn inproc_tasks_q(
+        family: StreamFamily,
+        mode: StreamMode,
+        machines: usize,
+        batches: &[Vec<u32>],
+        commit: &ProverCommit,
+        query_at: &[usize],
+    ) -> (Vec<ToWorker>, Vec<(usize, usize)>) {
+        let (sh, m) = (shape(), batches[0].len());
+        let machines = if mode == StreamMode::Chain { 1 } else { machines };
+        let ranges = slice_ranges(batches.len(), machines);
+        let mut starts: Vec<WireState> = Vec::new();
+        if family.is_gl() {
             let mut st = FamStateGl::empty(family, &sh, m);
-            let init = st.commit(&sh);
-            let mut bytes = Vec::new();
             for (i, b) in batches.iter().enumerate() {
-                bytes.push(postcard::to_allocvec(&st.prove_leaf(&mut leaf, i as u64 + 1, b).0 .0).unwrap());
+                if ranges.iter().any(|r| r.0 == i) {
+                    starts.push(st.encode());
+                }
                 st.advance(&sh, b);
             }
-            let refs: Vec<&[u8]> = bytes.iter().map(|b| b.as_slice()).collect();
-            let commits = batch_commits_gl(family, m, &batches);
-            let log = efg::batch_log(&init, &st.commit(&sh), &commits);
-            let ms = audit_leaf_bytes_gl(family, &sh, m, &refs, &log, layout, -1.0);
-            assert!(ms.as_ref().is_ok_and(|&ms| ms >= 0.0), "{family:?} honest per_batch: {ms:?}");
-            let l1: ProofGl = postcard::from_bytes(&bytes[0]).unwrap();
-            let v = efg::read_exposed_statement(&l1).values();
-            let cs: Vec<crate::config_gl::Challenge> = v
-                .chunks(2)
-                .map(|c| crate::config_gl::Challenge::from_basis_coefficients_slice(c).unwrap())
-                .collect();
-            let toy_bytes = postcard::to_allocvec(&efg::prove_exposing_leaf(&cs).0).unwrap();
-            let set = vec![toy_bytes.as_slice(), refs[1]];
-            let decoded: Vec<ProofGl> = set.iter().map(|b| postcard::from_bytes(b).unwrap()).collect();
-            let drefs: Vec<&ProofGl> = decoded.iter().collect();
-            assert_eq!(efg::check_leaves_against_log(&drefs, &log, layout), Ok(()), "{family:?}: pre-fix accepts");
-            let r = audit_leaf_bytes_gl(family, &sh, m, &set, &log, layout, -1.0);
-            println!("B6B dist leaf audit {family:?} per_batch toy: {r:?}");
-            assert!(r.is_err_and(|e| e.contains("leaf 1")), "{family:?}");
+        } else {
+            let mut st = FamState::empty(family, &sh, m);
+            for (i, b) in batches.iter().enumerate() {
+                if ranges.iter().any(|r| r.0 == i) {
+                    starts.push(st.encode());
+                }
+                st.advance(&sh, b);
+            }
+        }
+        let ctx = CtxCollector::new(!query_at.is_empty(), mode, ranges.len());
+        let tasks = ranges
+            .iter()
+            .zip(starts)
+            .map(|(&(a, e), start)| {
+                ToWorker::task(
+                    family,
+                    mode,
+                    &sh,
+                    m,
+                    start,
+                    batches[a..e].to_vec(),
+                    a as u64 + 1,
+                    commit,
+                    ctx.checkpoints(query_at, (a, e)),
+                    ctx.ship_root(query_at, (a, e)),
+                )
+            })
+            .collect();
+        (tasks, ranges)
+    }
+
+    /// Drive one in-process distributed run: each machine is a thread running
+    /// the REAL worker session (`worker_session` / `worker_session_gl`, the
+    /// body of a worker process) over a socket pair; the coordinator side
+    /// sends the Tasks, collects `LeafFinal` / `LeafDone` (+ `SliceDone`),
+    /// runs the forest reduction rounds, fetches the root and shuts the
+    /// workers down. A worker's panic (e.g. an inconsistent commitment
+    /// context on the wire) fails the caller with the worker's message.
+    fn run_inproc(
+        session: fn(&mut UnixStream),
+        tasks: Vec<ToWorker>,
+        ranges: &[(usize, usize)],
+        mode: StreamMode,
+    ) -> InprocRun {
+        let t = ranges.last().map_or(0, |r| r.1);
+        let mut coords: Vec<UnixStream> = Vec::new();
+        let mut handles = Vec::new();
+        for task in tasks {
+            let (mut c, mut w) = UnixStream::pair().expect("socket pair");
+            handles.push(std::thread::spawn(move || session(&mut w)));
+            send_msg(&mut c, &task).expect("send Task");
+            coords.push(c);
+        }
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut leaves: Vec<Option<Vec<u8>>> = vec![None; t];
+            let mut leaf_finals: Vec<Option<[Val; 8]>> = vec![None; t];
+            let mut contexts: Vec<(usize, Option<Vec<WireInterval>>)> = Vec::new();
+            let mut slice_roots: Vec<Option<Vec<u8>>> = vec![None; ranges.len()];
+            for (w, c) in coords.iter_mut().enumerate() {
+                let (a, e) = ranges[w];
+                let (mut pending, mut slice_done) = (e - a, mode == StreamMode::PerBatch);
+                while pending > 0 || !slice_done {
+                    match recv_from(c, w) {
+                        FromWorker::LeafFinal { idx, final_commit } => {
+                            leaf_finals[a + idx as usize] = Some(final_commit)
+                        }
+                        FromWorker::LeafDone { idx, proof, context, .. } => {
+                            leaves[a + idx as usize] = proof;
+                            contexts.push((a + idx as usize + 1, context));
+                            pending -= 1;
+                        }
+                        FromWorker::SliceDone { root, .. } => {
+                            slice_roots[w] = root;
+                            slice_done = true;
+                        }
+                        _ => panic!("worker {w}: unexpected message in the slice phase"),
+                    }
+                }
+            }
+            let root = (mode != StreamMode::PerBatch).then(|| {
+                let n = coords.len();
+                let mut stride = 1;
+                while stride < n {
+                    for k in (0..n).step_by(2 * stride).filter(|k| k + stride < n) {
+                        send_msg(&mut coords[k + stride], &ToWorker::FetchRoot).unwrap();
+                        let FromWorker::Root { proof } = recv_from(&mut coords[k + stride], k + stride) else {
+                            panic!("expected Root");
+                        };
+                        send_msg(&mut coords[k], &ToWorker::MergeWith { right_proof: proof }).unwrap();
+                        let FromWorker::Merged { .. } = recv_from(&mut coords[k], k) else {
+                            panic!("expected Merged");
+                        };
+                    }
+                    stride *= 2;
+                }
+                send_msg(&mut coords[0], &ToWorker::FetchRoot).unwrap();
+                let FromWorker::Root { proof } = recv_from(&mut coords[0], 0) else { panic!("expected Root") };
+                proof
+            });
+            for (w, c) in coords.iter_mut().enumerate() {
+                send_msg(c, &ToWorker::Exit).unwrap();
+                let FromWorker::Done { .. } = recv_from(c, w) else { panic!("expected Done") };
+            }
+            InprocRun {
+                leaves: leaves.into_iter().flatten().collect(),
+                root,
+                leaf_finals,
+                contexts,
+                slice_roots,
+            }
+        }));
+        drop(coords); // a worker still waiting on its socket now errors out
+        let worker_panics: Vec<String> =
+            handles.into_iter().filter_map(|h| h.join().err()).map(|p| panic_text(&*p)).collect();
+        match run {
+            Ok(r) => {
+                assert!(worker_panics.is_empty(), "worker panicked: {worker_panics:?}");
+                r
+            }
+            Err(p) => panic!("in-process run failed: {}; workers: {worker_panics:?}", panic_text(&*p)),
+        }
+    }
+
+    /// The distributed worker's SEED PATH, end to end over the real worker
+    /// session: the coordinator's Task ([`ToWorker::task`]) carries the
+    /// prover's seed, and every worker must derive its leaves' openings from
+    /// THAT seed, at the global index of its slice (machine 1 starts at leaf
+    /// 3), never from its own environment or RNG. The auditor accepts the
+    /// per_batch leaves (2 machines) and the chain (1 machine) and forest
+    /// (2 machines) roots against the log the coordinator publishes under its
+    /// seed, and rejects them against another seed's log; each reported
+    /// `LeafFinal` is exactly the leaf proof's exposed final, i.e. the
+    /// prover's `Com(S_t; ρ^S_t)`. A worker that dropped or ignored the wire
+    /// seed fails this test (fails closed, or its leaves bind other salts).
+    /// Also `Plain`: the wire carries no seed and the pre-B2 leaves verify.
+    #[test]
+    fn inproc_workers_derive_openings_from_the_wire_seed_bb() {
+        if root_vk_overridden() {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        let layout = composition_expose();
+        let seeded = ProverCommit::hiding(SaltSeed::for_tests(21));
+        let other = ProverCommit::hiding(SaltSeed::for_tests(22));
+        for family in BB_FAMILIES {
+            let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Hiding };
+            let log = publish_batch_log(family, &sh, m, &batches, &seeded);
+            let wrong = publish_batch_log(family, &sh, m, &batches, &other);
+            let (tasks, ranges) = inproc_tasks(family, StreamMode::PerBatch, 2, &batches, &seeded);
+            assert_eq!(ranges, vec![(0, 2), (2, 3)], "machine 1 starts at global leaf 3");
+            let run = run_inproc(worker_session, tasks, &ranges, StreamMode::PerBatch);
+            let refs: Vec<&[u8]> = run.leaves.iter().map(|b| b.as_slice()).collect();
+            assert_eq!(refs.len(), E2E_T, "{family:?}: one leaf proof per batch");
+            let ok = audit::audit_leaf_bytes(&pp, &refs, &log, layout, -1.0);
+            assert!(ok.is_ok(), "{family:?}: the workers' leaves verify against the coordinator's log: {ok:?}");
+            let bad = crate::sketch::forge::catch_msg(|| audit::audit_leaf_bytes(&pp, &refs, &wrong, layout, -1.0))
+                .and_then(|x| x);
+            assert!(bad.is_err(), "{family:?}: another seed's log is rejected");
+            let mut st = FamState::empty(family, &sh, m);
+            for (g, b) in batches.iter().enumerate() {
+                st.advance(&sh, b);
+                let proof: Proof = postcard::from_bytes(&run.leaves[g]).unwrap();
+                let exposed = read_exposed_boundary_proof(&proof).1 .0;
+                let prover = st.commit_with(
+                    &sh,
+                    CommitMode::Hiding,
+                    &seeded.state_salt(family.commit_family(), g as u64 + 1),
+                );
+                assert_eq!(run.leaf_finals[g], Some(exposed), "{family:?}: leaf {} reports its exposed final", g + 1);
+                assert_eq!(exposed, prover, "{family:?}: leaf {} ends at the prover's Com(S_t; ρ_t)", g + 1);
+            }
+        }
+        // The composed artifacts, on one family.
+        let family = StreamFamily::CmOmc;
+        let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Hiding };
+        let log = publish_batch_log(family, &sh, m, &batches, &seeded);
+        let wrong = publish_batch_log(family, &sh, m, &batches, &other);
+        for (mode, machines) in [(StreamMode::Chain, 1), (StreamMode::Forest, E2E_MACHINES)] {
+            let (tasks, ranges) = inproc_tasks(family, mode, machines, &batches, &seeded);
+            let run = run_inproc(worker_session, tasks, &ranges, mode);
+            assert!(run.leaf_finals.iter().all(Option::is_some), "{mode:?}: every leaf reported its final");
+            let root = run.root.expect("root");
+            let ok = audit::audit_root_bytes(&pp, &root, &log, mode, E2E_T, machines, layout, -1.0);
+            assert!(ok.is_ok(), "{mode:?}: the workers' root verifies against the coordinator's log: {ok:?}");
+            let bad = crate::sketch::forge::catch_msg(|| {
+                audit::audit_root_bytes(&pp, &root, &wrong, mode, E2E_T, machines, layout, -1.0)
+            })
+            .and_then(|x| x);
+            assert!(bad.is_err(), "{mode:?}: another seed's log is rejected");
+        }
+        // Plain: no seed on the wire; the pre-B2 leaves verify against the plain log.
+        let plain = ProverCommit::plain();
+        let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Plain };
+        let (tasks, ranges) = inproc_tasks(family, StreamMode::PerBatch, 2, &batches, &plain);
+        let run = run_inproc(worker_session, tasks, &ranges, StreamMode::PerBatch);
+        let refs: Vec<&[u8]> = run.leaves.iter().map(|b| b.as_slice()).collect();
+        let log = publish_batch_log(family, &sh, m, &batches, &plain);
+        let ok = audit::audit_leaf_bytes(&pp, &refs, &log, layout, -1.0);
+        assert!(ok.is_ok(), "plain: the workers' leaves verify against the plain log: {ok:?}");
+    }
+
+    /// Goldilocks twin of
+    /// [`inproc_workers_derive_openings_from_the_wire_seed_bb`]: per_batch
+    /// over 2 machines for every family, the forest over 2 machines for one.
+    #[test]
+    fn inproc_workers_derive_openings_from_the_wire_seed_gl() {
+        if root_vk_overridden() {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        let layout = composition_expose();
+        let seeded = ProverCommit::hiding(SaltSeed::for_tests(23));
+        let other = ProverCommit::hiding(SaltSeed::for_tests(24));
+        for family in GL_FAMILIES {
+            let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Hiding };
+            let log = publish_batch_log_gl(family, &sh, m, &batches, &seeded);
+            let wrong = publish_batch_log_gl(family, &sh, m, &batches, &other);
+            let (tasks, ranges) = inproc_tasks(family, StreamMode::PerBatch, 2, &batches, &seeded);
+            let run = run_inproc(worker_session_gl, tasks, &ranges, StreamMode::PerBatch);
+            let refs: Vec<&[u8]> = run.leaves.iter().map(|b| b.as_slice()).collect();
+            assert_eq!(refs.len(), E2E_T, "{family:?}: one leaf proof per batch");
+            let ok = audit::audit_leaf_bytes_gl(&pp, &refs, &log, layout, -1.0);
+            assert!(ok.is_ok(), "{family:?}: the workers' leaves verify against the coordinator's log: {ok:?}");
+            let bad =
+                crate::sketch::forge::catch_msg(|| audit::audit_leaf_bytes_gl(&pp, &refs, &wrong, layout, -1.0))
+                    .and_then(|x| x);
+            assert!(bad.is_err(), "{family:?}: another seed's log is rejected");
+        }
+        let family = StreamFamily::CmOmcGl;
+        let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Hiding };
+        let log = publish_batch_log_gl(family, &sh, m, &batches, &seeded);
+        let (tasks, ranges) = inproc_tasks(family, StreamMode::Forest, E2E_MACHINES, &batches, &seeded);
+        let run = run_inproc(worker_session_gl, tasks, &ranges, StreamMode::Forest);
+        let root = run.root.expect("root");
+        let ok = audit::audit_root_bytes_gl(&pp, &root, &log, StreamMode::Forest, E2E_T, E2E_MACHINES, layout, -1.0);
+        assert!(ok.is_ok(), "forest: the workers' root verifies against the coordinator's log: {ok:?}");
+    }
+
+    /// The procs engine's query replay binds each query to the WORKERS' leaf:
+    /// the operation-stream schedule (n = 10, Q = 3, m = 4: queries after
+    /// leaves 1..3, every one mid-batch, split and padded leaves) is proved
+    /// per_batch by 2 in-process workers, and [`measure_queries_dist`] holds
+    /// each query at version `t'` to the final leaf `t'` REPORTED
+    /// (`LeafFinal`, which equals that leaf proof's exposed final). With the
+    /// reported finals shifted by one version the replay must refuse (a
+    /// query opening another version's randomizer, or another state, fails
+    /// the same check). Every family, both modes.
+    #[test]
+    fn procs_query_replay_binds_the_workers_leaf_finals() {
+        let sh = shape();
+        let base: Vec<u32> = (1..=10).map(|k| k * 7 + 1).collect();
+        for commit in both_modes() {
+            for family in BB_FAMILIES {
+                let tag = format!("{family:?} {}", commit.label());
+                let (batches, query_at, _pads, _splits) =
+                    crate::experiments::stream_compose::build_query_schedule_batches(&base, 10, 4, 3, family);
+                assert_eq!(query_at, vec![1, 2, 3], "{tag}");
+                let (tasks, ranges) = inproc_tasks(family, StreamMode::PerBatch, 2, &batches, &commit);
+                let run = run_inproc(worker_session, tasks, &ranges, StreamMode::PerBatch);
+                let finals = reported_leaf_finals(run.leaf_finals).expect("every leaf reported its final");
+                for (g, p) in run.leaves.iter().enumerate() {
+                    let proof: Proof = postcard::from_bytes(p).unwrap();
+                    assert_eq!(finals[g], read_exposed_boundary_proof(&proof).1 .0, "{tag}: leaf {} final", g + 1);
+                }
+                let q = measure_queries_dist(
+                    family, sh, &batches, StreamMode::PerBatch, 1, &query_at, QueryKeyMode::First, &commit,
+                    &finals, None,
+                )
+                .expect("unbound query replay");
+                assert_eq!(q.n_queries, 3, "{tag}: every query bound its leaf's final");
+                let shifted: Vec<[Val; 8]> = (0..finals.len()).map(|i| finals[(i + 1) % finals.len()]).collect();
+                if !query_at.iter().any(|&t| shifted[t - 1] != finals[t - 1]) {
+                    // Plain only: consecutive versions may share a state (e.g. an
+                    // HLL batch that moves no register), hence a commitment.
+                    assert!(!commit.is_hiding(), "{tag}: hiding finals differ per version");
+                    continue;
+                }
+                let r = crate::sketch::forge::catch_msg(|| {
+                    measure_queries_dist(
+                        family, sh, &batches, StreamMode::PerBatch, 1, &query_at, QueryKeyMode::First, &commit,
+                        &shifted, None,
+                    )
+                });
+                match r {
+                    Ok(_) => panic!("{tag}: a query bound to another version's leaf final was accepted"),
+                    Err(e) => assert!(e.contains("must equal the leaf boundary"), "{tag}: {e}"),
+                }
+            }
+        }
+    }
+
+    /// Property-3 binding through the REAL worker sessions, under both
+    /// commitment modes: the workers prove the operation-stream schedule
+    /// (queries after leaves 1..3, mid-batch, split and padded), ship the
+    /// interval proofs live at each query version (per_batch: the leaves;
+    /// chain on one machine: the running fold; forest on two machines: machine
+    /// 0's root plus machine 1's peaks), the coordinator assembles the
+    /// certificates ([`CtxCollector`]) and [`measure_queries_dist`] pins every
+    /// query proof to the decode VK of the mode and binds it against the log
+    /// the prover published. Under `Hiding` the same certificates are rejected
+    /// against a log published under another seed.
+    #[test]
+    fn inproc_workers_ship_certificates_that_bind_queries_both_modes() {
+        if root_vk_overridden() {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        let sh = shape();
+        let base: Vec<u32> = (1..=10).map(|k| k * 7 + 1).collect();
+        let other = ProverCommit::hiding(SaltSeed::for_tests(26));
+        for commit in both_modes() {
+            for (family, mode, machines) in [
+                (StreamFamily::CmOmc, StreamMode::PerBatch, 2),
+                (StreamFamily::HllOmc, StreamMode::Chain, 1),
+                (StreamFamily::BloomOmc, StreamMode::Forest, 2),
+                (StreamFamily::GkBandmerge2, StreamMode::Forest, 2),
+            ] {
+                let tag = format!("{family:?} {mode:?} {}", commit.label());
+                let (batches, query_at, _, _) =
+                    crate::experiments::stream_compose::build_query_schedule_batches(&base, 10, 4, 3, family);
+                let m = batches[0].len();
+                let Some(mut audit) = QueryAudit::new(family, &sh, m, commit.mode()) else {
+                    eprintln!("skipped: binding off under a legacy opt-in");
+                    return;
+                };
+                let (tasks, ranges) = inproc_tasks_q(family, mode, machines, &batches, &commit, &query_at);
+                let run = run_inproc(worker_session, tasks, &ranges, mode);
+                let mut ctx = CtxCollector::new(true, mode, ranges.len());
+                for (g, c) in run.contexts {
+                    ctx.on_leaf(mode, g, c).unwrap_or_else(|e| panic!("{tag}: {e}"));
+                }
+                for (w, r) in run.slice_roots.into_iter().enumerate() {
+                    ctx.on_slice(w, ranges[w], r).unwrap_or_else(|e| panic!("{tag}: {e}"));
+                }
+                let leaf_proofs: Vec<Option<Vec<u8>>> = run.leaves.iter().cloned().map(Some).collect();
+                let leaf_proofs = if mode == StreamMode::PerBatch { leaf_proofs } else { Vec::new() };
+                let store = ctx.finish(&query_at, &ranges, &leaf_proofs).unwrap_or_else(|e| panic!("{tag}: {e}"));
+                let finals = reported_leaf_finals(run.leaf_finals).expect("every leaf reported its final");
+                let log = publish_batch_log(family, &sh, m, &batches, &commit);
+                let q = measure_queries_dist(
+                    family, sh, &batches, mode, 1, &query_at, QueryKeyMode::First, &commit, &finals,
+                    Some((&mut audit, &store, &log)),
+                )
+                .unwrap_or_else(|e| panic!("{tag}: {e}"));
+                assert_eq!(q.n_queries, 3, "{tag}");
+                assert!(q.query_bind_ms.is_some_and(|ms| ms > 0.0), "{tag}: answers bound");
+                if commit.is_hiding() {
+                    let wrong = publish_batch_log(family, &sh, m, &batches, &other);
+                    let r = measure_queries_dist(
+                        family, sh, &batches, mode, 1, &query_at, QueryKeyMode::First, &commit, &finals,
+                        Some((&mut audit, &store, &wrong)),
+                    );
+                    assert!(r.is_err(), "{tag}: bound against another seed's log");
+                }
+            }
         }
     }
 

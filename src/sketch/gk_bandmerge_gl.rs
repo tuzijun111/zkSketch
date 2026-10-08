@@ -217,6 +217,9 @@ use p3_recursion::RecursionOutput;
 use p3_symmetric::CryptographicHasher;
 use p3_uni_stark::StarkGenericConfig;
 
+use crate::commitment::hiding::{
+    self, CommitFamily, CommitKind, CommitMode, OpeningsGl, SaltGl, commit_flat_gl,
+};
 use crate::config_gl::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config_gl::ConfigWithFriParamsGl as ConfigWithFriParams;
 use crate::recursion::recursive::statement::{self, Expose, IndexPin};
@@ -1206,6 +1209,48 @@ pub fn commit_gk2_batch(vals: &[u32], m: usize, n_prev: u64) -> Gk2BatchCommit {
     Gk2BatchCommit(hasher.hash_iter(flat_tuples2(&fresh_tuples2(vals, m, n_prev))))
 }
 
+/// [`commit_gk2_state`] under a [`CommitMode`] (revision B2,
+/// [`crate::commitment::hiding`]): `Plain` is exactly [`commit_gk2_state`]
+/// (the salt is ignored); `Hiding` is `MyHash([TAG_STATE, GreenwaldKhanna,
+/// ρ_0..ρ_5] ‖ tuples)` over the same per-tuple `[e, g₁, g₂, Δ₁, Δ₂, t]`
+/// stream ([`commit_flat_gl`]), the value a `Hiding` leaf exposes for
+/// `Com(S_t; ρ)`.
+pub fn commit_gk2_state_with(state: &Gk2State, mode: CommitMode, salt: &SaltGl) -> Gk2StateCommit {
+    match mode {
+        CommitMode::Plain => commit_gk2_state(state),
+        CommitMode::Hiding => Gk2StateCommit(commit_flat_gl(
+            mode,
+            CommitKind::State,
+            CommitFamily::GreenwaldKhanna,
+            salt,
+            &flat_tuples2(&state.tuples),
+        )),
+    }
+}
+
+/// [`commit_gk2_batch`] under a [`CommitMode`]: `Plain` is exactly
+/// [`commit_gk2_batch`]; `Hiding` is `Com(B_t; ρ)` over the same fresh
+/// singletons `(v, 0, 0, 0, 0, n_prev + 1 + j)` (padded with `E_MAX`
+/// dummies to `m`).
+pub fn commit_gk2_batch_with(
+    vals: &[u32],
+    m: usize,
+    n_prev: u64,
+    mode: CommitMode,
+    salt: &SaltGl,
+) -> Gk2BatchCommit {
+    match mode {
+        CommitMode::Plain => commit_gk2_batch(vals, m, n_prev),
+        CommitMode::Hiding => Gk2BatchCommit(commit_flat_gl(
+            mode,
+            CommitKind::Batch,
+            CommitFamily::GreenwaldKhanna,
+            salt,
+            &flat_tuples2(&fresh_tuples2(vals, m, n_prev)),
+        )),
+    }
+}
+
 /// Expand a tuple-permutation to the atom-cell permutation that moves each
 /// tuple's TWO atomic cells (`atom_lo`, `atom_hi`) together.
 fn expand_sigma(sigma: &[usize]) -> Vec<usize> {
@@ -1484,6 +1529,8 @@ pub struct Gkb2LeafCircuit {
     expose: Expose,
     /// Batch index `t` of the next proof (Interval statement only).
     batch_index: u64,
+    /// Commitment mode (revision B2).
+    mode: CommitMode,
 }
 
 /// Build the reusable GK band-merge leaf circuit for a shape.
@@ -1508,10 +1555,33 @@ pub fn build_gkb2_leaf_expose(params: GkbParams, expose: Expose) -> Gkb2LeafCirc
 /// `N_{t-1}`, `N_t` stay unexposed: they are functions of the committed
 /// boundary states (see the BabyBear
 /// [`crate::sketch::gk_bandmerge::build_gkb2_leaf_expose_with`]).
+///
+/// Plain commitments ([`build_gkb2_leaf_commit`] with [`CommitMode::Plain`]);
+/// prove with [`Gkb2LeafCircuit::prove_epoch_at`].
 pub fn build_gkb2_leaf_expose_with(
     params: GkbParams,
     expose: Expose,
     binding: Binding,
+) -> Gkb2LeafCircuit {
+    build_gkb2_leaf_commit(params, expose, binding, CommitMode::Plain)
+}
+
+/// [`build_gkb2_leaf_expose_with`] with an explicit [`CommitMode`] (revision
+/// B2, [`crate::commitment::hiding`]). `Plain` is the pre-B2 circuit byte for
+/// byte (same VK). `Hiding` adds 9 private inputs, the salts of
+/// `Com(S_{t-1})`, `Com(S_t)` and `Com(B_t)` (init, final, batch; three D = 2
+/// Challenges each), allocated as the FIRST private inputs, and hashes each
+/// commitment as `[tag, salt…, inputs…]` ([`commit_gk2_state_with`] /
+/// [`commit_gk2_batch_with`]) through the same plain sponge as before
+/// (`add_hash_slice`; `binding` only gates the `θ` constraint here). `θ`,
+/// `N_{t-1}` and `N_t` stay unsalted, unexposed public inputs. The salts are
+/// witnesses, so the VK does not depend on them; prove with
+/// [`Gkb2LeafCircuit::prove_epoch_commit`].
+pub fn build_gkb2_leaf_commit(
+    params: GkbParams,
+    expose: Expose,
+    binding: Binding,
+    mode: CommitMode,
 ) -> Gkb2LeafCircuit {
     let expose_boundary = expose == Expose::Boundary;
     let cap = params.capacity;
@@ -1561,6 +1631,11 @@ pub fn build_gkb2_leaf_expose_with(
     let e_max = b.alloc_const(Challenge::from_u64(E_MAX as u64), "e_max");
 
     // Private inputs — 3 challenges per tuple. Alloc order == packing order.
+    // B2: the salts of (init, final, batch) come FIRST under `Hiding` (9
+    // inputs, [`OpeningsGl::private_inputs`] order); `Plain` allocates
+    // nothing, so its circuit is byte-identical.
+    // `alloc_leaf_salts_first` panics if any private input precedes them.
+    let salts = crate::recursion::recursive::leaf_gl::alloc_leaf_salts_first(&mut b, mode);
     let init_packed: Vec<ExprId> = (0..3 * cap)
         .map(|_| b.alloc_private_input("init"))
         .collect();
@@ -1662,21 +1737,48 @@ pub fn build_gkb2_leaf_expose_with(
     };
 
     // ── Stage 1: commit bindings ──
-    let h_init = b
-        .add_hash_slice(&Poseidon2Config::GOLDILOCKS_D2_W8, &init_packed, true)
-        .expect("hash init");
+    // Salted under `Hiding` (`[tag, salt…, inputs…]`); with no salt,
+    // `commit_hash(.., Binding::Semantic)` is exactly the pre-B2
+    // `add_hash_slice(cfg, inputs, true)`.
+    let commit_cfg = Poseidon2Config::GOLDILOCKS_D2_W8;
+    let fam = CommitFamily::GreenwaldKhanna;
+    let sponge = Binding::Semantic;
+    let h_init = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &commit_cfg,
+        CommitKind::State,
+        fam,
+        salts.as_ref().map(|s| &s.init),
+        &init_packed,
+        zero,
+        sponge,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(h_init[i], init_pis[i]);
     }
-    let h_final = b
-        .add_hash_slice(&Poseidon2Config::GOLDILOCKS_D2_W8, &final_packed, true)
-        .expect("hash final");
+    let h_final = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &commit_cfg,
+        CommitKind::State,
+        fam,
+        salts.as_ref().map(|s| &s.final_),
+        &final_packed,
+        zero,
+        sponge,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(h_final[i], final_pis[i]);
     }
-    let h_batch = b
-        .add_hash_slice(&Poseidon2Config::GOLDILOCKS_D2_W8, &batch_packed, true)
-        .expect("hash batch");
+    let h_batch = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &commit_cfg,
+        CommitKind::Batch,
+        fam,
+        salts.as_ref().map(|s| &s.batch),
+        &batch_packed,
+        zero,
+        sponge,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(h_batch[i], batch_pis[i]);
     }
@@ -2175,6 +2277,7 @@ pub fn build_gkb2_leaf_expose_with(
         pair_bind,
         expose,
         batch_index: 1,
+        mode,
     }
 }
 
@@ -2190,14 +2293,133 @@ impl Gkb2LeafCircuit {
         self.expose
     }
 
+    /// The commitment mode the circuit was built with (revision B2).
+    pub fn commit_mode(&self) -> CommitMode {
+        self.mode
+    }
+
+    /// The VK (preprocessed commitment, `expose_forest_gl::vk_pin_values`
+    /// order) of every proof this prebuilt leaf produces, read from its
+    /// prover data (public parameters alone, no proving).
+    pub fn vk_pin_values(&self) -> Vec<Challenge> {
+        crate::recursion::recursive::expose_forest_gl::common_vk_pin_values(
+            self.circuit_prover_data.common_data(),
+        )
+    }
+
     /// Prove the epoch of batch `t` (1-based); `t` is part of the Interval
-    /// statement (ignored by the other layouts).
+    /// statement (ignored by the other layouts). `Plain` circuits only: on a
+    /// `Hiding` circuit this would open every commitment with the public
+    /// zero salt, so it panics; use [`Self::prove_epoch_commit`] (or, for
+    /// the no-op leaf, [`Self::prove_epoch_public_zero`]).
     pub fn prove_epoch_at(
         &mut self,
         t: u64,
         initial_state: Gk2State,
         batch_vals: Vec<u32>,
     ) -> Gk2LeafProof {
+        assert!(
+            !self.mode.is_hiding(),
+            "prove_epoch_at on a Hiding leaf would publish Com(S; 0): use prove_epoch_commit with \
+             OpeningsGl::for_leaf(..)"
+        );
+        self.prove_epoch_opened(t, initial_state, batch_vals, &OpeningsGl::plain())
+    }
+
+    /// [`Self::prove_epoch_at`] with the commitment openings of leaf `t`
+    /// (`OpeningsGl::for_leaf(seed, CommitFamily::GreenwaldKhanna, t)` for an
+    /// honest prover, `OpeningsGl::for_leaf_after` for leaf 1 of a history
+    /// continued after a rotation; ignored by a `Plain` circuit). The proof's
+    /// `initial`, `final_` and `batch_commit` are then `Com(S_{t-1};
+    /// ρ^S_{t-1})`, `Com(S_t; ρ^S_t)` and `Com(B_t; ρ^B_t)`. A `Hiding` circuit
+    /// panics when `openings.final_` or `openings.batch` is the public zero
+    /// salt (never an honest PRF output). The init salt may be zero only at `t
+    /// = 1` on the empty genesis state (leaf 1 of the genesis history opens the
+    /// public `Com(S_0; 0)`); a zero init on any other input panics
+    /// ([`assert_zero_init_opens_public_state`](crate::commitment::hiding::assert_zero_init_opens_public_state)).
+    pub fn prove_epoch_commit(
+        &mut self,
+        t: u64,
+        initial_state: Gk2State,
+        batch_vals: Vec<u32>,
+        openings: &OpeningsGl,
+    ) -> Gk2LeafProof {
+        if self.mode.is_hiding() {
+            assert!(
+                !openings.final_.is_zero() && !openings.batch.is_zero(),
+                "Hiding leaf t = {t}: the final and batch commitments need secret randomizers \
+                 (OpeningsGl::for_leaf), not the public zero salt"
+            );
+            crate::commitment::hiding::assert_zero_init_opens_public_state(t, openings.init.is_zero(), || {
+                initial_state == Gk2State::empty(self.params)
+            });
+        }
+        self.prove_epoch_opened(t, initial_state, batch_vals, openings)
+    }
+
+    /// The no-op VK-derivation leaf's epoch: all three commitments opened
+    /// with [`OpeningsGl::public_zero`], so a batch that changes nothing
+    /// exposes `init == final` in either mode. The only path that proves a
+    /// `Hiding` leaf with zero final/batch salts, so (like the BabyBear
+    /// leaf's) it accepts exactly the VK-derivation leaf's input
+    /// ([`gk2_gl_noop_leaf_commit`]): an empty batch (the stream harness's GK
+    /// no-op: `n` does not move) that leaves the state unchanged, batch index
+    /// `t = 1` and the EMPTY initial state (whose `Com(S_0; 0)` the verifier
+    /// recomputes itself). A real state with an empty batch does not move
+    /// either, so without the empty-state check it would publish the
+    /// deterministic, guess-checkable `Com(S_t; 0)` as both init and final.
+    /// Input checks only (circuit and VK unchanged), in both modes.
+    pub fn prove_epoch_public_zero(
+        &mut self,
+        t: u64,
+        initial_state: Gk2State,
+        batch_vals: Vec<u32>,
+    ) -> Gk2LeafProof {
+        assert!(
+            batch_vals.is_empty() && apply_batch2(&initial_state, &batch_vals) == initial_state,
+            "prove_epoch_public_zero is for the no-op leaf: the batch must be empty and the state \
+             must not move"
+        );
+        assert_eq!(t, 1, "prove_epoch_public_zero is for the no-op leaf: it is proved at batch index 1");
+        assert!(
+            initial_state == Gk2State::empty(self.params),
+            "prove_epoch_public_zero is for the no-op leaf: the initial state must be the empty genesis \
+             state (a real state would publish the guess-checkable Com(S; 0))"
+        );
+        self.prove_epoch_opened(t, initial_state, batch_vals, &OpeningsGl::public_zero())
+    }
+
+    /// Shared body of the three `prove_epoch_*` entry points (no opening
+    /// checks).
+    fn prove_epoch_opened(
+        &mut self,
+        t: u64,
+        initial_state: Gk2State,
+        batch_vals: Vec<u32>,
+        openings: &OpeningsGl,
+    ) -> Gk2LeafProof {
+        let build = self.install_epoch(t, &initial_state, &batch_vals);
+        self.prove_build_opened(initial_state, batch_vals, &build, openings)
+    }
+
+    /// Run (no proof) the epoch [`Self::prove_epoch_commit`] would prove:
+    /// its traces (the row-overhead tests).
+    #[cfg(test)]
+    fn run_epoch_commit(
+        &mut self,
+        t: u64,
+        initial_state: Gk2State,
+        batch_vals: Vec<u32>,
+        openings: &OpeningsGl,
+    ) -> p3_circuit::tables::Traces<Challenge> {
+        let build = self.install_epoch(t, &initial_state, &batch_vals);
+        self.run_build_opened(initial_state, batch_vals, &build, openings).0
+    }
+
+    /// The honest band-merge build of the epoch of batch `t`, with its
+    /// permutation hints installed in the prebuilt graph and `t` recorded for
+    /// the Interval statement.
+    fn install_epoch(&mut self, t: u64, initial_state: &Gk2State, batch_vals: &[u32]) -> Bm2Build {
         self.batch_index = t;
         let params = self.params;
         assert!(batch_vals.len() <= params.batch);
@@ -2207,7 +2429,7 @@ impl Gkb2LeafCircuit {
         assert_eq!(total % 2, 0, "total = cap+m must be even");
 
         // ── Native replay + commitments ──
-        let build = build_bm2(&initial_state, &batch_vals);
+        let build = build_bm2(initial_state, batch_vals);
         let lf = num_rounds(total);
         // Swap the real per-batch permutation hints into the prebuilt graph
         // (op order: union-sort permute, then the lf per-round resort permutes).
@@ -2219,19 +2441,81 @@ impl Gkb2LeafCircuit {
         self.circuit
             .update_permute_witnesses(&sigmas)
             .expect("update permute witnesses (gkb2)");
-        self.prove_build(initial_state, batch_vals, &build)
+        build
     }
 
     /// Pack a (honest or hand-crafted) band-merge witness, run, prove and
-    /// self-verify. The Permute ops' hints must already be installed. The
-    /// source witnesses are the build's permutations (`sigma_union`, each
-    /// round's `sigma`).
+    /// self-verify, with Plain openings (the soundness tests' hand-crafted
+    /// builds). The Permute ops' hints must already be installed. The source
+    /// witnesses are the build's permutations (`sigma_union`, each round's
+    /// `sigma`).
+    #[cfg(test)]
     fn prove_build(
         &mut self,
         initial_state: Gk2State,
         batch_vals: Vec<u32>,
         build: &Bm2Build,
     ) -> Gk2LeafProof {
+        self.prove_build_opened(initial_state, batch_vals, build, &OpeningsGl::plain())
+    }
+
+    /// [`Self::prove_build`] with explicit commitment openings (ignored
+    /// under `Plain`).
+    fn prove_build_opened(
+        &mut self,
+        initial_state: Gk2State,
+        batch_vals: Vec<u32>,
+        build: &Bm2Build,
+        openings: &OpeningsGl,
+    ) -> Gk2LeafProof {
+        let params = self.params;
+        let (traces, initial_commit, final_commit, batch_commit, __witness) =
+            self.run_build_opened(initial_state, batch_vals, build, openings);
+
+        let __t_p = std::time::Instant::now();
+        let proof = self
+            .prover
+            .prove_all_tables(&traces, &self.circuit_prover_data)
+            .expect("prove_all_tables (gkb2)");
+        let __prove = __t_p.elapsed();
+        let __t_v = std::time::Instant::now();
+        self.prover
+            .verify_all_tables(&proof)
+            .expect("self-verify gkb2 leaf");
+        crate::recursion::recursive::timing::record(
+            crate::recursion::recursive::timing::LeafTiming {
+                witness: __witness,
+                prove: __prove,
+                verify: __t_v.elapsed(),
+                trace_rows: self.trace_rows,
+            },
+        );
+
+        Gk2LeafProof {
+            output: RecursionOutput(proof, Rc::clone(&self.circuit_prover_data)),
+            initial: initial_commit,
+            final_: final_commit,
+            batch_commit,
+            params,
+        }
+    }
+
+    /// Pack a band-merge witness and run the circuit (no proof): the traces,
+    /// the three commitments and the trace-generation time. The Permute ops'
+    /// hints must already be installed.
+    fn run_build_opened(
+        &mut self,
+        initial_state: Gk2State,
+        batch_vals: Vec<u32>,
+        build: &Bm2Build,
+        openings: &OpeningsGl,
+    ) -> (
+        p3_circuit::tables::Traces<Challenge>,
+        Gk2StateCommit,
+        Gk2StateCommit,
+        Gk2BatchCommit,
+        std::time::Duration,
+    ) {
         let params = self.params;
         let cap = params.capacity;
         let m = params.batch;
@@ -2241,9 +2525,10 @@ impl Gkb2LeafCircuit {
             params,
             n: build.n_t,
         };
-        let initial_commit = commit_gk2_state(&initial_state);
-        let final_commit = commit_gk2_state(&final_state);
-        let batch_commit = commit_gk2_batch(&batch_vals, m, build.n_prev);
+        let mode = self.mode;
+        let initial_commit = commit_gk2_state_with(&initial_state, mode, &openings.init);
+        let final_commit = commit_gk2_state_with(&final_state, mode, &openings.final_);
+        let batch_commit = commit_gk2_batch_with(&batch_vals, m, build.n_prev, mode, &openings.batch);
         let lf = num_rounds(total);
         let num_pairs = total / 2;
 
@@ -2273,6 +2558,10 @@ impl Gkb2LeafCircuit {
         }
 
         let mut private_inputs: Vec<Challenge> = Vec::new();
+        if mode.is_hiding() {
+            // The salts come first (see `build_gkb2_leaf_commit`).
+            private_inputs.extend(openings.private_inputs());
+        }
         private_inputs.extend_from_slice(&pack_tuples2(&initial_state.tuples));
         private_inputs.extend_from_slice(&pack_tuples2(&final_state.tuples));
         private_inputs.extend_from_slice(&pack_tuples2(&fresh_tuples2(
@@ -2379,7 +2668,7 @@ impl Gkb2LeafCircuit {
             }
         }
 
-        // ── Run + prove ──
+        // ── Run ──
         let __t_w = std::time::Instant::now();
         let traces = {
             let mut runner = self.circuit.runner();
@@ -2390,33 +2679,7 @@ impl Gkb2LeafCircuit {
             runner.run().expect("run gkb2 circuit")
         };
         let __witness = __t_w.elapsed();
-
-        let __t_p = std::time::Instant::now();
-        let proof = self
-            .prover
-            .prove_all_tables(&traces, &self.circuit_prover_data)
-            .expect("prove_all_tables (gkb2)");
-        let __prove = __t_p.elapsed();
-        let __t_v = std::time::Instant::now();
-        self.prover
-            .verify_all_tables(&proof)
-            .expect("self-verify gkb2 leaf");
-        crate::recursion::recursive::timing::record(
-            crate::recursion::recursive::timing::LeafTiming {
-                witness: __witness,
-                prove: __prove,
-                verify: __t_v.elapsed(),
-                trace_rows: self.trace_rows,
-            },
-        );
-
-        Gk2LeafProof {
-            output: RecursionOutput(proof, Rc::clone(&self.circuit_prover_data)),
-            initial: initial_commit,
-            final_: final_commit,
-            batch_commit,
-            params,
-        }
+        (traces, initial_commit, final_commit, batch_commit, __witness)
     }
 }
 
@@ -2435,6 +2698,27 @@ pub fn generate_proof2(params: GkbParams, batch_vals: Vec<u32>) -> Gk2Proof {
     let final_state = apply_batch2(&initial_state, &batch_vals);
     let proof = prove_gkb2(params, initial_state, batch_vals);
     Gk2Proof { proof, final_state }
+}
+
+/// Public **no-op leaf** of the Goldilocks GK band-merge leaf for root-VK
+/// derivation (the Goldilocks counterpart of
+/// `noop_leaf::gk2_noop_leaf_expose`): the empty state and an empty batch
+/// (the prover pads the fresh-tuple rows with `E_MAX` dummies; `n` does not
+/// move; the stream harness's GK no-op), proved at batch index 1 through the
+/// explicit zero-salt path ([`Gkb2LeafCircuit::prove_epoch_public_zero`],
+/// all three salts [`OpeningsGl::public_zero`]), so it exposes
+/// `init == final` in either mode. The salts and the index are witnesses,
+/// so its VK is that of every real leaf of the same parameters and mode.
+pub fn gk2_gl_noop_leaf_commit(
+    params: GkbParams,
+    expose: Expose,
+    binding: Binding,
+    mode: CommitMode,
+) -> p3_circuit_prover::BatchStarkProof<ConfigWithFriParams> {
+    build_gkb2_leaf_commit(params, expose, binding, mode)
+        .prove_epoch_public_zero(1, Gk2State::empty(params), Vec::new())
+        .output
+        .0
 }
 
 #[cfg(test)]
@@ -2805,5 +3089,495 @@ mod tests {
             }
         }
     }
-}
 
+    // ── B2: hiding commitments (`crate::commitment::hiding`) ─────────────────
+
+    use crate::commitment::hiding::{
+        SaltSeed, rho_batch_gl, rho_batch_gl_in, rho_state_gl, rho_state_gl_in,
+    };
+    use crate::recursion::recursive::expose_forest_gl::{
+        batch_log, check_leaves_against_log, check_root_against_log, prove_hiding_merge,
+        read_exposed_boundary_proof, read_exposed_statement, root_vk_deriver,
+        verify_bound_stark_proof_against_log, vk_pin_values,
+    };
+    use crate::recursion::recursive::leaf_gl::hiding_probe::{
+        leaked_salts, proof_alu_rows, trace_rows, vk_flat, vk_literal,
+    };
+    use crate::recursion::recursive::root_vk::ForestShape;
+    use crate::recursion::recursive::statement::{hash_gl, leaf_digest};
+    use crate::sketch::forge;
+
+    const HP: GkbParams = GkbParams { capacity: 8, batch: 4, s: 2 };
+    const GK: CommitFamily = CommitFamily::GreenwaldKhanna;
+
+    fn hiding_leaf(binding: Binding) -> Gkb2LeafCircuit {
+        build_gkb2_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding)
+    }
+
+    fn hp_prior() -> Gk2State {
+        apply_batch2(&Gk2State::empty(HP), &[10, 20, 30, 40])
+    }
+
+    fn hp_batches() -> Vec<Vec<u32>> {
+        vec![vec![15, 25, 35, 45], vec![12, 22, 32, 42]]
+    }
+
+    /// Native drift guard: `Plain` is the pre-B2 commitment whatever the
+    /// salt; `Hiding` is `MyHash([TAG_STATE | TAG_BATCH, GreenwaldKhanna, ρ…]
+    /// ‖ flat)` over exactly the pre-B2 flat stream (the batch's fresh
+    /// singletons still carry `n_prev`).
+    #[test]
+    fn commit_with_modes() {
+        use crate::commitment::hiding::{TAG_BATCH, TAG_STATE};
+        let seed = SaltSeed::for_tests(9);
+        let (r1, r2) = (rho_state_gl(&seed, GK, 1), rho_state_gl(&seed, GK, 2));
+        let s = hp_prior();
+        assert_eq!(commit_gk2_state_with(&s, CommitMode::Plain, &r1), commit_gk2_state(&s));
+        let mut input = vec![Val::from_u64(TAG_STATE), Val::from_u64(GK.id())];
+        input.extend_from_slice(&r1.0);
+        input.extend(flat_tuples2(&s.tuples));
+        let want: [Val; 4] = MyHash::new(make_perm()).hash_iter(input);
+        let h1 = commit_gk2_state_with(&s, CommitMode::Hiding, &r1);
+        assert_eq!(h1.0, want, "state layout drift");
+        assert_ne!(h1, commit_gk2_state_with(&s, CommitMode::Hiding, &r2));
+        assert_ne!(h1, commit_gk2_state(&s));
+        let rb = rho_batch_gl(&seed, GK, 1);
+        let vals = hp_batches()[0].clone();
+        assert_eq!(commit_gk2_batch_with(&vals, HP.batch, s.n, CommitMode::Plain, &rb), commit_gk2_batch(&vals, HP.batch, s.n));
+        let mut input = vec![Val::from_u64(TAG_BATCH), Val::from_u64(GK.id())];
+        input.extend_from_slice(&rb.0);
+        input.extend(flat_tuples2(&fresh_tuples2(&vals, HP.batch, s.n)));
+        let want: [Val; 4] = MyHash::new(make_perm()).hash_iter(input);
+        let hb = commit_gk2_batch_with(&vals, HP.batch, s.n, CommitMode::Hiding, &rb);
+        assert_eq!(hb.0, want, "batch layout drift");
+        assert_ne!(hb, commit_gk2_batch(&vals, HP.batch, s.n));
+        assert_ne!(hb, commit_gk2_batch_with(&vals, HP.batch, s.n + 1, CommitMode::Hiding, &rb), "n_prev is bound");
+    }
+
+    /// (1) A hiding leaf's commitments (the proof's `initial/final_/batch`
+    /// fields and the exposed statement) equal the NATIVE hiding commitments
+    /// under the leaf-`t` openings, under every binding (it gates the `θ`
+    /// constraint) and under the Interval and Boundary layouts.
+    #[test]
+    fn hiding_leaf_exposes_native_hiding_commitments() {
+        let seed = SaltSeed::for_tests(21);
+        let t = 3u64;
+        let vals = hp_batches()[0].clone();
+        let prior = hp_prior();
+        let expect = apply_batch2(&prior, &vals);
+        let init = commit_gk2_state_with(&prior, CommitMode::Hiding, &rho_state_gl(&seed, GK, t - 1));
+        let fin = commit_gk2_state_with(&expect, CommitMode::Hiding, &rho_state_gl(&seed, GK, t));
+        let bc = commit_gk2_batch_with(&vals, HP.batch, prior.n, CommitMode::Hiding, &rho_batch_gl(&seed, GK, t));
+        assert_ne!(init, commit_gk2_state(&prior), "hiding != plain");
+        assert_ne!(fin, commit_gk2_state(&expect), "hiding != plain");
+        assert_ne!(bc, commit_gk2_batch(&vals, HP.batch, prior.n), "hiding != plain");
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let mut leaf = hiding_leaf(binding);
+            assert_eq!(leaf.commit_mode(), CommitMode::Hiding);
+            let r = leaf.prove_epoch_commit(t, prior.clone(), vals.clone(), &OpeningsGl::for_leaf(&seed, GK, t));
+            assert_eq!(r.initial, init, "{binding:?}");
+            assert_eq!(r.final_, fin, "{binding:?}");
+            assert_eq!(r.batch_commit, bc, "{binding:?}");
+            let st = read_exposed_statement(&r.output.0);
+            assert_eq!(st.init, init.0.to_vec(), "{binding:?}");
+            assert_eq!(st.final_, fin.0.to_vec(), "{binding:?}");
+            let iv = st.interval.expect("interval layout");
+            assert_eq!((iv.lo, iv.hi), (Val::from_u64(t), Val::from_u64(t)));
+            assert_eq!(iv.digest, leaf_digest(&hash_gl, 2, t, &bc.0), "{binding:?}: H(TAG_LEAF, t, Com(B_t; ρ))");
+        }
+        // Boundary layout, leaf 1 of the genesis history from the empty S_0
+        // (its zero init salt opens only that public state).
+        let s0 = Gk2State::empty(HP);
+        let expect0 = apply_batch2(&s0, &vals);
+        for binding in [Binding::Semantic, Binding::Legacy] {
+            let mut bleaf = build_gkb2_leaf_commit(HP, Expose::Boundary, binding, CommitMode::Hiding);
+            let r = bleaf.prove_epoch_commit(1, s0.clone(), vals.clone(), &OpeningsGl::for_leaf(&seed, GK, 1));
+            let (i, f) = read_exposed_boundary_proof(&r.output.0);
+            assert_eq!(i.0, commit_gk2_state_with(&s0, CommitMode::Hiding, &SaltGl::ZERO).0, "{binding:?}");
+            assert_eq!(f.0, r.final_.0, "{binding:?}");
+            assert_eq!(f.0, commit_gk2_state_with(&expect0, CommitMode::Hiding, &rho_state_gl(&seed, GK, 1)).0);
+        }
+    }
+
+    /// (2) The hiding leaf's VK does not depend on the salts (two different
+    /// openings, and the zero-salt no-op leaf, give one VK), differs from the
+    /// Plain VK, and the Plain circuit is the pre-B2 circuit: its VK equals
+    /// the value recorded on the unmodified Goldilocks leaf (b2-hiding
+    /// @94e9f58), through both the old builder and
+    /// `build_gkb2_leaf_commit(.., Plain)`, for every layout and binding
+    /// (`Bound` equals `Semantic` on this leaf).
+    #[test]
+    fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+        let recorded = [
+            (Expose::None, Binding::Legacy, [17648301630814163799, 5056629490044759552, 18124287673730190577, 10229800710694710351]),
+            (Expose::None, Binding::Semantic, [15783120118502133170, 15673227004874413497, 16436335801021612575, 16167864115155413287]),
+            (Expose::None, Binding::Bound, [15783120118502133170, 15673227004874413497, 16436335801021612575, 16167864115155413287]),
+            (Expose::Boundary, Binding::Legacy, [8877931017855245655, 13239424998823848014, 4664278231825416898, 9226611488382758017]),
+            (Expose::Boundary, Binding::Semantic, [14695903512229121464, 7479378755966821786, 14574137524852503798, 16567183074626621323]),
+            (Expose::Boundary, Binding::Bound, [14695903512229121464, 7479378755966821786, 14574137524852503798, 16567183074626621323]),
+            (Expose::Interval, Binding::Legacy, [17969328576662778145, 15120082042092615866, 4816197231256429130, 10060820669137172799]),
+            (Expose::Interval, Binding::Semantic, [1177917408512823668, 7183958709189815382, 5583135678615390458, 15052598159657248002]),
+            (Expose::Interval, Binding::Bound, [1177917408512823668, 7183958709189815382, 5583135678615390458, 15052598159657248002]),
+        ];
+        for (expose, binding, vk) in recorded {
+            let old = build_gkb2_leaf_expose_with(HP, expose, binding).vk_pin_values();
+            let plain = build_gkb2_leaf_commit(HP, expose, binding, CommitMode::Plain).vk_pin_values();
+            assert_eq!(vk_flat(&old), vk_literal(vk), "{expose:?}/{binding:?}: Plain VK drifted from the pre-B2 leaf");
+            assert_eq!(plain, old, "{expose:?}/{binding:?}");
+            let hid = build_gkb2_leaf_commit(HP, expose, binding, CommitMode::Hiding).vk_pin_values();
+            assert_ne!(hid, old, "{expose:?}/{binding:?}: the hiding circuit differs");
+        }
+        for binding in [Binding::Semantic, Binding::Legacy] {
+            let mut leaf = hiding_leaf(binding);
+            let vk = leaf.vk_pin_values();
+            let vals = hp_batches()[0].clone();
+            let o1 = OpeningsGl::for_leaf(&SaltSeed::for_tests(1), GK, 1);
+            let o5 = OpeningsGl::for_leaf(&SaltSeed::for_tests(2), GK, 5);
+            // Leaf 1 starts from the empty S_0 (its zero init salt opens only
+            // that public state); leaf 5 from a real prior.
+            let a = leaf.prove_epoch_commit(1, Gk2State::empty(HP), vals.clone(), &o1);
+            let b = leaf.prove_epoch_commit(5, hp_prior(), vals, &o5);
+            assert_ne!(a.final_, b.final_);
+            assert_eq!(vk_pin_values(&a.output.0), vk, "{binding:?}");
+            assert_eq!(vk_pin_values(&b.output.0), vk, "{binding:?}");
+            let noop = gk2_gl_noop_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding);
+            assert_eq!(vk_pin_values(&noop), vk, "{binding:?}: the zero-salt no-op leaf has the real leaves' VK");
+        }
+    }
+
+    /// (2b) The Hiding leaf's VK is pinned, one literal per statement layout and binding.
+    /// It does not depend on the salts (test (2)), so it is a fixed value per
+    /// shape; recorded on b2-gl @77a02a3. The pin guards what the other
+    /// tests only compare against the native functions, which would carry the
+    /// same change: which sponge each salted commitment uses, the
+    /// `(kind, GreenwaldKhanna)` tag constants, and the salt allocation order.
+    /// The salted sponges are Semantic under every binding, as the Plain
+    /// ones are, so the `Bound` VK equals the `Semantic` one here too.
+    #[test]
+    fn hiding_leaf_vk_is_pinned() {
+        let recorded = [
+            (Expose::None, Binding::Legacy, [3029885619994448637, 17441158352762443225, 10853978290850170651, 14097643031452289306]),
+            (Expose::None, Binding::Semantic, [2553289518217700547, 11811450157687497045, 7917681042355712433, 16431477266885413259]),
+            (Expose::None, Binding::Bound, [2553289518217700547, 11811450157687497045, 7917681042355712433, 16431477266885413259]),
+            (Expose::Boundary, Binding::Legacy, [4254308733864687361, 12525722226883359869, 5696773030907435527, 2424577922232817698]),
+            (Expose::Boundary, Binding::Semantic, [1326411197357999998, 1628734671836764846, 10759183271107343309, 13359699208043678665]),
+            (Expose::Boundary, Binding::Bound, [1326411197357999998, 1628734671836764846, 10759183271107343309, 13359699208043678665]),
+            (Expose::Interval, Binding::Legacy, [9782628864113537765, 17236547483427436253, 1394173986358015459, 10953610386781663955]),
+            (Expose::Interval, Binding::Semantic, [17948282801466964897, 16583181577784489926, 13993560794779333575, 3530354182268625117]),
+            (Expose::Interval, Binding::Bound, [17948282801466964897, 16583181577784489926, 13993560794779333575, 3530354182268625117]),
+        ];
+        for (expose, binding, vk) in recorded {
+            let hid = build_gkb2_leaf_commit(HP, expose, binding, CommitMode::Hiding).vk_pin_values();
+            assert_eq!(vk_flat(&hid), vk_literal(vk), "{expose:?}/{binding:?}: Hiding VK drifted");
+        }
+    }
+
+    /// (3) Equal states at two versions get different hiding commitments,
+    /// both different from the plain one; at the proof level, two no-op
+    /// (empty-batch) leaves at `t = 1, 2` over the empty summary expose
+    /// `Com(S_0; 0) → Com(S_0; ρ_1) → Com(S_0; ρ_2)`: three distinct values
+    /// for one state, chained.
+    #[test]
+    fn equal_states_get_unlinkable_hiding_commitments() {
+        let seed = SaltSeed::for_tests(33);
+        let s = hp_prior();
+        let (r1, r2) = (rho_state_gl(&seed, GK, 1), rho_state_gl(&seed, GK, 2));
+        let (c1, c2) = (
+            commit_gk2_state_with(&s, CommitMode::Hiding, &r1),
+            commit_gk2_state_with(&s, CommitMode::Hiding, &r2),
+        );
+        assert_ne!(c1, c2);
+        assert_ne!(c1, commit_gk2_state(&s));
+        assert_ne!(c2, commit_gk2_state(&s));
+        assert_eq!(commit_gk2_state_with(&s, CommitMode::Plain, &r1), commit_gk2_state(&s), "Plain ignores the salt");
+
+        let e = Gk2State::empty(HP);
+        let mut leaf = hiding_leaf(Binding::Semantic);
+        let l1 = leaf.prove_epoch_commit(1, e.clone(), Vec::new(), &OpeningsGl::for_leaf(&seed, GK, 1));
+        let l2 = leaf.prove_epoch_commit(2, e.clone(), Vec::new(), &OpeningsGl::for_leaf(&seed, GK, 2));
+        let (s1, s2) = (read_exposed_statement(&l1.output.0), read_exposed_statement(&l2.output.0));
+        assert_eq!(s1.init, commit_gk2_state_with(&e, CommitMode::Hiding, &SaltGl::ZERO).0.to_vec());
+        assert_eq!(s1.final_, commit_gk2_state_with(&e, CommitMode::Hiding, &r1).0.to_vec());
+        assert_eq!(s2.init, s1.final_, "leaf 2 opens Com(S_1) with the same ρ_1");
+        assert_eq!(s2.final_, commit_gk2_state_with(&e, CommitMode::Hiding, &r2).0.to_vec());
+        assert_ne!(s1.init, s1.final_, "the state did not move, the commitment did");
+        assert_ne!(s2.init, s2.final_);
+    }
+
+    /// (4) Binding in Hiding mode, through the auditor paths: an honest
+    /// 2-leaf forest passes the per-batch log check and its root verifies
+    /// against the log under the root VK derived from the zero-salt no-op
+    /// leaf; another seed's log, a wrong batch salt and a wrong final salt
+    /// are rejected; an inconsistent `ρ_1` across the leaf boundary cannot be
+    /// merged.
+    #[test]
+    fn wrong_salt_rejected_by_log_and_inconsistent_salt_breaks_merge() {
+        let binding = Binding::Semantic;
+        let (a, b) = (SaltSeed::for_tests(41), SaltSeed::for_tests(42));
+        let bs = hp_batches();
+        let s0 = Gk2State::empty(HP);
+        let s1 = apply_batch2(&s0, &bs[0]);
+        let s2 = apply_batch2(&s1, &bs[1]);
+        let log_for = |seed: &SaltSeed| {
+            let bc: Vec<[Val; 4]> = [(&bs[0], s0.n), (&bs[1], s1.n)]
+                .iter()
+                .enumerate()
+                .map(|(k, (v, n))| {
+                    commit_gk2_batch_with(v, HP.batch, *n, CommitMode::Hiding, &rho_batch_gl(seed, GK, k as u64 + 1)).0
+                })
+                .collect();
+            batch_log(
+                &commit_gk2_state_with(&s0, CommitMode::Hiding, &SaltGl::ZERO).0,
+                &commit_gk2_state_with(&s2, CommitMode::Hiding, &rho_state_gl(seed, GK, 2)).0,
+                &bc,
+            )
+        };
+        let (log_a, log_b) = (log_for(&a), log_for(&b));
+        let mut leaf = hiding_leaf(binding);
+        let l1 = leaf.prove_epoch_commit(1, s0.clone(), bs[0].clone(), &OpeningsGl::for_leaf(&a, GK, 1)).output;
+        let l2 = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &OpeningsGl::for_leaf(&a, GK, 2)).output;
+        assert_eq!(check_leaves_against_log(&[&l1.0, &l2.0], &log_a, Expose::Interval), Ok(()));
+        assert!(check_leaves_against_log(&[&l1.0, &l2.0], &log_b, Expose::Interval).is_err(), "another seed's log");
+
+        let bad_batch = OpeningsGl { batch: rho_batch_gl(&b, GK, 2), ..OpeningsGl::for_leaf(&a, GK, 2) };
+        let l2b = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_batch).output;
+        let e = check_leaves_against_log(&[&l1.0, &l2b.0], &log_a, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|e| e.contains("digest")), "{e:?}");
+        let bad_final = OpeningsGl { final_: rho_state_gl(&b, GK, 2), ..OpeningsGl::for_leaf(&a, GK, 2) };
+        let l2f = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_final).output;
+        let e = check_leaves_against_log(&[&l1.0, &l2f.0], &log_a, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|e| e.contains("Com(S_T)")), "{e:?}");
+
+        let shape = ForestShape::forest(2);
+        let root = prove_hiding_merge(&l1, &l2);
+        let noop = gk2_gl_noop_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding);
+        let vk = root_vk_deriver(noop).root_vk(&shape);
+        verify_bound_stark_proof_against_log(&root.0, &vk, &log_a, &shape);
+        assert!(check_root_against_log(&root.0, &log_b, &shape).is_err());
+
+        let bad_init = OpeningsGl { init: rho_state_gl(&b, GK, 1), ..OpeningsGl::for_leaf(&a, GK, 2) };
+        let l2i = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_init).output;
+        assert_ne!(read_exposed_statement(&l2i.0).init, read_exposed_statement(&l1.0).final_);
+        let e = forge::catch_msg(|| prove_hiding_merge(&l1, &l2i)).map(|_| ());
+        println!("B2 GL gk inconsistent salt merge: {e:?}");
+        assert!(
+            e.as_ref().is_err_and(|m| m.contains("WitnessConflict")),
+            "leaf 2's init must use leaf 1's final salt: {e:?}"
+        );
+    }
+
+    /// (5) The zero-salt no-op leaf of a Hiding circuit still exposes
+    /// `init == final` (`= Com(S_0; 0)`, the public anchor), so the twin-merge
+    /// root-VK derivation works unchanged; the Plain no-op leaf exposes the
+    /// pre-B2 anchor.
+    #[test]
+    fn hiding_noop_leaf_has_init_eq_final() {
+        let empty = Gk2State::empty(HP);
+        for binding in [Binding::Semantic, Binding::Legacy] {
+            let noop = gk2_gl_noop_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding);
+            let st = read_exposed_statement(&noop);
+            let anchor = commit_gk2_state_with(&empty, CommitMode::Hiding, &SaltGl::ZERO);
+            assert_eq!(st.init, st.final_, "{binding:?}");
+            assert_eq!(st.init, anchor.0.to_vec(), "{binding:?}");
+            assert_ne!(anchor, commit_gk2_state(&empty), "{binding:?}");
+        }
+        let plain = gk2_gl_noop_leaf_commit(HP, Expose::Boundary, Binding::Semantic, CommitMode::Plain);
+        let (i, f) = read_exposed_boundary_proof(&plain);
+        assert_eq!((i.0, f.0), (commit_gk2_state(&empty).0, commit_gk2_state(&empty).0));
+    }
+
+    /// (F3, F5) The Hiding leaf costs exactly +2 Poseidon2 rows and +3 ALU
+    /// rows per commitment over the Plain leaf (+6 and +9 per leaf) under
+    /// every binding, and none of its 18 salt values is a public value of
+    /// the proof (positive control: a "salt" equal to an exposed commitment
+    /// value is found).
+    #[test]
+    fn hiding_leaf_row_overhead_and_no_salt_in_public_values() {
+        let seed = SaltSeed::for_tests(91);
+        let t = 3u64;
+        let vals = hp_batches()[0].clone();
+        let o = OpeningsGl::for_leaf(&seed, GK, t);
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let mut plain = build_gkb2_leaf_commit(HP, Expose::Interval, binding, CommitMode::Plain);
+            let mut leaf = hiding_leaf(binding);
+            let (p0, a0) = trace_rows(&plain.run_epoch_commit(t, hp_prior(), vals.clone(), &OpeningsGl::plain()));
+            let (p1, a1) = trace_rows(&leaf.run_epoch_commit(t, hp_prior(), vals.clone(), &o));
+            println!("B2 GL gk leaf rows {binding:?}: Poseidon2 {p0} -> {p1}, ALU {a0} -> {a1}");
+            assert_eq!(p1, p0 + 6, "{binding:?}: Poseidon2 rows");
+            assert_eq!(a1, a0 + 9, "{binding:?}: ALU rows");
+            let hid = leaf.prove_epoch_commit(t, hp_prior(), vals.clone(), &o);
+            assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
+            assert_eq!(leaked_salts(&hid.output.0, &[o.init, o.final_, o.batch]), vec![], "{binding:?}");
+            let mut control = SaltGl::ZERO;
+            control.0[0] = hid.initial.0[0];
+            assert!(!leaked_salts(&hid.output.0, &[control]).is_empty(), "{binding:?}: the scan sees the statement");
+        }
+    }
+
+    /// (F1) A Hiding leaf never falls back to zero salts silently: the old
+    /// `prove_epoch_at` / `prove_epoch` entry points panic on it, and so does
+    /// `prove_epoch_commit` handed a zero final or batch salt. The explicit
+    /// no-op path refuses a non-empty batch. Controls: a zero INIT salt is
+    /// leaf 1's honest opening (from the empty genesis state; a zero init on
+    /// a real state is refused, test
+    /// `hiding_leaf_refuses_zero_init_on_a_real_state`), and a Plain leaf
+    /// still ignores its openings.
+    #[test]
+    fn hiding_leaf_rejects_zero_openings_outside_the_noop_path() {
+        let seed = SaltSeed::for_tests(81);
+        let vals = hp_batches()[0].clone();
+        let mut leaf = hiding_leaf(Binding::Semantic);
+        let msg = forge::catch_msg(|| leaf.prove_epoch_at(2, hp_prior(), vals.clone()).final_).unwrap_err();
+        assert!(msg.contains("prove_epoch_at on a Hiding leaf"), "{msg}");
+        assert!(forge::catch(|| leaf.prove_epoch(hp_prior(), vals.clone()).final_).is_none());
+        let honest = OpeningsGl::for_leaf(&seed, GK, 2);
+        for (what, o) in [
+            ("plain", OpeningsGl::plain()),
+            ("public_zero", OpeningsGl::public_zero()),
+            ("zero final", OpeningsGl { final_: SaltGl::ZERO, ..honest }),
+            ("zero batch", OpeningsGl { batch: SaltGl::ZERO, ..honest }),
+        ] {
+            let msg = forge::catch_msg(|| leaf.prove_epoch_commit(2, hp_prior(), vals.clone(), &o).final_)
+                .unwrap_err();
+            assert!(msg.contains("public zero salt"), "{what}: {msg}");
+        }
+        let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(1, hp_prior(), vals.clone()).final_).unwrap_err();
+        assert!(msg.contains("the batch must be empty"), "{msg}");
+
+        let o1 = OpeningsGl::for_leaf(&seed, GK, 1);
+        assert!(o1.init.is_zero());
+        let s0 = Gk2State::empty(HP);
+        let r = leaf.prove_epoch_commit(1, s0.clone(), vals.clone(), &o1);
+        assert_eq!(r.initial, commit_gk2_state_with(&s0, CommitMode::Hiding, &SaltGl::ZERO));
+        let mut plain = build_gkb2_leaf_commit(HP, Expose::Interval, Binding::Semantic, CommitMode::Plain);
+        let p = plain.prove_epoch_commit(2, hp_prior(), vals.clone(), &OpeningsGl::plain());
+        assert_eq!(p.initial, commit_gk2_state(&hp_prior()));
+        assert_eq!(p.final_, commit_gk2_state(&apply_batch2(&hp_prior(), &vals)));
+        assert_eq!(p.batch_commit, commit_gk2_batch(&vals, HP.batch, hp_prior().n));
+    }
+
+    /// (F1, init salt) The twin of the BabyBear leaf's test: under `Hiding` a
+    /// zero INIT salt opens only the public genesis `Com(S_0; 0)` (batch
+    /// index 1, the empty state). Refused, under both bindings: a forgotten
+    /// init opening on a real prior (`t = 2`), local numbering
+    /// (`for_leaf(.., 1)` at global `t = 5` on a real state), leaf 1's
+    /// openings on a real prior at `t = 1`, and a zero init at `t = 2` on the
+    /// empty state. Controls: the genesis leaf proves and exposes
+    /// `Com(S_0; 0)`; a Plain leaf ignores its openings on the same inputs.
+    #[test]
+    fn hiding_leaf_refuses_zero_init_on_a_real_state() {
+        let seed = SaltSeed::for_tests(83);
+        let vals = hp_batches()[0].clone();
+        let s0 = Gk2State::empty(HP);
+        assert_ne!(hp_prior(), s0, "precondition: a real (secret) prior");
+        let forgot = OpeningsGl { init: SaltGl::ZERO, ..OpeningsGl::for_leaf(&seed, GK, 2) };
+        let local = OpeningsGl::for_leaf(&seed, GK, 1);
+        let cases = [
+            ("forgotten init, real prior", 2u64, hp_prior(), forgot),
+            ("local numbering at global t = 5", 5, hp_prior(), local),
+            ("leaf-1 openings on a real prior", 1, hp_prior(), local),
+            ("zero init at t = 2 on the empty state", 2, s0.clone(), forgot),
+        ];
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let mut leaf = hiding_leaf(binding);
+            for (what, t, prior, o) in &cases {
+                let msg = forge::catch_msg(|| leaf.prove_epoch_commit(*t, prior.clone(), vals.clone(), o).final_)
+                    .unwrap_err();
+                assert!(msg.contains("zero init salt"), "{binding:?}/{what}: {msg}");
+            }
+            let r = leaf.prove_epoch_commit(1, s0.clone(), vals.clone(), &local);
+            assert_eq!(r.initial, commit_gk2_state_with(&s0, CommitMode::Hiding, &SaltGl::ZERO), "{binding:?}");
+        }
+        let mut plain = build_gkb2_leaf_commit(HP, Expose::Interval, Binding::Semantic, CommitMode::Plain);
+        for (what, t, prior, o) in &cases {
+            let p = plain.prove_epoch_commit(*t, prior.clone(), vals.clone(), o);
+            assert_eq!(p.initial, commit_gk2_state(prior), "Plain/{what}");
+        }
+    }
+
+    /// The no-op path refuses a real state and another batch index (the twin
+    /// of the BabyBear leaf's test): an empty batch leaves ANY state
+    /// unchanged, so "empty batch, state does not move" alone would let a
+    /// real state publish the guess-checkable `Com(S; 0)` as both init and
+    /// final. Rejected in either mode. Control: the honest no-op input still
+    /// proves and exposes `init == final == Com(S_0; 0)`.
+    #[test]
+    fn noop_path_refuses_a_real_state_or_another_index() {
+        assert_eq!(apply_batch2(&hp_prior(), &[]), hp_prior(), "precondition: an empty batch leaves S unchanged");
+        for mode in [CommitMode::Hiding, CommitMode::Plain] {
+            let mut leaf = build_gkb2_leaf_commit(HP, Expose::Interval, Binding::Semantic, mode);
+            let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(1, hp_prior(), Vec::new()).final_).unwrap_err();
+            assert!(msg.contains("the initial state must be the empty genesis state"), "{mode:?}: {msg}");
+            let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(2, Gk2State::empty(HP), Vec::new()).final_)
+                .unwrap_err();
+            assert!(msg.contains("batch index 1"), "{mode:?}: {msg}");
+        }
+        let r = hiding_leaf(Binding::Semantic).prove_epoch_public_zero(1, Gk2State::empty(HP), Vec::new());
+        let s0 = commit_gk2_state_with(&Gk2State::empty(HP), CommitMode::Hiding, &SaltGl::ZERO);
+        assert_eq!((r.initial, r.final_), (s0, s0));
+    }
+
+    /// (F2) A continued history (the GK rotation after 2^24 records) is
+    /// anchored on the previous history's certified final commitment
+    /// ([`OpeningsGl::for_leaf_after`]): history 1 restarts `t` at 1 from
+    /// history 0's final `S_2`, its leaf 1 exposes exactly the certified
+    /// `Com(S_2; ρ_{0,2})`, both leaves pass history 1's log (whose anchor is
+    /// taken from history 0, not recomputed); the zero init salt (the
+    /// guess-checkable `Com(S_2; 0)`) is refused by the leaf, and a nonzero
+    /// wrong anchor salt is rejected by the log.
+    #[test]
+    fn continued_history_leaf_opens_the_previous_final_commitment() {
+        let seed = SaltSeed::for_tests(71);
+        let bs = hp_batches();
+        let s1 = apply_batch2(&Gk2State::empty(HP), &bs[0]);
+        let s2 = apply_batch2(&s1, &bs[1]);
+        let mut leaf = hiding_leaf(Binding::Semantic);
+        let h0_last = leaf.prove_epoch_commit(2, s1, bs[1].clone(), &OpeningsGl::for_leaf(&seed, GK, 2));
+        let anchor_salt = rho_state_gl(&seed, GK, 2);
+        let anchor = h0_last.final_;
+        assert_eq!(anchor, commit_gk2_state_with(&s2, CommitMode::Hiding, &anchor_salt));
+
+        let h = 1u64;
+        let s3 = apply_batch2(&s2, &bs[0]);
+        let s4 = apply_batch2(&s3, &bs[1]);
+        let o1 = OpeningsGl::for_leaf_after(&anchor_salt, &seed, GK, h);
+        let l1 = leaf.prove_epoch_commit(1, s2.clone(), bs[0].clone(), &o1).output;
+        let l2 = leaf.prove_epoch_commit(2, s3.clone(), bs[1].clone(), &OpeningsGl::for_leaf_in(&seed, GK, h, 2)).output;
+        assert_eq!(read_exposed_statement(&l1.0).init, anchor.0.to_vec(), "history 1 starts at history 0's final");
+        assert_eq!(read_exposed_statement(&l2.0).init, read_exposed_statement(&l1.0).final_);
+        let bc: Vec<[Val; 4]> = [(&bs[0], s2.n), (&bs[1], s3.n)]
+            .iter()
+            .enumerate()
+            .map(|(k, (v, n))| {
+                commit_gk2_batch_with(v, HP.batch, *n, CommitMode::Hiding, &rho_batch_gl_in(&seed, GK, h, k as u64 + 1)).0
+            })
+            .collect();
+        let fin = commit_gk2_state_with(&s4, CommitMode::Hiding, &rho_state_gl_in(&seed, GK, h, 2));
+        let log1 = batch_log(&anchor.0, &fin.0, &bc);
+        assert_eq!(check_leaves_against_log(&[&l1.0, &l2.0], &log1, Expose::Interval), Ok(()));
+        let zero_init = OpeningsGl { init: SaltGl::ZERO, ..o1 };
+        let msg = forge::catch_msg(|| leaf.prove_epoch_commit(1, s2.clone(), bs[0].clone(), &zero_init).final_)
+            .unwrap_err();
+        assert!(msg.contains("zero init salt"), "{msg}");
+        let wrong_init = OpeningsGl { init: rho_state_gl(&seed, GK, 1), ..o1 };
+        let l1w = leaf.prove_epoch_commit(1, s2, bs[0].clone(), &wrong_init).output;
+        let e = check_leaves_against_log(&[&l1w.0, &l2.0], &log1, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|m| m.contains("Com(S_0)")), "{e:?}");
+    }
+
+    /// (8) Build and prove the Hiding leaf at a tiny shape. Under the DEBUG
+    /// profile (`cargo test --lib gk_bandmerge_gl::tests::hiding_leaf_tiny_debug`)
+    /// the fork debug-asserts, during the build, that each of the 9 salt
+    /// private inputs has an ALU creator.
+    #[test]
+    fn hiding_leaf_tiny_debug() {
+        let p = GkbParams { capacity: 4, batch: 2, s: 2 };
+        for binding in [Binding::Semantic, Binding::Legacy] {
+            let mut leaf = build_gkb2_leaf_commit(p, Expose::Interval, binding, CommitMode::Hiding);
+            let seed = SaltSeed::for_tests(8);
+            let r = leaf.prove_epoch_commit(1, Gk2State::empty(p), vec![9, 3], &OpeningsGl::for_leaf(&seed, GK, 1));
+            let fin = apply_batch2(&Gk2State::empty(p), &[9, 3]);
+            assert_eq!(r.final_, commit_gk2_state_with(&fin, CommitMode::Hiding, &rho_state_gl(&seed, GK, 1)));
+        }
+    }
+}

@@ -79,8 +79,14 @@ fn agg_params() -> ProveNextLayerParams {
 /// exposed boundary values — so it is a legitimate public parameter, not a
 /// trusted setup.
 pub fn vk_pin_values(proof: &BatchStarkProof<ConfigWithFriParams>) -> Vec<Challenge> {
-    let commitment = &proof
-        .stark_common
+    common_vk_pin_values(&proof.stark_common)
+}
+
+/// [`vk_pin_values`] read from a circuit's common data (a prebuilt leaf's
+/// prover data), so a leaf's VK is available without proving. Goldilocks
+/// analog of `expose_forest::common_vk_pin_values`.
+pub fn common_vk_pin_values(common: &CommonData<ConfigWithFriParams>) -> Vec<Challenge> {
+    let commitment = &common
         .preprocessed
         .as_ref()
         .expect("a boundary-bound proof carries a preprocessed commitment")

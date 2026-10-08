@@ -21,27 +21,46 @@
 //! Whole vs partial dataset: this runner consumes `max(EXP_M)` keys per family
 //! (a *small slice* — fine for testing). To exercise the real datasets, fetch
 //! them first (`python3 scripts/fetch_datasets.py`) and set EXP_DATASET=aol.
+//!
+//! Commitments (revision B2): the DEPLOYED variants (cm `omc`, hll `omc`, ss
+//! `certified`, gk `bandmerge2`) run under the prover's commitment context,
+//! read once (`ProverCommit::from_env`: `ZKSKETCH_COMMIT`, default `hiding`;
+//! the salt seed from `ZKSKETCH_SALT_SEED` or the OS RNG, never printed):
+//! under `hiding` each is the `*_commit` leaf (9 salt inputs, 3 salted
+//! sponges) proved at batch index 1 with `Openings::for_leaf(seed, family,
+//! 1)`. Every baseline variant stays `Plain`. Every CSV row records the mode
+//! it was proved under in its `commit` column (just before `status`): the
+//! run's mode for the deployed variants, `plain` for every baseline (the
+//! plonky2 leg writes the same column, always `plain`, so the two CSVs still
+//! merge); env.json records `commit_deployed`, `commit_baselines` and
+//! `salt_seed` (the seed's source, never the seed).
 
 use zksketch::dataset::{aol, netflix, synthetic_stream, take, zipf_stream, Synthetic};
 use zksketch::experiments::metrics::{append_csv, bench, write_env_json, AggRow, BenchCfg, RunOutcome};
 use zksketch::experiments::{env_usize, proof_size, results_dir};
 use zksketch::recursion::recursive::timing;
 
+use zksketch::commitment::hiding::CommitFamily;
+use zksketch::experiments::prover_commit::ProverCommit;
+use zksketch::recursion::recursive::statement::Expose;
+use zksketch::sketch::bind::default_binding;
 use zksketch::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
 use zksketch::sketch::countmin_final::{generate_proof as cm_prove, CountMinFinalParams};
 use zksketch::sketch::countmin_c_merkle::{prove_countmin_c_merkle_leaf, CountMinCMerkleParams};
 use zksketch::sketch::countmin_memcheck::{prove_countmin_memcheck, CmMemcheckParams};
-use zksketch::sketch::countmin_omc::{prove_countmin_omc, CmOmcParams};
+use zksketch::sketch::countmin_omc::{build_countmin_omc_leaf_commit, prove_countmin_omc, CmOmcParams};
 use zksketch::sketch::hll_merkle::{prove_hll_merkle_leaf, HllMerkleParams};
-use zksketch::sketch::hll_omc::{prove_hll_omc, HllOmcParams};
+use zksketch::sketch::hll_omc::{build_hll_omc_leaf_commit, prove_hll_omc, HllOmcParams};
 use zksketch::sketch::gk_final_full::{generate_proof as gk_prove, GKFullParams, GKFullState, GKFullUpdate};
 use zksketch::sketch::gk_bandmerge::{
-    generate_proof as gkb_prove, generate_proof2 as gkb2_prove,
-    generate_proof2_naive as gkb2n_prove, GkbParams,
+    build_gkb2_leaf_commit, generate_proof as gkb_prove, generate_proof2 as gkb2_prove,
+    generate_proof2_naive as gkb2n_prove, Gk2State, GkbParams,
 };
 use zksketch::sketch::greenwald_khanna_naive::generate_proof_naive as gk_naive_prove;
 use zksketch::sketch::hll_final_full::{generate_proof as hll_prove, HllFullParams, HllFullUpdate};
-use zksketch::sketch::ss_final_full::{generate_proof as ss_prove, SsFullParams, SsFullState, SsFullUpdate};
+use zksketch::sketch::ss_final_full::{
+    build_ss_full_leaf_commit, generate_proof as ss_prove, SsFullParams, SsFullState, SsFullUpdate,
+};
 use zksketch::sketch::spacesaving_naive::generate_proof_naive as ss_naive_prove;
 
 fn env_str(key: &str, default: &str) -> String {
@@ -141,6 +160,9 @@ fn main() {
     }
     let include_cores = cores_override.is_some();
     let cores_used = cores_override.unwrap_or_else(rayon::current_num_threads);
+    // The PROVER's commitment context for the deployed variants, read once
+    // (the seed is never printed). Baselines stay Plain.
+    let commit = ProverCommit::from_env();
 
     let dataset_arg = env_str("EXP_DATASET", "uniform");
     // EXP_DATASET may be a comma-list of datasets — sweep each in turn.
@@ -155,8 +177,10 @@ fn main() {
     let family_sel = env_str("EXP_FAMILY", "all");
     let want = |f: &str| family_sel == "all" || family_sel.split(',').any(|x| x.trim() == f);
     println!(
-        "E1 (plonky3 STARK) — datasets={datasets:?}  m={ms:?}  family={family_sel}  cores={cores_used}  trials={}",
-        cfg().trials
+        "E1 (plonky3 STARK) — datasets={datasets:?}  m={ms:?}  family={family_sel}  cores={cores_used}  trials={}  commit(deployed)={} salt_seed={}",
+        cfg().trials,
+        commit.label(),
+        commit.seed_label()
     );
 
     let dir = results_dir();
@@ -169,6 +193,11 @@ fn main() {
             ("ext_degree_D", "4".into()),
             ("dataset", dataset_arg.clone()),
             ("cores", cores_used.to_string()),
+            // Deployed variants (cm/hll omc, ss certified, gk bandmerge2) run
+            // under the run's commitment mode; baselines are always plain.
+            ("commit_deployed", commit.label().into()),
+            ("commit_baselines", "plain".into()),
+            ("salt_seed", commit.seed_label().into()),
         ],
     );
     let hdr: Vec<String> = {
@@ -180,8 +209,19 @@ fn main() {
         }
         let mut h: Vec<String> = cols.iter().map(|s| s.to_string()).collect();
         h.extend(AggRow::header().iter().map(|s| s.to_string()));
+        // Per-row provenance of the commitment mode (revision B2).
+        h.push("commit".into());
         h.push("status".into());
         h
+    };
+    // The mode a row was proved under: the run's context for the DEPLOYED
+    // variants (the only ones with a hiding circuit here), `plain` for every
+    // baseline.
+    let commit_of = |family: &str, variant: &str| -> &'static str {
+        match (family, variant) {
+            ("cm", "omc") | ("hll", "omc") | ("ss", "certified") | ("gk", "bandmerge2") => commit.label(),
+            _ => "plain",
+        }
     };
 
     let c = cfg();
@@ -254,6 +294,7 @@ fn main() {
                 r.push(cores_used.to_string());
             }
             r.extend(agg.fields());
+            r.push(commit_of(family, variant).into());
             r.push("ok".into());
             r
         };
@@ -266,6 +307,7 @@ fn main() {
                 r.push(cores_used.to_string());
             }
             r.extend(std::iter::repeat("n/a".to_string()).take(AggRow::header().len()));
+            r.push(commit_of(family, variant).into());
             r.push(status.into());
             r
         };
@@ -406,7 +448,12 @@ fn main() {
                         };
                         let p = CmOmcParams { d: cm_d, w: cm_w, batch: m };
                         match bench_guarded(c, || {
-                            let r = prove_countmin_omc(p, initial.clone(), ups.clone());
+                            let r = if commit.is_hiding() {
+                                build_countmin_omc_leaf_commit(p, Expose::None, default_binding(), commit.mode())
+                                    .prove_epoch_commit(1, initial.clone(), ups.clone(), &commit.openings(CommitFamily::CountMin, 1))
+                            } else {
+                                prove_countmin_omc(p, initial.clone(), ups.clone())
+                            };
                             outcome(r.proof_size() as u64)
                         }) {
                             Some(agg) => { append_csv(&dir, "e1_circuit", &hdr, &row("cm", "omc", m, cm_d, cm_w, s_cells, &agg)); }
@@ -494,7 +541,16 @@ fn main() {
                         // per row ⇒ ~2× per-tuple width vs `bandmerge`.
                         let bvals: Vec<u32> = slice_e.iter().map(|&k| (k & 0x001F_FFFF) as u32).collect();
                         let gp = GkbParams { capacity: cap, batch: me, s: s_param };
-                        match bench_guarded(c, || { let r = gkb2_prove(gp, bvals.clone()); outcome(proof_size(&r.proof.output.0) as u64) }) {
+                        match bench_guarded(c, || {
+                            let out = if commit.is_hiding() {
+                                build_gkb2_leaf_commit(gp, Expose::None, default_binding(), commit.mode())
+                                    .prove_epoch_commit(1, Gk2State::empty(gp), bvals.clone(), &commit.openings(CommitFamily::GreenwaldKhanna, 1))
+                                    .output
+                            } else {
+                                gkb2_prove(gp, bvals.clone()).proof.output
+                            };
+                            outcome(proof_size(&out.0) as u64)
+                        }) {
                             Some(agg) => { append_csv(&dir, "e1_circuit", &hdr, &row("gk", "bandmerge2", me, 0, 0, cap, &agg)); }
                             None => {
                                 println!("  gk bandmerge2 m={me} cap={cap}: SKIPPED — too large");
@@ -580,7 +636,12 @@ fn main() {
                         let initial = vec![0u64; m_reg];
                         let op = HllOmcParams { b: hb, batch: me };
                         match bench_guarded(c, || {
-                            let r = prove_hll_omc(op, initial.clone(), keys_e.clone());
+                            let r = if commit.is_hiding() {
+                                build_hll_omc_leaf_commit(op, Expose::None, default_binding(), commit.mode())
+                                    .prove_epoch_commit(1, initial.clone(), keys_e.clone(), &commit.openings(CommitFamily::HyperLogLog, 1))
+                            } else {
+                                prove_hll_omc(op, initial.clone(), keys_e.clone())
+                            };
                             outcome(r.proof_size() as u64)
                         }) {
                             Some(agg) => { append_csv(&dir, "e1_circuit", &hdr, &row("hll", "omc", me, 0, 0, m_reg, &agg)); }
@@ -607,7 +668,16 @@ fn main() {
                     let cap = cap.max(2) + (cap % 2);
                     let p = SsFullParams { capacity: cap, batch: me };
                     if ss_wants("certified") {
-                        let agg = bench(c, || { let r = ss_prove(p, ups.clone()); outcome(proof_size(&r.proof.output.0) as u64) });
+                        let agg = bench(c, || {
+                            let out = if commit.is_hiding() {
+                                build_ss_full_leaf_commit(p, Expose::None, commit.mode())
+                                    .prove_epoch_commit(1, SsFullState::empty(p), ups.clone(), &commit.openings(CommitFamily::SpaceSaving, 1))
+                                    .output
+                            } else {
+                                ss_prove(p, ups.clone()).proof.output
+                            };
+                            outcome(proof_size(&out.0) as u64)
+                        });
                         append_csv(&dir, "e1_circuit", &hdr, &row("ss", "certified", me, 0, 0, cap, &agg));
                     }
                     if ss_wants("naive") {

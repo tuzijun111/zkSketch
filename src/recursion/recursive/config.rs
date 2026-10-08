@@ -4,6 +4,13 @@
 //! Hand-translation of the `define_field_module_types!` macro from
 //! `Plonky3-recursion/recursion/examples/common/mod.rs` (lines 207–342),
 //! specialised to BabyBear + Poseidon2 width-16 + binomial extension D=4.
+//!
+//! Under `--features zk` the verified proofs come from `HidingFriPcs`
+//! (`crate::config`), so the in-circuit verifier carries
+//! `HidingFriProofTargets` (the random-codeword openings plus the inner FRI
+//! proof) and the MMCS private data is set from the inner FRI proof
+//! (`set_hiding_fri_mmcs_private_data`); the Merkle MMCS stays the plain one,
+//! as in the upstream `ConfigWithFriParamsZk` example config.
 
 use std::sync::Arc;
 
@@ -16,9 +23,12 @@ use p3_commit::Pcs as PcsTrait;
 use p3_field::BasedVectorSpace;
 use p3_lookup::logup::LogUpGadget;
 use p3_poseidon2_circuit_air::BabyBearD4Width16;
+#[cfg(not(feature = "zk"))]
+use p3_recursion::pcs::{FriProofTargets, set_fri_mmcs_private_data};
+#[cfg(feature = "zk")]
+use p3_recursion::pcs::{HidingFriProofTargets, set_hiding_fri_mmcs_private_data};
 use p3_recursion::pcs::{
-    FriProofTargets, InputProofTargets, MerkleCapTargets, RecExtensionValMmcs, RecValMmcs,
-    Witness, set_fri_mmcs_private_data,
+    InputProofTargets, MerkleCapTargets, RecExtensionValMmcs, RecValMmcs, Witness,
 };
 use p3_recursion::traits::{RecursiveAir, RecursivePcs};
 use p3_recursion::verifier::VerificationError;
@@ -36,7 +46,23 @@ pub const DIGEST_ELEMS: usize = 8;
 pub const D: usize = 4;
 
 /// The FRI proof targets the recursive verifier carries — opaque to callers.
+#[cfg(not(feature = "zk"))]
 pub type InnerFri = FriProofTargets<
+    Val,
+    Challenge,
+    RecExtensionValMmcs<
+        Val,
+        Challenge,
+        DIGEST_ELEMS,
+        RecValMmcs<Val, DIGEST_ELEMS, MyHash, MyCompress>,
+    >,
+    InputProofTargets<Val, Challenge, RecValMmcs<Val, DIGEST_ELEMS, MyHash, MyCompress>>,
+    Witness<Val>,
+>;
+
+/// The FRI proof targets the recursive verifier carries (hiding PCS).
+#[cfg(feature = "zk")]
+pub type InnerFri = HidingFriProofTargets<
     Val,
     Challenge,
     RecExtensionValMmcs<
@@ -162,7 +188,8 @@ where
         op_ids: &[NonPrimitiveOpId],
         opening_proof: &Self::RawOpeningProof,
     ) -> Result<(), &'static str> {
-        set_fri_mmcs_private_data::<
+        #[cfg(not(feature = "zk"))]
+        let set = set_fri_mmcs_private_data::<
             Val,
             Challenge,
             ChallengeMmcs,
@@ -170,7 +197,18 @@ where
             MyHash,
             MyCompress,
             DIGEST_ELEMS,
-        >(runner, op_ids, opening_proof, Poseidon2Config::BABY_BEAR_D4_W16)
+        >;
+        #[cfg(feature = "zk")]
+        let set = set_hiding_fri_mmcs_private_data::<
+            Val,
+            Challenge,
+            ChallengeMmcs,
+            ValMmcs,
+            MyHash,
+            MyCompress,
+            DIGEST_ELEMS,
+        >;
+        set(runner, op_ids, opening_proof, Poseidon2Config::BABY_BEAR_D4_W16)
     }
 }
 

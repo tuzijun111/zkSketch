@@ -10,6 +10,7 @@ pub mod boundary;
 pub mod countmin;
 pub mod countmin_batch;
 pub mod greenwald_khanna;
+pub mod hiding;
 pub mod hyperloglog;
 pub mod spacesaving;
 
@@ -17,6 +18,10 @@ pub use boundary::Boundary;
 pub use countmin::CountMinCommit;
 pub use countmin_batch::CountMinBatchCommit;
 pub use greenwald_khanna::GKCommit;
+pub use hiding::{
+    CommitFamily, CommitKind, CommitMode, Openings, OpeningsGl, SaltBb, SaltGl, SaltSeed,
+    commit_mode_from_env,
+};
 pub use hyperloglog::HyperLogLogCommit;
 pub use spacesaving::SpaceSavingCommit;
 

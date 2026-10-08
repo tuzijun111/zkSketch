@@ -76,6 +76,31 @@ pub fn cm_omc_noop_leaf_expose(
     build_countmin_omc_leaf_expose(params, expose, binding).prove_epoch_at(1, state, batch).output.0
 }
 
+/// [`cm_omc_noop_leaf_expose`] with an explicit [`CommitMode`] (revision B2).
+/// The no-op leaf opens all three commitments with the public zero salt
+/// ([`Openings::public_zero`](crate::commitment::hiding::Openings::public_zero),
+/// through the explicit `prove_epoch_public_zero` path), so `ρ_in = ρ_out`
+/// and it still exposes `init == final`; the salts are witnesses, so its VK
+/// is that of every real leaf of the same mode.
+pub fn cm_omc_noop_leaf_commit(
+    params: crate::sketch::countmin_omc::CmOmcParams,
+    expose: Expose,
+    binding: crate::sketch::bind::Binding,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::sketch::Sketch;
+    use crate::sketch::countmin::{CountMinParams, CountMinUpdate};
+    use crate::sketch::countmin_omc::build_countmin_omc_leaf_commit;
+    use crate::sketch::countmin_v9::CountMinV9;
+
+    let state = CountMinV9::new(&CountMinParams { d: params.d, w: params.w });
+    let batch = vec![CountMinUpdate { key: 0, value: 0 }; params.batch];
+    build_countmin_omc_leaf_commit(params, expose, binding, mode)
+        .prove_epoch_public_zero(1, state, batch)
+        .output
+        .0
+}
+
 /// HyperLogLog (`hll_final_full`) exposed leaf: inactive (`dummy`) updates.
 pub fn hll_full_noop_leaf(params: crate::sketch::hll_final_full::HllFullParams) -> Proof {
     use crate::sketch::hll_final_full::{HllFullState, HllFullUpdate, prove_hll_full_exposed};
@@ -100,6 +125,26 @@ pub fn ss_full_noop_leaf_expose(
     let batch = vec![SsFullUpdate::dummy(); params.batch];
     build_ss_full_leaf_expose(params, expose)
         .prove_epoch_at(1, SsFullState::empty(params), batch)
+        .output
+        .0
+}
+
+/// [`ss_full_noop_leaf_expose`] with an explicit
+/// [`CommitMode`](crate::commitment::hiding::CommitMode) (revision B2). The
+/// no-op leaf opens all three commitments with the public zero salt
+/// ([`Openings::public_zero`](crate::commitment::hiding::Openings::public_zero),
+/// through the explicit `prove_epoch_public_zero` path), so `ρ_in = ρ_out`
+/// and it still exposes `init == final`; the salts are witnesses, so its VK
+/// is that of every real leaf of the same mode.
+pub fn ss_full_noop_leaf_commit(
+    params: crate::sketch::ss_final_full::SsFullParams,
+    expose: Expose,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::sketch::ss_final_full::{SsFullState, SsFullUpdate, build_ss_full_leaf_commit};
+    let batch = vec![SsFullUpdate::dummy(); params.batch];
+    build_ss_full_leaf_commit(params, expose, mode)
+        .prove_epoch_public_zero(1, SsFullState::empty(params), batch)
         .output
         .0
 }
@@ -135,6 +180,26 @@ pub fn gk2_noop_leaf_expose(params: crate::sketch::gk_bandmerge::GkbParams, expo
         .0
 }
 
+/// [`gk2_noop_leaf_expose`] with an explicit binding and [`CommitMode`]
+/// (revision B2). The no-op leaf (empty state, empty batch) opens all three
+/// commitments with the public zero salt
+/// ([`Openings::public_zero`](crate::commitment::hiding::Openings::public_zero),
+/// through the explicit `prove_epoch_public_zero` path), so `ρ_in = ρ_out`
+/// and it still exposes `init == final`; the salts are witnesses, so its VK
+/// is that of every real leaf of the same mode.
+pub fn gk2_noop_leaf_commit(
+    params: crate::sketch::gk_bandmerge::GkbParams,
+    expose: Expose,
+    binding: crate::sketch::bind::Binding,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::sketch::gk_bandmerge::{Gk2State, build_gkb2_leaf_commit};
+    build_gkb2_leaf_commit(params, expose, binding, mode)
+        .prove_epoch_public_zero(1, Gk2State::empty(params), Vec::new())
+        .output
+        .0
+}
+
 /// [`hll_full_noop_leaf`] with the Interval statement.
 pub fn hll_full_noop_leaf_interval(params: crate::sketch::hll_final_full::HllFullParams) -> Proof {
     use crate::sketch::hll_final_full::{HllFullState, HllFullUpdate, prove_hll_full_interval};
@@ -159,6 +224,31 @@ pub fn cm_v9_noop_leaf_interval(params: CountMinLeafParams) -> Proof {
     let state = CountMinV9::new(&CountMinParams { d: params.d, w: params.w });
     let batch = vec![CountMinUpdate { key: 0, value: 0 }; params.batch];
     prove_countmin_leaf_v9_interval_with_params(params, 1, state, batch).output.0
+}
+
+/// [`hll_omc_noop_leaf_expose`] with an explicit [`CommitMode`] (revision
+/// B2), over the same no-op input (key 1 re-inserted into a state that
+/// already holds it). The no-op leaf opens all three commitments with the
+/// public zero salt
+/// ([`Openings::public_zero`](crate::commitment::hiding::Openings::public_zero),
+/// through the explicit `prove_epoch_public_zero` path, which accepts only
+/// this public no-op input, since for HLL a real batch of repeated keys can
+/// also leave every register unchanged), so the init and final salts are
+/// equal and it still exposes `init == final`; the salts are witnesses, so
+/// its VK is that of every real leaf of the same mode.
+pub fn hll_omc_noop_leaf_commit(
+    params: crate::sketch::hll_omc::HllOmcParams,
+    expose: Expose,
+    binding: crate::sketch::bind::Binding,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::sketch::hll_omc::{build_hll_omc_leaf_commit, hll_omc_advance_with, hll_omc_empty};
+    let mut regs = hll_omc_empty(params.b);
+    hll_omc_advance_with(&mut regs, &[1], params.m(), binding);
+    build_hll_omc_leaf_commit(params, expose, binding, mode)
+        .prove_epoch_public_zero(1, regs, vec![1; params.batch])
+        .output
+        .0
 }
 
 /// HyperLogLog `omc` leaf with an explicit statement ([`Expose`]) and
@@ -191,6 +281,26 @@ pub fn bloom_omc_noop_leaf_expose(
     use crate::sketch::bloom_omc::{bloom_empty, build_bloom_omc_leaf_expose};
     build_bloom_omc_leaf_expose(params, expose)
         .prove_epoch_at(1, &bloom_empty(&params), &[])
+        .output
+        .0
+}
+
+/// [`bloom_omc_noop_leaf_expose`] with an explicit
+/// [`CommitMode`](crate::commitment::hiding::CommitMode) (revision B2). The
+/// no-op leaf (empty filter, all-dummy batch) opens all three commitments
+/// with the public zero salt
+/// ([`Openings::public_zero`](crate::commitment::hiding::Openings::public_zero),
+/// through the explicit `prove_epoch_public_zero` path), so `ρ_in = ρ_out`
+/// and it still exposes `init == final`; the salts are witnesses, so its VK
+/// is that of every real leaf of the same mode.
+pub fn bloom_omc_noop_leaf_commit(
+    params: crate::sketch::bloom_omc::BloomOmcParams,
+    expose: Expose,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::sketch::bloom_omc::{bloom_empty, build_bloom_omc_leaf_commit};
+    build_bloom_omc_leaf_commit(params, expose, mode)
+        .prove_epoch_public_zero(1, &bloom_empty(&params), &[])
         .output
         .0
 }

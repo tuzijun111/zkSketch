@@ -138,6 +138,17 @@
 #                        with the reason. CSV shape column: k{k}_logw{logw}.
 #   EXP_DATASET          uniform|gaussian|zipf|aol|netflix        (default uniform)
 #   EXP_OUT / $1         rename output to results/<name>.csv
+#   --- commitments (plonky3; revision B2, see README) ---
+#   ZKSKETCH_COMMIT      hiding|plain (default hiding; plain under
+#                        ZKSKETCH_BINDING=legacy). hiding: every leaf commits
+#                        Com(S_t)/Com(B_t) with the prover's per-version
+#                        randomizers, the batch log is built prover-side and the
+#                        auditor sees only that log, the proofs and public
+#                        parameters. plain: the pre-B2 circuits, commitments and
+#                        VKs byte for byte.
+#   ZKSKETCH_SALT_SEED   the prover's salt seed, 64 hex chars (reproducible
+#                        runs); unset = OS RNG. Never printed; the salt_seed
+#                        column records only its source (env|os; n/a if plain).
 #
 # Output: results/stream_compose.csv — the legacy columns
 #   dataset,family,variant,mode,shape,n,m,t,cores,machines,total_time_ms,
@@ -151,7 +162,8 @@
 #   scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,local_fold_ms,
 #   merges_local,merges_cross,cross_rounds,comm_msgs,
 #   comm_bytes,comm_ms_measured,comm_model_ms,merge_total_ms,
-#   query_bind_ms,query_bind_ms_avg,status
+#   query_bind_ms,query_bind_ms_avg,commit,salt_seed,status
+#   (commit = plain|hiding, salt_seed = env|os|n/a: plonky3 only)
 #   (procs: total_time_ms = measured end-to-end wall (witness pass → root);
 #    leafgen_ms = real parallel slice-phase wall; merge_ms = cross-machine
 #    composition wall; proof_bytes/verify_ms are Θ(t) for per_batch vs O(1)
@@ -167,7 +179,7 @@ OUT_CSV="${EXP_OUT:-${1:-}}"
 BACKEND="${EXP_COMPOSE_BACKEND:-plonky3}"
 mkdir -p results
 
-echo "== zkSketch stream-compose == backend=$BACKEND N=${EXP_COMPOSE_N:-32} dataset=${EXP_DATASET:-uniform} families=${EXP_COMPOSE_FAMILY:-cm,hll,ss,gk} modes=${EXP_COMPOSE_MODE:-per_batch,chain,forest} m=${EXP_COMPOSE_BATCHES:-8} cores=${EXP_COMPOSE_CORES:-all} machines=${EXP_COMPOSE_MACHINES:-1}"
+echo "== zkSketch stream-compose == backend=$BACKEND N=${EXP_COMPOSE_N:-32} dataset=${EXP_DATASET:-uniform} families=${EXP_COMPOSE_FAMILY:-cm,hll,ss,gk} modes=${EXP_COMPOSE_MODE:-per_batch,chain,forest} m=${EXP_COMPOSE_BATCHES:-8} cores=${EXP_COMPOSE_CORES:-all} machines=${EXP_COMPOSE_MACHINES:-1} commit=${ZKSKETCH_COMMIT:-default}"
 
 case "$BACKEND" in
   plonky3|p3|stark)

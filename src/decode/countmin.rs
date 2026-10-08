@@ -39,7 +39,8 @@ use p3_poseidon2_circuit_air::BabyBearD4Width16;
 use p3_recursion::RecursionOutput;
 use p3_uni_stark::StarkGenericConfig;
 
-use crate::commitment::countmin::commit_countmin;
+use crate::commitment::countmin::commit_countmin_with;
+use crate::commitment::hiding::{self, CommitFamily, CommitKind, CommitMode, SaltBb};
 use crate::config::{Challenge, LOG_BLOWUP, Val};
 use crate::decode::{DecodeProof, DecodeVk, ReleasePolicy};
 use crate::recursion::recursive::config::ConfigWithFriParams;
@@ -143,7 +144,34 @@ pub fn prove_cm_decode_with(
     key: u64,
     binding: Binding,
 ) -> DecodeProof {
-    let dc = build_cm_decode(params, &state, key, binding);
+    prove_cm_decode_commit(params, state, key, binding, CommitMode::Plain, &SaltBb::ZERO)
+}
+
+/// [`prove_cm_decode_with`] against a commitment made under `mode` (revision
+/// B2, [`crate::commitment::hiding`]). `Plain` is the pre-B2 circuit byte for
+/// byte (`salt` ignored). Under `Hiding` the decoder opens
+/// `Com(S_t; ρ) = commit_countmin_with(state, Hiding, salt)`: the salt is the
+/// FIRST 3 private inputs, and (under `Semantic`/`Bound`) the exposed
+/// commitment is the hiding one. For a query at version `t` of history `h`
+/// the honest salt is `rho_state_bb_in(seed, CommitFamily::CountMin, h, t)`
+/// (`rho_state_bb(seed, .., t)` in the genesis history), the same randomizer
+/// leaf `t` closed its final state with; at `t = 0` it is the public zero in
+/// the genesis history and the anchor salt in a continued one. So under
+/// `Hiding` the public zero salt opens only the empty genesis state (the one
+/// state commitment, `Com(S_0; 0)`, that the verifier recomputes itself):
+/// handed [`SaltBb::ZERO`] with any other state (a forgotten salt at
+/// `t ≥ 1`) the decoder panics instead of publishing the guess-checkable
+/// `Com(S_t; 0)`. A nonzero wrong salt still proves (the circuit does not
+/// check the derivation) and exposes a commitment that is not the log's.
+pub fn prove_cm_decode_commit(
+    params: CmDecodeParams,
+    state: CountMinState,
+    key: u64,
+    binding: Binding,
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> DecodeProof {
+    let dc = build_cm_decode_commit(params, &state, key, binding, mode, salt);
     let __t_w = std::time::Instant::now();
     let traces = dc.run();
     let __witness = __t_w.elapsed();
@@ -215,33 +243,63 @@ impl CmDecodeCircuit {
 /// input, so neither shapes the circuit), proved once, and its preprocessed
 /// commitment and metadata read off. A verifier pins every Count-Min query
 /// proof to it with [`crate::decode::verify_decode_proof`], never to the VK
-/// a proof carries.
+/// a proof carries. The Plain decoder's VK ([`cm_decode_vk_commit`] with
+/// [`CommitMode::Plain`]).
 pub fn cm_decode_vk(params: CmDecodeParams, binding: Binding) -> DecodeVk {
+    cm_decode_vk_commit(params, binding, CommitMode::Plain)
+}
+
+/// [`cm_decode_vk`] of the decoder built under `mode` (revision B2): the
+/// trusted VK of every [`prove_cm_decode_commit`] proof of that mode. `Plain`
+/// is exactly [`cm_decode_vk`]; `Hiding` is derived over the empty state with
+/// the public zero salt (the one state a `Hiding` decoder opens with it); the
+/// salt is a witness, so every `Hiding` proof of the same parameters has this
+/// VK.
+pub fn cm_decode_vk_commit(params: CmDecodeParams, binding: Binding, mode: CommitMode) -> DecodeVk {
     use crate::sketch::Sketch;
     let empty = crate::sketch::countmin::CountMin::new(&crate::sketch::countmin::CountMinParams {
         d: params.d,
         w: params.w,
     });
-    build_cm_decode(params, &empty, 0, binding).derive_vk()
+    build_cm_decode_commit(params, &empty, 0, binding, mode, &SaltBb::ZERO).derive_vk()
 }
 
+#[cfg(test)]
 fn build_cm_decode(
     params: CmDecodeParams,
     state: &CountMinState,
     key: u64,
     binding: Binding,
 ) -> CmDecodeCircuit {
+    build_cm_decode_commit(params, state, key, binding, CommitMode::Plain, &SaltBb::ZERO)
+}
+
+fn build_cm_decode_commit(
+    params: CmDecodeParams,
+    state: &CountMinState,
+    key: u64,
+    binding: Binding,
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> CmDecodeCircuit {
     params.validate();
     let bound = binding.is_bound();
     let CmDecodeParams { d, w, release } = params;
     assert_eq!((state.params.d, state.params.w), (d, w), "state shape must match params");
+    if mode.is_hiding() && salt.is_zero() {
+        assert!(
+            state.counters.iter().flatten().all(|&c| c == 0),
+            "Hiding CM decode: the public zero salt opens only the empty genesis state Com(S_0; 0); \
+             a query at t >= 1 (or at version 0 of a continued history) needs its real salt"
+        );
+    }
     let num_cells = d * w;
     let cell_packing = num_cells / 4;
     let w_log2 = w.trailing_zeros() as usize;
     let cfg = Poseidon2Config::BABY_BEAR_D4_W16;
 
     // ─── Native decode ───────────────────────────────────────────────────
-    let commit = commit_countmin(state);
+    let commit = commit_countmin_with(state, mode, salt);
     let mut vals_native: Vec<u32> = Vec::with_capacity(d);
     for i in 0..d {
         vals_native.push(state.counters[i][hash_cell_prf_with(i, key, w, binding)]);
@@ -282,7 +340,9 @@ fn build_cm_decode(
         (0..w).map(|j| b.alloc_const(Challenge::from_u64(j as u64), "col")).collect();
     let split_c = bound.then(|| bind::SplitConsts::new::<Val, Challenge>(&mut b, w_log2, one, zero));
 
-    // Private witnesses.
+    // Private witnesses. B2: under `Hiding` the salt of `Com(S_t)` comes
+    // first (3 private inputs); `Plain` allocates nothing.
+    let salt_t = mode.is_hiding().then(|| hiding::alloc_salt_targets(&mut b));
     let cells_packed: Vec<ExprId> =
         (0..cell_packing).map(|_| b.alloc_private_input("cell_packed")).collect();
     for (q, &p) in cells_packed.iter().enumerate() {
@@ -307,7 +367,16 @@ fn build_cm_decode(
     };
 
     // ── Stage 1: open the committed state ──
-    let digest = bind::hash_slice(&mut b, &cfg, &cells_packed, zero, binding);
+    let digest = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::State,
+        CommitFamily::CountMin,
+        salt_t.as_ref(),
+        &cells_packed,
+        zero,
+        binding,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(digest[i], commit_pis[i]);
     }
@@ -465,7 +534,9 @@ fn build_cm_decode(
     public_inputs.push(Challenge::from_basis_coefficients_slice(&key_input).expect("4 base coeffs"));
     public_inputs.push(Challenge::from_u64(answer));
 
-    let mut private_inputs: Vec<Challenge> = pack_cells(state);
+    let mut private_inputs: Vec<Challenge> =
+        if mode.is_hiding() { salt.packed().to_vec() } else { Vec::new() };
+    private_inputs.extend(pack_cells(state));
     // sel[i][j]
     for i in 0..d {
         let pos = hash_cell_prf_with(i, key, w, binding);
@@ -542,6 +613,7 @@ fn build_cm_decode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commitment::countmin::commit_countmin;
     use crate::sketch::Sketch;
     use crate::sketch::countmin::{CountMin, CountMinParams, CountMinUpdate};
     use crate::sketch::countmin_final::apply_update_prf_with;
@@ -683,6 +755,136 @@ mod tests {
             assert_eq!(&exposed16(&pr)[8..12], &bind::key_limbs::<Val>(key)[..]);
             assert_eq!(&exposed16(&pr)[8..12], &[0xCDEF, 0x89AB, 0x4567, 0x0123].map(Val::from_u64)[..]);
         }
+    }
+
+    /// (6) B2: a Hiding decode opens `Com(S_t; ρ)`. Under `Semantic`/`Bound`
+    /// it exposes the hiding commitment (not the plain one) with the same
+    /// answer; the Plain decoder is the pre-B2 circuit (VK recorded at
+    /// main@7089f70) and the Hiding VK does not depend on the salt. A query at
+    /// version `t` opened with `ρ^S_t` exposes exactly the final commitment of
+    /// the hiding leaf `t` (the lemma in `crate::commitment::hiding`); a wrong
+    /// salt still proves, but exposes a commitment that is not the log's.
+    #[test]
+    fn hiding_decode_exposes_hiding_commit() {
+        use crate::commitment::hiding::{CommitFamily, Openings, SaltSeed, rho_state_bb};
+        use crate::recursion::recursive::expose_forest::vk_pin_values;
+        use crate::recursion::recursive::statement::Expose;
+        use crate::sketch::countmin_omc::{CmOmcParams, build_countmin_omc_leaf_commit};
+
+        let flat = |v: &[Challenge]| -> Vec<u64> {
+            v.iter()
+                .flat_map(|c| {
+                    <Challenge as BasedVectorSpace<Val>>::as_basis_coefficients_slice(c)
+                        .iter()
+                        .map(|x| x.as_canonical_u64())
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        let recorded = [
+            (Binding::Semantic, [1773978634u64, 384655842, 294999589, 1673679358, 228006917, 1314500707, 1408979141, 851131018]),
+            (Binding::Bound, [463599477, 1112163925, 541462878, 1485602053, 736039150, 1630584522, 230137302, 1981838388]),
+            (Binding::Legacy, [228825302, 1995195332, 1399604520, 922024243, 1544049975, 1169568391, 1127353679, 1729298590]),
+        ];
+        let seed = SaltSeed::for_tests(61);
+        let (rho, rho2) = (rho_state_bb(&seed, CommitFamily::CountMin, 4), rho_state_bb(&seed, CommitFamily::CountMin, 5));
+        for (binding, vk) in recorded {
+            let s = state_with(binding);
+            let plain = prove_cm_decode_with(P4, s.clone(), 7, binding);
+            let want: Vec<u64> = vk.iter().flat_map(|&x| [x, 0, 0, 0]).collect();
+            assert_eq!(flat(&vk_pin_values(&plain.output.0)), want, "{binding:?}: Plain decode VK drifted");
+            let hid = prove_cm_decode_commit(P4, s.clone(), 7, binding, CommitMode::Hiding, &rho);
+            assert_eq!(hid.answer, native_estimate(&s, 7, binding) as u64, "{binding:?}");
+            assert_eq!(hid.answer, plain.answer, "{binding:?}");
+            let hid2 = prove_cm_decode_commit(P4, s.clone(), 7, binding, CommitMode::Hiding, &rho2);
+            assert_eq!(vk_pin_values(&hid.output.0), vk_pin_values(&hid2.output.0), "{binding:?}");
+            assert_ne!(vk_pin_values(&hid.output.0), vk_pin_values(&plain.output.0), "{binding:?}");
+            if binding.is_bound() {
+                let pv = exposed16(&hid);
+                assert_eq!(&pv[0..8], &commit_countmin_with(&s, CommitMode::Hiding, &rho).0[..], "{binding:?}");
+                assert_ne!(&pv[0..8], &commit_countmin(&s).0[..], "{binding:?}");
+                assert_ne!(exposed16(&hid2)[0..8], pv[0..8], "{binding:?}: another version, another commitment");
+            }
+        }
+
+        // Query at version t == leaf t's final commitment.
+        let binding = Binding::Semantic;
+        let t = 2u64;
+        let mut leaf = build_countmin_omc_leaf_commit(CmOmcParams { d: 4, w: 8, batch: 2 }, Expose::Interval, binding, CommitMode::Hiding);
+        let s_prev = state_with(binding);
+        let ups = vec![CountMinUpdate { key: 7, value: 2 }, CountMinUpdate { key: 5, value: 1 }];
+        let r = leaf.prove_epoch_commit(t, s_prev.clone(), ups.clone(), &Openings::for_leaf(&seed, CommitFamily::CountMin, t));
+        let mut s_t = s_prev;
+        for u in &ups {
+            apply_update_prf_with(&mut s_t, u, binding);
+        }
+        let q = prove_cm_decode_commit(P4, s_t.clone(), 7, binding, CommitMode::Hiding, &rho_state_bb(&seed, CommitFamily::CountMin, t));
+        assert_eq!(&exposed16(&q)[0..8], &r.final_commit.0[..], "query at t opens leaf t's final commitment");
+        let wrong = prove_cm_decode_commit(P4, s_t, 7, binding, CommitMode::Hiding, &rho_state_bb(&seed, CommitFamily::CountMin, t + 1));
+        assert_ne!(&exposed16(&wrong)[0..8], &r.final_commit.0[..], "a wrong salt exposes another commitment");
+    }
+
+    /// (F3, F5) Decoder twin of the leaf's overhead test: a Hiding decode
+    /// costs exactly +2 Poseidon2 rows and +3 ALU rows (one commitment)
+    /// under every binding, and none of its 12 salt values is a public value
+    /// of the proof.
+    #[test]
+    fn hiding_decode_row_overhead_and_no_salt_in_public_values() {
+        use crate::commitment::hiding::probe::{leaked_salts, proof_alu_rows, trace_rows};
+        use crate::commitment::hiding::{CommitFamily, SaltSeed, rho_state_bb};
+        let rho = rho_state_bb(&SaltSeed::for_tests(62), CommitFamily::CountMin, 3);
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let s = state_with(binding);
+            let (p0, a0) = trace_rows(&build_cm_decode(P4, &s, 7, binding).run());
+            let (p1, a1) = trace_rows(&build_cm_decode_commit(P4, &s, 7, binding, CommitMode::Hiding, &rho).run());
+            println!("B2 decode rows {binding:?}: Poseidon2 {p0} -> {p1}, ALU {a0} -> {a1}");
+            assert_eq!(p1, p0 + 2, "{binding:?}: Poseidon2 rows");
+            assert_eq!(a1, a0 + 3, "{binding:?}: ALU rows");
+            let hid = prove_cm_decode_commit(P4, s, 7, binding, CommitMode::Hiding, &rho);
+            assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
+            assert_eq!(leaked_salts(&hid.output.0, &[rho]), vec![], "{binding:?}");
+        }
+    }
+
+    /// Under `Hiding` the public zero salt opens only the empty genesis
+    /// state, the one state commitment the verifier recomputes itself
+    /// (`Com(S_0; 0)`; a continued history's version 0 opens with its
+    /// anchor salt). A real state handed the zero salt (a forgotten opening
+    /// at `t >= 1`) panics instead of publishing the guess-checkable
+    /// `Com(S_t; 0)`, from the builder and the proving entry point alike
+    /// (the twin of `decode::gk_bandmerge`'s test). Controls: the empty state
+    /// with the zero salt (a genesis query; the Hiding VK derivation), a
+    /// real state with a real salt, and `Plain` (salt ignored) still build,
+    /// and the genesis query proves and exposes `Com(S_0; 0)`.
+    #[test]
+    fn hiding_decode_refuses_zero_salt_on_a_real_state() {
+        use crate::commitment::hiding::{SaltSeed, rho_state_bb};
+        let rho = rho_state_bb(&SaltSeed::for_tests(64), CommitFamily::CountMin, 2);
+        let empty = CountMin::new(&CountMinParams { d: P4.d, w: P4.w });
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let s = state_with(binding);
+            let msg = forge::catch_msg(|| {
+                build_cm_decode_commit(P4, &s, 7, binding, CommitMode::Hiding, &SaltBb::ZERO).answer
+            })
+            .unwrap_err();
+            assert!(msg.contains("public zero salt"), "{binding:?}: {msg}");
+            let _ = build_cm_decode_commit(P4, &empty, 7, binding, CommitMode::Hiding, &SaltBb::ZERO);
+            let _ = build_cm_decode_commit(P4, &s, 7, binding, CommitMode::Hiding, &rho);
+            let _ = build_cm_decode_commit(P4, &s, 7, binding, CommitMode::Plain, &SaltBb::ZERO);
+        }
+        let msg = forge::catch_msg(|| {
+            prove_cm_decode_commit(P4, state_with(Binding::Semantic), 7, Binding::Semantic, CommitMode::Hiding, &SaltBb::ZERO)
+                .answer
+        })
+        .unwrap_err();
+        assert!(msg.contains("public zero salt"), "{msg}");
+        let genesis = prove_cm_decode_commit(P4, empty.clone(), 7, Binding::Semantic, CommitMode::Hiding, &SaltBb::ZERO);
+        assert_eq!(genesis.answer, 0);
+        assert_eq!(
+            &exposed16(&genesis)[0..8],
+            &commit_countmin_with(&empty, CommitMode::Hiding, &SaltBb::ZERO).0[..],
+            "a genesis query opens the public anchor Com(S_0; 0)"
+        );
     }
 
     /// Keys congruent mod `p`: decode `k` on a state holding one occurrence of

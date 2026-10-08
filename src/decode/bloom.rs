@@ -27,6 +27,15 @@
 //! [`crate::decode::verify_decode_proof`] pins a proof to
 //! [`bloom_decode_vk`] (derived from public parameters).
 //!
+//! Hiding commitments (revision B2): [`prove_bloom_query_commit`] opens a
+//! state committed under a [`CommitMode`]. `Plain` is the circuit above op
+//! for op; `Hiding` opens `Com(S; ρ) = commit_bloom_with(S, Hiding, ρ)` (the
+//! salt is the first 3 private inputs, absorbed behind the `TAG_STATE` /
+//! Bloom tag), so the exposed commitment is the salted one a hiding leaf
+//! published. The verifier pins such proofs to [`bloom_decode_vk_commit`]
+//! with the same mode (derived over the empty filter with the public zero
+//! salt; the salt is a witness).
+//!
 //! Soundness caveat: as for the update leaf, this is conditional on the pinned
 //! fork binding constant values (see the "constants are not bound" section of
 //! [`crate::sketch::bloom_omc`]); the one-hot index constants `i` and the
@@ -61,8 +70,9 @@ use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::countmin_leaf::make_leaf_config;
 use crate::recursion::recursive::expose_forest::vk_pin_values;
 use crate::recursion::recursive::root_vk::bound_proof_shape;
+use crate::commitment::hiding::{self, CommitKind, CommitMode, SaltBb};
 use crate::sketch::bloom_omc::{
-    BloomOmcParams, Consts, bloom_positions, commit_bloom, hash_slice_bound, pack_cells,
+    BloomOmcParams, Consts, bloom_positions, commit_bloom_with, commit_hash_bound, pack_cells,
     record_route_gadget, record_vals, split_witness_count, split_witness_values,
 };
 
@@ -106,10 +116,20 @@ pub fn bloom_query_input(key: u64) -> [Val; 4] {
 /// witnesses, so neither shapes the circuit) and its preprocessed commitment
 /// and metadata are read off. A verifier pins every Bloom query proof to it
 /// with [`crate::decode::verify_decode_proof`], never to the VK a proof
-/// carries. `params.batch` is ignored.
+/// carries. `params.batch` is ignored. The `Plain` decoder's VK
+/// ([`bloom_decode_vk_commit`] with [`CommitMode::Plain`]).
 pub fn bloom_decode_vk(params: BloomOmcParams) -> DecodeVk {
+    bloom_decode_vk_commit(params, CommitMode::Plain)
+}
+
+/// [`bloom_decode_vk`] of the decoder built under `mode` (revision B2): the
+/// trusted VK of every [`prove_bloom_query_commit`] proof of that mode.
+/// Derived over the empty filter with the public zero salt (the one state a
+/// `Hiding` decoder opens with the zero salt); the salt is a witness, so the
+/// VK does not depend on it.
+pub fn bloom_decode_vk_commit(params: BloomOmcParams, mode: CommitMode) -> DecodeVk {
     use crate::sketch::bloom_omc::bloom_empty;
-    let proof = prove_bloom_query(params, &bloom_empty(&params), 0);
+    let proof = prove_bloom_query_commit(params, &bloom_empty(&params), 0, mode, &SaltBb::ZERO);
     DecodeVk {
         commitment: vk_pin_values(&proof.output.0),
         shape: Some(bound_proof_shape(&proof.output.0)),
@@ -122,11 +142,44 @@ pub fn prove_bloom_query(params: BloomOmcParams, bits: &[u8], key: u64) -> Decod
     try_prove_bloom_query(params, bits, key).unwrap_or_else(|e| panic!("bloom query rejected: {e}"))
 }
 
+/// [`prove_bloom_query`] against a commitment made under `mode` (revision
+/// B2). `Plain` is the pre-B2 circuit op for op (`salt` ignored). Under
+/// `Hiding` the decoder opens `Com(S_t; ρ) = commit_bloom_with(S, Hiding,
+/// ρ)`; for a query at version `t` of the genesis history the honest salt is
+/// `rho_state_bb(seed, CommitFamily::Bloom, t)`, the randomizer leaf `t`
+/// closed its final state with. The public zero salt opens only the empty
+/// genesis filter (`Com(S_0; 0)`, which the verifier recomputes itself):
+/// handed [`SaltBb::ZERO`] with any other state the decoder panics instead
+/// of publishing the guess-checkable `Com(S_t; 0)`. Pin the proof to
+/// [`bloom_decode_vk_commit`] with the same `mode`.
+pub fn prove_bloom_query_commit(
+    params: BloomOmcParams,
+    bits: &[u8],
+    key: u64,
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> DecodeProof {
+    try_prove_bloom_query_commit(params, bits, key, mode, salt)
+        .unwrap_or_else(|e| panic!("bloom query rejected: {e}"))
+}
+
 /// [`prove_bloom_query`] reporting the rejecting stage instead of panicking.
 pub fn try_prove_bloom_query(
     params: BloomOmcParams,
     bits: &[u8],
     key: u64,
+) -> Result<DecodeProof, String> {
+    try_prove_bloom_query_commit(params, bits, key, CommitMode::Plain, &SaltBb::ZERO)
+}
+
+/// [`prove_bloom_query_commit`] reporting the rejecting stage instead of
+/// panicking (the zero-salt guard still panics: it is an input check).
+pub fn try_prove_bloom_query_commit(
+    params: BloomOmcParams,
+    bits: &[u8],
+    key: u64,
+    mode: CommitMode,
+    salt: &SaltBb,
 ) -> Result<DecodeProof, String> {
     params.validate();
     let BloomOmcParams { k, log_w, .. } = params;
@@ -134,6 +187,13 @@ pub fn try_prove_bloom_query(
     let m = params.m_cells();
     assert_eq!(bits.len(), m, "state must have M = k·W bits");
     assert!(bits.iter().all(|&x| x <= 1));
+    if mode.is_hiding() && salt.is_zero() {
+        assert!(
+            bits.iter().all(|&x| x == 0),
+            "Hiding Bloom decode: the public zero salt opens only the empty genesis state Com(S_0; 0); \
+             a query at t >= 1 needs its real salt"
+        );
+    }
 
     // ─── Circuit ─────────────────────────────────────────────────────────
     let cfg = Poseidon2Config::BABY_BEAR_D4_W16;
@@ -159,6 +219,9 @@ pub fn try_prove_bloom_query(
         .map(|i| b.alloc_const(Challenge::from_u64(i as u64), "i"))
         .collect();
 
+    // B2: under `Hiding` the salt of `Com(S_t)` comes first (3 private
+    // inputs); `Plain` allocates nothing.
+    let salt_t = mode.is_hiding().then(|| hiding::alloc_salt_targets(&mut b));
     let cells: Vec<ExprId> = (0..m).map(|_| b.alloc_private_input("cell")).collect();
     let limbs: [ExprId; 4] = std::array::from_fn(|_| b.alloc_private_input("key_limb"));
     let split: Vec<ExprId> = (0..split_witness_count(k))
@@ -171,7 +234,7 @@ pub fn try_prove_bloom_query(
         b.assert_bool(cell);
     }
     let packed = pack_cells(&mut b, &cells);
-    let dig = hash_slice_bound(&mut b, &cfg, &packed, c.zero);
+    let dig = commit_hash_bound(&mut b, &cfg, CommitKind::State, salt_t.as_ref(), &packed, c.zero);
     for i in 0..2 {
         b.connect(dig[i], commit_pis[i]);
     }
@@ -215,7 +278,7 @@ pub fn try_prove_bloom_query(
         .enumerate()
         .all(|(j, &p)| bits[j * w + p] == 1)
         .into();
-    let commit = commit_bloom(bits);
+    let commit = commit_bloom_with(bits, mode, salt);
     let rv = record_vals(Some(key));
 
     let public_inputs: Vec<Challenge> = vec![
@@ -226,6 +289,9 @@ pub fn try_prove_bloom_query(
     ];
 
     let mut private_inputs: Vec<Challenge> = Vec::with_capacity(2 * m + 40);
+    if mode.is_hiding() {
+        private_inputs.extend(salt.packed());
+    }
     private_inputs.extend(bits.iter().map(|&x| Challenge::from_u8(x)));
     for i in 0..4 {
         private_inputs.push(Challenge::from_u64((key >> (16 * i)) & 0xFFFF));
@@ -310,7 +376,9 @@ pub fn try_prove_bloom_query(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketch::bloom_omc::{bloom_contains, bloom_empty, bloom_insert, prove_bloom_omc};
+    use crate::sketch::bloom_omc::{
+        bloom_contains, bloom_empty, bloom_insert, commit_bloom, prove_bloom_omc,
+    };
 
     const P: BloomOmcParams = BloomOmcParams {
         k: 3,
@@ -392,6 +460,59 @@ mod tests {
             7,
         );
         assert!(verify_decode_proof(&cm.output.0, &vk).is_err(), "a Count-Min decode proof");
+    }
+
+    /// Hiding decoder (revision B2): the query at version `t` opens the
+    /// hiding leaf `t`'s final `Com(S_t; ρ^S_t)` (exposed as the statement's
+    /// commitment), is pinned by the HIDING decode VK (derived from public
+    /// parameters; different from the Plain one, which rejects it, and vice
+    /// versa), and refuses the public zero salt on a non-empty filter (the
+    /// empty genesis filter is the one state it opens with it). A salt is a
+    /// witness: no salt value is a public value of the proof.
+    #[test]
+    fn hiding_decode_exposes_hiding_commit_and_pins_to_the_hiding_vk() {
+        use crate::commitment::hiding::probe::leaked_salts;
+        use crate::commitment::hiding::{CommitFamily, Openings, SaltSeed, rho_state_bb};
+        use crate::decode::{QueryStatement, verify_decode_proof};
+        use crate::recursion::recursive::expose_forest::read_exposed_statement;
+        use crate::recursion::recursive::statement::Expose;
+        use crate::sketch::bloom_omc::{build_bloom_omc_leaf_commit, commit_bloom_with};
+        let seed = SaltSeed::for_tests(51);
+        let ks = keys(8, 11);
+        let t = 1u64;
+        let leaf = build_bloom_omc_leaf_commit(P, Expose::Interval, CommitMode::Hiding).prove_epoch_commit(
+            t,
+            &bloom_empty(&P),
+            &ks,
+            &Openings::for_leaf(&seed, CommitFamily::Bloom, t),
+        );
+        let leaf_final = read_exposed_statement(&leaf.output.0).final_;
+        let bits = leaf.final_bits.clone();
+        let salt = rho_state_bb(&seed, CommitFamily::Bloom, t);
+        let (vk_h, vk_p) = (bloom_decode_vk_commit(P, CommitMode::Hiding), bloom_decode_vk(P));
+        assert_ne!(vk_h.commitment, vk_p.commitment, "the hiding decoder is another circuit");
+        for key in [ks[0], 0xDEAD_BEEF_0042] {
+            let q = prove_bloom_query_commit(P, &bits, key, CommitMode::Hiding, &salt);
+            let (commit, rec, _) = read_exposed_query(&q.output.0);
+            assert_eq!(commit.to_vec(), leaf_final, "the query opens leaf t's final");
+            assert_eq!(commit, commit_bloom_with(&bits, CommitMode::Hiding, &salt));
+            assert_ne!(commit, commit_bloom(&bits), "not the plain commitment");
+            assert_eq!(rec, record_vals(Some(key)));
+            let want = QueryStatement::with_query(commit, bloom_query_input(key), q.answer);
+            assert_eq!(verify_decode_proof(&q.output.0, &vk_h), Ok(want), "key {key}");
+            assert!(verify_decode_proof(&q.output.0, &vk_p).is_err(), "the plain VK rejects a hiding proof");
+            assert_eq!(leaked_salts(&q.output.0, &[salt]), vec![], "no salt in the public values");
+        }
+        let plain = prove_bloom_query(P, &bits, ks[0]);
+        assert!(verify_decode_proof(&plain.output.0, &vk_h).is_err(), "the hiding VK rejects a plain proof");
+        // The zero salt opens only the empty genesis filter.
+        let r = crate::sketch::forge::catch_msg(|| {
+            prove_bloom_query_commit(P, &bits, ks[0], CommitMode::Hiding, &SaltBb::ZERO).answer
+        });
+        assert!(r.is_err_and(|e| e.contains("public zero salt opens only the empty genesis state")));
+        let g = prove_bloom_query_commit(P, &bloom_empty(&P), 3, CommitMode::Hiding, &SaltBb::ZERO);
+        assert_eq!(read_exposed_query(&g.output.0).0, commit_bloom_with(&bloom_empty(&P), CommitMode::Hiding, &SaltBb::ZERO));
+        assert!(verify_decode_proof(&g.output.0, &vk_h).is_ok());
     }
 
     /// Opening a cell the key does not map to (to flip the answer) violates

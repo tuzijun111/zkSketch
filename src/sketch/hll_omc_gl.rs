@@ -51,6 +51,9 @@ use p3_recursion::RecursionOutput;
 use p3_symmetric::CryptographicHasher;
 use p3_uni_stark::StarkGenericConfig;
 
+use crate::commitment::hiding::{
+    self, CommitFamily, CommitKind, CommitMode, OpeningsGl, SaltGl, commit_flat_gl,
+};
 use crate::config_gl::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::sketch::bind::{self, Binding};
 use crate::recursion::recursive::statement::{self, Expose, IndexPin};
@@ -201,6 +204,24 @@ pub fn hll_omc_batch_commit_with(keys: &[u64], binding: Binding) -> [Val; 4] {
     hasher.hash_iter(flat.iter().copied())
 }
 
+/// [`hll_omc_batch_commit_with`] under a [`CommitMode`] (revision B2,
+/// [`crate::commitment::hiding`]): `Plain` is exactly
+/// [`hll_omc_batch_commit_with`] (the salt is ignored); `Hiding` is
+/// `Com(B_t; salt)` over the same flat key stream (one Challenge per key),
+/// the value a `Hiding` leaf opened with `batch = salt` binds.
+pub fn hll_omc_batch_commit_salted(keys: &[u64], binding: Binding, mode: CommitMode, salt: &SaltGl) -> [Val; 4] {
+    match mode {
+        CommitMode::Plain => hll_omc_batch_commit_with(keys, binding),
+        CommitMode::Hiding => {
+            let flat: Vec<Val> = keys
+                .iter()
+                .flat_map(|&k| bind::key_hash_input::<Val>(k, binding))
+                .collect();
+            commit_flat_gl(mode, CommitKind::Batch, CommitFamily::HyperLogLog, salt, &flat)
+        }
+    }
+}
+
 /// `Com(S)` for an HLL/omc register array — the flat Poseidon2 hash over the
 /// `m` register values the leaf recomputes in-circuit, so it equals the leaf's
 /// `initial_commit`/`final_commit` and anchors the per-batch chain.
@@ -209,9 +230,37 @@ pub fn commit_hll_omc(regs: &[u64], _b: usize) -> [Val; 4] {
     hasher.hash_iter(regs.iter().map(|&r| Val::from_u32(r as u32)))
 }
 
+/// [`commit_hll_omc`] under a [`CommitMode`] (revision B2): `Plain` is
+/// exactly [`commit_hll_omc`] (the salt is ignored); `Hiding` is
+/// `MyHash([TAG_STATE, HyperLogLog, salt_0..salt_5] ‖ registers)` over the
+/// same `m` register values ([`commit_flat_gl`]), the value a `Hiding` leaf
+/// exposes for `Com(S_t; salt)`. (The family tag separates it from a `d = 1`
+/// Count-Min state of the same width.)
+pub fn commit_hll_omc_with(regs: &[u64], b: usize, mode: CommitMode, salt: &SaltGl) -> [Val; 4] {
+    match mode {
+        CommitMode::Plain => commit_hll_omc(regs, b),
+        CommitMode::Hiding => {
+            let flat: Vec<Val> = regs.iter().map(|&r| Val::from_u32(r as u32)).collect();
+            commit_flat_gl(mode, CommitKind::State, CommitFamily::HyperLogLog, salt, &flat)
+        }
+    }
+}
+
 fn commit_regs(regs32: &[u32]) -> GlCommit {
     let hasher = MyHash::new(make_perm());
     GlCommit(hasher.hash_iter(regs32.iter().map(|&c| Val::from_u32(c))))
+}
+
+/// [`commit_regs`] under a [`CommitMode`] (the leaf's copy of
+/// [`commit_hll_omc_with`] over the `u32` registers it already holds).
+fn commit_regs_with(regs32: &[u32], mode: CommitMode, salt: &SaltGl) -> GlCommit {
+    match mode {
+        CommitMode::Plain => commit_regs(regs32),
+        CommitMode::Hiding => {
+            let flat: Vec<Val> = regs32.iter().map(|&c| Val::from_u32(c)).collect();
+            GlCommit(commit_flat_gl(mode, CommitKind::State, CommitFamily::HyperLogLog, salt, &flat))
+        }
+    }
 }
 
 /// Pack the register array 2-per-Challenge (D=2) — the coefficient stream the
@@ -308,6 +357,7 @@ pub struct HllOmcLeafCircuit {
     params: HllOmcParams,
     binding: Binding,
     expose: Expose,
+    mode: CommitMode,
     /// Batch index `t` of the next proof (Interval statement only).
     batch_index: u64,
     circuit: p3_circuit::Circuit<Challenge>,
@@ -347,11 +397,31 @@ pub fn build_hll_omc_leaf_with(
 /// Goldilocks `omc` HLL leaf with an explicit composition statement
 /// ([`Expose`]); `None` / `Boundary` are byte-for-byte
 /// [`build_hll_omc_leaf_with`], `Interval` adds the batch index `t` (last
-/// public input) and exposes `(init, final, (t, t), H)`.
+/// public input) and exposes `(init, final, (t, t), H)`. Plain commitments
+/// ([`build_hll_omc_leaf_commit`] with [`CommitMode::Plain`]); prove with
+/// [`HllOmcLeafCircuit::prove_epoch_at`].
 pub fn build_hll_omc_leaf_expose(
     params: HllOmcParams,
     expose: Expose,
     binding: Binding,
+) -> HllOmcLeafCircuit {
+    build_hll_omc_leaf_commit(params, expose, binding, CommitMode::Plain)
+}
+
+/// [`build_hll_omc_leaf_expose`] with an explicit [`CommitMode`] (revision
+/// B2, [`crate::commitment::hiding`]). `Plain` is the pre-B2 circuit byte for
+/// byte (same VK). `Hiding` adds 9 private inputs, the salts of
+/// `Com(S_{t-1})`, `Com(S_t)` and `Com(B_t)` (init, final, batch; three D = 2
+/// Challenges each), allocated as the FIRST private inputs, and hashes each
+/// commitment as `[tag, salt…, inputs…]`, i.e. [`commit_hll_omc_with`] /
+/// [`hll_omc_batch_commit_salted`]. The per-key routing hashes are not
+/// commitments and stay unsalted. The salts are witnesses, so the VK does not
+/// depend on them; prove with [`HllOmcLeafCircuit::prove_epoch_commit`].
+pub fn build_hll_omc_leaf_commit(
+    params: HllOmcParams,
+    expose: Expose,
+    binding: Binding,
+    mode: CommitMode,
 ) -> HllOmcLeafCircuit {
     let expose_boundary = expose == Expose::Boundary;
     params.validate();
@@ -411,6 +481,11 @@ pub fn build_hll_omc_leaf_expose(
         .collect();
 
     // Private witnesses (allocation order MUST match the value push order).
+    // B2: the salts of (init, final, batch) are the FIRST 9 private inputs
+    // under `Hiding` ([`OpeningsGl::private_inputs`] order); `Plain`
+    // allocates nothing, so its circuit is byte-identical.
+    // `alloc_leaf_salts_first` panics if any private input precedes them.
+    let salts = crate::recursion::recursive::leaf_gl::alloc_leaf_salts_first(&mut b, mode);
     let init_packed: Vec<ExprId> = (0..cell_packing)
         .map(|_| b.alloc_private_input("init_cell_packed"))
         .collect();
@@ -467,11 +542,32 @@ pub fn build_hll_omc_leaf_expose(
     if let Some(&f0) = final_packed.first() {
         b.tag(f0, "hllgl_final_packed_0").expect("tag");
     }
-    let digest_init = bind::hash_slice(&mut b, &cfg, &init_packed, zero, binding);
+    // Salted under `Hiding` (`[tag, salt…, inputs…]`); exactly
+    // `bind::hash_slice(inputs)` under `Plain`.
+    let fam = CommitFamily::HyperLogLog;
+    let digest_init = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::State,
+        fam,
+        salts.as_ref().map(|s| &s.init),
+        &init_packed,
+        zero,
+        binding,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(digest_init[i], init_commit_pis[i]);
     }
-    let digest_final = bind::hash_slice(&mut b, &cfg, &final_packed, zero, binding);
+    let digest_final = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::State,
+        fam,
+        salts.as_ref().map(|s| &s.final_),
+        &final_packed,
+        zero,
+        binding,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(digest_final[i], final_commit_pis[i]);
     }
@@ -504,7 +600,16 @@ pub fn build_hll_omc_leaf_expose(
     if let Some(&k0) = keys_t.first() {
         b.tag(k0, "hllgl_keys_t_0").expect("tag");
     }
-    let hb = bind::hash_slice(&mut b, &cfg, &keys_t, zero, binding);
+    let hb = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::Batch,
+        fam,
+        salts.as_ref().map(|s| &s.batch),
+        &keys_t,
+        zero,
+        binding,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(hb[i], batch_commit_pis[i]);
     }
@@ -776,6 +881,7 @@ pub fn build_hll_omc_leaf_expose(
         params,
         binding,
         expose,
+        mode,
         batch_index: 1,
         circuit,
         prover,
@@ -791,6 +897,20 @@ impl HllOmcLeafCircuit {
         self.binding
     }
 
+    /// The commitment mode the circuit was built with (revision B2).
+    pub fn commit_mode(&self) -> CommitMode {
+        self.mode
+    }
+
+    /// The VK (preprocessed commitment, `expose_forest_gl::vk_pin_values`
+    /// order) of every proof this prebuilt leaf produces, read from its
+    /// prover data (public parameters alone, no proving).
+    pub fn vk_pin_values(&self) -> Vec<Challenge> {
+        crate::recursion::recursive::expose_forest_gl::common_vk_pin_values(
+            self.circuit_prover_data.common_data(),
+        )
+    }
+
     /// Prove one epoch on the prebuilt circuit. `initial` is the `m` register
     /// values; `keys` is the `params.batch` record keys.
     pub fn prove_epoch(&mut self, initial: Vec<u64>, keys: Vec<u64>) -> HllOmcProof {
@@ -803,12 +923,98 @@ impl HllOmcLeafCircuit {
     }
 
     /// Prove the epoch of batch `t` (1-based); `t` is part of the Interval
-    /// statement (ignored by the other layouts).
+    /// statement (ignored by the other layouts). `Plain` circuits only: on a
+    /// `Hiding` circuit this would open every commitment with the public
+    /// zero salt, so it panics; use [`Self::prove_epoch_commit`] (or, for
+    /// the no-op leaf, [`Self::prove_epoch_public_zero`]).
     pub fn prove_epoch_at(&mut self, t: u64, initial: Vec<u64>, keys: Vec<u64>) -> HllOmcProof {
+        assert!(
+            !self.mode.is_hiding(),
+            "prove_epoch_at on a Hiding leaf would publish Com(S; 0): use prove_epoch_commit with \
+             OpeningsGl::for_leaf(..)"
+        );
+        self.prove_epoch_opened(t, initial, keys, &OpeningsGl::plain())
+    }
+
+    /// [`Self::prove_epoch_at`] with the commitment openings of leaf `t`
+    /// (`OpeningsGl::for_leaf(seed, CommitFamily::HyperLogLog, t)` for an
+    /// honest prover; ignored by a `Plain` circuit). The proof's
+    /// `initial_commit`, `final_commit` and `batch_commit` are then the salted
+    /// `Com(S_{t-1})`, `Com(S_t)` and `Com(B_t)`. A `Hiding` circuit panics
+    /// when `openings.final_` or `openings.batch` is the public zero salt
+    /// (never an honest PRF output). The init salt may be zero only at `t = 1`
+    /// on the empty genesis registers (or the public no-op state `S_noop`)
+    /// (leaf 1 of the genesis history opens the public `Com(S_0; 0)`); a zero
+    /// init on any other input panics
+    /// ([`assert_zero_init_opens_public_state`](crate::commitment::hiding::assert_zero_init_opens_public_state)).
+    pub fn prove_epoch_commit(
+        &mut self,
+        t: u64,
+        initial: Vec<u64>,
+        keys: Vec<u64>,
+        openings: &OpeningsGl,
+    ) -> HllOmcProof {
+        if self.mode.is_hiding() {
+            assert!(
+                !openings.final_.is_zero() && !openings.batch.is_zero(),
+                "Hiding leaf t = {t}: the final and batch commitments need secret randomizers \
+                 (OpeningsGl::for_leaf), not the public zero salt"
+            );
+            crate::commitment::hiding::assert_zero_init_opens_public_state(t, openings.init.is_zero(), || {
+                let empty = hll_omc_empty(self.params.b);
+                let mut noop = empty.clone();
+                hll_omc_advance_with(&mut noop, &[1], self.params.m(), self.binding);
+                initial == empty || initial == noop
+            });
+        }
+        self.prove_epoch_opened(t, initial, keys, openings)
+    }
+
+    /// The no-op VK-derivation leaf's epoch: all three commitments opened
+    /// with [`OpeningsGl::public_zero`], so a batch that changes nothing
+    /// exposes `init == final` in either mode. The only path that proves a
+    /// `Hiding` leaf with zero final/batch salts, so (like the BabyBear
+    /// leaf's) it accepts exactly the public no-op input
+    /// ([`hll_omc_gl_noop_leaf_commit`]): batch index `t = 1`, `initial` is
+    /// key 1 inserted into empty registers (under this leaf's binding) and
+    /// every key is 1 (the `t` check comes last). "The
+    /// batch leaves the registers unchanged" alone would not do for HLL: a
+    /// real batch of repeated keys often raises nothing, and would then
+    /// publish the deterministic (guess-checkable) commitments of a secret
+    /// state and of real keys. Input checks only (circuit and VK unchanged),
+    /// in both modes.
+    pub fn prove_epoch_public_zero(&mut self, t: u64, initial: Vec<u64>, keys: Vec<u64>) -> HllOmcProof {
+        let mut after = initial.clone();
+        hll_omc_advance_with(&mut after, &keys, self.params.m(), self.binding);
+        assert!(
+            after == initial,
+            "prove_epoch_public_zero is for the no-op leaf: the batch must not change the registers"
+        );
+        let mut noop = hll_omc_empty(self.params.b);
+        hll_omc_advance_with(&mut noop, &[1], self.params.m(), self.binding);
+        assert!(
+            initial == noop && keys.iter().all(|&k| k == 1),
+            "prove_epoch_public_zero is for the no-op leaf: the public no-op input only (initial = key 1 \
+             in empty registers, every key 1)"
+        );
+        assert_eq!(t, 1, "prove_epoch_public_zero is for the no-op leaf: it is proved at batch index 1");
+        self.prove_epoch_opened(t, initial, keys, &OpeningsGl::public_zero())
+    }
+
+    /// Shared body of the three `prove_epoch_*` entry points (no opening
+    /// checks).
+    fn prove_epoch_opened(
+        &mut self,
+        t: u64,
+        initial: Vec<u64>,
+        keys: Vec<u64>,
+        openings: &OpeningsGl,
+    ) -> HllOmcProof {
         self.batch_index = t;
         let params = self.params;
         let __t_w = std::time::Instant::now();
-        let (traces, (_, _, initial_commit, final_commit, batch_commit)) = self.run_epoch(initial, keys);
+        let (traces, (_, _, initial_commit, final_commit, batch_commit)) =
+            self.run_epoch_commit(initial, keys, openings);
         let __witness = __t_w.elapsed();
 
         let __t_p = std::time::Instant::now();
@@ -840,8 +1046,20 @@ impl HllOmcLeafCircuit {
     }
 
     /// Run the circuit on one epoch's witness; returns the traces and inputs.
+    #[allow(dead_code)] // test-only since B2: the prove paths run `run_epoch_commit`
     fn run_epoch(&mut self, initial: Vec<u64>, keys: Vec<u64>) -> (p3_circuit::tables::Traces<Challenge>, GlEpoch) {
-        let ep = self.epoch(initial, keys);
+        self.run_epoch_commit(initial, keys, &OpeningsGl::plain())
+    }
+
+    /// [`Self::run_epoch`] with explicit commitment openings (ignored under
+    /// `Plain`).
+    fn run_epoch_commit(
+        &mut self,
+        initial: Vec<u64>,
+        keys: Vec<u64>,
+        openings: &OpeningsGl,
+    ) -> (p3_circuit::tables::Traces<Challenge>, GlEpoch) {
+        let ep = self.epoch(initial, keys, openings);
         let traces = {
             let mut runner = self.circuit.runner();
             runner.set_public_inputs(&ep.0).expect("set pubs");
@@ -866,7 +1084,8 @@ impl HllOmcLeafCircuit {
     }
 
     /// Native side of one epoch + runner inputs (swaps the permutation hints).
-    fn epoch(&mut self, initial: Vec<u64>, keys: Vec<u64>) -> GlEpoch {
+    /// `openings` are the commitment salts (ignored under `Plain`).
+    fn epoch(&mut self, initial: Vec<u64>, keys: Vec<u64>, openings: &OpeningsGl) -> GlEpoch {
         let params = self.params;
         let HllOmcParams { batch: m_batch, .. } = params;
         let m = params.m();
@@ -958,11 +1177,12 @@ impl HllOmcLeafCircuit {
         if TAMPER_FINAL_CELL.with(|f| f.get()) {
             committed_final_regs[0] = committed_final_regs[0].wrapping_add(1);
         }
-        let initial_commit = commit_regs(&init_regs);
-        let final_commit = commit_regs(&committed_final_regs);
+        let mode = self.mode;
+        let initial_commit = commit_regs_with(&init_regs, mode, &openings.init);
+        let final_commit = commit_regs_with(&committed_final_regs, mode, &openings.final_);
 
         // Batch commitment over the keys (one Challenge each).
-        let batch_commit: GlCommit = GlCommit(hll_omc_batch_commit_with(&keys, binding));
+        let batch_commit: GlCommit = GlCommit(hll_omc_batch_commit_salted(&keys, binding, mode, &openings.batch));
 
         // Dense old/new register multisets + touched read/write rows, in the
         // offline-memory-checking read/write-set form with a time coordinate `ts`
@@ -1024,6 +1244,10 @@ impl HllOmcLeafCircuit {
         }
 
         let mut private_inputs: Vec<Challenge> = Vec::new();
+        if mode.is_hiding() {
+            // The salts come first (see `build_hll_omc_leaf_commit`).
+            private_inputs.extend(openings.private_inputs());
+        }
         private_inputs.extend_from_slice(&pack_cells_to_challenge(&init_regs));
         private_inputs.extend_from_slice(&pack_cells_to_challenge(&committed_final_regs));
         if binding.is_bound() {
@@ -1105,6 +1329,29 @@ pub fn prove_hll_omc_with(
     binding: Binding,
 ) -> HllOmcProof {
     build_hll_omc_leaf_with(params, expose_boundary, binding).prove_epoch(initial, keys)
+}
+
+/// Public **no-op leaf** of the Goldilocks `omc` HLL leaf for root-VK
+/// derivation (the Goldilocks counterpart of
+/// `noop_leaf::hll_omc_noop_leaf_expose`): every record re-inserts key 1
+/// into a state that already holds it (`max` is idempotent; the stream
+/// harness's HLL no-op), proved at batch index 1 through the explicit
+/// zero-salt path ([`HllOmcLeafCircuit::prove_epoch_public_zero`], all three
+/// salts [`OpeningsGl::public_zero`]), so it exposes `init == final` in
+/// either mode. The salts and the index are witnesses, so its VK is that of
+/// every real leaf of the same parameters and mode.
+pub fn hll_omc_gl_noop_leaf_commit(
+    params: HllOmcParams,
+    expose: Expose,
+    binding: Binding,
+    mode: CommitMode,
+) -> p3_circuit_prover::BatchStarkProof<ConfigWithFriParams> {
+    let mut regs = hll_omc_empty(params.b);
+    hll_omc_advance_with(&mut regs, &[1], params.m(), binding);
+    build_hll_omc_leaf_commit(params, expose, binding, mode)
+        .prove_epoch_public_zero(1, regs, vec![1; params.batch])
+        .output
+        .0
 }
 
 #[cfg(test)]
@@ -1436,6 +1683,582 @@ mod tests {
             for b in [Binding::Semantic, Binding::Legacy] {
                 assert!(!forged_iv(b), "fork binds the sponge IV: {b:?} must reject too");
             }
+        }
+    }
+
+    // ── B2: hiding commitments (`crate::commitment::hiding`) ─────────────────
+    //
+    // The hiding module's randomizer PRF is imported under salt names here
+    // (`rho` is the HLL rank in this file).
+
+    use crate::commitment::hiding::{
+        SaltSeed, rho_batch_gl as batch_salt, rho_batch_gl_in as batch_salt_in,
+        rho_state_gl as state_salt, rho_state_gl_in as state_salt_in,
+    };
+    use crate::recursion::recursive::expose_forest_gl::{
+        batch_log, check_leaves_against_log, check_root_against_log, prove_hiding_merge,
+        read_exposed_boundary_proof, read_exposed_statement, root_vk_deriver,
+        verify_bound_stark_proof_against_log, vk_pin_values,
+    };
+    use crate::recursion::recursive::leaf_gl::hiding_probe::{
+        leaked_salts, proof_alu_rows, trace_rows, vk_flat, vk_literal,
+    };
+    use crate::recursion::recursive::root_vk::ForestShape;
+    use crate::recursion::recursive::statement::{hash_gl, leaf_digest};
+
+    const HP: HllOmcParams = HllOmcParams { b: 3, batch: 4 };
+    const HLL: CommitFamily = CommitFamily::HyperLogLog;
+
+    fn hiding_leaf(binding: Binding) -> HllOmcLeafCircuit {
+        build_hll_omc_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding)
+    }
+
+    /// `regs` advanced by `keys` under `binding`'s routing.
+    fn advanced(regs: &[u64], keys: &[u64], binding: Binding) -> Vec<u64> {
+        let mut r = regs.to_vec();
+        hll_omc_advance_with(&mut r, keys, HP.m(), binding);
+        r
+    }
+
+    fn hp_prior(binding: Binding) -> Vec<u64> {
+        advanced(&hll_omc_empty(HP.b), &[5, 9], binding)
+    }
+
+    fn hp_batches() -> Vec<Vec<u64>> {
+        vec![vec![7, 11, 13, 7], vec![19, 7, 23, 29]]
+    }
+
+    /// Native drift guard: `Plain` is the pre-B2 commitment whatever the
+    /// salt (both the public `commit_hll_omc` and the leaf's private
+    /// `commit_regs`); `Hiding` is `MyHash([TAG_STATE | TAG_BATCH,
+    /// HyperLogLog, salt…] ‖ flat)` over exactly the pre-B2 flat stream, and
+    /// the family tag separates an HLL state from a `d = 1` Count-Min state
+    /// with the same cells.
+    #[test]
+    fn commit_with_modes() {
+        use crate::commitment::hiding::{TAG_BATCH, TAG_STATE};
+        use crate::sketch::countmin_omc_gl::commit_countmin_with;
+        let seed = SaltSeed::for_tests(9);
+        let (s1, s2) = (state_salt(&seed, HLL, 1), state_salt(&seed, HLL, 2));
+        let regs = hp_prior(Binding::Semantic);
+        let regs32: Vec<u32> = regs.iter().map(|&r| r as u32).collect();
+        assert_eq!(commit_hll_omc_with(&regs, HP.b, CommitMode::Plain, &s1), commit_hll_omc(&regs, HP.b));
+        assert_eq!(commit_regs_with(&regs32, CommitMode::Plain, &s1), commit_regs(&regs32));
+        let mut input = vec![Val::from_u64(TAG_STATE), Val::from_u64(HLL.id())];
+        input.extend_from_slice(&s1.0);
+        input.extend(regs.iter().map(|&r| Val::from_u64(r)));
+        let want: [Val; 4] = MyHash::new(make_perm()).hash_iter(input);
+        let h1 = commit_hll_omc_with(&regs, HP.b, CommitMode::Hiding, &s1);
+        assert_eq!(h1, want, "state layout drift");
+        assert_eq!(commit_regs_with(&regs32, CommitMode::Hiding, &s1).0, h1);
+        assert_ne!(h1, commit_hll_omc_with(&regs, HP.b, CommitMode::Hiding, &s2));
+        assert_ne!(h1, commit_hll_omc(&regs, HP.b));
+        // The same cells as a d = 1 Count-Min state: equal Plain digests (the
+        // pre-B2 collision), separated by the family tag under Hiding.
+        let cm = crate::sketch::countmin::CountMinState {
+            counters: vec![regs32.clone()],
+            params: crate::sketch::countmin::CountMinParams { d: 1, w: HP.m() },
+        };
+        assert_eq!(crate::sketch::countmin_omc_gl::commit_countmin(&cm).0, commit_hll_omc(&regs, HP.b));
+        assert_ne!(commit_countmin_with(&cm, CommitMode::Hiding, &s1).0, h1, "family tags separate");
+        let sb = batch_salt(&seed, HLL, 1);
+        let keys = hp_batches()[0].clone();
+        for binding in [Binding::Legacy, Binding::Semantic, Binding::Bound] {
+            assert_eq!(
+                hll_omc_batch_commit_salted(&keys, binding, CommitMode::Plain, &sb),
+                hll_omc_batch_commit_with(&keys, binding)
+            );
+            let mut input = vec![Val::from_u64(TAG_BATCH), Val::from_u64(HLL.id())];
+            input.extend_from_slice(&sb.0);
+            input.extend(keys.iter().flat_map(|&k| bind::key_hash_input::<Val>(k, binding)));
+            let want: [Val; 4] = MyHash::new(make_perm()).hash_iter(input);
+            let hb = hll_omc_batch_commit_salted(&keys, binding, CommitMode::Hiding, &sb);
+            assert_eq!(hb, want, "{binding:?}: batch layout drift");
+            assert_ne!(hb, hll_omc_batch_commit_with(&keys, binding), "{binding:?}");
+        }
+    }
+
+    /// (1) A hiding leaf's commitments (the proof's `initial/final/batch`
+    /// fields and the exposed Interval statement) equal the NATIVE hiding
+    /// commitments under the leaf-`t` openings, under every binding; the
+    /// Boundary layout exposes the hiding pair too.
+    #[test]
+    fn hiding_leaf_exposes_native_hiding_commitments() {
+        let seed = SaltSeed::for_tests(21);
+        let t = 3u64;
+        let keys = hp_batches()[0].clone();
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let mut leaf = hiding_leaf(binding);
+            assert_eq!(leaf.commit_mode(), CommitMode::Hiding);
+            let prior = hp_prior(binding);
+            let r = leaf.prove_epoch_commit(t, prior.clone(), keys.clone(), &OpeningsGl::for_leaf(&seed, HLL, t));
+            let expect = advanced(&prior, &keys, binding);
+            let init = commit_hll_omc_with(&prior, HP.b, CommitMode::Hiding, &state_salt(&seed, HLL, t - 1));
+            let fin = commit_hll_omc_with(&expect, HP.b, CommitMode::Hiding, &state_salt(&seed, HLL, t));
+            let bc = hll_omc_batch_commit_salted(&keys, binding, CommitMode::Hiding, &batch_salt(&seed, HLL, t));
+            assert_eq!(r.initial_commit.0, init, "{binding:?}");
+            assert_eq!(r.final_commit.0, fin, "{binding:?}");
+            assert_eq!(r.batch_commit.0, bc, "{binding:?}");
+            assert_ne!(init, commit_hll_omc(&prior, HP.b), "{binding:?}: hiding != plain");
+            assert_ne!(fin, commit_hll_omc(&expect, HP.b), "{binding:?}: hiding != plain");
+            assert_ne!(bc, hll_omc_batch_commit_with(&keys, binding), "{binding:?}: hiding != plain");
+            let st = read_exposed_statement(&r.output.0);
+            assert_eq!(st.init, init.to_vec(), "{binding:?}");
+            assert_eq!(st.final_, fin.to_vec(), "{binding:?}");
+            let iv = st.interval.expect("interval layout");
+            assert_eq!((iv.lo, iv.hi), (Val::from_u64(t), Val::from_u64(t)));
+            assert_eq!(iv.digest, leaf_digest(&hash_gl, 2, t, &bc), "{binding:?}: H(TAG_LEAF, t, Com(B_t; salt))");
+        }
+        // Boundary layout, leaf 1 of the genesis history from the empty S_0
+        // (its zero init salt opens only that public state).
+        for binding in [Binding::Semantic, Binding::Legacy] {
+            let mut bleaf = build_hll_omc_leaf_commit(HP, Expose::Boundary, binding, CommitMode::Hiding);
+            let prior = hll_omc_empty(HP.b);
+            let r = bleaf.prove_epoch_commit(1, prior.clone(), keys.clone(), &OpeningsGl::for_leaf(&seed, HLL, 1));
+            let (i, f) = read_exposed_boundary_proof(&r.output.0);
+            assert_eq!(i.0, commit_hll_omc_with(&prior, HP.b, CommitMode::Hiding, &SaltGl::ZERO), "{binding:?}");
+            assert_eq!(f, r.final_commit, "{binding:?}");
+            let fin = advanced(&prior, &keys, binding);
+            assert_eq!(f.0, commit_hll_omc_with(&fin, HP.b, CommitMode::Hiding, &state_salt(&seed, HLL, 1)));
+        }
+    }
+
+    /// (2) The hiding leaf's VK does not depend on the salts (two different
+    /// openings, and the zero-salt no-op leaf, give one VK), differs from the
+    /// Plain VK, and the Plain circuit is the pre-B2 circuit: its VK equals
+    /// the value recorded on the unmodified Goldilocks leaf (b2-hiding
+    /// @94e9f58), through both the old builder and
+    /// `build_hll_omc_leaf_commit(.., Plain)`, for every layout and binding.
+    #[test]
+    fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+        let recorded = [
+            (Expose::None, Binding::Legacy, [14168919388163267691, 14460048179212378628, 8910995631445728004, 15256646160871894868]),
+            (Expose::None, Binding::Semantic, [11499029830929027002, 952261770204596331, 14617706948556334579, 5938851537768499731]),
+            (Expose::None, Binding::Bound, [813484156469277899, 8183806348160860546, 17654867415947999660, 12531779750251986898]),
+            (Expose::Boundary, Binding::Legacy, [15543137933915619559, 18139362217733167749, 12155153133407480564, 8127256034025869025]),
+            (Expose::Boundary, Binding::Semantic, [5138130978998227796, 7067718375919704150, 13912666147390980263, 6321985076559359309]),
+            (Expose::Boundary, Binding::Bound, [13782179169350075207, 12056932387851708703, 2236995706214631902, 4354521716714807773]),
+            (Expose::Interval, Binding::Legacy, [14669599425293956236, 16341529921799257724, 3702582242897993872, 14699538780081726645]),
+            (Expose::Interval, Binding::Semantic, [10507600970848577520, 12831808682093879075, 14828731557621822660, 9751981943810625564]),
+            (Expose::Interval, Binding::Bound, [705249840634679929, 2970675906437864458, 18350968471023740034, 18034393421210718204]),
+        ];
+        for (expose, binding, vk) in recorded {
+            let old = build_hll_omc_leaf_expose(HP, expose, binding).vk_pin_values();
+            let plain = build_hll_omc_leaf_commit(HP, expose, binding, CommitMode::Plain).vk_pin_values();
+            assert_eq!(vk_flat(&old), vk_literal(vk), "{expose:?}/{binding:?}: Plain VK drifted from the pre-B2 leaf");
+            assert_eq!(plain, old, "{expose:?}/{binding:?}");
+            let hid = build_hll_omc_leaf_commit(HP, expose, binding, CommitMode::Hiding).vk_pin_values();
+            assert_ne!(hid, old, "{expose:?}/{binding:?}: the hiding circuit differs");
+        }
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let mut leaf = hiding_leaf(binding);
+            let vk = leaf.vk_pin_values();
+            let keys = hp_batches()[0].clone();
+            let o1 = OpeningsGl::for_leaf(&SaltSeed::for_tests(1), HLL, 1);
+            let o5 = OpeningsGl::for_leaf(&SaltSeed::for_tests(2), HLL, 5);
+            // Leaf 1 starts from the empty S_0 (its zero init salt opens only
+            // that public state); leaf 5 from a real prior.
+            let a = leaf.prove_epoch_commit(1, hll_omc_empty(HP.b), keys.clone(), &o1);
+            let b = leaf.prove_epoch_commit(5, hp_prior(binding), keys, &o5);
+            assert_ne!(a.final_commit, b.final_commit);
+            assert_eq!(vk_pin_values(&a.output.0), vk, "{binding:?}");
+            assert_eq!(vk_pin_values(&b.output.0), vk, "{binding:?}");
+            let noop = hll_omc_gl_noop_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding);
+            assert_eq!(vk_pin_values(&noop), vk, "{binding:?}: the zero-salt no-op leaf has the real leaves' VK");
+        }
+    }
+
+    /// (2b) The Hiding leaf's VK is pinned, one literal per statement layout and binding.
+    /// It does not depend on the salts (test (2)), so it is a fixed value per
+    /// shape; recorded on b2-gl @77a02a3. The pin guards what the other
+    /// tests only compare against the native functions, which would carry the
+    /// same change: which sponge each salted commitment uses, the
+    /// `(kind, HyperLogLog)` tag constants, and the salt allocation order.
+    /// Under `Bound` the three salted sponges are the zero-IV bound sponge
+    /// (`hash_slice_bound`); a Hiding leaf that fell back to the plain sponge
+    /// there keeps its row counts and still matches the native `_with`
+    /// functions, so only this pin sees it.
+    #[test]
+    fn hiding_leaf_vk_is_pinned() {
+        let recorded = [
+            (Expose::None, Binding::Legacy, [9020287199632471132, 4922640300835232299, 6545664025718793889, 16708064044724174711]),
+            (Expose::None, Binding::Semantic, [16676829244106536675, 7186883655321923827, 7030534363062251864, 3279728442841506886]),
+            (Expose::None, Binding::Bound, [3612063495855129343, 11975865296845562783, 4356664480343767723, 1742447526026485940]),
+            (Expose::Boundary, Binding::Legacy, [478692673385797063, 9835345290699689723, 17957644977397044213, 2418480954263820918]),
+            (Expose::Boundary, Binding::Semantic, [13832337578725166954, 10137499088671747806, 1255461744675994764, 15138686581792200521]),
+            (Expose::Boundary, Binding::Bound, [7159761428616114914, 9102334846850709283, 2608971208970966697, 5004193696937718827]),
+            (Expose::Interval, Binding::Legacy, [12682436709770012897, 17765918685796911134, 9764386592423390210, 17028952910073436610]),
+            (Expose::Interval, Binding::Semantic, [7723533189676974475, 2704071495339774341, 2715990335894637200, 11753830400438177939]),
+            (Expose::Interval, Binding::Bound, [11527054926566344460, 3907425700823126067, 8490328091609986456, 16436418461637429624]),
+        ];
+        for (expose, binding, vk) in recorded {
+            let hid = build_hll_omc_leaf_commit(HP, expose, binding, CommitMode::Hiding).vk_pin_values();
+            assert_eq!(vk_flat(&hid), vk_literal(vk), "{expose:?}/{binding:?}: Hiding VK drifted");
+        }
+    }
+
+    /// (3) Equal states at two versions get different hiding commitments,
+    /// both different from the plain one; at the proof level, two no-op
+    /// leaves (every key already at its register's rank) at `t = 1, 2` from
+    /// the public no-op state `S_noop` (leaf 1's zero init salt opens only a
+    /// public state) expose `Com(S; 0) → Com(S; salt_1) → Com(S; salt_2)`:
+    /// three distinct values for one state, chained.
+    #[test]
+    fn equal_states_get_unlinkable_hiding_commitments() {
+        let binding = Binding::Semantic;
+        let seed = SaltSeed::for_tests(33);
+        let s = hp_prior(binding);
+        let (s1, s2) = (state_salt(&seed, HLL, 1), state_salt(&seed, HLL, 2));
+        let (c1, c2) = (
+            commit_hll_omc_with(&s, HP.b, CommitMode::Hiding, &s1),
+            commit_hll_omc_with(&s, HP.b, CommitMode::Hiding, &s2),
+        );
+        assert_ne!(c1, c2);
+        assert_ne!(c1, commit_hll_omc(&s, HP.b));
+        assert_ne!(c2, commit_hll_omc(&s, HP.b));
+        assert_eq!(commit_hll_omc_with(&s, HP.b, CommitMode::Plain, &s1), commit_hll_omc(&s, HP.b));
+
+        let s = advanced(&hll_omc_empty(HP.b), &[1], binding);
+        let (c1, c2) = (
+            commit_hll_omc_with(&s, HP.b, CommitMode::Hiding, &s1),
+            commit_hll_omc_with(&s, HP.b, CommitMode::Hiding, &s2),
+        );
+        let same = vec![1u64; HP.batch];
+        assert_eq!(advanced(&s, &same, binding), s, "re-inserting present keys moves nothing");
+        let mut leaf = hiding_leaf(binding);
+        let l1 = leaf.prove_epoch_commit(1, s.clone(), same.clone(), &OpeningsGl::for_leaf(&seed, HLL, 1));
+        let l2 = leaf.prove_epoch_commit(2, s.clone(), same, &OpeningsGl::for_leaf(&seed, HLL, 2));
+        let (t1, t2) = (read_exposed_statement(&l1.output.0), read_exposed_statement(&l2.output.0));
+        assert_eq!(t1.init, commit_hll_omc_with(&s, HP.b, CommitMode::Hiding, &SaltGl::ZERO).to_vec());
+        assert_eq!(t1.final_, c1.to_vec());
+        assert_eq!(t2.init, t1.final_, "leaf 2 opens Com(S_1) with the same salt");
+        assert_eq!(t2.final_, c2.to_vec());
+        assert_ne!(t1.init, t1.final_, "the state did not move, the commitment did");
+        assert_ne!(t2.init, t2.final_);
+    }
+
+    /// (4) Binding in Hiding mode, through the auditor paths: an honest
+    /// 2-leaf forest passes the per-batch log check and its root verifies
+    /// against the log under the root VK derived from the zero-salt no-op
+    /// leaf; another seed's log, a wrong batch salt and a wrong final salt
+    /// are rejected; an inconsistent salt across the leaf boundary cannot be
+    /// merged.
+    #[test]
+    fn wrong_salt_rejected_by_log_and_inconsistent_salt_breaks_merge() {
+        let binding = Binding::Semantic;
+        let (a, b) = (SaltSeed::for_tests(41), SaltSeed::for_tests(42));
+        let bs = hp_batches();
+        let s0 = hll_omc_empty(HP.b);
+        let s1 = advanced(&s0, &bs[0], binding);
+        let s2 = advanced(&s1, &bs[1], binding);
+        let log_for = |seed: &SaltSeed| {
+            let bc: Vec<[Val; 4]> = (0..2)
+                .map(|k| hll_omc_batch_commit_salted(&bs[k], binding, CommitMode::Hiding, &batch_salt(seed, HLL, k as u64 + 1)))
+                .collect();
+            batch_log(
+                &commit_hll_omc_with(&s0, HP.b, CommitMode::Hiding, &SaltGl::ZERO),
+                &commit_hll_omc_with(&s2, HP.b, CommitMode::Hiding, &state_salt(seed, HLL, 2)),
+                &bc,
+            )
+        };
+        let (log_a, log_b) = (log_for(&a), log_for(&b));
+        let mut leaf = hiding_leaf(binding);
+        let l1 = leaf.prove_epoch_commit(1, s0.clone(), bs[0].clone(), &OpeningsGl::for_leaf(&a, HLL, 1)).output;
+        let l2 = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &OpeningsGl::for_leaf(&a, HLL, 2)).output;
+        assert_eq!(check_leaves_against_log(&[&l1.0, &l2.0], &log_a, Expose::Interval), Ok(()));
+        assert!(check_leaves_against_log(&[&l1.0, &l2.0], &log_b, Expose::Interval).is_err(), "another seed's log");
+
+        let bad_batch = OpeningsGl { batch: batch_salt(&b, HLL, 2), ..OpeningsGl::for_leaf(&a, HLL, 2) };
+        let l2b = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_batch).output;
+        let e = check_leaves_against_log(&[&l1.0, &l2b.0], &log_a, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|e| e.contains("digest")), "{e:?}");
+        let bad_final = OpeningsGl { final_: state_salt(&b, HLL, 2), ..OpeningsGl::for_leaf(&a, HLL, 2) };
+        let l2f = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_final).output;
+        let e = check_leaves_against_log(&[&l1.0, &l2f.0], &log_a, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|e| e.contains("Com(S_T)")), "{e:?}");
+
+        let shape = ForestShape::forest(2);
+        let root = prove_hiding_merge(&l1, &l2);
+        let noop = hll_omc_gl_noop_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding);
+        let vk = root_vk_deriver(noop).root_vk(&shape);
+        verify_bound_stark_proof_against_log(&root.0, &vk, &log_a, &shape);
+        assert!(check_root_against_log(&root.0, &log_b, &shape).is_err());
+
+        let bad_init = OpeningsGl { init: state_salt(&b, HLL, 1), ..OpeningsGl::for_leaf(&a, HLL, 2) };
+        let l2i = leaf.prove_epoch_commit(2, s1.clone(), bs[1].clone(), &bad_init).output;
+        assert_ne!(read_exposed_statement(&l2i.0).init, read_exposed_statement(&l1.0).final_);
+        let e = forge::catch_msg(|| prove_hiding_merge(&l1, &l2i)).map(|_| ());
+        println!("B2 GL hll inconsistent salt merge: {e:?}");
+        assert!(
+            e.as_ref().is_err_and(|m| m.contains("WitnessConflict")),
+            "leaf 2's init must use leaf 1's final salt: {e:?}"
+        );
+    }
+
+    /// (5) The zero-salt no-op leaf of a Hiding circuit still exposes
+    /// `init == final` (the public zero-salt commitment of its public
+    /// state), so the twin-merge root-VK derivation works unchanged; the
+    /// Plain no-op leaf exposes the pre-B2 commitment.
+    #[test]
+    fn hiding_noop_leaf_has_init_eq_final() {
+        let mut regs = hll_omc_empty(HP.b);
+        for binding in [Binding::Semantic, Binding::Bound] {
+            regs = hll_omc_empty(HP.b);
+            hll_omc_advance_with(&mut regs, &[1], HP.m(), binding);
+            let noop = hll_omc_gl_noop_leaf_commit(HP, Expose::Interval, binding, CommitMode::Hiding);
+            let st = read_exposed_statement(&noop);
+            let anchor = commit_hll_omc_with(&regs, HP.b, CommitMode::Hiding, &SaltGl::ZERO);
+            assert_eq!(st.init, st.final_, "{binding:?}");
+            assert_eq!(st.init, anchor.to_vec(), "{binding:?}");
+            assert_ne!(anchor, commit_hll_omc(&regs, HP.b), "{binding:?}");
+        }
+        let plain = hll_omc_gl_noop_leaf_commit(HP, Expose::Boundary, Binding::Bound, CommitMode::Plain);
+        let (i, f) = read_exposed_boundary_proof(&plain);
+        assert_eq!((i.0, f.0), (commit_hll_omc(&regs, HP.b), commit_hll_omc(&regs, HP.b)));
+    }
+
+    /// (F3, F5) The Hiding leaf costs exactly +2 Poseidon2 rows and +3 ALU
+    /// rows per commitment over the Plain leaf (+6 and +9 per leaf) under
+    /// every binding, and none of its 18 salt values is a public value of
+    /// the proof (positive control: a "salt" equal to an exposed commitment
+    /// value is found).
+    #[test]
+    fn hiding_leaf_row_overhead_and_no_salt_in_public_values() {
+        let seed = SaltSeed::for_tests(91);
+        let t = 3u64;
+        let keys = hp_batches()[0].clone();
+        let o = OpeningsGl::for_leaf(&seed, HLL, t);
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let mut plain = build_hll_omc_leaf_commit(HP, Expose::Interval, binding, CommitMode::Plain);
+            let mut leaf = hiding_leaf(binding);
+            let (p0, a0) = trace_rows(&plain.run_epoch(hp_prior(binding), keys.clone()).0);
+            let (p1, a1) = trace_rows(&leaf.run_epoch_commit(hp_prior(binding), keys.clone(), &o).0);
+            println!("B2 GL hll leaf rows {binding:?}: Poseidon2 {p0} -> {p1}, ALU {a0} -> {a1}");
+            assert_eq!(p1, p0 + 6, "{binding:?}: Poseidon2 rows");
+            assert_eq!(a1, a0 + 9, "{binding:?}: ALU rows");
+            let hid = leaf.prove_epoch_commit(t, hp_prior(binding), keys.clone(), &o);
+            assert_eq!(proof_alu_rows(&hid.output.0), a1, "{binding:?}: the proof's ALU height");
+            assert_eq!(leaked_salts(&hid.output.0, &[o.init, o.final_, o.batch]), vec![], "{binding:?}");
+            let mut control = SaltGl::ZERO;
+            control.0[0] = hid.initial_commit.0[0];
+            assert!(!leaked_salts(&hid.output.0, &[control]).is_empty(), "{binding:?}: the scan sees the statement");
+        }
+    }
+
+    /// (F1) A Hiding leaf never falls back to zero salts silently: the old
+    /// `prove_epoch_at` / `prove_epoch` entry points panic on it, and so does
+    /// `prove_epoch_commit` handed a zero final or batch salt. The explicit
+    /// no-op path refuses a batch that moves the registers. Controls: a zero
+    /// INIT salt is leaf 1's honest opening (from the empty genesis
+    /// registers; a zero init on a real state is refused, test
+    /// `hiding_leaf_refuses_zero_init_on_a_real_state`), and a Plain leaf
+    /// still ignores its openings.
+    #[test]
+    fn hiding_leaf_rejects_zero_openings_outside_the_noop_path() {
+        let seed = SaltSeed::for_tests(81);
+        let binding = Binding::Semantic;
+        let keys = hp_batches()[0].clone();
+        let mut leaf = hiding_leaf(binding);
+        let msg = forge::catch_msg(|| leaf.prove_epoch_at(2, hp_prior(binding), keys.clone()).final_commit).unwrap_err();
+        assert!(msg.contains("prove_epoch_at on a Hiding leaf"), "{msg}");
+        assert!(forge::catch(|| leaf.prove_epoch(hp_prior(binding), keys.clone()).final_commit).is_none());
+        let honest = OpeningsGl::for_leaf(&seed, HLL, 2);
+        for (what, o) in [
+            ("plain", OpeningsGl::plain()),
+            ("public_zero", OpeningsGl::public_zero()),
+            ("zero final", OpeningsGl { final_: SaltGl::ZERO, ..honest }),
+            ("zero batch", OpeningsGl { batch: SaltGl::ZERO, ..honest }),
+        ] {
+            let msg = forge::catch_msg(|| leaf.prove_epoch_commit(2, hp_prior(binding), keys.clone(), &o).final_commit)
+                .unwrap_err();
+            assert!(msg.contains("public zero salt"), "{what}: {msg}");
+        }
+        let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(1, hp_prior(binding), keys.clone()).final_commit)
+            .unwrap_err();
+        assert!(msg.contains("must not change the registers"), "{msg}");
+
+        let o1 = OpeningsGl::for_leaf(&seed, HLL, 1);
+        assert!(o1.init.is_zero());
+        let s0 = hll_omc_empty(HP.b);
+        let r = leaf.prove_epoch_commit(1, s0.clone(), keys.clone(), &o1);
+        assert_eq!(r.initial_commit.0, commit_hll_omc_with(&s0, HP.b, CommitMode::Hiding, &SaltGl::ZERO));
+        let mut plain = build_hll_omc_leaf_commit(HP, Expose::Interval, binding, CommitMode::Plain);
+        let p = plain.prove_epoch_commit(2, hp_prior(binding), keys.clone(), &OpeningsGl::plain());
+        assert_eq!(p.initial_commit.0, commit_hll_omc(&hp_prior(binding), HP.b));
+        assert_eq!(p.final_commit.0, commit_hll_omc(&advanced(&hp_prior(binding), &keys, binding), HP.b));
+        assert_eq!(p.batch_commit.0, hll_omc_batch_commit_with(&keys, binding));
+    }
+
+    /// (F1, init salt) The twin of the BabyBear leaf's test: under `Hiding` a
+    /// zero INIT salt opens only a public state at batch index 1 (the empty
+    /// genesis registers or the public `S_noop`). Refused, under every
+    /// binding: a forgotten init opening on a real prior (`t = 2`), local
+    /// numbering (`for_leaf(.., 1)` at global `t = 5` on a real state), leaf
+    /// 1's openings on a real prior at `t = 1`, and a zero init at `t = 2` on
+    /// the empty registers. Controls: the empty-registers and `S_noop`
+    /// leaves at `t = 1` prove and expose the zero-salt commitment of their
+    /// public state; a Plain leaf ignores its openings on the same inputs.
+    #[test]
+    fn hiding_leaf_refuses_zero_init_on_a_real_state() {
+        let seed = SaltSeed::for_tests(83);
+        let keys = hp_batches()[0].clone();
+        let s0 = hll_omc_empty(HP.b);
+        let forgot = OpeningsGl { init: SaltGl::ZERO, ..OpeningsGl::for_leaf(&seed, HLL, 2) };
+        let local = OpeningsGl::for_leaf(&seed, HLL, 1);
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let prior = hp_prior(binding);
+            let noop = advanced(&s0, &[1], binding);
+            assert!(prior != s0 && prior != noop, "precondition: a real (secret) prior");
+            let cases = [
+                ("forgotten init, real prior", 2u64, prior.clone(), forgot),
+                ("local numbering at global t = 5", 5, prior.clone(), local),
+                ("leaf-1 openings on a real prior", 1, prior.clone(), local),
+                ("zero init at t = 2 on the empty registers", 2, s0.clone(), forgot),
+            ];
+            let mut leaf = hiding_leaf(binding);
+            for (what, t, init, o) in &cases {
+                let msg = forge::catch_msg(|| leaf.prove_epoch_commit(*t, init.clone(), keys.clone(), o).final_commit)
+                    .unwrap_err();
+                assert!(msg.contains("zero init salt"), "{binding:?}/{what}: {msg}");
+            }
+            for public in [s0.clone(), noop.clone()] {
+                let r = leaf.prove_epoch_commit(1, public.clone(), keys.clone(), &local);
+                let want = commit_hll_omc_with(&public, HP.b, CommitMode::Hiding, &SaltGl::ZERO);
+                assert_eq!(r.initial_commit.0, want, "{binding:?}");
+            }
+            if binding == Binding::Semantic {
+                let mut plain = build_hll_omc_leaf_commit(HP, Expose::Interval, binding, CommitMode::Plain);
+                for (what, t, init, o) in &cases {
+                    let p = plain.prove_epoch_commit(*t, init.clone(), keys.clone(), o);
+                    assert_eq!(p.initial_commit.0, commit_hll_omc(init, HP.b), "Plain/{what}");
+                }
+            }
+        }
+    }
+
+    /// The zero-salt no-op path is proved at batch index 1 only (the
+    /// VK-derivation leaf's), like every other family's: the canonical
+    /// public input at `t = 2` is refused under every binding and in either
+    /// mode, after the input checks.
+    #[test]
+    fn public_zero_path_refuses_another_batch_index() {
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let noop = advanced(&hll_omc_empty(HP.b), &[1], binding);
+            for mode in [CommitMode::Hiding, CommitMode::Plain] {
+                let mut leaf = build_hll_omc_leaf_commit(HP, Expose::Interval, binding, mode);
+                let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(2, noop.clone(), vec![1; HP.batch]).final_commit)
+                    .unwrap_err();
+                assert!(msg.contains("batch index 1"), "{binding:?}/{mode:?}: {msg}");
+            }
+        }
+    }
+
+    /// The zero-salt no-op path accepts only the public no-op input (key 1
+    /// in empty registers, every key 1), the twin of the BabyBear leaf's
+    /// test: for HLL a real batch of repeated keys often raises nothing, so
+    /// "the registers do not move" alone would let it publish the
+    /// deterministic commitments of a secret state and of real keys.
+    /// Rejected, under every binding and in either mode: a real state with a
+    /// repeated real key (the stream harness's split-leaf pad shape), a
+    /// non-canonical state with keys 1, and the canonical state with a real
+    /// key that does not raise its register. Control: the canonical input
+    /// proves, and exposes `Com(S_noop; 0)`.
+    #[test]
+    fn noop_path_accepts_only_the_public_noop_input() {
+        let noop_msg = "the public no-op input only";
+        for binding in [Binding::Semantic, Binding::Bound, Binding::Legacy] {
+            let empty = hll_omc_empty(HP.b);
+            let noop = advanced(&empty, &[1], binding);
+            let real = advanced(&empty, &[4242, 777], binding);
+            let repeat = vec![4242u64; HP.batch];
+            assert_eq!(advanced(&real, &repeat, binding), real, "{binding:?}: the repeat raises nothing");
+            let other = advanced(&empty, &[1, 4242], binding);
+            assert_ne!(other, noop, "{binding:?}");
+            let quiet = (2u64..100_000)
+                .find(|&k| advanced(&noop, &[k], binding) == noop)
+                .expect("a key dominated by key 1's register");
+            let cases = [
+                ("real state, repeated real key", real, repeat),
+                ("non-canonical state, keys 1", other, vec![1; HP.batch]),
+                ("canonical state, dominated real key", noop.clone(), vec![quiet; HP.batch]),
+            ];
+            for mode in [CommitMode::Hiding, CommitMode::Plain] {
+                let mut leaf = build_hll_omc_leaf_commit(HP, Expose::Interval, binding, mode);
+                for (what, init, keys) in &cases {
+                    let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(9, init.clone(), keys.clone()).final_commit)
+                        .unwrap_err();
+                    assert!(msg.contains(noop_msg), "{binding:?}/{mode:?}/{what}: {msg}");
+                }
+            }
+            let r = hiding_leaf(binding).prove_epoch_public_zero(1, noop.clone(), vec![1; HP.batch]);
+            let c = commit_hll_omc_with(&noop, HP.b, CommitMode::Hiding, &SaltGl::ZERO);
+            assert_eq!(r.initial_commit.0, c, "{binding:?}");
+            assert_eq!(r.final_commit.0, c, "{binding:?}");
+            assert_eq!(
+                r.batch_commit.0,
+                hll_omc_batch_commit_salted(&vec![1; HP.batch], binding, CommitMode::Hiding, &SaltGl::ZERO),
+                "{binding:?}"
+            );
+        }
+    }
+
+    /// (F2) A continued history is anchored on the previous history's
+    /// certified final commitment ([`OpeningsGl::for_leaf_after`]): history
+    /// 1's leaf 1 exposes exactly history 0's final `Com(S_2; salt)`, both
+    /// leaves pass history 1's log; the zero init salt (the guess-checkable
+    /// `Com(S_2; 0)`) is refused by the leaf, and a nonzero wrong anchor salt
+    /// is rejected by the log.
+    #[test]
+    fn continued_history_leaf_opens_the_previous_final_commitment() {
+        let binding = Binding::Semantic;
+        let seed = SaltSeed::for_tests(71);
+        let bs = hp_batches();
+        let s1 = advanced(&hll_omc_empty(HP.b), &bs[0], binding);
+        let s2 = advanced(&s1, &bs[1], binding);
+        let mut leaf = hiding_leaf(binding);
+        let h0_last = leaf.prove_epoch_commit(2, s1, bs[1].clone(), &OpeningsGl::for_leaf(&seed, HLL, 2));
+        let anchor_salt = state_salt(&seed, HLL, 2);
+        let anchor = h0_last.final_commit.0;
+        assert_eq!(anchor, commit_hll_omc_with(&s2, HP.b, CommitMode::Hiding, &anchor_salt));
+
+        let h = 1u64;
+        let s3 = advanced(&s2, &bs[0], binding);
+        let s4 = advanced(&s3, &bs[1], binding);
+        let o1 = OpeningsGl::for_leaf_after(&anchor_salt, &seed, HLL, h);
+        let l1 = leaf.prove_epoch_commit(1, s2.clone(), bs[0].clone(), &o1).output;
+        let l2 = leaf.prove_epoch_commit(2, s3, bs[1].clone(), &OpeningsGl::for_leaf_in(&seed, HLL, h, 2)).output;
+        assert_eq!(read_exposed_statement(&l1.0).init, anchor.to_vec(), "history 1 starts at history 0's final");
+        assert_eq!(read_exposed_statement(&l2.0).init, read_exposed_statement(&l1.0).final_);
+        let bc: Vec<[Val; 4]> = (0..2)
+            .map(|k| hll_omc_batch_commit_salted(&bs[k], binding, CommitMode::Hiding, &batch_salt_in(&seed, HLL, h, k as u64 + 1)))
+            .collect();
+        let fin = commit_hll_omc_with(&s4, HP.b, CommitMode::Hiding, &state_salt_in(&seed, HLL, h, 2));
+        let log1 = batch_log(&anchor, &fin, &bc);
+        assert_eq!(check_leaves_against_log(&[&l1.0, &l2.0], &log1, Expose::Interval), Ok(()));
+        let zero_init = OpeningsGl { init: SaltGl::ZERO, ..o1 };
+        let msg = forge::catch_msg(|| leaf.prove_epoch_commit(1, s2.clone(), bs[0].clone(), &zero_init).final_commit)
+            .unwrap_err();
+        assert!(msg.contains("zero init salt"), "{msg}");
+        let wrong_init = OpeningsGl { init: state_salt(&seed, HLL, 1), ..o1 };
+        let l1w = leaf.prove_epoch_commit(1, s2, bs[0].clone(), &wrong_init).output;
+        let e = check_leaves_against_log(&[&l1w.0, &l2.0], &log1, Expose::Interval);
+        assert!(e.as_ref().is_err_and(|m| m.contains("Com(S_0)")), "{e:?}");
+    }
+
+    /// (8) Build and prove the Hiding leaf at a tiny shape. Under the DEBUG
+    /// profile (`cargo test --lib hll_omc_gl::tests::hiding_leaf_tiny_debug`)
+    /// the fork debug-asserts, during the build, that each of the 9 salt
+    /// private inputs has an ALU creator.
+    #[test]
+    fn hiding_leaf_tiny_debug() {
+        let p = HllOmcParams { b: 2, batch: 1 };
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let mut leaf = build_hll_omc_leaf_commit(p, Expose::Interval, binding, CommitMode::Hiding);
+            let seed = SaltSeed::for_tests(8);
+            let r = leaf.prove_epoch_commit(1, hll_omc_empty(2), vec![9], &OpeningsGl::for_leaf(&seed, HLL, 1));
+            let mut fin = hll_omc_empty(2);
+            hll_omc_advance_with(&mut fin, &[9], p.m(), binding);
+            assert_eq!(r.final_commit.0, commit_hll_omc_with(&fin, 2, CommitMode::Hiding, &state_salt(&seed, HLL, 1)));
         }
     }
 }
