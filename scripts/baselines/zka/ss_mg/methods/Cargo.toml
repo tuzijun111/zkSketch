@@ -1,0 +1,17 @@
+[package]
+name = "ss-mg-methods"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+# ss_mg is the headline guest (input via env::read_slice); ss_mg_serde is its
+# read-path sensitivity twin (input via risc0 serde env::read, as the zka
+# guests read). Both carry the env::cycle_count() probes.
+[package.metadata.risc0]
+methods = ["guests/ss_mg", "guests/ss_mg_serde"]
+
+[build-dependencies]
+risc0-build = "3"
+
+[dependencies]
+risc0-zkvm = "3"

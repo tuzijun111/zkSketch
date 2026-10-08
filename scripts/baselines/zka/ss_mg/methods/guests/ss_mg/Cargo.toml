@@ -1,0 +1,9 @@
+[package]
+name = "ss_mg"
+version = "0.1.0"
+edition = "2021"
+
+# Same risc0-zkvm spec as zk-Analytics' aggregation guests (aggregator/methods/guest_cm/Cargo.toml).
+[dependencies]
+risc0-zkvm = { version = "3", default-features = false }
+ss-mg-core = { path = "../../../core", default-features = false }

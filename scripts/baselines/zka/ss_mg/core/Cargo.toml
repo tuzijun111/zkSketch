@@ -1,0 +1,19 @@
+[package]
+name = "ss-mg-core"
+version = "0.1.0"
+edition = "2021"
+
+# no_std summary crate shared by the guest and the host driver. Same sha2 /
+# serde / risc0-zkvm specs as ../../spacesaving/core (ss-core), so the guest
+# resolves to the crate versions of zk-Analytics' own guests. It does not use
+# the zk-Analytics clone: this guest reads no Event batches and verifies no
+# batch chain (see ../README.md).
+[dependencies]
+rust_crypto = { package = "sha2", version = "0.10", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+bytemuck = { version = "1", default-features = false }
+risc0-zkvm = { version = "3", default-features = false }
+
+[features]
+default = ["std"]
+std = ["serde/std"]
