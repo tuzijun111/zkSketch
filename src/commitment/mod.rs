@@ -14,6 +14,9 @@ pub mod hiding;
 pub mod hyperloglog;
 pub mod spacesaving;
 
+#[cfg(test)]
+mod plain_vk_pins;
+
 pub use boundary::Boundary;
 pub use countmin::CountMinCommit;
 pub use countmin_batch::CountMinBatchCommit;

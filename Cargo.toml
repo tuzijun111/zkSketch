@@ -52,6 +52,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Merkle MMCS with an OS-seeded mask RNG. Off by default; see src/config.rs.
 zk = []
 
+# Procs regression test of the staged-wave engine: it spawns its workers by
+# re-executing itself, so it runs its own `main` (no libtest harness).
+[[test]]
+name = "staged_queries"
+path = "tests/staged_queries.rs"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "thin"

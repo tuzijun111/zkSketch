@@ -17,11 +17,12 @@
 //! `composition_expose()` (Interval unless `ZKSKETCH_STATEMENT` says otherwise),
 //! `default_binding()` (Semantic unless `ZKSKETCH_BINDING` says otherwise) and
 //! `commit_mode_from_env()` (revision B2: `ZKSKETCH_COMMIT=plain|hiding`,
-//! unset = Hiding except Plain under `ZKSKETCH_BINDING=legacy`). The four
-//! deployed leaves are built with their `*_commit` builders in that mode (a
-//! Hiding leaf carries the 9 salt private inputs and the salted commitment
-//! sponges); the Bloom leaf has no hiding variant and stays Plain. Every CSV
-//! row records the mode its circuit was built in (`commit_mode`).
+//! unset = Hiding except Plain under `ZKSKETCH_BINDING=legacy`). All five
+//! leaves are built with their `*_commit` builders in that mode (a Hiding
+//! leaf carries the salt private inputs, 9 for the four BabyBear sketches and
+//! 3 for Bloom, and the salted commitment sponges), the Bloom leaf under the
+//! same statement layout as the others, as the composition harness builds it.
+//! Every CSV row records the mode its circuit was built in (`commit_mode`).
 //!
 //! ```bash
 //! cargo run --release --example exp_e0                  # 5 families x m in {2^12, 2^13, 2^14}
@@ -88,7 +89,7 @@ use zksketch::recursion::recursive::statement::{Expose, composition_expose};
 use zksketch::recursion::recursive::timing;
 use zksketch::sketch::Sketch;
 use zksketch::sketch::bind::{Binding, default_binding};
-use zksketch::sketch::bloom_omc::{BloomOmcLeafCircuit, BloomOmcParams, bloom_empty, build_bloom_omc_leaf};
+use zksketch::sketch::bloom_omc::{BloomOmcLeafCircuit, BloomOmcParams, bloom_empty, build_bloom_omc_leaf_commit};
 use zksketch::sketch::countmin::{CountMinParams, CountMinUpdate};
 use zksketch::sketch::countmin_omc::{CmOmcLeafCircuit, CmOmcParams, build_countmin_omc_leaf_commit};
 use zksketch::sketch::countmin_v9::CountMinV9;
@@ -172,12 +173,6 @@ fn variant(fam: &str) -> &'static str {
     }
 }
 
-/// The commitment mode a family's leaf is built in: the run's mode for the
-/// four deployed families, `Plain` for Bloom (no hiding variant).
-fn family_mode(fam: &str, mode: CommitMode) -> CommitMode {
-    if fam == "bloom" { CommitMode::Plain } else { mode }
-}
-
 fn mode_name(mode: CommitMode) -> &'static str {
     match mode {
         CommitMode::Plain => "plain",
@@ -195,10 +190,12 @@ enum Leaf {
 }
 
 impl Leaf {
-    /// Build the family's deployed leaf in `mode` (Bloom ignores it). Under
-    /// `Plain` these are exactly the pre-B2 `*_expose` builders (which
-    /// delegate to the same `*_commit` builders with `CommitMode::Plain`;
-    /// GK's used `default_binding()`, which is the run's `binding`).
+    /// Build the family's deployed leaf in `mode`. Under `Plain` these are
+    /// exactly the pre-B2 `*_expose` builders (which delegate to the same
+    /// `*_commit` builders with `CommitMode::Plain`; GK's used
+    /// `default_binding()`, which is the run's `binding`). Bloom is built
+    /// under the run's statement layout `expose` (the composition harness's
+    /// leaf); earlier E-0 runs probed its standalone `Expose::None` leaf.
     fn build(fam: &str, g: &Geometry, m: usize, expose: Expose, binding: Binding, mode: CommitMode) -> Self {
         match fam {
             "cm" => {
@@ -219,7 +216,7 @@ impl Leaf {
             }
             "bloom" => {
                 let p = BloomOmcParams { k: g.bloom_k, log_w: g.bloom_log_w, batch: m };
-                Leaf::Bloom(build_bloom_omc_leaf(p), p)
+                Leaf::Bloom(build_bloom_omc_leaf_commit(p, expose, mode), p)
             }
             _ => panic!("unknown family {fam} (cm|hll|ss|gk|bloom)"),
         }
@@ -267,7 +264,13 @@ impl Leaf {
                     leaf.prove_epoch_at(t, Gk2State::empty(*p), Vec::new()).output.0
                 }
             }
-            Leaf::Bloom(leaf, p) => leaf.prove_epoch(&bloom_empty(p), &[]).output.0,
+            Leaf::Bloom(leaf, p) => {
+                if leaf.commit_mode().is_hiding() {
+                    leaf.prove_epoch_public_zero(t, &bloom_empty(p), &[]).output.0
+                } else {
+                    leaf.prove_epoch_at(t, &bloom_empty(p), &[]).output.0
+                }
+            }
         }
     }
 
@@ -282,7 +285,7 @@ impl Leaf {
             Leaf::Hll(l, _, _) => l.commit_mode().is_hiding(),
             Leaf::Ss(l, _) => l.commit_mode().is_hiding(),
             Leaf::Gk(l, _) => l.commit_mode().is_hiding(),
-            Leaf::Bloom(..) => false,
+            Leaf::Bloom(l, _) => l.commit_mode().is_hiding(),
         };
         if !hiding {
             return self.prove_noop(t);
@@ -310,7 +313,10 @@ impl Leaf {
                 let o = Openings::for_leaf(seed, CommitFamily::GreenwaldKhanna, t);
                 leaf.prove_epoch_commit(t, Gk2State::empty(*p), Vec::new(), &o).output.0
             }
-            Leaf::Bloom(..) => unreachable!("Bloom has no hiding variant"),
+            Leaf::Bloom(leaf, p) => {
+                let o = Openings::for_leaf(seed, CommitFamily::Bloom, t);
+                leaf.prove_epoch_commit(t, &bloom_empty(p), &[], &o).output.0
+            }
         }
     }
 }
@@ -385,20 +391,20 @@ struct Ctx {
     pcs: &'static str,
     binding: Binding,
     statement: Expose,
-    /// `ZKSKETCH_COMMIT` (Bloom rows are always `plain`, [`family_mode`]).
+    /// `ZKSKETCH_COMMIT` (every family's leaf is built in it).
     mode: CommitMode,
     is_zk: usize,
 }
 
 impl Ctx {
-    /// The leading columns of family `fam`'s rows.
-    fn prefix(&self, fam: &str) -> Vec<String> {
+    /// The leading columns of every row.
+    fn prefix(&self) -> Vec<String> {
         vec![
             self.commit.clone(),
             self.pcs.into(),
             format!("{:?}", self.binding).to_lowercase(),
             format!("{:?}", self.statement).to_lowercase(),
-            mode_name(family_mode(fam, self.mode)).into(),
+            mode_name(self.mode).into(),
         ]
     }
 }
@@ -453,7 +459,7 @@ fn write_family(ctx: &Ctx, probes: &[Probe]) {
             }
             min_headroom = min_headroom.min(t.headroom_hiding());
             let (lq0, lq1) = t.lq.map_or(("-".into(), "-".into()), |(a, b)| (a.to_string(), b.to_string()));
-            let mut row = ctx.prefix(&p.fam);
+            let mut row = ctx.prefix();
             row.extend([
                 p.fam.clone(),
                 variant.into(),
@@ -486,7 +492,7 @@ fn write_family(ctx: &Ctx, probes: &[Probe]) {
             .copied()
             .max_by_key(|t| t.rows)
             .expect("a circuit has tables");
-        let mut row = ctx.prefix(&p.fam);
+        let mut row = ctx.prefix();
         row.extend([
             p.fam.clone(),
             variant.into(),
@@ -520,7 +526,7 @@ fn print_probe(ctx: &Ctx, p: &Probe) {
     println!(
         "E0 fam={} commit_mode={} level={} m={} [{}] max_log_h={} ({}) fill={:.3} sum_padded={} fits_hiding(<=2^{} if lq<={})={} fits_nonhiding(<=2^{})={} consistent={} probe_s={:.1} hwm_mb={:.0} check={}",
         p.fam,
-        mode_name(family_mode(&p.fam, ctx.mode)),
+        mode_name(ctx.mode),
         p.level,
         p.m,
         p.geometry,
@@ -696,7 +702,7 @@ fn cost_row(ctx: &Ctx, fam: &str, circuit: &str, geometry: &str, m: usize, build
         max_db = db;
         out
     });
-    let mut row = ctx.prefix(fam);
+    let mut row = ctx.prefix();
     row.extend([
         fam.into(),
         circuit.into(),
@@ -712,7 +718,7 @@ fn cost_row(ctx: &Ctx, fam: &str, circuit: &str, geometry: &str, m: usize, build
     ]);
     println!(
         "E0C pcs={} commit_mode={} fam={fam} circuit={circuit} [{geometry}] m={m} build_s={build_s:.1} prove_ms={:.0} peak_rss_mb={:.0} proof_bytes={} max_degree_bits={max_db}",
-        ctx.pcs, mode_name(family_mode(fam, ctx.mode)), agg.prove_ms_median, agg.peak_rss_mb_median, agg.proof_size_bytes
+        ctx.pcs, mode_name(ctx.mode), agg.prove_ms_median, agg.peak_rss_mb_median, agg.proof_size_bytes
     );
     metrics::append_csv(&results_dir(), "e0_cost", &header(COST_HEADER), &row);
 }
@@ -779,7 +785,7 @@ fn main() {
         is_zk,
     };
     println!(
-        "E0 commit={} pcs={} binding={:?} statement={:?} commit_mode={} (bloom: plain) families={fams:?} m={ms:?}",
+        "E0 commit={} pcs={} binding={:?} statement={:?} commit_mode={} families={fams:?} m={ms:?}",
         ctx.commit,
         ctx.pcs,
         ctx.binding,

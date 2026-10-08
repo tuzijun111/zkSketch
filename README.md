@@ -566,6 +566,7 @@ cargo run --release --example hll_chain_n          # HLL chain sweep
 cargo test --release                       # plonky3: 524 lib unit tests (+66 #[ignore]d) + tests/ integration
 cargo test --release --lib dataset::       # one module
 cargo test --release --test two_leaf_hll   # one integration suite
+cargo test --release --test staged_queries # procs: staged-wave engine + bound queries, both commit modes
 (cd plonky2 && cargo test --release)       # plonky2 backend (nightly auto)
 ```
 

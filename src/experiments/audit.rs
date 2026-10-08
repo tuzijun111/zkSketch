@@ -11,6 +11,9 @@
 //! and the auditor compares commitment values without ever opening one. A
 //! source-level test (`tests::auditor_source_names_no_prover_secret`) keeps
 //! the prover-side seed types and randomizer derivations out of this file.
+//! That includes the query side (Property 3): [`QueryAudit`] (decode and
+//! prefix VKs from public parameters, prefix certificates tiled against the
+//! log) and [`ContextStore`] (the certificates the procs workers shipped).
 //!
 //! The one commitment the auditor recomputes is the genesis anchor
 //! `Com(S_0)`: `S_0` is the public empty sketch and its randomizer is the
@@ -20,6 +23,8 @@
 //! verify, like the VK derivation: a one-time, per-deployment check).
 //! `Com(S_T)` and every `Com(B_t)` are taken from the published log.
 
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{BuildHasher, RandomState};
 use std::time::Instant;
 
 use p3_circuit_prover::BatchStarkProof;
@@ -28,19 +33,27 @@ use p3_recursion::RecursionOutput;
 use crate::commitment::countmin::commit_countmin_with;
 use crate::commitment::hiding::{CommitMode, SaltBb, SaltGl};
 use crate::config::Val;
-use crate::decode::{check_query_statement, DecodeProof, QueryStatement};
+use crate::decode::bloom::bloom_decode_vk_commit;
+use crate::decode::countmin::{cm_decode_vk_commit, CmDecodeParams};
+use crate::decode::gk_bandmerge::{gk2_decode_vk_commit, Gkb2DecodeParams};
+use crate::decode::hyperloglog::{hll_omc_decode_vk_commit, HllDecodeParams};
+use crate::decode::spacesaving::{ss_decode_vk_commit, SsDecodeParams};
+use crate::decode::{check_query_statement, DecodeProof, DecodeVk, QueryStatement, ReleasePolicy};
 use crate::recursion::recursive::config::ConfigWithFriParams;
+use crate::recursion::recursive::config::D as EXT_D;
 use crate::recursion::recursive::config_gl::ConfigWithFriParamsGl;
 use crate::recursion::recursive::expose_forest::{
     check_leaves_against_log, check_root_against_log, read_exposed_statement, verify_bound_proof,
     verify_bound_proof_against_log, verify_bound_proof_self_pinned_legacy,
     verify_bound_stark_proof_against_log, verify_bound_stark_proof_pinned,
-    verify_leaves_against_log, vk_pin_values,
+    verify_leaves_against_log, vk_pin_values, PrefixAuditor,
 };
 use crate::recursion::recursive::root_vk::{
     exp_root_vk, warn_self_pinned_legacy, ExpRootVk, ForestShape, RootVk,
 };
-use crate::recursion::recursive::statement::{BatchLog, Expose};
+use crate::recursion::recursive::statement::{
+    check_prefix_statements, composition_expose, hash_bb, BatchLog, Expose, Statement,
+};
 use crate::sketch::bind::{default_binding, Binding};
 use crate::sketch::gk_bandmerge::{commit_gk2_state_with, Gk2State, GkbParams};
 use crate::sketch::hll_omc::{commit_hll_omc_with, hll_omc_empty};
@@ -51,7 +64,7 @@ use super::dist_compose::{
     dist_tree_shape, resolve_root_vk, resolve_trusted_vk,
 };
 use super::families::cm_empty;
-use super::stream_compose::{StreamFamily, StreamMode, StreamShape};
+use super::stream_compose::{QueryArt, StreamFamily, StreamMode, StreamShape};
 
 type Proof = BatchStarkProof<ConfigWithFriParams>;
 type ProofGl = BatchStarkProof<ConfigWithFriParamsGl>;
@@ -470,6 +483,282 @@ pub fn check_query_exposure(
             assert_eq!(pv[8], Val::from_u64(dp.answer), "hll query proof at t'={at_leaf}: exposed answer");
             assert!(pv[9..].iter().all(|v| *v == Val::ZERO), "hll answer must be a base element");
         }
+    }
+}
+
+// ─── Query binding (Property 3) ─────────────────────────────────────────────
+//
+// The auditor of the mixed workload: decode VKs and prefix VKs derived from
+// public parameters, prefix certificates verified and tiled against the log
+// the auditor holds (the prover-published one under `Hiding`).
+
+/// The outcome of binding one answer to the certified history.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct QueryBind {
+    /// Interval proofs in the answer's prefix certificate.
+    pub(crate) ctx_proofs: u64,
+    /// Stateless verifier cost: Σ pinned verify time of those proofs + the
+    /// statement checks against the log.
+    pub(crate) ms: f64,
+}
+
+/// Where one part of a prefix certificate lives: an in-memory proof (the
+/// single-process engine) or the serialized bytes a worker shipped (procs).
+pub(crate) enum CtxProof<'a> {
+    Proof(&'a Proof),
+    Bytes(&'a [u8]),
+}
+
+/// One part of a prefix certificate: the interval `[lo, hi]` it covers, the
+/// bracketing it was folded under, and the proof.
+pub(crate) type CtxPart<'a> = (u64, u64, ForestShape, CtxProof<'a>);
+
+/// The verifier side of the mixed workload (Property 3): the trusted VK of
+/// the family's query circuit and a [`PrefixAuditor`] (trusted VKs per
+/// bracketing), all derived from public parameters (the family, its shape,
+/// the batch size and the commitment MODE, which is public because the
+/// hiding leaf and decoder circuits differ from the plain ones; never the
+/// prover's seed). Every query proof is pinned to the decode VK of that mode
+/// (`stream_compose::record_query`), and its exposed `Com(S)` must equal the `Com(S_{t'})`
+/// certified by the interval proofs live at its version ([`Self::bind`]):
+/// the forest's peaks, the chain's current fold, or the per-batch leaves,
+/// tiled against the batch log the auditor holds (under `Hiding`, the
+/// salted log the prover published; it never recomputes a salted
+/// commitment).
+///
+/// Each distinct interval proof is verified once and its time memoised: a
+/// stateless verifier answering one query pays the sum over that query's
+/// certificate, which is what [`QueryBind::ms`] reports, without the harness
+/// re-verifying a peak that several queries share. The memo is keyed by the
+/// interval, its bracketing AND a fingerprint of the proof bytes, so a
+/// different proof offered later for an interval already seen is verified
+/// on its own (never served the earlier proof's statement). The query-side
+/// auditor lives in this file so that the source-level isolation test
+/// (`tests::auditor_source_names_no_prover_secret`) covers it.
+pub(crate) struct QueryAudit {
+    pub(crate) decode_vk: DecodeVk,
+    prefix: PrefixAuditor,
+    /// `Com(S_0)` recomputed from public parameters (the empty sketch under
+    /// the public zero randomizer, [`genesis_commit_bb`]): the
+    /// one commitment this auditor computes itself. Every log it binds
+    /// against must open with it.
+    genesis: [Val; 8],
+    /// Verified parts: `(lo, hi, bracketing, proof fingerprint)` to the
+    /// verify time and the statement read off the proof.
+    memo: HashMap<(u64, u64, ForestShape, u64), (f64, Statement<Val>)>,
+    /// Per-auditor random SipHash key of the proof fingerprints, so a prover
+    /// cannot aim a different proof at the fingerprint of a verified one.
+    /// (Even a collision would only serve a statement that WAS verified for
+    /// that interval and bracketing.)
+    fingerprint: RandomState,
+}
+
+impl QueryAudit {
+    /// The family's auditor, or `None` under the legacy opt-ins that cannot
+    /// bind an answer (`ZKSKETCH_BINDING=legacy`: the decoders expose
+    /// nothing; `ZKSKETCH_STATEMENT=boundary`: no interval to tile;
+    /// `EXP_ROOT_VK=self`: no trusted VKs), with a loud warning.
+    /// `commit_mode` selects the decode and leaf circuits whose VKs are
+    /// derived (each from the empty state / the no-op leaf with the public
+    /// zero salt; a salt is a witness, so the VK pins every proof of the
+    /// mode).
+    pub(crate) fn new(
+        family: StreamFamily,
+        shape: &StreamShape,
+        m: usize,
+        commit_mode: CommitMode,
+    ) -> Option<Self> {
+        let why = if default_binding() == Binding::Legacy {
+            Some("ZKSKETCH_BINDING=legacy (the decoders expose no statement)")
+        } else if composition_expose() != Expose::Interval {
+            Some("ZKSKETCH_STATEMENT=boundary (no interval statement to tile [1, t'])")
+        } else if exp_root_vk() == ExpRootVk::SelfPinnedLegacy {
+            Some("EXP_ROOT_VK=self (no VK derived from public parameters)")
+        } else if family.is_gl() {
+            Some("a Goldilocks family (no query path)")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            eprintln!(
+                "\n!!! WARNING: query answers are NOT bound to the certified history under {why}:\n\
+                 !!!   no prefix certificate is verified; query_bind_ms is reported as 'unbound'.\n"
+            );
+            return None;
+        }
+        let id = ReleasePolicy::Identity;
+        let decode_vk = match family {
+            StreamFamily::CmOmc => cm_decode_vk_commit(
+                CmDecodeParams { d: shape.d, w: shape.w, release: id },
+                default_binding(),
+                commit_mode,
+            ),
+            StreamFamily::HllOmc => hll_omc_decode_vk_commit(
+                HllDecodeParams { b: shape.b, release: id },
+                default_binding(),
+                commit_mode,
+            ),
+            StreamFamily::SsCertified => ss_decode_vk_commit(
+                SsDecodeParams { capacity: shape.capacity, c: 1, release: id },
+                default_binding(),
+                commit_mode,
+            ),
+            StreamFamily::GkBandmerge2 => gk2_decode_vk_commit(
+                Gkb2DecodeParams { capacity: shape.capacity, release: id },
+                default_binding(),
+                commit_mode,
+            ),
+            // The membership circuit has one (bound) construction; it does
+            // not depend on the binding, nor on the batch size.
+            StreamFamily::BloomOmc => bloom_decode_vk_commit(shape.bloom_params(m), commit_mode),
+            _ => unreachable!("Goldilocks families are rejected above"),
+        };
+        let noop = super::dist_compose::prove_noop_leaf(family, shape, m, commit_mode);
+        let genesis = genesis_commit_bb(&PublicParams { family, shape: *shape, m, commit_mode });
+        Some(Self {
+            decode_vk,
+            prefix: PrefixAuditor::new(noop),
+            genesis,
+            memo: HashMap::new(),
+            fingerprint: RandomState::new(),
+        })
+    }
+
+    /// Fingerprint of a part's proof bytes (an in-memory proof is serialized
+    /// exactly as a worker ships it).
+    fn fingerprint(&self, src: &CtxProof<'_>) -> Result<u64, String> {
+        Ok(match src {
+            CtxProof::Bytes(b) => self.fingerprint.hash_one(b),
+            CtxProof::Proof(p) => {
+                let b = postcard::to_allocvec(*p).map_err(|e| format!("serialize: {e}"))?;
+                self.fingerprint.hash_one(b.as_slice())
+            }
+        })
+    }
+
+    /// Bind query `q` (its version `q.at_leaf`) to the certified history with
+    /// the prefix certificate `parts`: verify each part under the trusted VK
+    /// of its bracketing (memoised per proof, so only an identical proof of
+    /// the same interval reuses an earlier verification; the one-time VK
+    /// derivation and the fingerprint are outside the timing), check that
+    /// `log` opens with the genesis anchor recomputed from public parameters
+    /// and that the statements tile `[1, t']` against it, and require the
+    /// query proof's exposed `Com(S)` to equal the certified `Com(S_{t'})`.
+    /// Fails closed.
+    pub(crate) fn bind(
+        &mut self,
+        q: &mut QueryArt,
+        parts: &[CtxPart<'_>],
+        log: &BatchLog<Val>,
+    ) -> Result<(), String> {
+        let stmt = q.statement.ok_or("the query proof exposes no statement")?;
+        let mut ms = 0.0f64;
+        let mut stmts: Vec<Statement<Val>> = Vec::with_capacity(parts.len());
+        for (k, (lo, hi, shape, src)) in parts.iter().enumerate() {
+            let fp =
+                self.fingerprint(src).map_err(|e| format!("part {} [{lo}, {hi}]: {e}", k + 1))?;
+            let key = (*lo, *hi, shape.clone(), fp);
+            if !self.memo.contains_key(&key) {
+                self.prefix.vk(shape);
+                let t0 = std::time::Instant::now();
+                let owned: Proof;
+                let proof = match src {
+                    CtxProof::Proof(p) => *p,
+                    CtxProof::Bytes(b) => {
+                        owned = postcard::from_bytes(b)
+                            .map_err(|e| format!("part {} [{lo}, {hi}]: decode: {e}", k + 1))?;
+                        &owned
+                    }
+                };
+                let st = self
+                    .prefix
+                    .verify_interval(proof, shape)
+                    .map_err(|e| format!("part {} [{lo}, {hi}]: {e}", k + 1))?;
+                self.memo.insert(key.clone(), (t0.elapsed().as_secs_f64() * 1000.0, st));
+            }
+            let (part_ms, st) = &self.memo[&key];
+            ms += part_ms;
+            stmts.push(st.clone());
+        }
+        let t0 = std::time::Instant::now();
+        if log.init[..] != self.genesis[..] {
+            return Err("log Com(S_0) != the genesis anchor recomputed from public parameters".into());
+        }
+        let refs: Vec<(&Statement<Val>, &ForestShape)> =
+            stmts.iter().zip(parts.iter().map(|(_, _, sh, _)| sh)).collect();
+        let certified = check_prefix_statements(&refs, log, q.at_leaf, &hash_bb, EXT_D)?;
+        if certified != stmt.commit.to_vec() {
+            return Err(format!(
+                "the query proof's Com(S) is not the certified Com(S_{}) of the history",
+                q.at_leaf
+            ));
+        }
+        ms += t0.elapsed().as_secs_f64() * 1000.0;
+        q.bind = Some(QueryBind { ctx_proofs: parts.len() as u64, ms });
+        Ok(())
+    }
+}
+
+/// The procs engine's prefix certificates, assembled by the coordinator from
+/// what the workers shipped: per query version `g`, the parts `(lo, hi,
+/// bracketing)` in order, and each distinct part's serialized proof.
+#[derive(Default)]
+pub(crate) struct ContextStore {
+    pub(crate) parts: BTreeMap<usize, Vec<(u64, u64, ForestShape)>>,
+    bytes: HashMap<(u64, u64, ForestShape), Vec<u8>>,
+}
+
+impl ContextStore {
+    /// Store the proof of one interval (a worker ships each peak once).
+    /// Rejects a second, different proof for the same interval.
+    pub(crate) fn insert(
+        &mut self,
+        key: (u64, u64, ForestShape),
+        bytes: Vec<u8>,
+    ) -> Result<(), String> {
+        match self.bytes.get(&key) {
+            Some(old) if *old != bytes => {
+                Err(format!("two different proofs shipped for interval [{}, {}]", key.0, key.1))
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.bytes.insert(key, bytes);
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn has(&self, key: &(u64, u64, ForestShape)) -> bool {
+        self.bytes.contains_key(key)
+    }
+
+    /// Bind every query in `arts` with its stored certificate.
+    pub(crate) fn bind_all(
+        &self,
+        audit: &mut QueryAudit,
+        arts: &mut [QueryArt],
+        log: &BatchLog<Val>,
+    ) -> Result<(), String> {
+        for q in arts.iter_mut() {
+            let list = self
+                .parts
+                .get(&q.at_leaf)
+                .ok_or_else(|| format!("no prefix certificate shipped for t'={}", q.at_leaf))?;
+            let parts: Vec<CtxPart<'_>> = list
+                .iter()
+                .map(|(lo, hi, sh)| {
+                    let b = self
+                        .bytes
+                        .get(&(*lo, *hi, sh.clone()))
+                        .ok_or_else(|| format!("interval [{lo}, {hi}] was never shipped"))?;
+                    Ok((*lo, *hi, sh.clone(), CtxProof::Bytes(b.as_slice())))
+                })
+                .collect::<Result<_, String>>()?;
+            audit
+                .bind(q, &parts, log)
+                .map_err(|e| format!("query at t'={}: {e}", q.at_leaf))?;
+        }
+        Ok(())
     }
 }
 
