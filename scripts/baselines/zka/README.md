@@ -21,8 +21,8 @@ Scripts run from any directory; `common.sh` resolves locations.
 | `RESULTS` | `results/` next to the scripts | where CSVs and logs are written |
 | `CM_TOPK_SLOTS` | per script | zk-Analytics top-k heap slots, a build-time constant |
 
-`ourcm/` and `zksq/` build against the zkSketch checkout they sit in, so a
-worktree measures its own sources.
+`ourcm/`, `zksq/` and `ss_mg/` build against the zkSketch checkout they sit in,
+so a worktree measures its own sources.
 
 | Script | Proves | Writes to `$RESULTS` | Measures |
 |---|---|---|---|
@@ -36,6 +36,7 @@ worktree measures its own sources.
 | `rss_watch.sh` | no | stdout | wraps a command and reports r0vm peak RSS |
 | `shipped_exec.sh` | no | `zka_shipped_exec.csv`, `zka_shipped_exec.log` | their three shipped epoch summaries on real AOL epochs, executor only (see below) |
 | `sketch_exec.sh` | no (`--prove`: yes) | `zka_{hll,ss,gk}_*.csv` / `.log`, `zka_sketch_exec.log` | OUR HLL, SpaceSaving and GK guests (†) in their architecture; builds and regenerates all executor CSVs (see "Sketch-family guests") |
+| `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -49,9 +50,10 @@ Don't run them next to another job of yours.
   guest ELF, and a shared target dir let a T=1 build relink binaries another
   script expected at T=100. Its path dependencies go through `.zka`, an
   untracked symlink to the clone that `common.sh` creates.
-- Other build locations: `build/ourcm`, `build/zksq` and `build/shaccel` under
-  `$BASELINE_DIR`; `nb-target-<T>` (`accuracy.sh native`) and `zka/target`
-  (`a234.sh`, `compare.sh`) inside the clone's directory. `compare.sh` S1/S2 and
+- Other build locations: `build/ourcm`, `build/zksq`, `build/shaccel` and
+  `build/zka-ss-mg` under `$BASELINE_DIR`; `nb-target-<T>` (`accuracy.sh
+  native`) and `zka/target` (`a234.sh`, `compare.sh`) inside the clone's
+  directory. `compare.sh` S1/S2 and
   `our_query.sh` Q1 build zkSketch's `exp_compose` in this checkout's `target/`.
 - `sha2-risc0-accel.patch` is the complete accelerator change: the root
   `[patch.crates-io]`, the `=0.10.6` pins in `aggregator/core` and
@@ -591,3 +593,252 @@ with the stored state that the guest re-hashes and merges:
   - ELF md5s and image IDs depend on the absolute source path (panic strings);
     cycle counts do not.
   - `exec_s` is wall-clock on a shared box and is not a metric.
+
+## zkSketch's SpaceSaving batch rule as a RISC Zero guest (`ss_mg`, ours †): executor only
+
+`ss_mg/` runs, as a RISC Zero guest, **exactly the batch transition that
+zkSketch's SS leaf circuit certifies** (`src/sketch/ss_final_full.rs`
+`apply_batch_ss_full`). That transition is mergeable Misra-Gries with top-s
+retention, on the records, batches and state representation of zkSketch's
+harness. One guest run is one zkSketch SS leaf:
+
+- input: S_old and the epoch's m raw keys;
+- journal: Com_old || Com_batch || Com_new.
+
+So the comparison is between two ways of handling the same batch transition
+(same rule, records and state layout): zkSketch's AIR circuit certifies it,
+and this guest executes it in a zkVM (executor only here; prove time
+MODELED). It is not a comparison of two algorithms, but the two statements are
+not identical either: hash, compute-vs-verify and in-guest key mapping differ
+(see "Statement differences" under Caveats).
+
+The SpaceSaving port above (`spacesaving/`, `zka_ss_exec.csv`) is a different
+baseline and stays unchanged: textbook per-record SpaceSaving inside
+zk-Analytics' full aggregation pipeline, merged at query time by
+sum-and-truncate. Never mix the two in one table.
+`ss_mg/README.md` has the full detail.
+
+**Nothing here was proved.** Every prove time is MODELED = segments x 30.1 s
+(envelope x 29.73 to x 30.79), the model of the sections above.
+
+### What is zkSketch's, ours and upstream
+
+| item | source |
+|---|---|
+| batch rule, tie-break, tau, dummy handling, state layout and order | zkSketch: `ss_final_full.rs` `build_ss` (:481), `group_by_key` (:408), `compress_from_gsorted` (:452), `apply_batch_ss_full` (:575); re-implemented, and every run is checked against the native function |
+| key mapping (29-bit mask, low bit forced to 1, `u32::MAX` gives the dummy) | zkSketch `ss_updates_of` (`src/experiments/stream_compose.rs:535`) |
+| epoch slicing, Uniform stream | zkSketch `examples/exp_compose.rs` `batches_from` (:206) and `load_base` (:192, seed 1) |
+| plain-Rust transition (`ss-mg-core`, radix and std sorts), the two guests, cycle probes, host driver, equivalence checks, runner | ours |
+| unsalted SHA-256 commitments through risc0's accelerated `sha::rust_crypto` | zk-Analytics' style. **No zk-Analytics code is used**: no `Event` batches, no batch chain, no epoch chain, no Merkle root. zkSketch's leaf statement has none of them |
+
+### Exact configuration
+
+- **Batches.** m = 16,384 records per epoch: epoch e is keys `[e*m, (e+1)*m)`.
+- **Datasets.**
+  - AOL: `data/aol.keys`, md5 `01dd7d5c8a73`.
+  - Uniform: `synthetic_stream(Uniform, 2^20, seed 1)`, the
+    `EXP_DATASET=uniform` stream of `exp_compose`. This is not the frozen
+    `data/uniform.keys`.
+  - No record equals `u32::MAX` (`pad_records` = 0 on every row).
+- **Capacities.** s = 16,384 (deployed) and 1,024. The state starts from
+  `SsFullState::empty`. The AOL epoch-63 rows carry S_63 computed natively from
+  epochs 0..62, with `ss-mg-core` checked against zkSketch on every one of them.
+- **Guests.**
+  - `ss_mg` (headline) reads its input with `env::read_slice`.
+  - `ss_mg_serde` (sensitivity) reads the same data through risc0 serde
+    (`env::read`), the way the zka guests read.
+  - Either can use the radix sort (headline) or core's `sort_unstable` with
+    `select_nth_unstable` (sensitivity).
+  - ELF md5s: `ss_mg` `87153a58…`, image `271123b7…`; `ss_mg_serde`
+    `ccdc2adc…`, image `512c7d48…`.
+- **Toolchain.** Guest risc0-zkvm 3.0.5; host 3.0.6; executor r0vm 3.0.6 on
+  CPU, through `default_executor()`.
+- **Native reference.** The zksketch crate of this checkout
+  (`7089f70`, `native_reference_dirty_files=0` in the log), by path.
+- **Probes.** `env::cycle_count()` probes split the user cycles of every run
+  into phases. `post_cycles` is defined as user cycles minus the last mark, so
+  `pre_main` + the phase deltas + `post` equals the user cycles by
+  construction; that sum checks nothing. The check (`probes_ok`; the driver
+  exits 1 otherwise) is that the marks increase and that `pre_main` and `post`
+  both stay under 10,000 cycles. That holds only if `env::cycle_count()` counts
+  the same session-wide user cycles as the executor. On all 306 rows
+  `pre_main` = 360 and `post` = 2,632-2,633 (the host-only write). Setting
+  the bound to 2,000 made the driver fail as expected (tried by hand, then
+  reverted).
+- **Cycle columns.** `user_cycles` are executed guest cycles. `padded_cycles`
+  is the sum of 2^po2 over segments, what the prover pays (same name as in
+  `zka_ss_exec.csv`). `overhead_cycles` = padded - user: paging plus the
+  per-segment reserve and po2 padding. The runner also records r0vm's own
+  session summary (`RISC0_INFO=1`) as `r0vm_paging_cycles` and
+  `r0vm_reserved_cycles` and checks, on every row, that r0vm's user and
+  total cycles equal `user_cycles` and `padded_cycles` and that
+  user + paging + reserved = total.
+- **Run record.** `ss_mg/ss_mg_exec.sh`, about 1 minute per run. It was run
+  five times on 2026-10-08; `results/zka_ss_mg_exec.log` holds runs 4 and 5.
+  - Runs 1-3 were development runs, and their log records were deleted.
+    - Run 1 used 8-epoch chains.
+    - Run 2 exited 1 because of a runner bug: `cargo test` got `--release`
+      after `--`. No check failed.
+    - Run 3's CSVs were kept as `*.prev` until run 5. They matched run 4's in
+      every column but `exec_s`.
+  - Run 4 (23:15) used the earlier column set. It had no overhead, probe or
+    r0vm columns, and named `padded_cycles` and `transition_pct_user`
+    `total_cycles` and `transition_pct`.
+  - Run 5 (23:35) wrote the current CSVs. On all 306 rows it matches run 4 in
+    all 46 columns the two runs share, `exec_s` excepted.
+
+### Equivalence (`zka_ss_mg_equiv.csv`, 288 guest runs, all passing)
+
+Every guest run is checked against zkSketch's native code, and any mismatch
+exits 1 before a row is written:
+- S_new, row by row and field by field (key, count, active), against
+  `apply_batch_ss_full`;
+- the journal against `ss-mg-core` run natively;
+- all three commitments against SHA-256 of zkSketch's native S_e,
+  `ss_updates_of(batch)` and S_{e+1}.
+
+Two bookkeeping checks also run on every row:
+- the cycle-mark bounds (`probes_ok`);
+- in the runner, r0vm's own session summary against the row's cycle counts.
+
+Both are described under "Exact configuration".
+
+The guest-chained runs feed each epoch the previous guest's output, and check
+Com_old(e) against Com_new(e-1):
+- radix sort: all 64 epochs, i.e. the whole 2^20-record stream;
+- std sort: 8 epochs;
+- each for AOL and Uniform, at both s.
+
+Eviction (tau > 0) is exercised:
+- AOL: 33 of 64 epochs at s = 16,384, all 64 at s = 1,024;
+- Uniform: 42 of 64 epochs at s = 16,384, all 64 at s = 1,024.
+
+Unit tests compare both sorts with `apply_batch_ss_full` on 1,200 random
+24-epoch chains of small shapes (ties at the cut, pads, mask aliases). A
+by-hand mutation check (off-by-one tau, reversed tie order) was caught by them.
+
+### Results (executor; MODELED = segments x 30.1 s, NOT measured)
+
+Headline guest (`ss_mg`, radix). The phase split covers **user cycles
+only**:
+- "Ingest + commit" is read + Com_old + key mapping + Com_batch + Com_new +
+  journal.
+- The remaining 2,993 user cycles fall before `main` and after the last probe.
+- "Overhead" (padded - user) is paging plus the per-segment reserve and po2
+  padding. It is not in any phase, yet it is 27-34% of the padded cycles that
+  set the segment count, and so the MODELED seconds.
+
+| dataset, epoch | s | S_old active | union keys | tau | S_new active | user cycles | padded cycles (sum 2^po2) | overhead (paging + reserved) | segments | MODELED prove | ingest + commit | transition | transition, % of user | transition, % of padded |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| AOL, 0 | 16,384 | 0 | 8,433 | 0 | 8,433 | 5,240,072 | 7,602,176 | 2,362,104 (2,034,292 + 327,812) | 8 | 240.8 s | 2,399,680 | 2,837,399 | 54.1% | 37.3% |
+| AOL, 63 | 16,384 | 8,061 | 15,062 | 0 | 15,062 | 7,048,931 | 10,485,760 | 3,436,829 (2,781,128 + 655,701) | 10 | 301.0 s | 2,399,680 | 4,646,258 | 65.9% | 44.3% |
+| Uniform, 0 | 16,384 | 0 | 16,384 | 0 | 16,384 | 5,554,676 | 8,388,608 | 2,833,932 (2,142,946 + 690,986) | 8 | 240.8 s | 2,399,680 | 3,152,003 | 56.7% | 37.6% |
+| AOL, 0 | 1,024 | 0 | 8,433 | 3 | 626 | 3,591,132 | 5,242,880 | 1,651,748 (1,192,116 + 459,632) | 5 | 150.5 s | 1,104,274 | 2,483,865 | 69.2% | 47.4% |
+| AOL, 63 | 1,024 | 802 | 9,450 | 3 | 1,002 | 4,005,449 | 5,505,024 | 1,499,575 (1,219,347 + 280,228) | 6 | 180.6 s | 1,104,274 | 2,898,182 | 72.4% | 52.6% |
+| Uniform, 0 | 1,024 | 0 | 16,384 | 1 | 0 | 3,704,270 | 5,242,880 | 1,538,610 (1,192,734 + 345,876) | 5 | 150.5 s | 1,104,274 | 2,597,003 | 70.1% | 49.5% |
+
+Ingest and commit phases (user cycles; identical on every row with the same s):
+
+| s | read | Com_old | map | Com_batch | Com_new | journal |
+|---|---|---|---|---|---|---|
+| 16,384 | 30,620 | 680,116 | 327,847 | 680,044 | 680,103 | 950 |
+| 1,024 | 8,060 | 43,693 | 327,847 | 680,044 | 43,680 | 950 |
+
+Each commitment costs about 166 cycles per 64-byte SHA-256 block. A state row
+is 16 bytes, so Com_old and Com_new grow with s; Com_batch hashes 16,384
+records of 16 bytes at both s.
+
+These are user cycles. Paging is not counted in any phase. A segment pays to
+page in every page it touches and to page out every page it writes, whichever
+phase touches them. For example, the read's 30,620 user cycles leave out the
+paging of the 320 KB its input lands in (s = 16,384), and later segments pay to
+page those buffers in again. The IPC executor reports paging per session only
+(the overhead column above), so paging per phase was not measured.
+
+Whole stream (the 64-epoch guest chains, sequential, one proof per epoch):
+
+| dataset, s | segments per epoch (mean, range) | segments over 64 epochs | MODELED over 64 epochs |
+|---|---|---|---|
+| AOL, 16,384 | 10.7 (8-12) | 685 | 20,619 s (5.7 h) |
+| AOL, 1,024 | 5.8 (5-6) | 373 | 11,227 s (3.1 h) |
+| Uniform, 16,384 | 9.3 (8-12) | 596 | 17,940 s (5.0 h) |
+| Uniform, 1,024 | 5.3 (5-6) | 342 | 10,294 s (2.9 h) |
+
+Sensitivity (user cycles / segments / MODELED):
+
+| row | `ss_mg`, radix (headline) | `ss_mg`, std sort | `ss_mg_serde`, radix |
+|---|---|---|---|
+| AOL 0, s = 16,384 | 5,240,072 / 8 / 241 s | 8,587,142 / 11 / 331 s | 17,498,422 / 20 / 602 s |
+| AOL 63, s = 16,384 | 7,048,931 / 10 / 301 s | 12,646,956 / 15 / 452 s | 19,307,281 / 22 / 662 s |
+| Uniform 0, s = 16,384 | 5,554,676 / 8 / 241 s | 7,590,943 / 10 / 301 s | 17,813,026 / 20 / 602 s |
+| AOL 0, s = 1,024 | 3,591,132 / 5 / 151 s | 5,691,132 / 7 / 211 s | 6,656,042 / 8 / 241 s |
+| AOL 63, s = 1,024 | 4,005,449 / 6 / 181 s | 5,987,939 / 7 / 211 s | 7,070,359 / 9 / 271 s |
+| Uniform 0, s = 1,024 | 3,704,270 / 5 / 151 s | 6,162,109 / 8 / 241 s | 6,769,180 / 8 / 241 s |
+
+- **Std sort.** The transition alone costs 1.6-2.2x the radix transition.
+- **Serde read.** Reading through risc0 serde costs about 150 cycles per input
+  word (12.29M cycles at s = 16,384 and 3.07M at s = 1,024) against 30,620 and
+  8,060 with `env::read_slice`. That is the same per-word cost behind the 60.8M
+  `Event` read of the ports above.
+- **Context, not a comparison.** On the same AOL epoch 0 at s = 2^14,
+  `aggr_ss` above takes 124 segments; this guest takes 8. Most of the gap is
+  zk-Analytics' framework (`Event` deserialisation and batch-chain checks,
+  about 78.7M cycles), which zkSketch's leaf statement does not contain. The
+  two guests also compute different summaries.
+
+### Caveats
+
+- **No proved anchor for this guest.** Every second above is MODELED from the
+  four CM-guest CPU anchors. The three non-CM anchors (HLL, SS, GK) agreed with
+  the model within 2%, but this guest is not one of them.
+  - The whole-segment model overstates rows whose last segment is partial. The
+    lower bound, `padded_cycles / 2^20 x 30.1 s`, gives 218 s for AOL 0 at
+    s = 16,384 (240.8 s modeled) and 158 s for AOL 63 at s = 1,024 (180.6 s).
+    The other headline rows have only full segments.
+- **CPU-only r0vm 3.0.6 on this box** (AMD Threadripper PRO 9975WX, 32 cores /
+  64 threads). The GPU prover was not used.
+- **Cross-hardware.** The paper's zkSketch timing tables were measured on EPYC
+  machines. Cycles and segments do not depend on the hardware; seconds do. A
+  ratio of these MODELED seconds to EPYC-measured zkSketch seconds is a
+  cross-hardware ratio and must say so. Better: re-measure zkSketch's SS leaf
+  on this box, from a build with the pending soundness fixes, and state which
+  build each side uses.
+- **Cycles depend on the data.** There is no oblivious padding, as in every
+  zka guest. Across the 64 AOL epochs at s = 16,384 the guest takes 5.24M-8.45M
+  user cycles (8-12 segments).
+  - The measured epochs 0 and 63 both have tau = 0 at s = 16,384. Eviction
+    epochs cost more, so whole-stream claims should use the chain totals.
+  - Uniform data nearly empties the summary under Misra-Gries: almost every
+    count is 1, so tau >= 1 leaves 0-3 counters at s = 1,024. This is the
+    rule's semantics, not a bug.
+- **Implementation choices move the cost, and the headline is the cheapest we
+  built** (radix sort, `read_slice`). It is not proven cycle-optimal: a
+  hash-based grouping, or a merge that exploits S_old's existing (count, key)
+  order, might be cheaper. Neither was tried.
+- **Statement differences from zkSketch's leaf.**
+  - Commitments are SHA-256, not Poseidon2, and unsalted, so they do not hide
+    the state (as in zk-Analytics' code).
+  - The guest maps the raw keys itself (328K cycles, the `map` column).
+    zkSketch maps them natively and binds the mapped batch; Com_batch here
+    binds the same mapped layout.
+  - The guest computes S_new. zkSketch's circuit verifies it, with range
+    checks, sortedness and permutation arguments; the guest checks only that
+    its input is well formed.
+  - The guest binds S_old only through Com_old. Linking Com_old to the previous
+    epoch's Com_new is the verifier's job, as with zkSketch's per-leaf
+    boundaries.
+- **The phase split covers user cycles only.** Paging, the per-segment
+  reserve and po2 padding (27-34% of the padded cycles of the headline rows)
+  are not attributed to any phase. A phase's share of the prover's work can
+  therefore differ from its share of user cycles: the transition is 54-72% of
+  user cycles but 37-53% of padded cycles.
+- **The host-only stdout channel** (marks and S_new, for the equivalence
+  check) is included in the user cycles. It costs about 2,600 cycles per run.
+- **Host build.** The host `Cargo.lock` is the union of the SS port's and
+  zkSketch's. Where they disagreed, 19 crates were raised to the newer patch
+  version; no Plonky3 crate was among them. This touches only the native
+  reference build, not the guests.
+- **ELF md5s and image IDs** were built from this worktree's path. We expect
+  them to differ when built from another path, as for the other ports, with
+  the same cycle counts; this was not checked for this guest.
+- `exec_s` is wall-clock on a shared box and is not a metric.

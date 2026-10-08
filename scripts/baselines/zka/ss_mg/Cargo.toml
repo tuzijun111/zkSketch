@@ -1,0 +1,34 @@
+# zkSketch's SpaceSaving batch rule (mergeable Misra-Gries) as a RISC Zero guest,
+# for an executor-cycle comparison with zkSketch's SS leaf circuit (README.md).
+#
+# Host workspace: the driver binary, the shared no_std transition crate (core/)
+# and the RISC Zero methods crate (methods/). The guest crate under
+# methods/guests/ is its own cargo workspace with its own Cargo.lock (risc0-zkvm
+# 3.0.5, as zk-Analytics' guests). The driver path-depends on the zkSketch
+# checkout this directory sits in, for the native reference
+# (ss_final_full::apply_batch_ss_full, stream_compose::ss_updates_of,
+# dataset::synthetic_stream), as ../ourcm and ../zksq do. Cargo.lock is the
+# union of ../spacesaving/Cargo.lock (host risc0-zkvm 3.0.6) and the zkSketch
+# root Cargo.lock, resolved once by cargo (see README.md).
+[workspace]
+members = ["core", "methods"]
+exclude = ["methods/guests"]
+resolver = "2"
+
+[package]
+name = "zka-ss-mg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ss-mg-core = { path = "core" }
+ss-mg-methods = { path = "methods" }
+zksketch = { path = "../../../.." }   # the zkSketch checkout this directory lives in
+risc0-zkvm = "3"
+
+[[bin]]
+name = "ss_mg"
+path = "src/bin/ss_mg.rs"
+
+[profile.release]
+opt-level = 3
