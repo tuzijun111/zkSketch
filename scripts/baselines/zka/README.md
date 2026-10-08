@@ -21,8 +21,8 @@ Scripts run from any directory; `common.sh` resolves locations.
 | `RESULTS` | `results/` next to the scripts | where CSVs and logs are written |
 | `CM_TOPK_SLOTS` | per script | zk-Analytics top-k heap slots, a build-time constant |
 
-`ourcm/` and `zksq/` build against the zkSketch checkout they sit in, so a
-worktree measures its own sources.
+`ourcm/`, `zksq/` and `gk_bm2/` build against the zkSketch checkout they sit
+in, so a worktree measures its own sources.
 
 | Script | Proves | Writes to `$RESULTS` | Measures |
 |---|---|---|---|
@@ -36,6 +36,7 @@ worktree measures its own sources.
 | `rss_watch.sh` | no | stdout | wraps a command and reports r0vm peak RSS |
 | `shipped_exec.sh` | no | `zka_shipped_exec.csv`, `zka_shipped_exec.log` | their three shipped epoch summaries on real AOL epochs, executor only (see below) |
 | `sketch_exec.sh` | no (`--prove`: yes) | `zka_{hll,ss,gk}_*.csv` / `.log`, `zka_sketch_exec.log` | OUR HLL, SpaceSaving and GK guests (†) in their architecture; builds and regenerates all executor CSVs (see "Sketch-family guests") |
+| `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -49,9 +50,9 @@ Don't run them next to another job of yours.
   guest ELF, and a shared target dir let a T=1 build relink binaries another
   script expected at T=100. Its path dependencies go through `.zka`, an
   untracked symlink to the clone that `common.sh` creates.
-- Other build locations: `build/ourcm`, `build/zksq` and `build/shaccel` under
-  `$BASELINE_DIR`; `nb-target-<T>` (`accuracy.sh native`) and `zka/target`
-  (`a234.sh`, `compare.sh`) inside the clone's directory. `compare.sh` S1/S2 and
+- Other build locations: `build/ourcm`, `build/zksq`, `build/zka-gk-bm2` and
+  `build/shaccel` under `$BASELINE_DIR`; `nb-target-<T>` (`accuracy.sh native`)
+  and `zka/target` (`a234.sh`, `compare.sh`) inside the clone's directory. `compare.sh` S1/S2 and
   `our_query.sh` Q1 build zkSketch's `exp_compose` in this checkout's `target/`.
 - `sha2-risc0-accel.patch` is the complete accelerator change: the root
   `[patch.crates-io]`, the `=0.10.6` pins in `aggregator/core` and
@@ -591,3 +592,191 @@ with the stored state that the guest re-hashes and merges:
   - ELF md5s and image IDs depend on the absolute source path (panic strings);
     cycle counts do not.
   - `exec_s` is wall-clock on a shared box and is not a metric.
+
+## GK band-merge transition, matched semantics (`gk_bm2/`): executor only
+
+`gk/` (above) runs textbook GK (per-record INSERT / COMPRESS) inside zk-Analytics'
+pipeline. That is not the function zkSketch's GK circuit certifies. `gk_bm2/`
+executes **exactly zkSketch's batch transition** in a RISC Zero guest, one guest
+run per epoch:
+
+    S_t = apply_batch2(S_{t-1}, gk_vals_of(batch_t))
+    journal = Com_old ‖ Com_batch ‖ Com_new        (unsalted SHA-256, risc0-accelerated)
+
+`apply_batch2` is `src/sketch/gk_bandmerge.rs:1426`; `gk_vals_of` is
+`src/experiments/stream_compose.rs:550`. `gk_bm2/README.md` has the full detail:
+the statement, the port, every check and the phase profile. Nothing was proved.
+
+### Method
+
+- **Guest (`gk_bm2_step`).**
+  - Reads the old state and the epoch's m raw u32 keys with `env::read_slice`.
+  - Commits the old state and the raw batch.
+  - Maps the keys with `gk_vals_of`: drop `PAD_KEY` slots, mask to 21 bits.
+  - Runs the transition.
+  - Commits the new state, and journals the three 32-byte commitments.
+  - `env::cycle_count()` probes split ingest + commit from the transition, in
+    user cycles. They go to the guest's private stdout, never to the journal.
+- **Four implementations of the one function** (an input word selects one):
+  - `literal`: zkSketch's code statement for statement. It uses the fixed
+    `capacity + m` table, all 15 fuse rounds over every row, a comparison sort
+    for the union, and a fresh table plus a stable `(e, t)` re-sort after each
+    round.
+  - `literal_reuse`: the same, with the per-round tables allocated once (risc0's
+    guest allocator never frees).
+  - `fixed_linear`: zkSketch's fixed schedule (the full table, all 15 rounds,
+    every pair visited, every row rewritten each round) with a linear-time
+    union (radix sort + merge) and an in-place fuse-and-compact per round in
+    one table. On a canonical state the compaction is the stable re-sort.
+  - `fast`: the same output on a data-dependent schedule: the union as in
+    `fixed_linear`, rounds over the active prefix only, and a stop at the first
+    no-op round. A zkVM may run that; zkSketch's oblivious circuit cannot.
+- **Equivalence (`zka_gk_bm2_check.csv`, 236 rows).** At every epoch the guest's
+  new state is emitted and compared, tuple by tuple (all `capacity` rows, `n`,
+  the parameters), with zkSketch's native `apply_batch2` on the same input. The
+  driver also checks:
+  - the journal against host-computed commitments;
+  - the guest's merge census (fusions by direction) against the native one;
+  - all four ports, re-run natively, against zkSketch.
+
+  The chains, all four variants each, with every row equal:
+
+  | config (capacity, s, m) | chains |
+  |---|---|
+  | deployed (2048, 51, 16384) | AOL 4 epochs; Uniform 4 epochs; AOL under the mixed-workload batcher, 7 batches carrying 49,158 `PAD_KEY` slots |
+  | (64, 51, 16384) | AOL 8 epochs; Uniform 8 epochs |
+  | (48, 51, 16384), overflow | AOL 4 epochs |
+  | (256, 6, 4096) | AOL 8 epochs; Uniform 8 epochs |
+  | (8, 51, 4095), odd and full | AOL 4 epochs; Uniform 4 epochs |
+
+  - **Capacity 64** runs the sketch at 72-88% occupancy. It does not change the
+    fusion schedule: θ = ⌊N_t / s⌋ does not depend on capacity, and `L_f` is
+    15 for both 64 and 2048 at m = 16,384. Its epochs 0-3 repeat the deployed
+    chain's merges exactly and differ only in the final slice.
+  - **s = 6** is the chain with a different θ regime (θ 682 to 5,461,
+    `L_f` = 13).
+  - **Capacity 48** is below the sketch, so zkSketch's release build truncates
+    silently, and the ports match it.
+  - **Capacity 8 with m = 4,095** gives an odd 4,103-row table that is full
+    from epoch 1, the one place where zkSketch drops the never-paired last row.
+  - **Unit tests.** `cargo test --release -p gk-bm2-host` (5 tests) adds 480
+    short native chains (odd tables, overflow, pads), odd full tables, and the
+    refusal of non-canonical states.
+- **Not † and not zk-Analytics.** No zk-Analytics code or architecture is used:
+  no `Event` batches, batch chain or epoch chain. Cite it as "zkSketch's GK
+  batch transition executed in RISC Zero (general-purpose zkVM baseline, ours)".
+
+### Ours vs upstream
+
+| item | source |
+|---|---|
+| the transition (`Tuple`, `State`, `apply_batch2`, `fuse_round_fixed2`, neighbour init, `num_rounds`, `gk_vals_of`, `E_MAX`, `PAD_KEY`) | zkSketch `gk_bandmerge.rs` / `stream_compose.rs`, ported statement for statement into `gk_bm2/core` (`literal`; only the circuit-witness captures dropped) |
+| `literal_reuse`, `fixed_linear`, `fast`, the word encoding, the SHA-256 commitments and tags, the guest, the host driver and its checks, the runner | written by us |
+| datasets, batching, the mixed-workload batcher, the reference `apply_batch2` | the zkSketch crate itself, a path dependency of the host (as `ourcm/` and `zksq/`) |
+| accelerated SHA-256, `read_slice` / `commit_slice` / `cycle_count` | risc0-zkvm 3.0.5 (guest) |
+| zk-Analytics (`d4a5a9a`) | nothing |
+
+Against `gk/`, the zk-Analytics-architecture GK (†):
+
+| | `gk/` `aggr_gk` (†) | `gk_bm2` |
+|---|---|---|
+| algorithm | textbook GK, per record, summary built from scratch per epoch | zkSketch's two-sided band-merge batch transition, carrying `S_{t-1}` |
+| statement | their epoch pipeline: batch hash chain, Merkle root, epoch chain link | `Com_old`, `Com_batch`, `Com_new` (zkSketch's leaf statement, SHA-256 in place of Poseidon2) |
+| input | their `Event` batches through risc0 serde (1.41 MB) | raw u32 keys + the state's words through `read_slice` (163,900 B) |
+| AOL epoch 0 | 103.4M user cycles, 107 segments (about 78.7M of them their framework) | 5.3M (`fast`), 23.3M (`fixed_linear`) or 82.1M (`literal`) user cycles; 8, 37 or 129 segments |
+
+### Exact configuration
+
+- **Parameters.** `GkbParams { capacity: 2048, batch: 16384, s: 51 }`, the
+  deployed config; `s = 51` is `exp_compose`'s `derive_gk_s(2048, 2^20)`.
+- **Records.** AOL is `data/aol.keys` (md5 `01dd7d5c8a73`). Uniform is
+  `synthetic_stream(Uniform, N, seed 1)`, `exp_compose`'s
+  `load_base("uniform")`, not the seed-2 `data/uniform.keys`. Epoch e is keys
+  `[e*16384, (e+1)*16384)`. For epoch 63 the state is carried by zkSketch's
+  native `apply_batch2` over epochs 0..62.
+- **Toolchain.**
+  - Guest: risc0-zkvm 3.0.5. Its lock was seeded from `gk/guests/Cargo.lock` and
+    no third-party version changed.
+  - Host: risc0-zkvm 3.0.6, plus the zkSketch crate.
+  - Executor: r0vm 3.0.6 over IPC, CPU.
+  - Builds go to `$BASELINE_DIR/build/zka-gk-bm2` with `--locked` and
+    `RISC0_BUILD_LOCKED=1`.
+  - The ELF md5 and image ID are in the log headers and in the `image_id`
+    column (measured ELF `b429918d`).
+- **Running.** `gk_bm2/gk_bm2_exec.sh` builds, runs the equivalence check,
+  then the measurement, and stages each CSV (`.tmp`, then a move). It took
+  4.5 minutes with a cached build. `CHECK=0 SKIP_BUILD=1` gives the
+  measurement only. The first, three-variant version's rows are kept as
+  `zka_gk_bm2_{exec,check}_v1_3variants.csv`.
+
+### Results (executor; MODELED = segments x 30.1 s, NOT measured)
+
+`zka_gk_bm2_exec.csv`, one 16,384-record epoch at the deployed config. Ingest +
+commit and transition are guest probes in **user cycles**:
+
+| row | variant | user cycles | total cycles (Σ 2^po2) | segments | MODELED prove | ingest + commit | transition |
+|---|---|---|---|---|---|---|---|
+| AOL epoch 0 | literal | 82,065,236 | 135,266,304 | 129 | 3,883 s | 869,752 | 81,195,484 |
+| AOL epoch 0 | literal_reuse | 69,069,283 | 114,294,784 | 109 | 3,281 s | 869,752 | 68,199,531 |
+| AOL epoch 0 | fixed_linear | 23,288,159 | 38,273,024 | 37 | 1,114 s | 869,752 | 22,418,407 |
+| AOL epoch 0 | fast | 5,271,282 | 8,388,608 | 8 | 241 s | 869,752 | 4,401,530 |
+| AOL epoch 63 | literal | 82,088,781 | 135,266,304 | 129 | 3,883 s | 869,752 | 81,219,029 |
+| AOL epoch 63 | literal_reuse | 69,092,828 | 114,294,784 | 109 | 3,281 s | 869,752 | 68,223,076 |
+| AOL epoch 63 | fixed_linear | 23,499,790 | 38,273,024 | 37 | 1,114 s | 869,752 | 22,630,038 |
+| AOL epoch 63 | fast | 5,489,126 | 8,388,608 | 8 | 241 s | 869,752 | 4,619,374 |
+| Uniform epoch 0 | literal | 82,022,165 | 135,266,304 | 129 | 3,883 s | 869,752 | 81,152,413 |
+| Uniform epoch 0 | literal_reuse | 69,026,212 | 114,294,784 | 109 | 3,281 s | 869,752 | 68,156,460 |
+| Uniform epoch 0 | fixed_linear | 23,230,989 | 37,748,736 | 36 | 1,084 s | 869,752 | 22,361,237 |
+| Uniform epoch 0 | fast | 5,244,975 | 8,388,608 | 8 | 241 s | 869,752 | 4,375,223 |
+
+- **The transition dominates, in user cycles.** Ingest plus the three SHA-256
+  commitments costs 0.87M user cycles on every row: 1.1% of `literal`, 3.7% of
+  `fixed_linear`, 16.5% of `fast`. Segments also carry paging (total/user is
+  1.59x-1.65x), which the executor does not split by phase, so the ingest
+  share of the segments and of the MODELED time is not measured.
+- **`literal` vs `fast` is 15.6x in user cycles (16x in segments), but most of
+  that is the literal port's implementation, not the oblivious schedule.**
+  At AOL epoch 0, of the 76.8M user-cycle gap:
+  - 13.0M is the bump allocator (fresh tables every round; `literal_reuse`);
+  - 8.9M is the comparison-sort union (vs radix sort + merge);
+  - 36.8M is each round's fresh `fused` table and stable `(e, t)` re-sort and
+    gather (vs fusing and compacting in place in one table);
+  - 18.0M is the fixed schedule itself: `fixed_linear` visits all 18,432 rows
+    in all 15 rounds, `fast` only the active prefix and 10-12 rounds;
+  - the remaining 0.04M is neighbour init and final rows.
+- **The like-for-like ratio is `fixed_linear` vs `fast`: 4.4x in user cycles,
+  4.6x in segments** (23.3M vs 5.3M, 37 vs 8). That is this implementation of
+  the fixed schedule, not a lower bound for every implementation.
+- **Data dependence.** `literal` and `literal_reuse` move by at most 0.1%
+  across the three rows, `fixed_linear` by 1.2% (36-37 segments), `fast` by
+  4.7%.
+- **Determinism.** Two full runs with the measured ELF agreed on all 248 rows
+  in every column but `exec_s`.
+
+### Caveats
+
+- **No proved anchor for this guest.** MODELED rests on the four CM-guest CPU
+  anchors (envelope 29.73-30.79 s/segment). The non-CM aggregation anchors
+  above landed within 2% of it, but none is `gk_bm2_step`. The whole-segment
+  model overstates partial last segments: AOL `fixed_linear` is 1,114 s
+  modeled against 1,099 s pro rata.
+- **Cycle counts belong to one ELF.** Rebuilding with other code in the guest
+  moved `literal` (source unchanged) by -0.3% and one segment, and `fast` by
+  +1.4%. `fast`'s rows fill exactly 8 x 2^20 total cycles, on the 8/9-segment
+  boundary; quote it as **8-9 segments (241-271 s MODELED)** and use user
+  cycles as the primary metric. Details in `gk_bm2/README.md`.
+- **CPU-only r0vm 3.0.6** on this 64-thread Threadripper; the GPU prover was not
+  used. `exec_s` is wall-clock and not a metric.
+- **Cross-hardware.** The paper's zkSketch tables were measured on an EPYC
+  machine. Cycles and segments are hardware-independent; MODELED seconds are
+  this box's CPU rate. Any ratio against an EPYC zkSketch time crosses machines
+  and must say so. No same-box zkSketch GK leaf was measured here, and the
+  zkSketch-side caveat above applies.
+- **Which row to quote.** `fixed_linear` is the like-for-like fixed schedule.
+  `fast` is the conservative (cheapest) zkVM baseline for the identical
+  function; its cycle count leaks data properties, as zk-Analytics' guests do.
+  `literal` is the statement-for-statement port; do not quote `literal` vs
+  `fast` as the cost of obliviousness.
+- **Not hiding, not a pipeline.** The commitments are unsalted. Each run is one
+  transition: linking `Com_new` to the next `Com_old`, verifying receipts and
+  answering queries are not measured.

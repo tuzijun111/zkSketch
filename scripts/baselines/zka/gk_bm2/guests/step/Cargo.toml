@@ -1,0 +1,9 @@
+[package]
+name = "gk_bm2_step"
+version = "0.1.0"
+edition = "2021"
+
+# One zkSketch GK band-merge batch transition per run (see ../../core).
+[dependencies]
+risc0-zkvm = { version = "3", default-features = false }
+gk-bm2-core = { path = "../../core", default-features = false }

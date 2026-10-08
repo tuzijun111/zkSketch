@@ -1,0 +1,15 @@
+[package]
+name = "gk-bm2-methods"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+# Same layout as ../../gk/methods.
+[package.metadata.risc0]
+methods = ["../guests/step"]
+
+[build-dependencies]
+risc0-build = "3"
+
+[dependencies]
+risc0-zkvm = "3"
