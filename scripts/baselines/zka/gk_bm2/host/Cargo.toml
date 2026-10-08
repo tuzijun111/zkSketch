@@ -1,0 +1,16 @@
+[package]
+name = "gk-bm2-host"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "gk_bm2"
+path = "src/main.rs"
+
+[dependencies]
+gk-bm2-core = { path = "../core" }
+gk-bm2-methods = { path = "../methods" }
+risc0-zkvm = "3"
+# The zkSketch checkout this directory lives in: its native apply_batch2, gk_vals_of,
+# datasets and batch builders are the reference the guest is checked against.
+zksketch = { path = "../../../../.." }

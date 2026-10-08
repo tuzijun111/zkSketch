@@ -1,0 +1,18 @@
+[package]
+name = "gk-bm2-core"
+version = "0.1.0"
+edition = "2021"
+
+# The guest-side port of zkSketch's two-sided GK band-merge batch transition
+# (src/sketch/gk_bandmerge.rs, apply_batch2) plus the SHA-256 commitments the
+# guest journals. Plain no_std Rust: no Poseidon, no sorting certificates, no
+# zk-Analytics code. Hashing is risc0's accelerated SHA-256 inside the guest and
+# the same sha2 crate on the host, as in ../../gk/core.
+[dependencies]
+rust_crypto = { package = "sha2", version = "0.10", default-features = false }
+risc0-zkvm = { version = "3", default-features = false }
+bytemuck = { version = "1", default-features = false }
+
+[features]
+default = ["std"]
+std = []
