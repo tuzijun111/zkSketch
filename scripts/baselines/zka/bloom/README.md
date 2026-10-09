@@ -17,6 +17,7 @@ offline-memory-checking rebind of the OR update; this guest just executes the up
 |---|---|---|
 | aggregation, one per epoch | `bloom_aggr` | verifies the source SHA-256 batch hash chain (their code), builds the epoch's k = 7 x W = 2^14-bit partitioned filter from scratch one record at a time, hashes the state with an unsalted tagged SHA-256, and links that commitment into the epoch chain (their `EpochChainLink::new`) |
 | query over n epochs | `bloom_query` | re-verifies the n epoch chain links (their code), recomputes each epoch's state commitment, merges the n filters by bitwise OR (the Bloom union), tests one key, and commits the key, the answer, the chain boundaries and the n state commits (their low-support suppression, `MIN_SUPPORT = 10`) |
+| sensitivity only | `bloom_query_words` | the same query and journal, but each filter travels as a `Vec<u32>` bitset in serde's default encoding (one zkVM word per 32 bits, read element by element), the form of their `CmEpochState::counts`; the guest copies the words into the packed bytes (its `convert` phase) and runs the identical query (the pattern of `../hll`'s `hll_query_words`) |
 
 The host driver `bloom` (`host/src/main.rs`) has three modes; every guest run is
 executed, and also proved with `--prove` (`ProverOpts::succinct()`, their shipped
@@ -27,6 +28,9 @@ tier, CPU r0vm):
 | `aggr --epoch-index i` | `bloom_aggr` on epoch i (earlier epochs aggregated natively only to carry the chain tips) |
 | `query --epochs n` | epochs 0..n aggregated natively, then `bloom_query` over the n states |
 | `exec --epochs N --query-at 1,2,4,8` | the whole per-epoch pipeline: `bloom_aggr` on every epoch in order, each epoch's `prev_chain_hash` and source tips taken from the previous **guest journal** (as their aggregator host carries them), and after epoch n the `bloom_query` guest over epochs 0..n for every n in `--query-at` |
+
+With `--words` (query and exec modes) every `bloom_query` run is followed by a
+`bloom_query_words` run on the same input; under `--prove` it is proved too.
 
 ### Configuration
 
@@ -47,7 +51,7 @@ tier, CPU r0vm):
   - Seeds: slices 0-2 use their three CM row seeds `0x6d0f27bd, 0x9e3779b9,
     0x94d049bb`; zk-Analytics has no further seed, so slices 3-6 use four fixed odd
     constants of ours (`0x85ebca6b, 0xc2b2ae35`, the MurmurHash3 fmix32 multipliers,
-    and `0x27d4eb2f, 0x165667b1`, xxHash32 primes 3 and 5), chosen before any run.
+    and `0x27d4eb2f, 0x165667b1`, xxHash32 primes 4 and 5), chosen before any run.
     For slices 0-2, `pos mod 1024` equals their `cm_bucket_index` exactly (unit test).
   - The FNV fold is computed once per record and shared by the 7 slices; their CM
     recomputes it per row. Hoisting it only makes this baseline cheaper.
@@ -84,8 +88,8 @@ tier, CPU r0vm):
 
 ```bash
 cd scripts/baselines/zka/bloom
-./run_exec.sh                         # executor: --mode exec, 8 epochs x 2048, queries at n = 1 2 4 8, probes first,absent
-PROVE=1 PROBES=first ./run_exec.sh    # the same pipeline PROVED (8 aggregation + 4 query proofs; refuses if 1-min load > 24)
+./run_exec.sh                         # executor: --mode exec, 8 epochs x 2048, queries at n = 1 2 4 8, probes first,absent, + bloom_query_words
+PROVE=1 ./run_exec.sh                 # the planned measurement: the same pipeline PROVED, probe first, no words variant (8 aggregation + 4 query proofs)
 MODE=aggr EPOCH_INDEX=3 ./run_exec.sh # one aggregation guest
 MODE=query EPOCHS=4 ./run_exec.sh     # one query guest per probe over epochs 0..4
 ./gen_upstream.sh --check             # verbatim copies still match the clone at d4a5a9a
@@ -100,8 +104,17 @@ CARGO_TARGET_DIR=~/ext-baselines/build/zka-bloom cargo test --release --locked -
   script refuses to append under a different header. The raw log (provenance header,
   ELF md5s, command, stderr, rows) is the `.log` next to it; paths inside the checkout
   are logged as `$ZKS/...`.
-- Env: `MODE EPOCHS EPOCH_SIZE QUERY_AT PROBES EPOCH_INDEX BATCH ABSENT PROVE MAX_LOAD
-  OUT SKIP_BUILD KEYS`.
+- Env: `MODE EPOCHS EPOCH_SIZE QUERY_AT PROBES WORDS EPOCH_INDEX BATCH ABSENT PROVE
+  MAX_LOAD WAIT_S ARM_TAG OUT SKIP_BUILD KEYS`. Defaults that change with `PROVE=1`:
+  `PROBES=first` (else `first,absent`) and `WORDS=0` (else 1).
+- `PROVE=1` gate: the runner takes `$BASELINE_DIR/build/zka-prove.lock` (shared with
+  `../kmv/run_exec.sh`; a second Bloom or KMV prover refuses), then waits up to
+  `WAIT_S` (1,800 s) until the 1-minute load is <= `MAX_LOAD` (24) and no `r0vm` of
+  any user runs (the rule of `../sketch_exec.sh`), and refuses (exit 3, printing the
+  command) otherwise. The driver inherits the lock, so it is held until the last
+  prover exits.
+- Rows reach `OUT` and the log as each guest run finishes (the driver's stdout is
+  line-buffered), so an interrupted `PROVE=1` run keeps its finished rows.
 - Every row checks, and the driver exits 1 if any fails (the row is still written):
   - `journal_eq_native`: the guest journal equals the same core function run natively
     (for proved rows the PROVED journal too, asserted).
@@ -124,60 +137,75 @@ CARGO_TARGET_DIR=~/ext-baselines/build/zka-bloom cargo test --release --locked -
   signalled) and `contention`: foreign r0vm processes and their CPU seconds (the GK
   driver's measure), plus `other_cores_avg`, the average number of cores busy with
   any process that is not the driver or its descendants (box busy ticks from
-  `/proc/stat` minus ours). `arm = proved_contended` when foreign r0vm burned >= 10
-  CPU s or `other_cores_avg >= 4`.
+  `/proc/stat` minus ours), and the runner's gate
+  (`gate=load1_start=..;max_load=..;waited_s=..`).
+- `arm`: `exec` for executor rows; for proved rows `proved`, or `proved_contended`
+  when foreign r0vm burned >= 10 CPU s or `other_cores_avg >= 4`, with `_override`
+  appended when `MAX_LOAD` was raised above its default and `_<tag>` for
+  `ARM_TAG=<tag>`. **Only `arm = proved`, in `zka_bloom_prove.csv`, is a timing
+  measurement.** The runner prints a re-run command (`MODE=aggr EPOCH_INDEX=i` /
+  `MODE=query EPOCHS=n ...`) for every contended row.
 
 ## Validation results (2026-10-09; VALIDATION ONLY, not the measurement)
 
 This phase built and validated the guests at tiny scale; the comparison measurement
 (8 epochs x 2,048, proved) is to be run later on a quiet machine. All rows are in
-`../results/zka_bloom_validation.csv` (+ `.log`). Every row passed every check.
+`../results/zka_bloom_validation.csv` (26 rows, + `.log`). Every row passed every
+check.
 
-Commands (from this directory's parent; `OUT=../results/zka_bloom_validation.csv`):
-`MODE=exec EPOCHS=2 EPOCH_SIZE=256 QUERY_AT="1 2"`, the same at `EPOCH_SIZE=2048`,
-`MODE=aggr EPOCH_INDEX=1 EPOCH_SIZE=2048`, `MODE=query EPOCHS=2 EPOCH_SIZE=2048
-PROBES=first`, and the proved run `PROVE=1 MAX_LOAD=200 MODE=exec EPOCHS=1
-EPOCH_SIZE=256 QUERY_AT=1 PROBES=first`, each as `./run_exec.sh`.
+Commands, run from this directory with `OUT=../results/zka_bloom_validation.csv`, each
+as `./run_exec.sh`: `MODE=exec EPOCHS=2 EPOCH_SIZE=256 QUERY_AT="1 2"`, the same at
+`EPOCH_SIZE=2048`, `MODE=aggr EPOCH_INDEX=1 EPOCH_SIZE=2048`, `MODE=query EPOCHS=2
+EPOCH_SIZE=2048 PROBES=first`, and the proved run `PROVE=1 ARM_TAG=validation WORDS=1
+MODE=exec EPOCHS=1 EPOCH_SIZE=256 QUERY_AT=1` (default `MAX_LOAD`).
 
 **Aggregation guest `bloom_aggr`** (executor; AOL, batches of 8):
 
 | epoch size | epoch | distinct keys | user cycles | cycles/rec | segments (padded) | read | chain | update | commit | bits set (fill) | false neg. | FP on 10,000 absent | `fpr_fill` |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 256 | 0 | 174 | 1,445,206 | 5,645 | 2 (2.10M) | 956,084 | 280,041 | 139,159 | 39,947 | 1,210 (1.06%) | 0 | 0 | 1.5e-14 |
-| 256 | 1 | 199 | 1,451,897 | 5,672 | 2 (2.10M) | 962,270 | 280,538 | 139,159 | 39,947 | 1,388 (1.21%) | 0 | 0 | 3.8e-14 |
-| 2,048 | 0 | 1,234 | 11,091,956 | 5,416 | 12 (12.06M) | 7,604,628 (68.6%) | 2,238,473 (20.2%) | 1,112,215 (10.0%; 543/rec) | 39,947 | 8,312 (7.25%) | 0 | 0 | 1.1e-8 |
-| 2,048 | 1 | 1,252 | 11,098,647 | 5,419 | 12 (12.06M) | 7,610,814 | 2,238,970 | 1,112,215 | 39,947 | 8,419 (7.34%) | 0 | 0 | 1.1e-8 |
+| 256 | 0 | 174 | 1,445,193 | 5,645 | 2 (1.57M) | 956,084 | 280,040 | 139,159 | 39,947 | 1,210 (1.06%) | 0 | 0 | 1.5e-14 |
+| 256 | 1 | 199 | 1,451,884 | 5,671 | 2 (2.10M) | 962,270 | 280,537 | 139,159 | 39,947 | 1,388 (1.21%) | 0 | 0 | 3.8e-14 |
+| 2,048 | 0 | 1,234 | 11,091,937 | 5,416 | 12 (12.06M) | 7,604,628 (68.6%) | 2,238,472 (20.2%) | 1,112,215 (10.0%; 543/rec) | 39,947 | 8,312 (7.25%) | 0 | 0 | 1.1e-8 |
+| 2,048 | 1 | 1,252 | 11,098,628 | 5,419 | 12 (12.06M) | 7,610,814 | 2,238,969 | 1,112,215 | 39,947 | 8,419 (7.34%) | 0 | 0 | 1.1e-8 |
 
-**Query guest `bloom_query`** (executor). The cycles are the same at both epoch sizes,
-because the state has a fixed size; first number = `first` probe (inserted, answered
-`member=true`), second = `absent` probe (answered `member=false`), at both sizes:
+**Query guests** (executor). The cycles are the same at both epoch sizes, because the
+state has a fixed size; first number = `first` probe (inserted, answered
+`member=true`), second = `absent` probe (answered `member=false`), at both sizes.
+`bloom_query_words` returns the same journal; its extra phase `convert` copies the
+words into the packed bytes:
 
-| n | user cycles | segments (po2) | read | links | commits | merge (OR) | answer |
-|---|---|---|---|---|---|---|---|
-| 1 | 180,159 / 180,094 | 1 (18) | 23,043 | 1,427 | 38,724 | 100,810 | 712 / 647 |
-| 2 | 343,378 / 343,313 | 1 (19) | 42,538 | 2,960 | 77,326 | 201,229 | 712 / 647 |
+| guest | n | user cycles | segments (po2) | read | convert | links | commits | merge (OR) | answer |
+|---|---|---|---|---|---|---|---|---|---|
+| `bloom_query` | 1 | 180,159 / 180,094 | 1 (18) | 23,043 | - | 1,427 | 38,724 | 100,810 | 712 / 647 |
+| `bloom_query` | 2 | 343,378 / 343,313 | 1 (19) | 42,538 | - | 2,960 | 77,326 | 201,229 | 712 / 647 |
+| `bloom_query_words` | 1 | 777,550 / 777,485 | 1 (20) | 559,215 | 61,206 | 1,427 | 38,724 | 100,810 | 712 / 647 |
+| `bloom_query_words` | 2 | 1,537,936 / 1,537,871 | 2 (20, 20) | 1,114,881 | 122,202 | 2,960 | 77,326 | 201,229 | 712 / 647 |
 
-- The increment from n = 1 to n = 2 is 163,219 cycles per epoch (read ~20K, commit
-  recomputation ~39K, OR merge ~101K, chain link ~1.5K). Linear extrapolation to the
-  planned n = 8 gives ~1.3M cycles (2 segments); that is an extrapolation, not a run.
+- The increment from n = 1 to n = 2 is 163,219 cycles per epoch for `bloom_query`
+  (read ~20K, commit recomputation ~39K, OR merge ~101K, chain link ~1.5K) and
+  760,386 for `bloom_query_words` (read ~556K, convert ~61K). Linear extrapolation to
+  the planned n = 8 gives ~1.3M cycles (2 segments) for `bloom_query`; that is an
+  extrapolation, not a run.
 - Merged 2-epoch filter at 2,048 records per epoch: 15,430 bits set (13.45%),
   `fpr_fill` 8.0e-7, `fpr_theory` 8.1e-7, 0 false positives in 10,000 absent keys
   (expected 0.008). At the planned 8 x 2,048 records (8,433 distinct AOL keys) the
   textbook FPR is (1 - e^(-8433/16384))^7 = 1.7e-3, about 17 of the 10,000 absent
   keys, so the measured rate becomes informative there.
 - The single-guest modes (`MODE=aggr EPOCH_INDEX=1`, `MODE=query EPOCHS=2`) reproduce
-  the pipeline's rows exactly (11,098,647 and 343,378 cycles): the chain carried from
-  the guest journals equals the natively computed one.
+  the pipeline's rows exactly (11,098,628, 343,378 and 1,537,936 cycles): the chain
+  carried from the guest journals equals the natively computed one.
 
-**Proved run** (validates the `--prove` path; NOT a timing measurement: the shared
-box had a concurrent job, `other_cores_avg` 3.0, 1-minute load 4.2 before and up to
-35.4 during, including this prover). `ProverOpts::succinct()`, CPU r0vm 3.0.6; both
-proved journals were asserted equal to the native output:
+**Proved run** (validates the `--prove` path; NOT a timing measurement). The runner's
+gate passed at once (1-minute load 12.2 <= 24, no other `r0vm`), but a sibling job
+kept 5.0-10.2 other cores busy during the proofs, so all three rows are
+`arm = proved_contended_validation`. `ProverOpts::succinct()`, CPU r0vm 3.0.6; every
+proved journal was asserted equal to the native output:
 
 | guest | input | segments | prove_s | s/segment | verify (best of 5) | receipt | r0vm peak RSS |
 |---|---|---|---|---|---|---|---|
-| `bloom_aggr` | epoch 0, 256 records | 2 (po2 20, 20) | 58.5 | 29.26 | 9.7 ms | 224,554 B | 9,389 MB |
-| `bloom_query` | n = 1, `first` probe | 1 (po2 18) | 9.4 | 9.35 | 9.7 ms | 224,162 B | 2,351 MB |
+| `bloom_aggr` | epoch 0, 256 records | 2 (po2 20, 19) | 50.3 | 25.15 | 9.7 ms | 224,554 B | 9,382 MB |
+| `bloom_query` | n = 1, `first` probe | 1 (po2 18) | 9.6 | 9.61 | 9.8 ms | 224,162 B | 2,365 MB |
+| `bloom_query_words` | n = 1, `first` probe | 1 (po2 20) | 29.6 | 29.58 | 9.8 ms | 224,162 B | 9,373 MB |
 
 ## Reused from upstream (d4a5a9a)
 
@@ -200,9 +228,10 @@ proved journals were asserted equal to the native output:
   `querier-guest-cm`, with the same risc0-zkvm feature sets.
 - **Position hash:** their `cm_bucket_index` formula, with W and per-slice seeds.
 - **Ours.** The Bloom insert / lookup / OR merge, the 4 extra seeds, the state type,
-  its tag and packing (the HLL port's `packed_bytes`), the cycle probes, the host driver
-  (independent reference, accuracy, `exec` pipeline mode, RSS/contention sampler after
-  `../gk/host`), the runner.
+  its tag and packing (the HLL port's `packed_bytes`), the `bloom_query_words`
+  variant, the cycle probes, the host driver (independent reference, accuracy, `exec`
+  pipeline mode, RSS/contention sampler after `../gk/host`), the runner (prove lock
+  and quiet-box wait after `../sketch_exec.sh`).
 
 ## Caveats
 
@@ -214,13 +243,15 @@ proved journals were asserted equal to the native output:
   (1,112,215 cycles at 2,048 records), and epoch 1's +6.7K cycles come from the source
   tip it carries in. The lookup short-circuits, so an absent key costs ~65 cycles less
   than a member.
-- **The state encoding is a ~4x lever on the query.** risc0's serde reads a plain
-  `Vec<u32>` (or `Vec<u8>`) one element per word at ~150 cycles per word, but a byte
-  string in bulk. A development build that kept the filter as `Vec<u32>` words (one
-  word per 32 bits, default serde) spent 559,214 cycles reading one epoch state and
-  702,100 cycles on the n = 1 query, against 23,043 and 180,159 with the packed bytes
-  (same records; that build is not in the tree). The packed form is the headline: it is
-  the cheaper (conservative) baseline, as for HLL.
+- **The state encoding is a ~4x lever on the query (measured).** risc0's serde reads
+  a plain `Vec<u32>` (or `Vec<u8>`) one element per word at ~150 cycles per word, but
+  a byte string in bulk; both encodings are 3,585 words per filter. `bloom_query_words`
+  spends 559,215 cycles reading one filter and 777,550 on the n = 1 query, against
+  23,043 and 180,159 for `bloom_query` (4.3x; 4.5x at n = 2). 61,206 of the words
+  variant's cycles per epoch are the copy into bytes; a variant that computed on the
+  words directly would save most of that, so read the words rows as an upper bound of
+  a direct port (minus ~61K per epoch). The packed form is the headline: it is the
+  cheaper (conservative) baseline, as for HLL.
 - **Byte-wise OR merge.** The query merges with a byte loop, ~7 cycles per byte
   (100,810 cycles per epoch). A word-wise OR would need the bytes converted, which
   costs about what it saves in safe Rust; no `unsafe` reinterpretation is used.
@@ -242,13 +273,17 @@ proved journals were asserted equal to the native output:
 - **ELF md5s and image IDs depend on the absolute source path** (panic strings carry
   it); cycle counts do not. The validation rows were built from a worktree path, so
   their `image_id`s differ from a build in the main checkout.
+- **Cycle counts do depend on the build.** Adding the words types to the core crate
+  changed the `bloom_aggr` ELF although it does not use them: -13 / -19 cycles at 256
+  / 2,048 records against the first build. The query guest did not move. The
+  measurement must use one build for all rows.
 
 ## Files
 
 | file | purpose |
 |---|---|
-| `core/` | `zka-bloom-core` (no_std): the filter, epoch type, aggregation, query; `upstream_verbatim.rs`; unit tests (CM-index agreement, union = OR, no false negatives, FPR vs theory, bit layout, tamper / reorder / forged batch, suppression, serde packing) |
-| `methods/`, `guests/aggr`, `guests/query` | risc0 methods crate and the guests `bloom_aggr`, `bloom_query` |
-| `host/` | driver `bloom` (modes `exec`, `aggr`, `query`; `--prove`) |
-| `run_exec.sh`, `bloom_common.sh` | runner (executor or `PROVE=1`) and its build/log helpers |
+| `core/` | `zka-bloom-core` (no_std): the filter, epoch type, aggregation, query, the words input type; `upstream_verbatim.rs`; unit tests (CM-index agreement, union = OR, no false negatives, FPR vs theory, bit layout, tamper / reorder / forged batch, suppression, serde packing, words variant = same input and answer) |
+| `methods/`, `guests/aggr`, `guests/query` | risc0 methods crate and the guests `bloom_aggr`, `bloom_query`, `bloom_query_words` (`guests/query/src/bin`) |
+| `host/` | driver `bloom` (modes `exec`, `aggr`, `query`; `--words`, `--prove`, `--gate`, `--arm-tag`) |
+| `run_exec.sh`, `bloom_common.sh` | runner (executor or `PROVE=1`) and its build / log / prove-gate helpers |
 | `gen_upstream.sh` | regenerates / checks the verbatim copies |

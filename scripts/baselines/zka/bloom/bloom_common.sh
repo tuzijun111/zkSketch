@@ -10,7 +10,8 @@ FAM=bloom
 FAM_TARGET="$BASELINE_DIR/build/zka-bloom"
 FAM_BIN="$FAM_TARGET/release/bloom"
 FAM_ELF_DIR="$FAM_TARGET/riscv-guest/zka-bloom-methods"
-FAM_GUESTS=(bloom_aggr bloom_query)
+# <guest package>/<ELF>: the query package also builds the words variant (src/bin)
+FAM_GUESTS=(bloom_aggr/bloom_aggr bloom_query/bloom_query bloom_query/bloom_query_words)
 KEYS=${KEYS:-$ZKS/data/aol.keys}
 
 build_fam() {
@@ -40,8 +41,8 @@ fam_log_header() {  # fam_log_header <script name>
   echo "# zkSketch=$(git -C "$ZKS" rev-parse --short=9 HEAD) ${FAM}_dirty=$(git -C "$ZKS" status --porcelain -- "$FAM_DIR" | wc -l)"
   local g f
   for g in "${FAM_GUESTS[@]}"; do
-    f="$FAM_ELF_DIR/$g/riscv32im-risc0-zkvm-elf/release/$g"
-    echo "# elf $g md5=$(md5sum < "$f" | cut -d' ' -f1) bytes=$(stat -c %s "$f")"
+    f="$FAM_ELF_DIR/${g%/*}/riscv32im-risc0-zkvm-elf/release/${g#*/}"
+    echo "# elf ${g#*/} md5=$(md5sum < "$f" | cut -d' ' -f1) bytes=$(stat -c %s "$f")"
   done
 }
 
@@ -57,4 +58,39 @@ csv_prepare() {  # csv_prepare <file>
     echo "REFUSING: $out has a different header; move it aside" >&2
     return 2
   fi
+}
+
+# ---------------------------------------------------------------- PROVE=1 gate
+# One prover at a time across the Bloom and KMV ports: both runners take the same lock,
+# and start only on a quiet box (the rule of ../sketch_exec.sh's wait_quiet).
+DEFAULT_MAX_LOAD=24
+PROVE_LOCK="$BASELINE_DIR/build/zka-prove.lock"
+
+# take_prove_lock: flock on fd 9, held by this shell and inherited by the driver and
+# its r0vm children (so it outlives an interrupted runner until its prover exits).
+# Returns 2 when another bloom/kmv PROVE=1 run holds it.
+take_prove_lock() {
+  mkdir -p "$(dirname "$PROVE_LOCK")"
+  exec 9> "$PROVE_LOCK"
+  flock -n 9 || { echo "another bloom/kmv PROVE=1 run holds $PROVE_LOCK; refusing" >&2; return 2; }
+}
+
+# wait_quiet: 0 once the 1-minute load is <= MAX_LOAD and no r0vm of ANY user runs;
+# 1 after WAIT_S seconds. Polls every 20 s. Sets L0 (load1 at return) and WAITED_S.
+wait_quiet() {
+  local t0=$SECONDS last=-1000 n
+  while :; do
+    L0=$(cut -d' ' -f1 /proc/loadavg); n=$(pgrep -x r0vm 2>/dev/null | wc -l)
+    WAITED_S=$((SECONDS - t0))
+    if awk -v l="$L0" -v m="$MAX_LOAD" 'BEGIN{exit !(l <= m)}' && (( n == 0 )); then return 0; fi
+    if (( WAITED_S >= WAIT_S )); then
+      echo "box not quiet after ${WAITED_S}s: 1-minute load $L0 (max $MAX_LOAD), $n r0vm process(es) of any user" >&2
+      return 1
+    fi
+    if (( SECONDS - last >= 300 )); then
+      echo "waiting for a quiet box: load1=$L0 (max $MAX_LOAD), r0vm processes (all users)=$n; up to ${WAIT_S}s" >&2
+      last=$SECONDS
+    fi
+    sleep 20
+  done
 }

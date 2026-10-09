@@ -66,7 +66,7 @@ const _: () = assert!(BLOOM_W % 32 == 0, "slices must be whole words");
 /// Per-slice seeds. Slices 0..3 reuse their three CM row seeds
 /// (aggregator/core/src/lib.rs:41) in order; zk-Analytics has no fourth seed, so
 /// slices 3..7 use four fixed odd constants of ours (the MurmurHash3 fmix32
-/// multipliers and xxHash32 primes 3 and 5), chosen before any measurement.
+/// multipliers and xxHash32 primes 4 and 5), chosen before any measurement.
 pub const BLOOM_SEEDS: [u32; BLOOM_K] = [
     CM_SEEDS[0], CM_SEEDS[1], CM_SEEDS[2], // their CM row seeds
     0x85eb_ca6b, 0xc2b2_ae35, 0x27d4_eb2f, 0x1656_67b1, // ours
@@ -342,6 +342,73 @@ pub fn run_bloom_query_probed(input: &BloomQueryInput, probe: &mut dyn FnMut()) 
     }
 }
 
+// ------------------------------------------------- naive-serde input variant
+/// The same query input with the filter as a `Vec<u32>` bitset in serde's DEFAULT
+/// encoding: one zkVM word per 32 filter bits, which risc0's serde reads element by
+/// element (the packed byte string above has the same number of words but is read in
+/// bulk). This is the form of their `CmEpochState::counts: Vec<u32>`
+/// (aggregator/core/src/lib.rs:978), i.e. what a direct port in the style of their CM
+/// state would send. Used only by the `bloom_query_words` guest, a sensitivity row
+/// (the pattern of ../../hll's `hll_query_words`): the guest converts the words to the
+/// packed bytes (a copy, its "convert" phase) and then runs the identical query, so the
+/// journal is the same.
+///
+/// Word w holds bytes 4w..4w+4 little-endian, so filter bit i is bit (i mod 32) of word
+/// i / 32 and the conversion is exact in both directions.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BloomEpochStateWords {
+    pub total_count: u64,
+    pub words: Vec<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BloomQueryInputWords {
+    pub query: BloomQuery,
+    pub epoch_states: Vec<BloomEpochStateWords>,
+    #[serde(default)]
+    pub epoch_chain_links: Vec<EpochChainLink>,
+}
+
+impl From<BloomQueryInputWords> for BloomQueryInput {
+    fn from(w: BloomQueryInputWords) -> Self {
+        BloomQueryInput {
+            query: w.query,
+            epoch_states: w
+                .epoch_states
+                .into_iter()
+                .map(|s| {
+                    let mut bits = Vec::with_capacity(s.words.len() * 4);
+                    for x in &s.words {
+                        bits.extend_from_slice(&x.to_le_bytes());
+                    }
+                    BloomEpochState { total_count: s.total_count, bits }
+                })
+                .collect(),
+            epoch_chain_links: w.epoch_chain_links,
+        }
+    }
+}
+
+impl From<&BloomQueryInput> for BloomQueryInputWords {
+    fn from(p: &BloomQueryInput) -> Self {
+        BloomQueryInputWords {
+            query: p.query.clone(),
+            epoch_states: p
+                .epoch_states
+                .iter()
+                .map(|s| {
+                    assert!(s.bits.len() % 4 == 0, "bitset of {} bytes is not whole words", s.bits.len());
+                    BloomEpochStateWords {
+                        total_count: s.total_count,
+                        words: s.bits.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
+                    }
+                })
+                .collect(),
+            epoch_chain_links: p.epoch_chain_links.clone(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------- serde helper
 /// Serializes a Vec<u8> through serde's bytes type, which risc0's serde packs four
 /// bytes per word (risc0-zkvm serde/serializer.rs serialize_bytes) and deserializes
@@ -572,5 +639,23 @@ mod tests {
         // (len; per epoch: total_count 2 words, byte length 1 + 14,336 / 4 packed words)
         // + links (len; per epoch 3 x 32 bytes, one word each)
         assert_eq!(words.len(), 1 + KEY_BYTES_LEN + 1 + 2 * (2 + 1 + BLOOM_BYTES / 4) + 1 + 2 * 3 * 32);
+    }
+
+    #[test]
+    fn words_variant_is_the_same_input_and_query() {
+        let q = query_input(&lcg_keys(2 * 1024, 5_000), 1024, 1);
+        let w = BloomQueryInputWords::from(&q);
+        // bit i of the filter is bit (i mod 32) of word i / 32
+        let s = &q.epoch_states[0];
+        for i in (0..BLOOM_BITS).step_by(37) {
+            assert_eq!(s.bits[i / 8] >> (i % 8) & 1, (w.epoch_states[0].words[i / 32] >> (i % 32) & 1) as u8);
+        }
+        let ww = to_vec(&w).unwrap();
+        let back = BloomQueryInput::from(from_slice::<BloomQueryInputWords, _>(&ww).unwrap());
+        assert_eq!(back, q);
+        assert_eq!(run_bloom_query(&back), run_bloom_query(&q));
+        // the same number of zkVM words as the packed encoding (len + 3,584 per state):
+        // the difference is how risc0's serde reads them, element by element
+        assert_eq!(ww.len(), to_vec(&q).unwrap().len());
     }
 }

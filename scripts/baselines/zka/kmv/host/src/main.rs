@@ -29,6 +29,17 @@
 //                journal is asserted equal to the native output; records prove_s,
 //                verify_ms (best of 5), receipt bytes, the r0vm peak RSS and foreign-r0vm
 //                contention during the prove
+//   --words      after every kmv_query run, also run the kmv_query_words guest on the same
+//                input (sensitivity: values sent as Vec<u64> in serde's default encoding,
+//                the form of their CmEpochState::heap_vals; same journal). Proved too
+//                under --prove.
+//   --gate TEXT  how the runner gated the prove (e.g. load1_start=..;max_load=..;waited_s=..),
+//                appended to the contention column of proved rows (gate=none if absent)
+//   --arm-tag T  proved rows get arm proved_T (and proved_contended_T when contended)
+//                instead of proved / proved_contended: the runner passes `override` when
+//                its load gate was raised above the default, and anything else a caller
+//                wants to keep apart (e.g. `validation`). Only arm == proved, with no tag,
+//                is a timing-grade row.
 //
 // Checks on every row (the driver exits 1 when one fails; the row is still printed):
 //   journal_eq_native  the guest journal equals the same core function run natively
@@ -45,9 +56,9 @@
 // Usage:
 //   kmv --header
 //   kmv --mode aggr  [--epoch-index 0] [common] [--prove]
-//   kmv --mode query --epochs N [common] [--prove]
-//   kmv --mode exec  --epochs N [--query-at 1,2,4,8] [common] [--prove]
-//   common: [--epoch-size 2048] [--batch 8] [--keys PATH]
+//   kmv --mode query --epochs N [--words] [common] [--prove]
+//   kmv --mode exec  --epochs N [--query-at 1,2,4,8] [--words] [common] [--prove]
+//   common: [--epoch-size 2048] [--batch 8] [--keys PATH] [--gate TEXT] [--arm-tag T]
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,9 +69,9 @@ use risc0_zkvm::{default_executor, default_prover, ExecutorEnv, ProverOpts, Sess
 use zka_kmv_core::{
     batch_chain_hash, kmv_epoch_state_commit, kmv_estimate, merge_bottom_k, process_kmv_aggr_with_state,
     run_kmv_query, BatchInput, EpochChainLink, KmvAggrInput, KmvAggrOutput, KmvEpochState, KmvQuery,
-    KmvQueryInput, KmvQueryOutput, KmvQueryResult, KMV_K, KMV_SEED,
+    KmvQueryInput, KmvQueryInputWords, KmvQueryOutput, KmvQueryResult, KMV_K, KMV_SEED,
 };
-use zka_kmv_methods::{KMV_AGGR_ELF, KMV_AGGR_ID, KMV_QUERY_ELF, KMV_QUERY_ID};
+use zka_kmv_methods::{KMV_AGGR_ELF, KMV_AGGR_ID, KMV_QUERY_ELF, KMV_QUERY_ID, KMV_QUERY_WORDS_ELF, KMV_QUERY_WORDS_ID};
 use zkvm_common::Event;
 
 /// MODELED prove time: segments x s/segment. Central value and envelope are the four
@@ -70,8 +81,9 @@ const S_PER_SEG_LO: f64 = 29.73;
 const S_PER_SEG_HI: f64 = 30.79;
 
 // ------------------------------------------------------------------ arguments
-const VALUE_FLAGS: &[&str] = &["--mode", "--epochs", "--epoch-index", "--keys", "--epoch-size", "--batch", "--query-at"];
-const BOOL_FLAGS: &[&str] = &["--prove", "--header"];
+const VALUE_FLAGS: &[&str] =
+    &["--mode", "--epochs", "--epoch-index", "--keys", "--epoch-size", "--batch", "--query-at", "--gate", "--arm-tag"];
+const BOOL_FLAGS: &[&str] = &["--prove", "--header", "--words"];
 
 fn validate_args() {
     let a: Vec<String> = std::env::args().skip(1).collect();
@@ -499,6 +511,11 @@ struct Ctx {
     m: usize,
     cbs: usize,
     do_prove: bool,
+    words: bool,
+    /// --gate, recorded in the contention column of proved rows
+    gate: String,
+    /// --arm-tag, appended to the arm of proved rows
+    arm_tag: Option<String>,
     fails: usize,
 }
 
@@ -554,7 +571,7 @@ fn result_cols(r: &mut Row, res: &KmvQueryResult, distinct: usize, prefix: &str,
     ok
 }
 
-fn tail_cols(r: &mut Row, x: &Exec, prof: String, p: Option<Proved>, id: [u32; 8]) {
+fn tail_cols(r: &mut Row, ctx: &Ctx, x: &Exec, prof: String, p: Option<Proved>, id: [u32; 8]) {
     let fmt_mb = |v: f64| if v.is_nan() { "NaN".to_string() } else { format!("{v:.1}") };
     r.put("prof", prof);
     match p {
@@ -568,7 +585,7 @@ fn tail_cols(r: &mut Row, x: &Exec, prof: String, p: Option<Proved>, id: [u32; 8
                 .put("prove_user_cycles", p.user_cycles)
                 .put("prove_paging_cycles", p.paging_cycles)
                 .put("prove_r0vm_peak_rss_mb", fmt_mb(p.rss_mb))
-                .put("contention", p.contention.csv());
+                .put("contention", format!("{};gate={}", p.contention.csv(), ctx.gate));
         }
         None => {
             r.put("prove_s", "NaN")
@@ -591,11 +608,16 @@ fn tail_cols(r: &mut Row, x: &Exec, prof: String, p: Option<Proved>, id: [u32; 8
         .put("image_id", image_id_hex(id));
 }
 
-fn arm_of(p: &Option<Proved>) -> &'static str {
-    match p {
-        None => "exec",
+/// exec | proved | proved_contended, then _<arm-tag> on proved rows when one was given.
+fn arm_of(ctx: &Ctx, p: &Option<Proved>) -> String {
+    let base = match p {
+        None => return "exec".into(),
         Some(p) if p.contention.contended() => "proved_contended",
         Some(_) => "proved",
+    };
+    match &ctx.arm_tag {
+        Some(t) => format!("{base}_{t}"),
+        None => base.into(),
     }
 }
 
@@ -614,10 +636,10 @@ fn aggr_step(ctx: &mut Ctx, inp: &KmvAggrInput, st: &KmvEpochState, e: usize, sl
     let KmvQueryResult::Estimate { estimate, .. } = res;
     let refc = ref_check(&st.values, slice, estimate);
     let mut r = Row::new();
-    common_cols(&mut r, ctx, arm_of(&p), "aggr", "kmv_aggr", "-", 1, e.to_string(), ctx.m, distinct, &x);
+    common_cols(&mut r, ctx, &arm_of(ctx, &p), "aggr", "kmv_aggr", "-", 1, e.to_string(), ctx.m, distinct, &x);
     r.put("state_commits", 1).put("journal_eq_native", eq).put("ref_check", &refc);
     let acc_ok = result_cols(&mut r, &res, distinct, "journal=commits_only;native_epoch_", st.total_count, "-");
-    tail_cols(&mut r, &x, prof(&x, &["chain", "flatten", "update", "commit"]), p, KMV_AGGR_ID);
+    tail_cols(&mut r, ctx, &x, prof(&x, &["chain", "flatten", "update", "commit"]), p, KMV_AGGR_ID);
     r.emit();
     if !eq || refc != "ok" || !acc_ok {
         eprintln!("kmv: FAIL aggr epoch {e}: journal_eq_native={eq} ref_check={refc} accuracy_ok={acc_ok}");
@@ -626,36 +648,56 @@ fn aggr_step(ctx: &mut Ctx, inp: &KmvAggrInput, st: &KmvEpochState, e: usize, sl
     got
 }
 
-/// One query guest run over the given epoch states and chain links.
+/// One query guest run over the given epoch states and chain links: `kmv_query`, then
+/// with --words also `kmv_query_words` on the same input.
 fn query_step(ctx: &mut Ctx, states: &[KmvEpochState], links: &[EpochChainLink], prefix: &[u32]) {
     let n = states.len();
     let input = KmvQueryInput { query: KmvQuery::Estimate, epoch_states: states.to_vec(), epoch_chain_links: links.to_vec() };
     let native = run_kmv_query(&input).suppress_if_low_support();
-    let x = execute(&input, KMV_QUERY_ELF);
-    let got: KmvQueryOutput = x.session.journal.decode().expect("decode journal");
-    let eq = got == native;
-    let p = ctx.do_prove.then(|| prove(&input, KMV_QUERY_ELF, KMV_QUERY_ID, &native));
+    let winput = ctx.words.then(|| KmvQueryInputWords::from(&input));
     let distinct = prefix.iter().collect::<HashSet<_>>().len();
     // the merged set the guest must have formed
     let mut merged: Vec<u64> = Vec::new();
     for s in states {
         merged = merge_bottom_k(&merged, &s.values, KMV_K);
     }
-    let KmvQueryResult::Estimate { estimate, .. } = got.result;
-    let refc = if got.suppressed { "suppressed".to_string() } else { ref_check(&merged, prefix, estimate) };
-    let mut r = Row::new();
-    common_cols(&mut r, ctx, arm_of(&p), "query", "kmv_query", "estimate", n, "-".into(), n * ctx.m, distinct, &x);
-    r.put("state_commits", got.state_commits.len()).put("journal_eq_native", eq).put("ref_check", &refc);
-    let acc = result_cols(
-        &mut r, &got.result, distinct, if got.suppressed { "SUPPRESSED;" } else { "" }, got.support,
-        &got.suppressed.to_string(),
-    );
-    let acc_ok = got.suppressed || acc;
-    tail_cols(&mut r, &x, prof(&x, &["links", "commits", "merge", "estimate"]), p, KMV_QUERY_ID);
-    r.emit();
-    if !eq || !(refc == "ok" || refc == "suppressed") || !acc_ok {
-        eprintln!("kmv: FAIL query n={n}: journal_eq_native={eq} ref_check={refc} accuracy_ok={acc_ok}");
-        ctx.fails += 1;
+    let mut variants = vec![("kmv_query", false)];
+    if winput.is_some() {
+        variants.push(("kmv_query_words", true));
+    }
+    for (guest, words) in variants {
+        let (elf, id) = if words { (KMV_QUERY_WORDS_ELF, KMV_QUERY_WORDS_ID) } else { (KMV_QUERY_ELF, KMV_QUERY_ID) };
+        let x = match &winput {
+            Some(w) if words => execute(w, elf),
+            _ => execute(&input, elf),
+        };
+        let got: KmvQueryOutput = x.session.journal.decode().expect("decode journal");
+        let eq = got == native;
+        let p = ctx.do_prove.then(|| match &winput {
+            Some(w) if words => prove(w, elf, id, &native),
+            _ => prove(&input, elf, id, &native),
+        });
+        let KmvQueryResult::Estimate { estimate, .. } = got.result;
+        let refc = if got.suppressed { "suppressed".to_string() } else { ref_check(&merged, prefix, estimate) };
+        let mut r = Row::new();
+        common_cols(&mut r, ctx, &arm_of(ctx, &p), "query", guest, "estimate", n, "-".into(), n * ctx.m, distinct, &x);
+        r.put("state_commits", got.state_commits.len()).put("journal_eq_native", eq).put("ref_check", &refc);
+        let acc = result_cols(
+            &mut r, &got.result, distinct, if got.suppressed { "SUPPRESSED;" } else { "" }, got.support,
+            &got.suppressed.to_string(),
+        );
+        let acc_ok = got.suppressed || acc;
+        let phases: &[&str] = if words {
+            &["convert", "links", "commits", "merge", "estimate"]
+        } else {
+            &["links", "commits", "merge", "estimate"]
+        };
+        tail_cols(&mut r, ctx, &x, prof(&x, phases), p, id);
+        r.emit();
+        if !eq || !(refc == "ok" || refc == "suppressed") || !acc_ok {
+            eprintln!("kmv: FAIL {guest} n={n}: journal_eq_native={eq} ref_check={refc} accuracy_ok={acc_ok}");
+            ctx.fails += 1;
+        }
     }
 }
 
@@ -697,7 +739,26 @@ fn main() {
         die("--epoch-size and --batch must be > 0");
     }
     let keys = load_keys(&keys_path);
-    let mut ctx = Ctx { mode: mode.clone(), m, cbs, do_prove: flag("--prove"), fails: 0 };
+    let gate = arg_str("--gate").unwrap_or_else(|| "none".into());
+    let arm_tag = arg_str("--arm-tag");
+    if gate.contains(',') {
+        die("--gate must not contain a comma (it goes into a CSV cell)");
+    }
+    if let Some(t) = &arm_tag {
+        if t.is_empty() || !t.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+            die(&format!("--arm-tag '{t}': use [a-z0-9_]+"));
+        }
+    }
+    let mut ctx = Ctx {
+        mode: mode.clone(),
+        m,
+        cbs,
+        do_prove: flag("--prove"),
+        words: flag("--words"),
+        gate,
+        arm_tag,
+        fails: 0,
+    };
 
     match mode.as_str() {
         "aggr" => {

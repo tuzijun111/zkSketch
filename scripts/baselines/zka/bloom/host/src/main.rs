@@ -33,6 +33,17 @@
 //                first  = the first record of the last queried epoch (zkSketch's
 //                         EXP_QUERY_KEY_MODE=first: the batch's first key) -- inserted
 //                absent = the first key of the absent set below -- not in the dataset
+//   --words      after every bloom_query run, also run the bloom_query_words guest on the
+//                same input (sensitivity: filters sent as Vec<u32> in serde's default
+//                encoding, the form of their CmEpochState::counts; same journal). Proved
+//                too under --prove.
+//   --gate TEXT  how the runner gated the prove (e.g. load1_start=..;max_load=..;waited_s=..),
+//                appended to the contention column of proved rows (gate=none if absent)
+//   --arm-tag T  proved rows get arm proved_T (and proved_contended_T when contended)
+//                instead of proved / proved_contended: the runner passes `override` when
+//                its load gate was raised above the default, and anything else a caller
+//                wants to keep apart (e.g. `validation`). Only arm == proved, with no tag,
+//                is a timing-grade row.
 //
 // Checks on every row (the driver exits 1 when one fails; the row is still printed):
 //   journal_eq_native  the guest journal equals the same core function run natively
@@ -52,9 +63,9 @@
 // Usage:
 //   bloom --header
 //   bloom --mode aggr  [--epoch-index 0] [common] [--prove]
-//   bloom --mode query --epochs N [--probe first] [common] [--prove]
-//   bloom --mode exec  --epochs N [--query-at 1,2,4,8] [--probe first] [common] [--prove]
-//   common: [--epoch-size 2048] [--batch 8] [--keys PATH] [--absent 10000]
+//   bloom --mode query --epochs N [--probe first] [--words] [common] [--prove]
+//   bloom --mode exec  --epochs N [--query-at 1,2,4,8] [--probe first] [--words] [common] [--prove]
+//   common: [--epoch-size 2048] [--batch 8] [--keys PATH] [--absent 10000] [--gate TEXT] [--arm-tag T]
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,10 +76,12 @@ use risc0_zkvm::{default_executor, default_prover, ExecutorEnv, ProverOpts, Sess
 use zka_bloom_core::{
     batch_chain_hash, bloom_contains, bloom_epoch_state_commit, process_bloom_aggr_with_state,
     run_bloom_query, BatchInput, BloomAggrInput, BloomAggrOutput, BloomEpochState, BloomQuery,
-    BloomQueryInput, BloomQueryOutput, BloomQueryResult, EpochChainLink, BLOOM_BITS, BLOOM_K,
-    BLOOM_BYTES, BLOOM_SEEDS, BLOOM_W,
+    BloomQueryInput, BloomQueryInputWords, BloomQueryOutput, BloomQueryResult, EpochChainLink, BLOOM_BITS,
+    BLOOM_K, BLOOM_BYTES, BLOOM_SEEDS, BLOOM_W,
 };
-use zka_bloom_methods::{BLOOM_AGGR_ELF, BLOOM_AGGR_ID, BLOOM_QUERY_ELF, BLOOM_QUERY_ID};
+use zka_bloom_methods::{
+    BLOOM_AGGR_ELF, BLOOM_AGGR_ID, BLOOM_QUERY_ELF, BLOOM_QUERY_ID, BLOOM_QUERY_WORDS_ELF, BLOOM_QUERY_WORDS_ID,
+};
 use zkvm_common::Event;
 
 /// MODELED prove time: segments x s/segment. Central value and envelope are the four
@@ -78,9 +91,11 @@ const S_PER_SEG_LO: f64 = 29.73;
 const S_PER_SEG_HI: f64 = 30.79;
 
 // ------------------------------------------------------------------ arguments
-const VALUE_FLAGS: &[&str] =
-    &["--mode", "--epochs", "--epoch-index", "--keys", "--epoch-size", "--batch", "--query-at", "--probe", "--absent"];
-const BOOL_FLAGS: &[&str] = &["--prove", "--header"];
+const VALUE_FLAGS: &[&str] = &[
+    "--mode", "--epochs", "--epoch-index", "--keys", "--epoch-size", "--batch", "--query-at", "--probe", "--absent",
+    "--gate", "--arm-tag",
+];
+const BOOL_FLAGS: &[&str] = &["--prove", "--header", "--words"];
 
 fn validate_args() {
     let a: Vec<String> = std::env::args().skip(1).collect();
@@ -586,6 +601,11 @@ struct Ctx {
     m: usize,
     cbs: usize,
     do_prove: bool,
+    words: bool,
+    /// --gate, recorded in the contention column of proved rows
+    gate: String,
+    /// --arm-tag, appended to the arm of proved rows
+    arm_tag: Option<String>,
     fails: usize,
 }
 
@@ -635,7 +655,7 @@ fn accuracy_cols(r: &mut Row, a: &Accuracy) -> bool {
     ok
 }
 
-fn tail_cols(r: &mut Row, x: &Exec, prof: String, p: Option<Proved>, id: [u32; 8]) {
+fn tail_cols(r: &mut Row, ctx: &Ctx, x: &Exec, prof: String, p: Option<Proved>, id: [u32; 8]) {
     let fmt_mb = |v: f64| if v.is_nan() { "NaN".to_string() } else { format!("{v:.1}") };
     r.put("prof", prof);
     match p {
@@ -649,7 +669,7 @@ fn tail_cols(r: &mut Row, x: &Exec, prof: String, p: Option<Proved>, id: [u32; 8
                 .put("prove_user_cycles", p.user_cycles)
                 .put("prove_paging_cycles", p.paging_cycles)
                 .put("prove_r0vm_peak_rss_mb", fmt_mb(p.rss_mb))
-                .put("contention", p.contention.csv());
+                .put("contention", format!("{};gate={}", p.contention.csv(), ctx.gate));
         }
         None => {
             for c in ["prove_s", "verify_ms"] {
@@ -673,11 +693,16 @@ fn tail_cols(r: &mut Row, x: &Exec, prof: String, p: Option<Proved>, id: [u32; 8
         .put("image_id", image_id_hex(id));
 }
 
-fn arm_of(p: &Option<Proved>) -> &'static str {
-    match p {
-        None => "exec",
+/// exec | proved | proved_contended, then _<arm-tag> on proved rows when one was given.
+fn arm_of(ctx: &Ctx, p: &Option<Proved>) -> String {
+    let base = match p {
+        None => return "exec".into(),
         Some(p) if p.contention.contended() => "proved_contended",
         Some(_) => "proved",
+    };
+    match &ctx.arm_tag {
+        Some(t) => format!("{base}_{t}"),
+        None => base.into(),
     }
 }
 
@@ -692,7 +717,7 @@ fn aggr_step(ctx: &mut Ctx, inp: &BloomAggrInput, st: &BloomEpochState, e: usize
     let inserted: HashSet<u32> = slice.iter().copied().collect();
     let refc = ref_check(&st.bits, slice, None);
     let mut r = Row::new();
-    common_cols(&mut r, ctx, arm_of(&p), "aggr", "bloom_aggr", "-", 1, e.to_string(), ctx.m, inserted.len(), &x);
+    common_cols(&mut r, ctx, &arm_of(ctx, &p), "aggr", "bloom_aggr", "-", 1, e.to_string(), ctx.m, inserted.len(), &x);
     r.put("state_commits", 1)
         .put("journal_eq_native", eq)
         .put("ref_check", &refc)
@@ -705,7 +730,7 @@ fn aggr_step(ctx: &mut Ctx, inp: &BloomAggrInput, st: &BloomEpochState, e: usize
         .put("suppressed", "-");
     // per-epoch filter accuracy, computed natively from the committed state
     let acc_ok = accuracy_cols(&mut r, &accuracy(&st.bits, &inserted, absent));
-    tail_cols(&mut r, &x, prof(&x, &["chain", "flatten", "update", "commit"]), p, BLOOM_AGGR_ID);
+    tail_cols(&mut r, ctx, &x, prof(&x, &["chain", "flatten", "update", "commit"]), p, BLOOM_AGGR_ID);
     r.emit();
     if !eq || refc != "ok" || !acc_ok {
         eprintln!("bloom: FAIL aggr epoch {e}: journal_eq_native={eq} ref_check={refc} accuracy_ok={acc_ok}");
@@ -714,7 +739,8 @@ fn aggr_step(ctx: &mut Ctx, inp: &BloomAggrInput, st: &BloomEpochState, e: usize
     got
 }
 
-/// One query guest run over the given epoch states and chain links.
+/// One query guest run over the given epoch states and chain links: `bloom_query`, then
+/// with --words also `bloom_query_words` on the same input.
 #[allow(clippy::too_many_arguments)]
 fn query_step(
     ctx: &mut Ctx, states: &[BloomEpochState], links: &[EpochChainLink], prefix: &[u32], probe_mode: &str,
@@ -727,12 +753,7 @@ fn query_step(
         epoch_chain_links: links.to_vec(),
     };
     let native = run_bloom_query(&input).suppress_if_low_support();
-    let x = execute(&input, BLOOM_QUERY_ELF);
-    let got: BloomQueryOutput = x.session.journal.decode().expect("decode journal");
-    let eq = got == native;
-    let p = ctx.do_prove.then(|| prove(&input, BLOOM_QUERY_ELF, BLOOM_QUERY_ID, &native));
-    let BloomQueryResult::Contains { key, member } = got.result;
-    assert_eq!(key, Event::make_key_id(0, probe as u64), "journal key != probe key");
+    let winput = ctx.words.then(|| BloomQueryInputWords::from(&input));
     // the merged filter the guest must have formed
     let mut merged = vec![0u8; BLOOM_BYTES];
     for s in states {
@@ -742,31 +763,52 @@ fn query_step(
     }
     let inserted: HashSet<u32> = prefix.iter().copied().collect();
     let in_stream = inserted.contains(&probe);
-    let refc = if got.suppressed { "suppressed".to_string() } else { ref_check(&merged, prefix, Some((probe, member))) };
-    let answer_ok = got.suppressed || !in_stream || member;
-    let answer = format!(
-        "member={member}{}{}",
-        if member && !in_stream { "(false_positive)" } else { "" },
-        if got.suppressed { " SUPPRESSED" } else { "" }
-    );
-    let mut r = Row::new();
-    common_cols(&mut r, ctx, arm_of(&p), "query", "bloom_query", "contains", n, "-".into(), n * ctx.m, inserted.len(), &x);
-    r.put("state_commits", got.state_commits.len())
-        .put("journal_eq_native", eq)
-        .put("ref_check", &refc)
-        .put("probe_mode", probe_mode)
-        .put("probe_key", probe)
-        .put("answer", answer)
-        .put("exact", format!("in_stream={in_stream}"))
-        .put("answer_ok", answer_ok)
-        .put("support", got.support)
-        .put("suppressed", got.suppressed);
-    let acc_ok = accuracy_cols(&mut r, &accuracy(&merged, &inserted, absent));
-    tail_cols(&mut r, &x, prof(&x, &["links", "commits", "merge", "answer"]), p, BLOOM_QUERY_ID);
-    r.emit();
-    if !eq || !(refc == "ok" || refc == "suppressed") || !answer_ok || !acc_ok {
-        eprintln!("bloom: FAIL query n={n} probe={probe}: journal_eq_native={eq} ref_check={refc} answer_ok={answer_ok} accuracy_ok={acc_ok}");
-        ctx.fails += 1;
+    let mut variants = vec![("bloom_query", false)];
+    if winput.is_some() {
+        variants.push(("bloom_query_words", true));
+    }
+    for (guest, words) in variants {
+        let (elf, id) = if words { (BLOOM_QUERY_WORDS_ELF, BLOOM_QUERY_WORDS_ID) } else { (BLOOM_QUERY_ELF, BLOOM_QUERY_ID) };
+        let x = match &winput {
+            Some(w) if words => execute(w, elf),
+            _ => execute(&input, elf),
+        };
+        let got: BloomQueryOutput = x.session.journal.decode().expect("decode journal");
+        let eq = got == native;
+        let p = ctx.do_prove.then(|| match &winput {
+            Some(w) if words => prove(w, elf, id, &native),
+            _ => prove(&input, elf, id, &native),
+        });
+        let BloomQueryResult::Contains { key, member } = got.result;
+        assert_eq!(key, Event::make_key_id(0, probe as u64), "journal key != probe key");
+        let refc = if got.suppressed { "suppressed".to_string() } else { ref_check(&merged, prefix, Some((probe, member))) };
+        let answer_ok = got.suppressed || !in_stream || member;
+        let answer = format!(
+            "member={member}{}{}",
+            if member && !in_stream { "(false_positive)" } else { "" },
+            if got.suppressed { " SUPPRESSED" } else { "" }
+        );
+        let mut r = Row::new();
+        common_cols(&mut r, ctx, &arm_of(ctx, &p), "query", guest, "contains", n, "-".into(), n * ctx.m, inserted.len(), &x);
+        r.put("state_commits", got.state_commits.len())
+            .put("journal_eq_native", eq)
+            .put("ref_check", &refc)
+            .put("probe_mode", probe_mode)
+            .put("probe_key", probe)
+            .put("answer", answer)
+            .put("exact", format!("in_stream={in_stream}"))
+            .put("answer_ok", answer_ok)
+            .put("support", got.support)
+            .put("suppressed", got.suppressed);
+        let acc_ok = accuracy_cols(&mut r, &accuracy(&merged, &inserted, absent));
+        let phases: &[&str] =
+            if words { &["convert", "links", "commits", "merge", "answer"] } else { &["links", "commits", "merge", "answer"] };
+        tail_cols(&mut r, ctx, &x, prof(&x, phases), p, id);
+        r.emit();
+        if !eq || !(refc == "ok" || refc == "suppressed") || !answer_ok || !acc_ok {
+            eprintln!("bloom: FAIL {guest} n={n} probe={probe}: journal_eq_native={eq} ref_check={refc} answer_ok={answer_ok} accuracy_ok={acc_ok}");
+            ctx.fails += 1;
+        }
     }
 }
 
@@ -828,7 +870,26 @@ fn main() {
     let keys = load_keys(&keys_path);
     let all: HashSet<u32> = keys.iter().copied().collect();
     let absent = absent_keys(&all, n_absent);
-    let mut ctx = Ctx { mode: mode.clone(), m, cbs, do_prove: flag("--prove"), fails: 0 };
+    let gate = arg_str("--gate").unwrap_or_else(|| "none".into());
+    let arm_tag = arg_str("--arm-tag");
+    if gate.contains(',') {
+        die("--gate must not contain a comma (it goes into a CSV cell)");
+    }
+    if let Some(t) = &arm_tag {
+        if t.is_empty() || !t.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+            die(&format!("--arm-tag '{t}': use [a-z0-9_]+"));
+        }
+    }
+    let mut ctx = Ctx {
+        mode: mode.clone(),
+        m,
+        cbs,
+        do_prove: flag("--prove"),
+        words: flag("--words"),
+        gate,
+        arm_tag,
+        fails: 0,
+    };
 
     match mode.as_str() {
         "aggr" => {

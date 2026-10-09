@@ -18,6 +18,7 @@ or certificate (zkSketch's `kmv` leaf certifies a verified sorted reduction over
 |---|---|---|
 | aggregation, one per epoch | `kmv_aggr` | verifies the source SHA-256 batch hash chain (their code), builds the epoch's bottom-k set (k = 1,024 smallest distinct 64-bit key hashes) from scratch one record at a time, hashes the state with an unsalted tagged SHA-256, and links that commitment into the epoch chain (their `EpochChainLink::new`) |
 | query over n epochs | `kmv_query` | re-verifies the n epoch chain links (their code), recomputes each epoch's state commitment, merges the n sets (bottom-k of their union), and commits the distinct-count answer with the chain boundaries and the n state commits (their low-support suppression, `MIN_SUPPORT = 10`) |
+| sensitivity only | `kmv_query_words` | the same query and journal, but each epoch's values travel as a `Vec<u64>` in serde's default encoding (two zkVM words per value, read element by element), the form of their `CmEpochState::heap_vals`; the conversion to the query input is a move (its `convert` phase, ~100 cycles) (the pattern of `../hll`'s `hll_query_words`) |
 
 The host driver `kmv` (`host/src/main.rs`) has three modes; every guest run is
 executed, and also proved with `--prove` (`ProverOpts::succinct()`, their shipped
@@ -28,6 +29,9 @@ tier, CPU r0vm):
 | `aggr --epoch-index i` | `kmv_aggr` on epoch i (earlier epochs aggregated natively only to carry the chain tips) |
 | `query --epochs n` | epochs 0..n aggregated natively, then `kmv_query` over the n states |
 | `exec --epochs N --query-at 1,2,4,8` | the whole per-epoch pipeline: `kmv_aggr` on every epoch in order, each epoch's `prev_chain_hash` and source tips taken from the previous **guest journal** (as their aggregator host carries them), and after epoch n the `kmv_query` guest over epochs 0..n for every n in `--query-at` |
+
+With `--words` (query and exec modes) every `kmv_query` run is followed by a
+`kmv_query_words` run on the same input; under `--prove` it is proved too.
 
 ### Configuration
 
@@ -80,8 +84,8 @@ tier, CPU r0vm):
 
 ```bash
 cd scripts/baselines/zka/kmv
-./run_exec.sh                         # executor: --mode exec, 8 epochs x 2048, queries at n = 1 2 4 8
-PROVE=1 ./run_exec.sh                 # the same pipeline PROVED (8 aggregation + 4 query proofs; refuses if 1-min load > 24)
+./run_exec.sh                         # executor: --mode exec, 8 epochs x 2048, queries at n = 1 2 4 8, + kmv_query_words
+PROVE=1 ./run_exec.sh                 # the planned measurement: the same pipeline PROVED, no words variant (8 aggregation + 4 query proofs)
 MODE=aggr EPOCH_INDEX=3 ./run_exec.sh # one aggregation guest
 MODE=query EPOCHS=4 ./run_exec.sh     # one query guest over epochs 0..4
 ./gen_upstream.sh --check             # verbatim copies still match the clone at d4a5a9a
@@ -90,9 +94,13 @@ CARGO_TARGET_DIR=~/ext-baselines/build/zka-kmv cargo test --release --locked -p 
 
 - Builds go to `$BASELINE_DIR/build/zka-kmv` (`--locked`, `RISC0_BUILD_LOCKED=1`).
 - `run_exec.sh` appends to `../results/zka_kmv_exec.csv` (`PROVE=1`:
-  `zka_kmv_prove.csv`; any file via `OUT=`), with the same header guard and raw log as
-  `../bloom/run_exec.sh`. Env: `MODE EPOCHS EPOCH_SIZE QUERY_AT EPOCH_INDEX BATCH
-  PROVE MAX_LOAD OUT SKIP_BUILD KEYS`.
+  `zka_kmv_prove.csv`; any file via `OUT=`), with the same header guard, raw log,
+  per-row streaming and `PROVE=1` gate as `../bloom/run_exec.sh`: the prove lock
+  `$BASELINE_DIR/build/zka-prove.lock` is shared by the two families, and the runner
+  waits up to `WAIT_S` (1,800 s) for a 1-minute load <= `MAX_LOAD` (24) with no `r0vm`
+  of any user, refusing (exit 3) otherwise. Env: `MODE EPOCHS EPOCH_SIZE QUERY_AT
+  WORDS EPOCH_INDEX BATCH PROVE MAX_LOAD WAIT_S ARM_TAG OUT SKIP_BUILD KEYS`; `WORDS`
+  defaults to 0 under `PROVE=1`, else 1.
 - Every row checks, and the driver exits 1 if any fails (the row is still written):
   - `journal_eq_native`: the guest journal equals the same core function run natively
     (for proved rows the PROVED journal too, asserted);
@@ -106,59 +114,71 @@ CARGO_TARGET_DIR=~/ext-baselines/build/zka-kmv cargo test --release --locked -p 
     Aggregation rows report the native estimate of the committed epoch state (the
     aggregation journal holds commitments only). A suppressed query (support < 10
     records) has `estimator = suppressed` and `accuracy_ok = -`.
-- Proved rows carry the same prove, RSS and contention columns as `../bloom/`
-  (`arm = proved_contended` when foreign r0vm burned >= 10 CPU s or
-  `other_cores_avg >= 4`).
+- Proved rows carry the same prove, RSS, contention and gate columns and the same
+  `arm` rule as `../bloom/`: `proved_contended` when foreign r0vm burned >= 10 CPU s
+  or `other_cores_avg >= 4`, `_override` appended when `MAX_LOAD` was raised above
+  its default, `_<tag>` for `ARM_TAG=<tag>`. **Only `arm = proved`, in
+  `zka_kmv_prove.csv`, is a timing measurement**; the runner prints a re-run command
+  for every contended row.
 
 ## Validation results (2026-10-09; VALIDATION ONLY, not the measurement)
 
 This phase built and validated the guests at tiny scale; the comparison measurement
 (8 epochs x 2,048, proved) is to be run later on a quiet machine. All rows are in
-`../results/zka_kmv_validation.csv` (+ `.log`). Every row passed every check.
+`../results/zka_kmv_validation.csv` (18 rows, + `.log`). Every row passed every check.
 
-Commands (`OUT=../results/zka_kmv_validation.csv`): `MODE=exec EPOCHS=2
-EPOCH_SIZE=256 QUERY_AT="1 2"`, the same at `EPOCH_SIZE=2048`, `MODE=aggr
-EPOCH_INDEX=1 EPOCH_SIZE=2048`, `MODE=query EPOCHS=2 EPOCH_SIZE=2048`, and the proved
-run `PROVE=1 MAX_LOAD=200 MODE=exec EPOCHS=1 EPOCH_SIZE=256 QUERY_AT=1`, each as
-`./run_exec.sh`.
+Commands, run from this directory with `OUT=../results/zka_kmv_validation.csv`, each
+as `./run_exec.sh`: `MODE=exec EPOCHS=2 EPOCH_SIZE=256 QUERY_AT="1 2"`, the same at
+`EPOCH_SIZE=2048`, `MODE=aggr EPOCH_INDEX=1 EPOCH_SIZE=2048`, `MODE=query EPOCHS=2
+EPOCH_SIZE=2048`, and the proved run `PROVE=1 ARM_TAG=validation WORDS=1 MODE=exec
+EPOCHS=1 EPOCH_SIZE=256 QUERY_AT=1` (default `MAX_LOAD`).
 
 **Aggregation guest `kmv_aggr`** (executor; AOL, batches of 8). The answer column is
 the native estimate of the committed epoch state:
 
 | epoch size | epoch | distinct keys | user cycles | cycles/rec | segments (padded) | read | chain | update | commit | kept | answer (rel. err) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 256 | 0 | 174 | 1,405,459 | 5,490 | 2 (1.57M) | 956,084 | 280,039 | 125,272 | 14,096 | 174 | 174 (exact branch) |
-| 256 | 1 | 199 | 1,418,452 | 5,541 | 2 (1.57M) | 962,270 | 280,536 | 129,988 | 15,682 | 199 | 199 (exact branch) |
-| 2,048 | 0 | 1,234 | 11,115,930 | 5,428 | 12 (12.06M) | 7,604,628 (68.4%) | 2,238,471 (20.1%) | 1,107,941 (10.0%; 541/rec) | 68,210 | 1,024 | 1,232 (-0.16%) |
-| 2,048 | 1 | 1,252 | 11,115,970 | 5,428 | 12 (12.06M) | 7,610,814 | 2,238,968 | 1,101,290 | 68,210 | 1,024 | 1,235 (-1.36%) |
+| 256 | 0 | 174 | 1,404,153 | 5,485 | 2 (1.57M) | 956,084 | 278,119 | 125,946 | 14,036 | 174 | 174 (exact branch) |
+| 256 | 1 | 199 | 1,417,244 | 5,536 | 2 (1.57M) | 962,270 | 278,616 | 130,760 | 15,622 | 199 | 199 (exact branch) |
+| 2,048 | 0 | 1,234 | 11,104,487 | 5,422 | 12 (12.06M) | 7,604,628 (68.5%) | 2,223,111 (20.0%) | 1,111,918 (10.0%; 543/rec) | 68,150 | 1,024 | 1,232 (-0.16%) |
+| 2,048 | 1 | 1,252 | 11,104,526 | 5,422 | 12 (12.06M) | 7,610,814 | 2,223,608 | 1,105,266 | 68,150 | 1,024 | 1,235 (-1.36%) |
 
-**Query guest `kmv_query`** (executor):
+**Query guests** (executor). `kmv_query_words` returns the same journal as `kmv_query`
+(same answers); its `convert` phase (a move) is 102 cycles:
 
-| epoch size | n | merged values | user cycles | segments (po2) | read | links | commits | merge | estimate | answer / exact (rel. err) |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 256 | 1 | 174 | 56,610 | 1 (17) | 23,524 | 1,445 | 12,854 | 4,172 | 116 | 174 / 174 (exact branch) |
-| 256 | 2 | 365 | 109,515 | 1 (18) | 46,919 | 2,995 | 27,179 | 14,636 | 116 | 365 / 365 (exact branch) |
-| 2,048 | 1 | 1,024 | 151,365 | 1 (18) | 45,380 | 1,445 | 66,968 | 22,021 | 1,052 | 1,232 / 1,234 (-0.16%) |
-| 2,048 | 2 | 1,024 | 296,524 | 1 (19) | 89,993 | 2,995 | 133,821 | 50,924 | 1,121 | 2,290 / 2,372 (-3.46%) |
+| guest | epoch size | n | merged values | user cycles | segments (po2) | read | links | commits | merge | estimate | answer / exact (rel. err) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `kmv_query` | 256 | 1 | 174 | 56,610 | 1 (17) | 23,524 | 1,445 | 12,854 | 4,172 | 116 | 174 / 174 (exact branch) |
+| `kmv_query` | 256 | 2 | 365 | 109,515 | 1 (18) | 46,919 | 2,995 | 27,179 | 14,636 | 116 | 365 / 365 (exact branch) |
+| `kmv_query` | 2,048 | 1 | 1,024 | 151,365 | 1 (18) | 45,380 | 1,445 | 66,968 | 22,021 | 1,052 | 1,232 / 1,234 (-0.16%) |
+| `kmv_query` | 2,048 | 2 | 1,024 | 296,524 | 1 (19) | 89,993 | 2,995 | 133,821 | 50,924 | 1,121 | 2,290 / 2,372 (-3.46%) |
+| `kmv_query_words` | 256 | 1 | 174 | 102,495 | 1 (18) | 69,294 | 1,445 | 12,854 | 4,172 | 116 | 174 / 174 (exact branch) |
+| `kmv_query_words` | 256 | 2 | 365 | 207,781 | 1 (18) | 145,070 | 2,995 | 27,179 | 14,636 | 116 | 365 / 365 (exact branch) |
+| `kmv_query_words` | 2,048 | 1 | 1,024 | 421,894 | 1 (19) | 315,794 | 1,445 | 66,968 | 22,021 | 1,052 | 1,232 / 1,234 (-0.16%) |
+| `kmv_query_words` | 2,048 | 2 | 1,024 | 837,466 | 1 (20) | 630,820 | 2,995 | 133,821 | 50,924 | 1,121 | 2,290 / 2,372 (-3.46%) |
 
 - Both estimator branches ran: the exact branch at 256 records per epoch (fewer than
   k distinct hashes) and the (k-1)/U_(k) branch at 2,048. The -3.46% at n = 2 is 1.1
   standard errors (1/sqrt(1022) = 3.13%). One hash draw; no seed spread was run.
-- With full epoch states (2,048 records) the query costs ~145K cycles per epoch (read
-  ~45K, commit recomputation ~67K, merge ~22-29K). Linear extrapolation to the planned
-  n = 8 gives ~1.2M cycles (2 segments); that is an extrapolation, not a run.
+- With full epoch states (2,048 records) `kmv_query` costs ~145K cycles per epoch
+  (read ~45K, commit recomputation ~67K, merge ~22-29K) and `kmv_query_words` ~416K
+  (read ~315K). Linear extrapolation to the planned n = 8 gives ~1.2M cycles (2
+  segments) for `kmv_query`; that is an extrapolation, not a run.
 - The single-guest modes (`MODE=aggr EPOCH_INDEX=1`, `MODE=query EPOCHS=2`) reproduce
-  the pipeline's rows exactly (11,115,970 and 296,524 cycles).
+  the pipeline's rows exactly (11,104,526, 296,524 and 837,466 cycles).
 
-**Proved run** (validates the `--prove` path; NOT a timing measurement: the shared
-box had a concurrent job, `other_cores_avg` 2.0-2.3, 1-minute load up to 42.5
-including this prover and the Bloom prove just before it). `ProverOpts::succinct()`,
-CPU r0vm 3.0.6; both proved journals were asserted equal to the native output:
+**Proved run** (validates the `--prove` path; NOT a timing measurement). The runner
+waited 120 s for the gate (1-minute load 21.4 <= 24, no other `r0vm`; part of the
+earlier load was the Bloom validation prove), but a sibling job kept 4.9-8.2 other
+cores busy during the proofs, so all three rows are
+`arm = proved_contended_validation`. `ProverOpts::succinct()`, CPU r0vm 3.0.6; every
+proved journal was asserted equal to the native output:
 
 | guest | input | segments | prove_s | s/segment | verify (best of 5) | receipt | r0vm peak RSS |
 |---|---|---|---|---|---|---|---|
-| `kmv_aggr` | epoch 0, 256 records | 2 (po2 20, 19) | 45.6 | 22.81 | 9.8 ms | 224,554 B | 9,387 MB |
-| `kmv_query` | n = 1 | 1 (po2 17) | 6.0 | 6.04 | 9.7 ms | 224,082 B | 1,430 MB |
+| `kmv_aggr` | epoch 0, 256 records | 2 (po2 20, 19) | 50.4 | 25.20 | 9.7 ms | 224,554 B | 9,389 MB |
+| `kmv_query` | n = 1 | 1 (po2 17) | 6.4 | 6.38 | 9.7 ms | 224,082 B | 1,420 MB |
+| `kmv_query_words` | n = 1 | 1 (po2 18) | 9.5 | 9.52 | 9.8 ms | 224,082 B | 2,345 MB |
 
 ## Reused from upstream (d4a5a9a)
 
@@ -176,8 +196,9 @@ CPU r0vm 3.0.6; both proved journals were asserted equal to the native output:
   same risc0-zkvm feature sets.
 - **Hash:** their `key_to_u64` + `cm_bucket_index` finaliser (the HLL port's hash).
 - **Ours.** The KMV insert, the bottom-k merge, the estimator, the state type, its tag
-  and packing, the cycle probes, the host driver (independent reference, accuracy,
-  `exec` pipeline mode, RSS/contention sampler after `../gk/host`), the runner.
+  and packing, the `kmv_query_words` variant, the cycle probes, the host driver
+  (independent reference, accuracy, `exec` pipeline mode, RSS/contention sampler after
+  `../gk/host`), the runner (prove lock and quiet-box wait after `../sketch_exec.sh`).
 
 ## Caveats
 
@@ -187,12 +208,13 @@ CPU r0vm 3.0.6; both proved journals were asserted equal to the native output:
   many records enter or evict from the ordered set (epochs 0 and 1 at 2,048 records:
   1,107,941 vs 1,101,290 cycles), and the merge on how the epoch sets interleave.
   Cycles leak input properties, exactly as in their guests.
-- **The state encoding is a lever.** risc0's serde reads a plain `Vec<u64>` one word
-  at a time (~150 cycles per word, 2 words per value: ~0.3M cycles per full epoch
-  state, by the per-word cost measured for the HLL and Bloom ports; not measured for
-  KMV). The packed byte image is read in bulk and converted (45,380 cycles for one
-  full state's read phase). The packed form is the headline: it is the cheaper
-  (conservative) baseline, as for HLL.
+- **The state encoding is a ~2.8x lever on the query (measured).** risc0's serde
+  reads a plain `Vec<u64>` one word at a time (~150 cycles per word, 2 words per
+  value), the packed byte image in bulk; both are the same number of words.
+  `kmv_query_words` spends 315,794 cycles reading one full epoch state and 421,894 on
+  the n = 1 query at 2,048 records, against 45,380 (bulk read plus the conversion back
+  to u64s) and 151,365 for `kmv_query` (2.8x at n = 1 and n = 2). The packed form is
+  the headline: it is the cheaper (conservative) baseline, as for HLL.
 - **Aggregation is dominated by their input format.** About 68% of `kmv_aggr`'s
   cycles deserialize their `Event` batches and 20% verify the batch chain; the KMV
   update is ~10%.
@@ -211,13 +233,18 @@ CPU r0vm 3.0.6; both proved journals were asserted equal to the native output:
 - **MODELED is a model** (`segments x 30.1 s`, see `../README.md`).
 - **ELF md5s and image IDs depend on the absolute source path**; cycle counts do not.
   The validation rows were built from a worktree path.
+- **Cycle counts do depend on the build.** Adding the words types to the core crate
+  changed the `kmv_aggr` ELF although it does not use them: against the first build,
+  -1,306 / -11,443 cycles (-0.09% / -0.10%) at 256 / 2,048 records, mostly the batch
+  chain verification (-60 cycles per batch; upstream code, so a codegen effect). The
+  query guest did not move. The measurement must use one build for all rows.
 
 ## Files
 
 | file | purpose |
 |---|---|
-| `core/` | `zka-kmv-core` (no_std): hash, bottom-k insert, merge, estimator, epoch type, aggregation, query; `upstream_verbatim.rs`; unit tests (per-epoch state = reference bottom-k, merge = union, insertion order, merge edges, exact branch, estimator integer arithmetic and saturation, tamper / reorder / forged batch, suppression, serde packing) |
-| `methods/`, `guests/aggr`, `guests/query` | risc0 methods crate and the guests `kmv_aggr`, `kmv_query` |
-| `host/` | driver `kmv` (modes `exec`, `aggr`, `query`; `--prove`) |
-| `run_exec.sh`, `kmv_common.sh` | runner (executor or `PROVE=1`) and its build/log helpers |
+| `core/` | `zka-kmv-core` (no_std): hash, bottom-k insert, merge, estimator, epoch type, aggregation, query; `upstream_verbatim.rs`; unit tests (per-epoch state = reference bottom-k, merge = union, insertion order, merge edges, exact branch, estimator integer arithmetic and saturation, tamper / reorder / forged batch, suppression, serde packing, words variant = same input and answer) |
+| `methods/`, `guests/aggr`, `guests/query` | risc0 methods crate and the guests `kmv_aggr`, `kmv_query`, `kmv_query_words` (`guests/query/src/bin`) |
+| `host/` | driver `kmv` (modes `exec`, `aggr`, `query`; `--words`, `--prove`, `--gate`, `--arm-tag`) |
+| `run_exec.sh`, `kmv_common.sh` | runner (executor or `PROVE=1`) and its build / log / prove-gate helpers |
 | `gen_upstream.sh` | regenerates / checks the verbatim copies |

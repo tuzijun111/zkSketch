@@ -382,6 +382,57 @@ pub fn run_kmv_query_probed(input: &KmvQueryInput, probe: &mut dyn FnMut()) -> K
     }
 }
 
+// ------------------------------------------------- naive-serde input variant
+/// The same query input with the values as a `Vec<u64>` in serde's DEFAULT encoding:
+/// two zkVM words per value, which risc0's serde reads element by element (the packed
+/// image above has the same number of words but is read in bulk). This is the form of
+/// their `CmEpochState::heap_vals: Vec<u64>` (aggregator/core/src/lib.rs:982), i.e.
+/// what a direct port in the style of their CM state would send. Used only by the
+/// `kmv_query_words` guest, a sensitivity row (the pattern of ../../hll's
+/// `hll_query_words`): the conversion to `KmvQueryInput` is a move (no copy), the query
+/// is identical and so is the journal.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KmvEpochStateWords {
+    pub total_count: u64,
+    pub values: Vec<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KmvQueryInputWords {
+    pub query: KmvQuery,
+    pub epoch_states: Vec<KmvEpochStateWords>,
+    #[serde(default)]
+    pub epoch_chain_links: Vec<EpochChainLink>,
+}
+
+impl From<KmvQueryInputWords> for KmvQueryInput {
+    fn from(w: KmvQueryInputWords) -> Self {
+        KmvQueryInput {
+            query: w.query,
+            epoch_states: w
+                .epoch_states
+                .into_iter()
+                .map(|s| KmvEpochState { total_count: s.total_count, values: s.values })
+                .collect(),
+            epoch_chain_links: w.epoch_chain_links,
+        }
+    }
+}
+
+impl From<&KmvQueryInput> for KmvQueryInputWords {
+    fn from(p: &KmvQueryInput) -> Self {
+        KmvQueryInputWords {
+            query: p.query.clone(),
+            epoch_states: p
+                .epoch_states
+                .iter()
+                .map(|s| KmvEpochStateWords { total_count: s.total_count, values: s.values.clone() })
+                .collect(),
+            epoch_chain_links: p.epoch_chain_links.clone(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------- serde helper
 /// Serializes a Vec<u64> as one byte string (the values' big-endian image) through
 /// serde's bytes type, which risc0's serde packs four bytes per word and reads in bulk
@@ -635,5 +686,17 @@ mod tests {
         let v = to_vec(&s).unwrap();
         assert_eq!(from_slice::<KmvEpochState, _>(&v).unwrap(), s);
         assert_eq!(kmv_values_be_bytes(&s.values)[8..16], 2u64.to_be_bytes());
+    }
+
+    #[test]
+    fn words_variant_is_the_same_input_and_query() {
+        let q = query_input(&lcg_keys(2 * 4096, 50_000), 4096);
+        let ww = to_vec(&KmvQueryInputWords::from(&q)).unwrap();
+        let back = KmvQueryInput::from(from_slice::<KmvQueryInputWords, _>(&ww).unwrap());
+        assert_eq!(back, q);
+        assert_eq!(run_kmv_query(&back), run_kmv_query(&q));
+        // the same number of zkVM words as the packed image (len + 2 per value): the
+        // difference is how risc0's serde reads them, element by element
+        assert_eq!(ww.len(), to_vec(&q).unwrap().len());
     }
 }

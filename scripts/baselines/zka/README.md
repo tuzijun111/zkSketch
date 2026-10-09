@@ -36,8 +36,8 @@ they sit in, so a worktree measures its own sources.
 | `rss_watch.sh` | no | stdout | wraps a command and reports r0vm peak RSS |
 | `shipped_exec.sh` | no | `zka_shipped_exec.csv`, `zka_shipped_exec.log` | their three shipped epoch summaries on real AOL epochs, executor only (see below) |
 | `sketch_exec.sh` | no (`--prove`: yes) | `zka_{hll,ss,gk}_*.csv` / `.log`, `zka_sketch_exec.log` | OUR HLL, SpaceSaving and GK guests (†) in their architecture; builds and regenerates all executor CSVs (see "Sketch-family guests") |
-| `bloom/run_exec.sh` | no (`PROVE=1`: yes) | `zka_bloom_exec.csv` (`PROVE=1`: `zka_bloom_prove.csv`) + `.log` | OUR partitioned Bloom filter guests (†) in their architecture: per-epoch aggregation and query-time OR merge, the whole pipeline in one run (see "Bloom filter and KMV guests") |
-| `kmv/run_exec.sh` | no (`PROVE=1`: yes) | `zka_kmv_exec.csv` (`PROVE=1`: `zka_kmv_prove.csv`) + `.log` | OUR KMV / bottom-k guests (†) in their architecture: per-epoch aggregation and query-time bottom-k union (see "Bloom filter and KMV guests") |
+| `bloom/run_exec.sh` | no (`PROVE=1`: yes) | `zka_bloom_exec.csv` (`PROVE=1`: `zka_bloom_prove.csv`) + `.log` | OUR partitioned Bloom filter guests (†) in their architecture: per-epoch aggregation and query-time OR merge, the whole pipeline in one run, plus the `bloom_query_words` state-encoding sensitivity (see "Bloom filter and KMV guests") |
+| `kmv/run_exec.sh` | no (`PROVE=1`: yes) | `zka_kmv_exec.csv` (`PROVE=1`: `zka_kmv_prove.csv`) + `.log` | OUR KMV / bottom-k guests (†) in their architecture: per-epoch aggregation and query-time bottom-k union, plus the `kmv_query_words` sensitivity (see "Bloom filter and KMV guests") |
 | `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 | `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
 
@@ -629,10 +629,10 @@ two families; each has its own runner.
 ### Running
 
 ```bash
-scripts/baselines/zka/bloom/run_exec.sh              # executor: 8 x 2048 pipeline, queries n = 1 2 4 8, probes first,absent
-scripts/baselines/zka/kmv/run_exec.sh                # executor: 8 x 2048 pipeline, queries n = 1 2 4 8
-PROVE=1 PROBES=first scripts/baselines/zka/bloom/run_exec.sh   # the planned measurement, proved (quiet machine)
-PROVE=1 scripts/baselines/zka/kmv/run_exec.sh
+scripts/baselines/zka/bloom/run_exec.sh              # executor: 8 x 2048 pipeline, queries n = 1 2 4 8, probes first,absent (+ words variant)
+scripts/baselines/zka/kmv/run_exec.sh                # executor: 8 x 2048 pipeline, queries n = 1 2 4 8 (+ words variant)
+PROVE=1 scripts/baselines/zka/bloom/run_exec.sh      # the planned measurement, proved: 8 aggregation + 4 query proofs
+PROVE=1 scripts/baselines/zka/kmv/run_exec.sh        # (run one after the other, on a quiet machine)
 ```
 
 - The drivers (`bloom`, `kmv`) have three modes: `aggr` (one aggregation guest),
@@ -641,14 +641,29 @@ PROVE=1 scripts/baselines/zka/kmv/run_exec.sh
   from the previous guest journal, and the query guest after epoch n for every n in
   `--query-at`). With `--prove` every guest run of the invocation is also proved
   (`ProverOpts::succinct()`, CPU), its journal asserted equal to the native output.
+  `--words` also runs each query as the `*_query_words` guest (sensitivity, as
+  `hll_query_words`: the same query and journal, the state in serde's default
+  `Vec<u32>` / `Vec<u64>` encoding, the form of their `CmEpochState`). The runners
+  pass it by default for executor runs and not under `PROVE=1`; under `PROVE=1` the
+  Bloom runner's default probe is `first` only, so `PROVE=1 run_exec.sh` as is runs
+  the planned 12 proofs per family.
 - CSV columns: user / padded cycles, segments, max po2, the guest's phase split,
   `prove_s`, `verify_ms`, `receipt_bytes`, `prove_r0vm_peak_rss_mb` (VmHWM of the
-  driver's r0vm descendants), `contention` (foreign r0vm CPU seconds and
-  `other_cores_avg`, the cores busy with anything else; `arm = proved_contended` at
-  >= 10 r0vm CPU s or >= 4 cores), the answer, the exact answer, `journal_eq_native`,
-  an independent host reference (`ref_check`) and the accuracy columns. The driver
-  exits 1 if any check fails.
-- `PROVE=1` refuses when the 1-minute load average exceeds `MAX_LOAD` (24).
+  driver's r0vm descendants), `contention` (foreign r0vm CPU seconds,
+  `other_cores_avg` = the cores busy with anything else, and the runner's load gate
+  `gate=load1_start=..;max_load=..;waited_s=..`), the answer, the exact answer,
+  `journal_eq_native`, an independent host reference (`ref_check`) and the accuracy
+  columns. The driver exits 1 if any check fails.
+- **Which proved rows are timing-grade.** `arm = proved_contended` at >= 10 foreign
+  r0vm CPU s or >= 4 other cores busy; `MAX_LOAD` raised above its default 24 appends
+  `_override`, and `ARM_TAG=<tag>` appends `_<tag>` (the validation proofs below use
+  `validation`). Only `arm = proved`, in `zka_{bloom,kmv}_prove.csv`, is a timing
+  measurement; the runner prints a re-run command for every contended row.
+- **`PROVE=1` gate.** The runner takes `$BASELINE_DIR/build/zka-prove.lock` (shared
+  by the two families: a second Bloom or KMV prover refuses), then waits up to
+  `WAIT_S` (1,800 s) until the 1-minute load is <= `MAX_LOAD` (24) and no `r0vm` of
+  any user runs (`sketch_exec.sh`'s rule), and refuses (exit 3) otherwise. Rows reach
+  the CSV and the log as each guest run finishes, so an interrupted run keeps them.
 - Builds: `$BASELINE_DIR/build/zka-{bloom,kmv}`, `--locked`, `RISC0_BUILD_LOCKED=1`.
 
 ### Exact configuration
@@ -666,7 +681,8 @@ PROVE=1 scripts/baselines/zka/kmv/run_exec.sh
 Records, batching and chains are those of the families above (`data/aol.keys`; epoch e
 = keys `[e*m, (e+1)*m)`, default m = 2,048; one source, batches of 8; chains carried
 across epochs). Both state types travel as packed byte strings (the HLL port's
-`packed_bytes` pattern), the cheaper encoding (see Caveats).
+`packed_bytes` pattern), the cheaper encoding; the `*_query_words` guests measure the
+default encoding (see Caveats).
 
 ### Reused from upstream vs written by us
 
@@ -675,36 +691,43 @@ across epochs). Both state types travel as packed byte strings (the HLL port's
 | `verify_and_compute_chain`, `verify_epoch_chain_integrity`, `events_commit`, `chain_tips_to_sorted_vec`, `sha256_bytes`, `TAG_SHARD_CHAIN`, `TAG_EPOCH_CHAIN` | copied verbatim (`gen_upstream.sh`; the file is byte-identical to `hll/`'s) | copied verbatim (same) |
 | `Event`, `make_key_id`, `BatchInput`, `CmAggrInput`, `EpochChainLink::new`, `batch_chain_hash`, `key_to_u64`, `CM_SEEDS`, `MIN_SUPPORT` | path dependency | path dependency |
 | structure mirrored step for step | `process_cm_aggr_with_state`, `run_cm_query`, guests `aggr_cm` / `querier-guest-cm` | same |
-| **written by us** | insert / lookup / OR merge, 4 extra seeds, state type, tag, packing, probes, host driver (reference filter, FPR, `exec` mode, RSS/contention sampler), runner | bottom-k insert, merge, integer estimator, state type, tag, packing, probes, host driver (reference bottom-k, `exec` mode, sampler), runner |
+| **written by us** | insert / lookup / OR merge, 4 extra seeds, state type, tag, packing, the `bloom_query_words` variant, probes, host driver (reference filter, FPR, `exec` mode, RSS/contention sampler), runner | bottom-k insert, merge, integer estimator, state type, tag, packing, the `kmv_query_words` variant, probes, host driver (reference bottom-k, `exec` mode, sampler), runner |
 
 ### Validation results (VALIDATION ONLY; executor unless stated)
 
 AOL, batches of 8; every row passed `journal_eq_native`, `ref_check` and the
-accuracy checks. Rows: `results/zka_{bloom,kmv}_validation.csv` (16 and 12 rows, with
-`.log`).
+accuracy checks. Rows: `results/zka_{bloom,kmv}_validation.csv` (26 and 18 rows, with
+`.log`; regenerated 2026-10-09 with the words variants, the gate column and the
+`validation` arm tag).
 
 | guest | epoch size | n | user cycles | segments | per record / per epoch | answer vs exact |
 |---|---|---|---|---|---|---|
-| `bloom_aggr` † | 256 | 1 (epoch 0) | 1,445,206 | 2 | 5,645 / rec | 0 false negatives; 0 / 10,000 FP |
-| `bloom_aggr` † | 2,048 | 1 (epoch 0) | 11,091,956 | 12 | 5,416 / rec (update 543) | 0 false negatives; 0 / 10,000 FP |
+| `bloom_aggr` † | 256 | 1 (epoch 0) | 1,445,193 | 2 | 5,645 / rec | 0 false negatives; 0 / 10,000 FP |
+| `bloom_aggr` † | 2,048 | 1 (epoch 0) | 11,091,937 | 12 | 5,416 / rec (update 543) | 0 false negatives; 0 / 10,000 FP |
 | `bloom_query` † | 256 or 2,048 | 1 | 180,159 | 1 (po2 18) | - | inserted key: true; absent key: false |
 | `bloom_query` † | 256 or 2,048 | 2 | 343,378 | 1 (po2 19) | +163,219 / epoch | inserted key: true; absent key: false |
-| `kmv_aggr` † | 256 | 1 (epoch 0) | 1,405,459 | 2 | 5,490 / rec | 174 = exact (exact branch) |
-| `kmv_aggr` † | 2,048 | 1 (epoch 0) | 11,115,930 | 12 | 5,428 / rec (update 541) | 1,232 vs 1,234 (-0.16%) |
+| `bloom_query_words` † | 256 or 2,048 | 1 | 777,550 | 1 (po2 20) | - | same journal as `bloom_query` |
+| `bloom_query_words` † | 256 or 2,048 | 2 | 1,537,936 | 2 | +760,386 / epoch | same journal as `bloom_query` |
+| `kmv_aggr` † | 256 | 1 (epoch 0) | 1,404,153 | 2 | 5,485 / rec | 174 = exact (exact branch) |
+| `kmv_aggr` † | 2,048 | 1 (epoch 0) | 11,104,487 | 12 | 5,422 / rec (update 543) | 1,232 vs 1,234 (-0.16%) |
 | `kmv_query` † | 2,048 | 1 | 151,365 | 1 (po2 18) | - | 1,232 vs 1,234 (-0.16%) |
 | `kmv_query` † | 2,048 | 2 | 296,524 | 1 (po2 19) | +145,159 / epoch | 2,290 vs 2,372 (-3.46%, 1.1 std err) |
 | `kmv_query` † | 256 | 1 / 2 | 56,610 / 109,515 | 1 | - | 174 / 365 = exact |
+| `kmv_query_words` † | 2,048 | 1 / 2 | 421,894 / 837,466 | 1 (po2 19 / 20) | +415,572 / epoch | same journal as `kmv_query` |
+| `kmv_query_words` † | 256 | 1 / 2 | 102,495 / 207,781 | 1 | - | same journal as `kmv_query` |
 
 - As for HLL, SS and GK, their framework dominates the aggregation: reading the
   `Event` batches is ~68.5% of both guests (~3,710 cycles per record) and the batch
-  chain ~20%; the sketch update is ~10% (541-543 cycles per record).
-- One tiny **proved** pipeline per family (epoch size 256, 1 epoch: one aggregation
-  and one query proof) validated `--prove`: `bloom_aggr` 2 segments, 58.5 s;
-  `bloom_query` 1 segment, 9.4 s; `kmv_aggr` 2 segments (po2 20 + 19), 45.6 s;
-  `kmv_query` 1 segment, 6.0 s; receipts 224,082-224,554 B, verify 9.7-9.8 ms, r0vm
-  peak RSS 9.4 GB (aggregation) and 1.4-2.4 GB (query). The box was shared with a
-  concurrent job (`other_cores_avg` 2.0-3.0 cores): these are not timing
-  measurements.
+  chain ~20%; the sketch update is ~10% (543 cycles per record).
+- One tiny **proved** pipeline per family (epoch size 256, 1 epoch: one aggregation,
+  one query and one words-query proof, `ARM_TAG=validation`) validated `--prove`;
+  every proved journal equals the native output. `bloom_aggr` 2 segments (po2 20 +
+  19), 50.3 s; `bloom_query` 1 segment, 9.6 s; `bloom_query_words` 1 segment (po2
+  20), 29.6 s; `kmv_aggr` 2 segments (po2 20 + 19), 50.4 s; `kmv_query` 1 segment,
+  6.4 s; `kmv_query_words` 1 segment, 9.5 s; receipts 224,082-224,554 B, verify
+  9.7-9.8 ms, r0vm peak RSS 9.4 GB (aggregation, `bloom_query_words`) and 1.4-2.4 GB
+  (the other queries). A sibling job kept 4.9-10.2 other cores busy, so every proved
+  row is `arm = proved_contended_validation`: these are not timing measurements.
 
 ### Caveats
 
@@ -712,11 +735,13 @@ accuracy checks. Rows: `results/zka_{bloom,kmv}_validation.csv` (16 and 12 rows,
 - **Not yet measured.** Only the tiny validation above ran. Every number at 8 x 2,048
   records (aggregation ~11.1M cycles and 12 segments per epoch; queries ~1.2-1.3M
   cycles at n = 8) is an extrapolation from these rows until the measurement runs.
-- **State encoding is a lever.** risc0's serde reads a `Vec<u32>` / `Vec<u8>` /
-  `Vec<u64>` one element per word at ~150 cycles per word, a byte string in bulk. A
-  development build of the Bloom guest with a `Vec<u32>` state spent 702,100 cycles on
-  the n = 1 query against 180,159 packed. The packed form (cheaper baseline) is the
-  headline, as for HLL.
+- **State encoding is a lever (measured).** risc0's serde reads a `Vec<u32>` /
+  `Vec<u8>` / `Vec<u64>` one element per word at ~150 cycles per word, a byte string
+  in bulk; both encodings are the same number of words. With the state in the
+  default encoding the n = 1 query costs 4.3x (Bloom: 777,550 vs 180,159; reading
+  one filter 559,215 vs 23,043 cycles, plus 61,206 to copy the words into bytes) and
+  2.8x (KMV at 2,048 records: 421,894 vs 151,365; reading one full state 315,794 vs
+  45,380). The packed form (cheaper baseline) is the headline, as for HLL.
 - **Cheaper than a literal port**, as for HLL: no per-type Merkle root; Bloom hoists
   the FNV fold out of the per-slice loop (their CM recomputes it per row); one
   SHA-256 `update` per state commit; KMV merges linearly.
@@ -728,6 +753,11 @@ accuracy checks. Rows: `results/zka_{bloom,kmv}_validation.csv` (16 and 12 rows,
 - **ELF md5s and image IDs depend on the absolute source path**; the validation rows
   were built in a worktree, so their `image_id`s differ from a main-checkout build.
   Cycle counts do not depend on it.
+- **Cycle counts do depend on the build.** Adding the words types to the core crates
+  changed the aggregation ELFs, though the guests do not use the types: `kmv_aggr`
+  moved by -0.10% (-11,443 cycles at 2,048 records; batch-chain verification -60
+  cycles per batch) and `bloom_aggr` by -19 cycles. The query guests did not move.
+  The measurement must use one build for all rows.
 
 ## zkSketch's SpaceSaving batch rule as a RISC Zero guest (`ss_mg`, ours †): executor only
 
