@@ -4,24 +4,43 @@
 Usage: assemble.py <results dir> <aol.keys>
 
 Inputs (all in <results dir>):
-  six_zka_<fam>_exec.csv     executor rows, all 8 aggregation epochs (bloom/kmv: + query executes)
-  six_zka_<fam>_prove.csv    proved rows (aggregation epochs 0 and 7; queries n = 1, 2, 4, 8)
-  six_zka_jobs.csv           one line per proved job, in the same order (gate, load, r0vm peak RSS)
-  six_zksketch_<tag>.csv     exp_compose CSV row (one per run)
-  six_zksketch_<tag>.log     the run's stderr/stdout incl. QLOG_* per-query lines and RSSTREE
+  zk-Analytics side (`run_zka.sh`)
+    six_zka_<fam>_exec.csv       executor rows, all 8 aggregation epochs (bloom/kmv: + query executes)
+    six_zka_<fam>_prove.csv      proved rows (aggregation epochs 0 and 7; queries n = 1, 2, 4, 8)
+    six_zka_jobs.csv             one line per proved job, same order (gate, load, r0vm peak RSS)
+    six_zka_vt_<fam>_prove.csv   re-proofs for the verify protocol (query n = 1, HLL epoch 0); their
+    six_zka_vt_<fam>_prove.log   logs carry VERIFY_TIMES_MS (all 5 verify calls + bincode decode)
+    six_zka_vt_jobs.csv
+  zkSketch side (`run_zks.sh`), one exp_compose run per tag and run set:
+    six_zksketch_r2_<tag>.csv/.log   default build (no `zk` feature): the PRIMARY zkSketch numbers
+    six_zksketch_zk_<tag>.csv/.log   `--features zk` build (HidingFriPcs)
+    six_zksketch_<tag>.csv/.log      the first run (r1), default build, kept as a repeat
+    <set>_runs.csv                   gate, load, RSSTREE peaks per run
 Exact answers are recomputed here from the same 16,384 AOL records.
+
+Verify protocol (both sides): `verify_ms` = the best of 5 in-process verify calls of the same
+proof (zk-Analytics: their drivers' loop; zkSketch: EXP_VERIFY_REPEATS=5). Deserialisation is
+excluded on both sides and reported separately (`decode_ms`). `verify_first_ms` / `verify_median_ms`
+are the first call and the median of the 5 where they were logged.
 """
 import collections
 import csv
 import os
 import re
+import statistics
 import struct
 import sys
 
 R, KEYS = sys.argv[1], sys.argv[2]
 M, T = 2048, 8
-NS = [1, 2, 4, 8]
+NS = list(range(1, T + 1))
 FAMS = ['cm', 'hll', 'ss', 'gk', 'bloom', 'kmv']
+ZKS_TAGS = {'cm': ['cm'], 'hll': ['hll'], 'ss': ['ss'], 'gk': ['gk'], 'bloom': ['bloom', 'bloom_absent'],
+            'kmv': ['kmv']}
+# (file prefix, system name, run label, full instrumentation?)
+ZKS_SETS = [('six_zksketch_r2', 'zkSketch', 'r2', True),
+            ('six_zksketch_zk', 'zkSketch (zk feature)', 'zk', True),
+            ('six_zksketch', 'zkSketch', 'r1', False)]
 
 # ------------------------------------------------------------------ exact answers
 raw = open(KEYS, 'rb').read()
@@ -59,36 +78,48 @@ def num(x):
         return None
 
 
-jobs = rows('six_zka_jobs.csv')
-prove = {f: rows(f'six_zka_{f}_prove.csv') for f in FAMS}
-# attach each proved row to its job line (same order per family; checked)
-for f in FAMS:
-    fj = [j for j in jobs if j['family'] == f]
-    if len(fj) != len(prove[f]):
-        sys.exit(f'{f}: {len(fj)} jobs vs {len(prove[f])} proved rows')
-    for row, j in zip(prove[f], fj):
-        mode = row.get('step') or row.get('mode')
-        n_or_e = row['epoch_index'] if j['op'] == 'aggr' else row['epochs']
-        if mode != j['op'] or n_or_e != j['n_or_epoch']:
-            sys.exit(f'{f}: row/job mismatch {mode},{n_or_e} vs {j["op"]},{j["n_or_epoch"]}')
-        row['_job'] = j
+def stats(v):
+    return min(v), v[0], statistics.median(v)
+
 
 OUT = []
+COLS = ['family', 'system', 'run', 'operation', 'n', 'prove_s', 'verify_ms', 'verify_first_ms', 'verify_median_ms',
+        'decode_ms', 'proof_bytes', 'peak_rss_mb', 'rss_scope', 'answer', 'exact', 'provenance', 'note', 'detail']
 
 
-def emit(fam, system, op, n, prove_s, verify_ms, proof_bytes, rss, answer, exact, prov, detail):
+def emit(**kw):
     def fmt(v, d):
         return '' if v is None else (f'{v:.{d}f}' if isinstance(v, float) else str(v))
-    OUT.append(dict(family=fam, system=system, operation=op, n=n, prove_s=fmt(prove_s, 6),
-                    verify_ms=fmt(verify_ms, 3), proof_bytes=fmt(proof_bytes, 0),
-                    peak_rss_mb=fmt(rss, 1), answer=answer, exact=exact, provenance=prov, detail=detail))
+    r = {c: '' for c in COLS}
+    for k, v in kw.items():
+        if k in ('prove_s',):
+            r[k] = fmt(v, 6)
+        elif k in ('verify_ms', 'verify_first_ms', 'verify_median_ms', 'decode_ms'):
+            r[k] = fmt(v, 3)
+        elif k == 'proof_bytes':
+            r[k] = fmt(v, 0)
+        elif k == 'peak_rss_mb':
+            r[k] = fmt(v, 1)
+        else:
+            r[k] = '' if v is None else str(v)
+    OUT.append(r)
 
 
+def note_for(fam, system):
+    if fam == 'hll' and system.startswith('zkSketch'):
+        return ('NOT like-for-like: zkSketch certifies the raw HLL estimator (no small-range / linear-counting '
+                'branch); its answers are 1.9-10x above exact here, outside HLL error bounds')
+    if fam == 'ss' and system.startswith('zkSketch'):
+        return 'releases the top-1 MG count only (no key); zk-Analytics port releases key, count and error'
+    if fam == 'ss':
+        return 'topk --limit 1: full sum-and-truncate merge of n x 1,024 entries; releases key, count, error'
+    return ''
+
+
+# ------------------------------------------------------------------ zk-Analytics side
 def zka_answer(f, row):
     res = row.get('answer') or row.get('result') or ''
-    if f == 'cm':
-        return re.search(r'estimate=(\d+)', res).group(1)
-    if f in ('hll', 'kmv'):
+    if f in ('cm', 'hll', 'kmv'):
         return re.search(r'estimate=(\d+)', res).group(1)
     if f == 'ss':
         m = re.search(r'top=(\d+):(\d+)/e(\d+)', res)
@@ -101,154 +132,296 @@ def zka_answer(f, row):
     return res
 
 
-ZKA_NAME = {'cm': 'zk-Analytics', 'hll': 'zk-Analytics arch. (port †)', 'ss': 'zk-Analytics arch. (port †)',
-            'gk': 'zk-Analytics arch. (port †)', 'bloom': 'zk-Analytics arch. (port †)',
-            'kmv': 'zk-Analytics arch. (port †)'}
+def zka_exact(f, r, n):
+    """(exact, probe description, op suffix) of a zk-Analytics query row."""
+    if f == 'cm':
+        k, c = hot_key(n)
+        m = re.search(r'key=(\d+)', r['exact'])
+        assert int(m.group(1)) == k, (f, n)
+        return str(c), f'key {k} (heaviest of prefix)', ''
+    if f in ('hll', 'kmv'):
+        return str(distinct(n)), 'distinct count', ''
+    if f == 'ss':
+        k, c = hot_key(n)
+        return f'key {k} count {c}', 'top-1 (topk limit 1)', ''
+    if f == 'gk':
+        v = int(r['_job']['arg'])
+        return str(rank_le(n, v)), f'rank({v})', ''
+    if f == 'bloom':
+        pk = int(r['probe_key'])
+        ex = str(pk in set(prefix(n))).lower()
+        return ex, f"key {pk} ({'inserted' if ex == 'true' else 'absent'})", \
+            '_inserted' if ex == 'true' else '_absent'
+    raise ValueError(f)
 
-zka_aggr_mean = {}
+
+def attach_jobs(prefix_):
+    jobs = rows(f'{prefix_}_jobs.csv')
+    prove = {f: rows(f'{prefix_}_{f}_prove.csv') for f in FAMS}
+    for f in FAMS:
+        fj = [j for j in jobs if j['family'] == f]
+        if len(fj) != len(prove[f]):
+            sys.exit(f'{prefix_} {f}: {len(fj)} jobs vs {len(prove[f])} proved rows')
+        for row, j in zip(prove[f], fj):
+            mode = row.get('step') or row.get('mode')
+            n_or_e = row['epoch_index'] if j['op'] == 'aggr' else row['epochs']
+            if mode != j['op'] or n_or_e != j['n_or_epoch']:
+                sys.exit(f'{prefix_} {f}: row/job mismatch {mode},{n_or_e} vs {j["op"]},{j["n_or_epoch"]}')
+            row['_job'] = j
+    return prove
+
+
+ZKA_NAME = {'cm': 'zk-Analytics', **{f: 'zk-Analytics arch. (port †)' for f in FAMS if f != 'cm'}}
+prove = attach_jobs('six_zka')
+
+# verify-protocol re-proofs: VERIFY_TIMES_MS lines, in job order per family
+vt = attach_jobs('six_zka_vt')
+for f in FAMS:
+    logp = os.path.join(R, f'six_zka_vt_{f}_prove.log')
+    if not os.path.exists(logp):
+        continue
+    vts = re.findall(r'VERIFY_TIMES_MS,([\d.;]+),receipt_decode_ms=([\d.]+)', open(logp).read())
+    if len(vts) != len(vt[f]):
+        sys.exit(f'vt {f}: {len(vts)} VERIFY_TIMES_MS lines vs {len(vt[f])} proved rows')
+    for row, (ts, dec) in zip(vt[f], vts):
+        times = [float(x) for x in ts.split(';')]
+        mn, first, med = stats(times)
+        if abs(mn - float(row['verify_ms'])) > 0.002:
+            sys.exit(f'vt {f}: min of VERIFY_TIMES_MS {mn} != verify_ms {row["verify_ms"]}')
+        row['_vt'] = (mn, first, med, float(dec), times)
+
+zka_aggr_mean, zka_query_mean = {}, {}
 for f in FAMS:
     sysname = ZKA_NAME[f]
     ex = [r for r in rows(f'six_zka_{f}_exec.csv') if (r.get('step') or r.get('mode')) == 'aggr']
     segs = [int(r['segments']) for r in ex]
     cyc = [int(r['user_cycles']) for r in ex]
     aggr = [r for r in prove[f] if r['_job']['op'] == 'aggr']
+    if not aggr:
+        print(f'{f}: no proved aggregation rows; skipped', file=sys.stderr)
+        continue
     for r in aggr:
         e = r['epoch_index']
-        emit(f, sysname, f'update_epoch{e}', '', num(r['prove_s']), num(r['verify_ms']), int(r['receipt_bytes']),
-             num(r['_job']['r0vm_peak_rss_mb']), '-', '-', 'measured',
-             f"aggregation guest on epoch {e} ({M} records); {r['segments']} segments; {r['user_cycles']} user cycles; "
-             f"gate={r['_job']['gate']} load1_start={r['_job']['load1_start']}")
-    if not aggr:
-        print(f'{f}: no proved aggregation rows yet; skipped', file=sys.stderr)
-        continue
+        emit(family=f, system=sysname, run='main', operation=f'update_epoch{e}', prove_s=num(r['prove_s']),
+             verify_ms=num(r['verify_ms']), proof_bytes=int(r['receipt_bytes']),
+             peak_rss_mb=num(r['_job']['r0vm_peak_rss_mb']), rss_scope='r0vm process of this proof',
+             answer='-', exact='-', provenance='measured',
+             detail=f"aggregation guest on epoch {e} ({M} records); {r['segments']} segments; {r['user_cycles']} "
+                    f"user cycles; verify = best of 5; gate={r['_job']['gate']} load1_start={r['_job']['load1_start']} "
+                    f"busy_cores_start={r['_job']['busy_cores_start']}")
     ps = [num(r['prove_s']) for r in aggr]
     vs = [num(r['verify_ms']) for r in aggr]
     bs = [int(r['receipt_bytes']) for r in aggr]
     rs = [num(r['_job']['r0vm_peak_rss_mb']) for r in aggr]
     mp, mv, mb = sum(ps) / len(ps), sum(vs) / len(vs), sum(bs) / len(bs)
     zka_aggr_mean[f] = (mp, mv, mb)
-    emit(f, sysname, 'update_per_epoch', '', mp, mv, round(mb), max(rs), '-', '-', 'sampled',
-         f'mean of proved epochs 0 and 7; executor over all 8 epochs: {min(segs)}-{max(segs)} segments, '
-         f'{min(cyc)}-{max(cyc)} user cycles')
-    emit(f, sysname, 'update_stream_8_epochs', '', 8 * mp, None, None, max(rs), '-', '-', 'derived',
-         '8 x sampled per-epoch prove time; 8 receipts are kept (no composition)')
+    emit(family=f, system=sysname, run='main', operation='update_per_epoch', prove_s=mp, verify_ms=mv,
+         proof_bytes=round(mb), peak_rss_mb=max(rs), rss_scope='r0vm process (max of the 2 proofs)',
+         answer='-', exact='-', provenance='sampled',
+         detail=f'mean of proved epochs 0 and 7; executor over all 8 epochs: {min(segs)}-{max(segs)} segments, '
+                f'{min(cyc)}-{max(cyc)} user cycles')
+    emit(family=f, system=sysname, run='main', operation='update_per_epoch_amortized', prove_s=mp,
+         answer='-', exact='-', provenance='sampled',
+         detail='no composition on this side: equals update_per_epoch')
+    emit(family=f, system=sysname, run='main', operation='update_stream_8_epochs', prove_s=8 * mp,
+         peak_rss_mb=max(rs), rss_scope='r0vm process (max of the 2 proofs)', answer='-', exact='-',
+         provenance='derived', detail='8 x sampled per-epoch prove time; 8 receipts are kept (no composition)')
+    qrows = {}
     for r in [r for r in prove[f] if r['_job']['op'] == 'query']:
         n = int(r['epochs'])
-        probe = ''
-        if f == 'cm':
-            k, c = hot_key(n)
-            exact = str(c)
-            m = re.search(r'key=(\d+)', r['exact'])
-            assert int(m.group(1)) == k, (f, n)
-            probe = f'key {k} (heaviest of prefix)'
-        elif f in ('hll', 'kmv'):
-            exact = str(distinct(n))
-        elif f == 'ss':
-            k, c = hot_key(n)
-            exact = f'key {k} count {c}'
-            probe = 'top-1 (topk limit 1)'
-        elif f == 'gk':
-            v = int(r['_job']['arg'])
-            exact = str(rank_le(n, v))
-            probe = f'rank({v})'
-        elif f == 'bloom':
-            pk = int(r['probe_key'])
-            exact = str(pk in set(prefix(n))).lower()
-            probe = f"key {pk} ({'inserted' if exact == 'true' else 'absent'})"
-        op = f'query_n{n}' + ('' if f != 'bloom' else ('_inserted' if exact == 'true' else '_absent'))
-        emit(f, sysname, op, n, num(r['prove_s']), num(r['verify_ms']), int(r['receipt_bytes']),
-             num(r['_job']['r0vm_peak_rss_mb']), zka_answer(f, r), exact, 'measured',
-             f"query guest over {n} epoch states; {probe}; {r['segments']} segments; {r['user_cycles']} user cycles; "
-             f"gate={r['_job']['gate']} load1_start={r['_job']['load1_start']}")
-        emit(f, sysname, op.replace('query', 'accept'), n, None, n * mv + num(r['verify_ms']),
-             round(n * mb + int(r['receipt_bytes'])), None, '', '', 'derived',
-             f'verifier work to accept the answer: {n} aggregation receipts (sampled mean verify {mv:.3f} ms, '
-             f'{mb:.0f} B each) + 1 query receipt (measured)')
-
-# ------------------------------------------------------------------ zkSketch
-ZKS_TAGS = {'cm': ['cm'], 'hll': ['hll'], 'ss': ['ss'], 'gk': ['gk'], 'bloom': ['bloom', 'bloom_absent'],
-            'kmv': ['kmv']}
-for f in FAMS:
-    for tag in ZKS_TAGS[f]:
-        rr = rows(f'six_zksketch_{tag}.csv')
-        if not rr:
-            continue
-        row = rr[0]
-        logp = os.path.join(R, f'six_zksketch_{tag}.log')
-        log = open(logp).read()
-        q = {int(m.group(1)): m.groupdict() for m in re.finditer(
-            r'QLOG_QUERY,at_leaf=(\d+),prove_ms=(?P<prove>[\d.]+),witness_ms=[\d.]+,verify_ms=(?P<verify>[\d.]+),'
-            r'proof_bytes=(?P<bytes>\d+),answer=(?P<answer>\d+)', log)}
-        kk = {int(m.group(1)): m.group(2) for m in re.finditer(r'QLOG_KEY,at_leaf=(\d+),(\S+)', log)}
-        b = {int(m.group(1)): m.groupdict() for m in re.finditer(
-            r'QLOG_BIND,at_leaf=(\d+),ctx_proofs=(?P<ctx>\d+),intervals=(?P<iv>[^,]+),interval_bytes=(?P<ib>[^,]+),'
-            r'bind_ms=(?P<ms>[\d.]+)', log)}
-        # the per-query log lines must add up to the CSV's summed query_* columns
-        for col, vals in (('query_prove_ms', [float(v['prove']) for v in q.values()]),
-                          ('query_verify_ms', [float(v['verify']) for v in q.values()]),
-                          ('query_proof_bytes', [float(v['bytes']) for v in q.values()]),
-                          ('query_bind_ms', [float(v['ms']) for v in b.values()])):
-            if len(vals) != int(row['n_queries']) or abs(sum(vals) - float(row[col])) > 0.01 + 1e-6 * sum(vals):
-                sys.exit(f'{tag}: QLOG lines do not add up to {col} ({sum(vals)} vs {row[col]})')
-        rs = re.search(r'RSSTREE,\S+,main_peak_rss_mb=([\d.]+),r0vm_peak_rss_mb=[\d.]+,desc_peak_rss_mb=([\d.]+)', log)
-        main_rss, worker_rss = float(rs.group(1)), float(rs.group(2))
-        t = int(row['t'])
-        leaf_bytes = int(b[1]['ib'])
-        notes = os.path.join(R, 'six_zksketch_runs.csv')
-        g = [x for x in rows('six_zksketch_runs.csv') if x['tag'] == tag][0]
-        gate = f"gate={g['gate']} load1_start={g['load1_start']} commit={row['commit']}"
-        if tag == ZKS_TAGS[f][0]:
-            emit(f, 'zkSketch', 'update_per_epoch', '', float(row['leafgen_seq_ms']) / t / 1000, None, leaf_bytes,
-                 float(row['peak_rss_mb']), '-', '-', 'derived',
-                 f"leafgen_seq_ms/t = {row['leafgen_seq_ms']}/{t} (sum of the {t} measured leaf proofs); "
-                 f'proof_bytes = leaf-1 proof as shipped for query binding; {gate}')
-            emit(f, 'zkSketch', 'update_stream_8_epochs', '', float(row['total_time_ms']) / 1000,
-                 float(row['verify_ms']), int(row['proof_bytes']), float(row['peak_rss_mb']), '-', '-', 'measured',
-                 f"forest, 1 machine x 32 cores: {t} leaves + {row['merges_local']} merges (merge_ms {row['merge_ms']}, "
-                 f"local_fold_ms {row['local_fold_ms']}); one O(1) root (verify_ms, proof_bytes); {gate}")
+        exact, probe, suf = zka_exact(f, r, n)
+        qrows[(n, suf)] = r
+        emit(family=f, system=sysname, run='main', operation=f'query_n{n}{suf}', n=n, prove_s=num(r['prove_s']),
+             verify_ms=num(r['verify_ms']), proof_bytes=int(r['receipt_bytes']),
+             peak_rss_mb=num(r['_job']['r0vm_peak_rss_mb']), rss_scope='r0vm process of this proof',
+             answer=zka_answer(f, r), exact=exact, provenance='measured', note=note_for(f, sysname),
+             detail=f"query guest over {n} epoch states; {probe}; {r['segments']} segments; {r['user_cycles']} user "
+                    f"cycles; verify = best of 5; gate={r['_job']['gate']} load1_start={r['_job']['load1_start']} "
+                    f"busy_cores_start={r['_job']['busy_cores_start']}")
+    sufs = sorted({s for (_, s) in qrows})
+    qv = [num(r['verify_ms']) for r in qrows.values()]
+    qb = [int(r['receipt_bytes']) for r in qrows.values()]
+    zka_query_mean[f] = (sum(qv) / len(qv), sum(qb) / len(qb))
+    for suf in sufs:
         for n in NS:
-            if n not in q:
-                continue
-            qq, bb = q[n], b[n]
-            ans = int(qq['answer'])
-            key = kk.get(n, '')
-            if f == 'cm':
-                kv = int(key.split('=')[1])
-                c = collections.Counter(prefix(n))[kv]
-                exact, answer, probe = str(c), str(ans), f'key {kv} (hot = heaviest of prefix)'
-            elif f == 'hll':
-                exact, answer, probe = str(distinct(n)), f'{ans / 256:.1f}', \
-                    f'raw HLL estimator, fixed point answer {ans}/2^8, no small-range correction'
-            elif f == 'kmv':
-                exact, answer, probe = str(distinct(n)), str(ans), 'distinct count (27-bit hash)'
-            elif f == 'ss':
-                k, c = hot_key(n)
-                exact, answer, probe = f'key {k} count {c}', f'count {ans} (no key)', 'top-1 mass (c=1), MG under-estimate'
-            elif f == 'gk':
-                v = int(key.split('=')[1])
-                exact, answer, probe = str(rank_le(n, v)), str(ans), f'rank({v}) (hot value)'
-            elif f == 'bloom':
-                kv = int(key.split('=')[1])
-                exact = str(kv in set(prefix(n))).lower()
-                answer = 'true' if ans == 1 else 'false'
-                probe = f"key {kv} ({'inserted' if exact == 'true' else 'absent'})"
-            op = f'query_n{n}' + ('' if f != 'bloom' else ('_inserted' if exact == 'true' else '_absent'))
-            emit(f, 'zkSketch', op, n, float(qq['prove']) / 1000, float(qq['verify']), int(qq['bytes']), main_rss,
-                 answer, exact, 'measured',
-                 f'decode proof at version t\'={n}; {probe}; prove = witness + prove; rss = coordinator peak '
-                 f'(whole run: auditor VK derivation + all {t} queries + binding); {gate}')
-            ib = [int(x) for x in bb['ib'].split(';')]
-            emit(f, 'zkSketch', op.replace('query', 'accept'), n, None, float(bb['ms']) + float(qq['verify']),
-                 sum(ib) + int(qq['bytes']), None, '', '', 'measured',
-                 f"query_bind_ms {bb['ms']} (pinned verify of {bb['ctx']} live peak(s) [{bb['iv']}] + log checks) "
-                 f"+ query verify {qq['verify']} ms; bytes = peak proof(s) {bb['ib']} + query proof")
+            r = qrows.get((n, suf))
+            if r:
+                v, b, how = num(r['verify_ms']), int(r['receipt_bytes']), 'query receipt measured'
+            else:
+                v, b = zka_query_mean[f]
+                how = (f'query receipt at n={n} not proved: mean of the {len(qv)} measured query receipts '
+                       f'({v:.3f} ms, {b:.0f} B)')
+            emit(family=f, system=sysname, run='main', operation=f'accept_n{n}{suf}', n=n,
+                 verify_ms=n * mv + v, proof_bytes=round(n * mb + b), answer='', exact='', provenance='derived',
+                 detail=f'verifier work to accept the answer, best-of-5 per receipt: {n} aggregation receipts '
+                        f'(sampled mean {mv:.3f} ms, {mb:.0f} B each) + 1 query receipt ({how})')
+    # verify-protocol re-proofs
+    for r in vt[f]:
+        if '_vt' not in r:
+            continue
+        mn, first, med, dec, times = r['_vt']
+        j = r['_job']
+        if j['op'] == 'aggr':
+            op, ans, ex = f"verify_protocol_update_epoch{r['epoch_index']}", '-', '-'
+        else:
+            n = int(r['epochs'])
+            exact, probe, suf = zka_exact(f, r, n)
+            op, ans, ex = f'verify_protocol_query_n{n}{suf}', zka_answer(f, r), exact
+        emit(family=f, system=sysname, run='vt', operation=op, n='' if j['op'] == 'aggr' else r['epochs'],
+             prove_s=num(r['prove_s']), verify_ms=mn, verify_first_ms=first, verify_median_ms=med, decode_ms=dec,
+             proof_bytes=int(r['receipt_bytes']), peak_rss_mb=num(j['r0vm_peak_rss_mb']),
+             rss_scope='r0vm process of this proof', answer=ans, exact=ex, provenance='measured (re-proof)',
+             detail=f"re-proof for the verify protocol: all 5 in-process verify calls {';'.join(f'{x:.3f}' for x in times)} ms; "
+                    f"decode = bincode deserialisation of the receipt; gate={j['gate']} load1_start={j['load1_start']} "
+                    f"busy_cores_start={j['busy_cores_start']}")
 
-cols = ['family', 'system', 'operation', 'n', 'prove_s', 'verify_ms', 'proof_bytes', 'peak_rss_mb', 'answer', 'exact',
-        'provenance', 'detail']
+
+# ------------------------------------------------------------------ zkSketch side
+def parse_zks_log(log):
+    q = {int(m.group(1)): m.groupdict() for m in re.finditer(
+        r'QLOG_QUERY,at_leaf=(\d+),prove_ms=(?P<prove>[\d.]+),witness_ms=[\d.]+,verify_ms=(?P<verify>[\d.]+),'
+        r'proof_bytes=(?P<bytes>\d+),answer=(?P<answer>\d+)', log)}
+    kk = {int(m.group(1)): m.group(2) for m in re.finditer(r'QLOG_KEY,at_leaf=(\d+),(\S+)', log)}
+    b = {int(m.group(1)): m.groupdict() for m in re.finditer(
+        r'QLOG_BIND,at_leaf=(\d+),ctx_proofs=(?P<ctx>\d+),intervals=(?P<iv>[^,]+),interval_bytes=(?P<ib>[^,]+),'
+        r'bind_ms=(?P<ms>[\d.]+)', log)}
+    vq = {int(m.group(1)): [float(x) for x in m.group(2).split(';')] for m in re.finditer(
+        r'QLOG_VERIFY,at_leaf=(\d+),decode_verify_ms=([\d.;]+)', log)}
+    bv = {}
+    for m in re.finditer(r'QLOG_BINDV,at_leaf=(\d+),decode_ms=([\d.|]+),verify_ms=([\d.;|]+),check_ms=([\d.]+)', log):
+        bv[int(m.group(1))] = dict(dec=[float(x) for x in m.group(2).split('|')],
+                                   ver=[[float(y) for y in x.split(';')] for x in m.group(3).split('|')],
+                                   check=float(m.group(4)))
+    mem = {int(m.group(1)): float(m.group(2)) for m in re.finditer(
+        r'QLOG_MEM,at_leaf=(\d+),query_hwm_mb=([\d.]+)', log)}
+    memstart = {int(m.group(1)): (m.group(2), float(m.group(3))) for m in re.finditer(
+        r'QLOG_MEMSTART,at_leaf=(\d+),hwm_reset=(\w+),rss_start_mb=([\d.]+)', log)}
+    phase = {m.group(1): (float(m.group(2)), float(m.group(3))) for m in re.finditer(
+        r'QLOG_PHASE,after=(\w+),coord_hwm_mb=([\d.]+),coord_rss_mb=([\d.]+)', log)}
+    vk = re.findall(r'auditor: VK derived from public parameters in ([\d.]+)s', log)
+    rs = re.search(r'RSSTREE,\S+,main_peak_rss_mb=([\d.]+),r0vm_peak_rss_mb=[\d.]+,desc_peak_rss_mb=([\d.]+)', log)
+    return q, kk, b, vq, bv, mem, memstart, phase, vk, (float(rs.group(1)), float(rs.group(2)))
+
+
+def zks_answer(f, n, ans, key):
+    if f == 'cm':
+        kv = int(key.split('=')[1])
+        return str(ans), str(collections.Counter(prefix(n))[kv]), f'key {kv} (hot = heaviest of prefix)', ''
+    if f == 'hll':
+        return f'{ans / 256:.1f}', str(distinct(n)), f'raw HLL estimator, fixed point {ans}/2^8, no small-range correction', ''
+    if f == 'kmv':
+        return str(ans), str(distinct(n)), 'distinct count (27-bit hash)', ''
+    if f == 'ss':
+        k, c = hot_key(n)
+        return f'count {ans} (no key)', f'key {k} count {c}', 'top-1 mass (c=1), MG under-estimate', ''
+    if f == 'gk':
+        v = int(key.split('=')[1])
+        return str(ans), str(rank_le(n, v)), f'rank({v}) (hot value)', ''
+    if f == 'bloom':
+        kv = int(key.split('=')[1])
+        ex = str(kv in set(prefix(n))).lower()
+        return ('true' if ans == 1 else 'false'), ex, f"key {kv} ({'inserted' if ex == 'true' else 'absent'})", \
+            '_inserted' if ex == 'true' else '_absent'
+    raise ValueError(f)
+
+
+PHASES = []  # (set, tag, phase dict, vk secs, rsstree)
+for pfx, sysname, run, full in ZKS_SETS:
+    runs = rows(f'{pfx}_runs.csv')
+    for f in FAMS:
+        for tag in ZKS_TAGS[f]:
+            rr = rows(f'{pfx}_{tag}.csv')
+            if not rr:
+                continue
+            row = rr[0]
+            log = open(os.path.join(R, f'{pfx}_{tag}.log')).read()
+            q, kk, b, vq, bv, mem, memstart, phase, vk, (main_rss, worker_rss) = parse_zks_log(log)
+            # the per-query log lines must add up to the CSV's summed query_* columns
+            for col, vals in (('query_prove_ms', [float(v['prove']) for v in q.values()]),
+                              ('query_verify_ms', [float(v['verify']) for v in q.values()]),
+                              ('query_proof_bytes', [float(v['bytes']) for v in q.values()]),
+                              ('query_bind_ms', [float(v['ms']) for v in b.values()])):
+                if len(vals) != int(row['n_queries']) or abs(sum(vals) - float(row[col])) > 0.01 + 1e-6 * sum(vals):
+                    sys.exit(f'{pfx}_{tag}: QLOG lines do not add up to {col} ({sum(vals)} vs {row[col]})')
+            if full:
+                for n in q:
+                    # first decode verify == the CSV's; bind_ms == sum(decode + first verify per part) + checks
+                    if abs(vq[n][0] - float(q[n]['verify'])) > 0.002:
+                        sys.exit(f'{pfx}_{tag}: QLOG_VERIFY first != QLOG_QUERY verify at {n}')
+                    want = sum(d + v[0] for d, v in zip(bv[n]['dec'], bv[n]['ver'])) + bv[n]['check']
+                    if abs(want - float(b[n]['ms'])) > 0.005 * len(bv[n]['dec']) + 0.002:
+                        sys.exit(f'{pfx}_{tag}: QLOG_BINDV parts do not add up to bind_ms at {n} ({want} vs {b[n]["ms"]})')
+                    if memstart[n][0] != 'true':
+                        sys.exit(f'{pfx}_{tag}: VmHWM reset failed at {n}')
+                PHASES.append((pfx, tag, phase, vk, (main_rss, worker_rss)))
+            t = int(row['t'])
+            g = [x for x in runs if x['tag'] == tag][0]
+            gate = (f"gate={g['gate']} load1_start={g['load1_start']} busy_cores_start={g['busy_cores_start']} "
+                    f"commit={row['commit']} features={g.get('features', 'default')}")
+            if tag == ZKS_TAGS[f][0]:
+                emit(family=f, system=sysname, run=run, operation='update_per_epoch',
+                     prove_s=float(row['leafgen_seq_ms']) / t / 1000, proof_bytes=int(b[1]['ib']),
+                     peak_rss_mb=worker_rss, rss_scope='procs-engine worker (RSSTREE sampler)', answer='-', exact='-',
+                     provenance='derived',
+                     detail=f"EXCLUDING composition: leafgen_seq_ms/t = {row['leafgen_seq_ms']}/{t} (sum of the {t} "
+                            f"measured leaf proofs); proof_bytes = leaf-1 proof as shipped for query binding; "
+                            f"exp_compose's own worker peak_rss_mb = {row['peak_rss_mb']}; {gate}")
+                emit(family=f, system=sysname, run=run, operation='update_per_epoch_amortized',
+                     prove_s=float(row['total_time_ms']) / t / 1000, answer='-', exact='-', provenance='derived',
+                     detail=f"INCLUDING composition: total_time_ms/t = {row['total_time_ms']}/{t} ({t} leaves + "
+                            f"{row['merges_local']} merges, 1 machine x 32 cores)")
+                emit(family=f, system=sysname, run=run, operation='update_stream_8_epochs',
+                     prove_s=float(row['total_time_ms']) / 1000, verify_first_ms=float(row['verify_ms']),
+                     proof_bytes=int(row['proof_bytes']), peak_rss_mb=worker_rss,
+                     rss_scope='procs-engine worker (RSSTREE sampler)', answer='-', exact='-', provenance='measured',
+                     detail=f"forest, 1 machine x 32 cores: {t} leaves + {row['merges_local']} merges (merge_ms "
+                            f"{row['merge_ms']}, local_fold_ms {row['local_fold_ms']}); one O(1) root (single verify "
+                            f"verify_first_ms, proof_bytes); {gate}")
+            for n in NS:
+                if n not in q:
+                    continue
+                qq, bb = q[n], b[n]
+                answer, exact, probe, suf = zks_answer(f, n, int(qq['answer']), kk.get(n, ''))
+                op = f'query_n{n}{suf}'
+                ib = [int(x) for x in bb['ib'].split(';')]
+                if full:
+                    mn, first, med = stats(vq[n])
+                    emit(family=f, system=sysname, run=run, operation=op, n=n, prove_s=float(qq['prove']) / 1000,
+                         verify_ms=mn, verify_first_ms=first, verify_median_ms=med, proof_bytes=int(qq['bytes']),
+                         peak_rss_mb=mem[n], rss_scope='coordinator VmHWM reset at query start (this query only)',
+                         answer=answer, exact=exact, provenance='measured', note=note_for(f, sysname),
+                         detail=f"decode proof at version t'={n}; {probe}; prove = witness + prove; verify calls "
+                                f"{';'.join(f'{x:.3f}' for x in vq[n])} ms; rss_start {memstart[n][1]} MB; {gate}")
+                    parts = bv[n]
+                    pmin = sum(min(v) for v in parts['ver'])
+                    pfirst = sum(v[0] for v in parts['ver'])
+                    pmed = sum(statistics.median(v) for v in parts['ver'])
+                    emit(family=f, system=sysname, run=run, operation=op.replace('query', 'accept'), n=n,
+                         verify_ms=pmin + parts['check'] + mn, verify_first_ms=pfirst + parts['check'] + first,
+                         verify_median_ms=pmed + parts['check'] + med, decode_ms=sum(parts['dec']),
+                         proof_bytes=sum(ib) + int(qq['bytes']), answer='', exact='',
+                         provenance='derived (sum of measured parts)',
+                         detail=f"{bb['ctx']} live peak(s) [{bb['iv']}] verified against pinned VKs (per part, best "
+                                f"of 5: {'+'.join(f'{min(v):.3f}' for v in parts['ver'])} ms) + statement checks "
+                                f"{parts['check']:.3f} ms + query proof (best of 5 {mn:.3f} ms); postcard decode "
+                                f"{'+'.join(f'{d:.3f}' for d in parts['dec'])} ms excluded; bytes = peak proof(s) "
+                                f"{bb['ib']} + query proof")
+                else:
+                    emit(family=f, system=sysname, run=run, operation=op, n=n, prove_s=float(qq['prove']) / 1000,
+                         verify_first_ms=float(qq['verify']), proof_bytes=int(qq['bytes']), answer=answer,
+                         exact=exact, provenance='measured (repeat run r1)', note=note_for(f, sysname),
+                         detail=f"first run (r1), single verify only; {probe}; {gate}")
+
 order = {f: i for i, f in enumerate(FAMS)}
-OUT.sort(key=lambda r: (order[r['family']], r['system'] != 'zkSketch', r['operation'].split('_')[0] != 'update',
+sys_order = {'zk-Analytics': 0, 'zk-Analytics arch. (port †)': 0, 'zkSketch': 1, 'zkSketch (zk feature)': 2}
+run_order = {'main': 0, 'vt': 1, 'r2': 0, 'zk': 0, 'r1': 3}
+OUT.sort(key=lambda r: (order[r['family']], sys_order[r['system']], run_order[r['run']],
+                        r['operation'].split('_')[0] != 'update', r['operation'].split('_')[0],
                         int(r['n'] or 0), r['operation']))
-w = csv.DictWriter(open(os.path.join(R, 'six_sketch_comparison.csv'), 'w', newline=''), fieldnames=cols)
+w = csv.DictWriter(open(os.path.join(R, 'six_sketch_comparison.csv'), 'w', newline=''), fieldnames=COLS)
 w.writeheader()
 w.writerows(OUT)
 print(f'{len(OUT)} rows')
+for pfx, tag, phase, vk, (mr, wr) in PHASES:
+    print(f'PHASE {pfx}_{tag}: ' + ' '.join(f'{k}=hwm {v[0]:.0f}/rss {v[1]:.0f} MB' for k, v in phase.items())
+          + f" vk_derive_s={','.join(vk)} RSSTREE main={mr:.0f} worker={wr:.0f}", file=sys.stderr)

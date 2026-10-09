@@ -10,10 +10,11 @@
 //! and disagreed with the leaf proof, surfacing as `WitnessConflict` at the
 //! first compared witness).
 //!
-//! ### Zero knowledge (`--features zk`)
+//! ### Zero knowledge (the `zk` feature, on by default)
 //!
-//! The default build is **not hiding**: `Pcs` is the plain `TwoAdicFriPcs`.
-//! The `zk` Cargo feature (off by default) swaps in `HidingFriPcs` over the
+//! The default build is **hiding**: the `zk` Cargo feature (a default
+//! feature; `--no-default-features` gives the plain `TwoAdicFriPcs`) swaps
+//! in `HidingFriPcs` over the
 //! SAME plain `MerkleTreeMmcs`, with the OS-seeded `ZkRng`
 //! ([`crate::zk_rng`]) as its mask RNG and `NUM_RANDOM_CODEWORDS` random
 //! codewords per commitment. Every leaf, merge, root and query proof is then

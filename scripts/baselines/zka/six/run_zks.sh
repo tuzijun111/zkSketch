@@ -33,7 +33,7 @@ declare -A FAM KM ENVS
 FAM[cm]=cm;            KM[cm]=hot;      ENVS[cm]="EXP_D=3 EXP_W=1024"
 FAM[hll]=hll;          KM[hll]=first;   ENVS[hll]="EXP_HLL_B=14"
 FAM[ss]=ss;            KM[ss]=first;    ENVS[ss]="EXP_SS_CAP=1024"
-FAM[gk]=gk;            KM[gk]=hot;      ENVS[gk]="EXP_GK_CAP=2048 EXP_GK_S=51"
+FAM[gk]=gk;            KM[gk]=hot;      ENVS[gk]="EXP_GK_CAP=${SIX_GK_CAP:-2048} EXP_GK_S=51"
 FAM[bloom]=bloom;      KM[bloom]=first; ENVS[bloom]="EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14"
 FAM[bloom_absent]=bloom; KM[bloom_absent]=absent; ENVS[bloom_absent]="EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14"
 FAM[kmv]=kmv;          KM[kmv]=first;   ENVS[kmv]="EXP_KMV_K=1024"
@@ -55,11 +55,11 @@ for tag in "${TAGS[@]}"; do
   {
     echo "# six-sketch zkSketch run tag=$tag $(date -Is) host=$(hostname) nproc=$(nproc) gate=$g waited_s=$GATE_WAITED_S load1_start=$GATE_L0 busy_cores_start=${GATE_BUSY:-NA}"
     echo "# zkSketch HEAD=$(git -C "$WT" rev-parse --short=9 HEAD) dirty_files_outside_results=$(dirty) features=$FEAT bin_md5=$BIN_MD5"
-    echo "# env: EXP_COMPOSE_FAMILY=$fam EXP_COMPOSE_MODE=forest EXP_COMPOSE_EXEC=procs EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_N=16384 EXP_COMPOSE_BATCHES=2048 EXP_COMPOSE_QUERY_EVERY=1 EXP_DATASET=aol EXP_QUERY_KEY_MODE=${KM[$tag]} ${ENVS[$tag]} EXP_QUERY_LOG=1 EXP_VERIFY_REPEATS=$VREP (ZKSKETCH_COMMIT unset = hiding default)"
+    echo "# env: EXP_COMPOSE_FAMILY=$fam EXP_COMPOSE_MODE=forest EXP_COMPOSE_EXEC=procs EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_N=${SIX_N:-16384} EXP_COMPOSE_BATCHES=${SIX_M:-2048} EXP_COMPOSE_QUERY_EVERY=1 EXP_DATASET=aol EXP_QUERY_KEY_MODE=${KM[$tag]} ${ENVS[$tag]} EXP_QUERY_LOG=1 EXP_VERIFY_REPEATS=$VREP (ZKSKETCH_COMMIT unset = hiding default)"
   } > "$log"
   T0=$SECONDS
   ( cd "$WT" && env EXP_COMPOSE_FAMILY="$fam" EXP_COMPOSE_MODE=forest EXP_COMPOSE_EXEC=procs \
-      EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_N=16384 EXP_COMPOSE_BATCHES=2048 \
+      EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_N=${SIX_N:-16384} EXP_COMPOSE_BATCHES=${SIX_M:-2048} \
       EXP_COMPOSE_QUERY_EVERY=1 EXP_DATASET=aol EXP_QUERY_KEY_MODE="${KM[$tag]}" EXP_QUERY_LOG=1 \
       EXP_VERIFY_REPEATS="$VREP" \
       ${ENVS[$tag]} EXP_OUT="$csvname" EXP_COMPOSE_PROOF_DIR="$SP/proofs_$tag" \

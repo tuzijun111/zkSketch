@@ -1,0 +1,4 @@
+tag,family,key_mode,family_env,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,main_peak_rss_mb,desc_peak_rss_mb,commit,zks_head,features,bin_md5
+cm,cm,hot,EXP_D=3 EXP_W=1024,2026-10-09T20:38:14+08:00,busy:load1=22.12;,60,22.12,NA,26.20,22,0,3093.3,2915.1,hiding,da4ff6e78,zk-default,7c934720d042
+hll,hll,first,EXP_HLL_B=14,2026-10-09T20:39:36+08:00,busy:load1=12.81;,60,12.81,NA,25.21,53,0,7029.3,3074.0,hiding,da4ff6e78,zk-default,7c934720d042
+ss,ss,first,EXP_SS_CAP=1024,2026-10-09T20:41:30+08:00,busy:load1=12.42;,61,12.42,NA,17.08,27,0,3847.6,3051.6,hiding,da4ff6e78,zk-default,7c934720d042

@@ -19,7 +19,7 @@ OUTD=$RESULTS
 PFX=${SIX_ZKA_PREFIX:-six_zka}
 EB=$BASELINE_DIR/build
 KEYS=$WT/data/aol.keys
-M=2048
+M=${SIX_M:-2048}   # records per epoch
 export PATH="$HOME/.cargo/bin:$HOME/.risc0/bin:$PATH"
 unset RISC0_DEV_MODE
 source "$HERE6/gate.sh"

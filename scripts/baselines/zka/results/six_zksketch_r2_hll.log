@@ -1,0 +1,69 @@
+# six-sketch zkSketch run tag=hll 2026-10-09T19:21:09+08:00 host=SPRL6201019991 nproc=64 gate=quiet waited_s=31 load1_start=7.30 busy_cores_start=0.1
+# zkSketch HEAD=da4ff6e78 dirty_files_outside_results=0 features=default bin_md5=6182555a6987
+# env: EXP_COMPOSE_FAMILY=hll EXP_COMPOSE_MODE=forest EXP_COMPOSE_EXEC=procs EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_N=16384 EXP_COMPOSE_BATCHES=2048 EXP_COMPOSE_QUERY_EVERY=1 EXP_DATASET=aol EXP_QUERY_KEY_MODE=first EXP_HLL_B=14 EXP_QUERY_LOG=1 EXP_VERIFY_REPEATS=5 (ZKSKETCH_COMMIT unset = hiding default)
+Stream compose (plonky3) — N=16384 datasets=["aol"] families=["hll_omc"] modes=["forest"] m=[2048] cores=[32] machines=[1] exec=procs commit=hiding salt_seed=os (avail=64) MIXED: query every 1 batch(es) key_mode=first
+procs engine: one pinned OS process per machine (numactl/taskset, disjoint physical cores), all cross-machine data over serialized sockets; the chain runs sequentially on ONE machine (folds in place), forest composes in-place on the leaf machines. Communication bytes are measured; the comm_model_ms column uses EXP_NET_MBPS=200Mb/s + EXP_NET_RTT_MS=0.2ms.
+-- dataset=aol (1048576 keys) --
+QLOG_PHASE,after=auditor_new,coord_hwm_mb=2400.6,coord_rss_mb=749.1
+    auditor: VK derived from public parameters in 7.6s
+QLOG_PHASE,after=before_query_phase,coord_hwm_mb=2417.6,coord_rss_mb=770.3
+QLOG_KEY,at_leaf=1,hll_b=14
+QLOG_MEMSTART,at_leaf=1,hwm_reset=true,rss_start_mb=771.0
+QLOG_QUERY,at_leaf=1,prove_ms=1971.198,witness_ms=80.721,verify_ms=14.916,proof_bytes=593831,answer=3180164
+QLOG_MEM,at_leaf=1,query_hwm_mb=3048.1,rss_end_mb=1585.3
+QLOG_VERIFY,at_leaf=1,decode_verify_ms=14.916;14.770;14.701;14.718;14.710
+QLOG_KEY,at_leaf=2,hll_b=14
+QLOG_MEMSTART,at_leaf=2,hwm_reset=true,rss_start_mb=1178.2
+QLOG_QUERY,at_leaf=2,prove_ms=1880.153,witness_ms=61.175,verify_ms=17.730,proof_bytes=593646,answer=3331013
+QLOG_MEM,at_leaf=2,query_hwm_mb=3079.7,rss_end_mb=1721.7
+QLOG_VERIFY,at_leaf=2,decode_verify_ms=17.730;17.658;17.573;17.533;17.556
+QLOG_KEY,at_leaf=3,hll_b=14
+QLOG_MEMSTART,at_leaf=3,hwm_reset=true,rss_start_mb=1346.6
+QLOG_QUERY,at_leaf=3,prove_ms=1663.420,witness_ms=61.368,verify_ms=14.910,proof_bytes=593583,answer=3477838
+QLOG_MEM,at_leaf=3,query_hwm_mb=3044.1,rss_end_mb=1750.4
+QLOG_VERIFY,at_leaf=3,decode_verify_ms=14.910;14.794;14.717;14.697;14.718
+QLOG_KEY,at_leaf=4,hll_b=14
+QLOG_MEMSTART,at_leaf=4,hwm_reset=true,rss_start_mb=1353.2
+QLOG_QUERY,at_leaf=4,prove_ms=1682.979,witness_ms=57.502,verify_ms=14.960,proof_bytes=593681,answer=3603979
+QLOG_MEM,at_leaf=4,query_hwm_mb=3076.4,rss_end_mb=1792.2
+QLOG_VERIFY,at_leaf=4,decode_verify_ms=14.960;14.836;14.731;14.705;14.689
+QLOG_KEY,at_leaf=5,hll_b=14
+QLOG_MEMSTART,at_leaf=5,hwm_reset=true,rss_start_mb=1353.8
+QLOG_QUERY,at_leaf=5,prove_ms=1707.938,witness_ms=56.924,verify_ms=14.940,proof_bytes=593814,answer=3741591
+QLOG_MEM,at_leaf=5,query_hwm_mb=3079.0,rss_end_mb=1816.1
+QLOG_VERIFY,at_leaf=5,decode_verify_ms=14.940;14.833;14.756;14.720;14.794
+QLOG_KEY,at_leaf=6,hll_b=14
+QLOG_MEMSTART,at_leaf=6,hwm_reset=true,rss_start_mb=1355.2
+QLOG_QUERY,at_leaf=6,prove_ms=1713.341,witness_ms=61.320,verify_ms=14.943,proof_bytes=593876,answer=3899691
+QLOG_MEM,at_leaf=6,query_hwm_mb=3094.1,rss_end_mb=1737.5
+QLOG_VERIFY,at_leaf=6,decode_verify_ms=14.943;14.834;14.726;14.750;14.709
+QLOG_KEY,at_leaf=7,hll_b=14
+QLOG_MEMSTART,at_leaf=7,hwm_reset=true,rss_start_mb=1362.4
+QLOG_QUERY,at_leaf=7,prove_ms=1747.393,witness_ms=59.648,verify_ms=14.951,proof_bytes=593680,answer=4032048
+QLOG_MEM,at_leaf=7,query_hwm_mb=3095.0,rss_end_mb=1737.7
+QLOG_VERIFY,at_leaf=7,decode_verify_ms=14.951;14.825;14.761;14.725;14.750
+QLOG_KEY,at_leaf=8,hll_b=14
+QLOG_MEMSTART,at_leaf=8,hwm_reset=true,rss_start_mb=1362.5
+QLOG_QUERY,at_leaf=8,prove_ms=1894.640,witness_ms=58.659,verify_ms=17.803,proof_bytes=593848,answer=4191638
+QLOG_MEM,at_leaf=8,query_hwm_mb=3095.4,rss_end_mb=1737.8
+QLOG_VERIFY,at_leaf=8,decode_verify_ms=17.803;17.655;17.558;18.028;17.563
+QLOG_BIND,at_leaf=1,ctx_proofs=1,intervals=1-1,interval_bytes=627349,bind_ms=19.783
+QLOG_BINDV,at_leaf=1,decode_ms=0.583,verify_ms=19.196;18.989;19.025;19.035;19.059,check_ms=0.005
+QLOG_BIND,at_leaf=2,ctx_proofs=1,intervals=1-2,interval_bytes=566522,bind_ms=17.423
+QLOG_BINDV,at_leaf=2,decode_ms=0.631,verify_ms=16.782;16.546;16.516;16.568;16.566,check_ms=0.010
+QLOG_BIND,at_leaf=3,ctx_proofs=2,intervals=1-2;3-3,interval_bytes=566522;627968,bind_ms=37.018
+QLOG_BINDV,at_leaf=3,decode_ms=0.631|0.566,verify_ms=16.782;16.546;16.516;16.568;16.566|19.028;19.092;19.107;19.065;18.945,check_ms=0.011
+QLOG_BIND,at_leaf=4,ctx_proofs=1,intervals=1-4,interval_bytes=528310,bind_ms=16.268
+QLOG_BINDV,at_leaf=4,decode_ms=0.712,verify_ms=15.536;15.355;15.307;15.379;15.342,check_ms=0.020
+QLOG_BIND,at_leaf=5,ctx_proofs=2,intervals=1-4;5-5,interval_bytes=528310;627651,bind_ms=35.905
+QLOG_BINDV,at_leaf=5,decode_ms=0.712|0.578,verify_ms=15.536;15.355;15.307;15.379;15.342|19.060;19.042;19.000;19.087;18.956,check_ms=0.020
+QLOG_BIND,at_leaf=6,ctx_proofs=2,intervals=1-4;5-6,interval_bytes=528310;566409,bind_ms=33.275
+QLOG_BINDV,at_leaf=6,decode_ms=0.712|0.488,verify_ms=15.536;15.355;15.307;15.379;15.342|16.516;16.551;16.547;16.433;16.473,check_ms=0.023
+QLOG_BIND,at_leaf=7,ctx_proofs=3,intervals=1-4;5-6;7-7,interval_bytes=528310;566409;627779,bind_ms=52.825
+QLOG_BINDV,at_leaf=7,decode_ms=0.712|0.488|0.552,verify_ms=15.536;15.355;15.307;15.379;15.342|16.516;16.551;16.547;16.433;16.473|18.996;19.028;19.002;18.961;19.000,check_ms=0.026
+QLOG_BIND,at_leaf=8,ctx_proofs=1,intervals=1-8,interval_bytes=528743,bind_ms=13.732
+QLOG_BINDV,at_leaf=8,decode_ms=0.623,verify_ms=13.075;12.915;12.872;12.841;12.835,check_ms=0.034
+  hll_omc       b14        m=2048 t=8   [forest   ] cores=32 mach=1 procs=1 total=27.84s (wpass=0.02s leaf=27.81s merge=9.8s [fold 9.8s + xmerge 0.00s]) verify=0.027s proof=516.4KB comm=516.4KB/1 msgs (200Mbps model 25.4ms) rss=2754MB | q=8 /query: 1782.6ms prove, 579.8KB, 1.6 ctx, bind 28.3ms
+results -> /home/binbin/zkSketch/.claude/worktrees/wf_e14f455f-2a8-1/results/six_zksketch_r2_hll.csv
+RSSTREE,zks_hll,main_peak_rss_mb=3095.4,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=2753.6,wall_s=74.3,rc=0
+# end 2026-10-09T19:22:23+08:00 rc=0 wall_s=74 load1_end=17.07

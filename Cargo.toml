@@ -49,7 +49,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 # Hiding (zero-knowledge) PCS for every proof: `HidingFriPcs` over the plain
-# Merkle MMCS with an OS-seeded mask RNG. Off by default; see src/config.rs.
+# Merkle MMCS with an OS-seeded mask RNG. On by default; build with
+# `--no-default-features` for the plain (non-hiding) PCS. See src/config.rs.
+default = ["zk"]
 zk = []
 
 # Procs regression test of the staged-wave engine: it spawns its workers by
