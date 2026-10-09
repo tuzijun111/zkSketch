@@ -315,11 +315,24 @@ macro_rules! prove {
         let info = default_prover().prove_with_opts(env, $elf, &ProverOpts::succinct()).expect("prove failed");
         let prove_s = t.elapsed().as_secs_f64();
         let receipt = info.receipt;
-        let mut best = f64::MAX;
+        // verify_ms = the best of 5 in-process calls (unchanged); every call, and a
+        // bincode decode of the serialized receipt, go to stderr for the six-sketch
+        // verify-protocol comparison (../README.md).
+        let mut times: Vec<f64> = Vec::with_capacity(5);
         for _ in 0..5 {
             let t2 = Instant::now();
             receipt.verify($id).expect("verify failed");
-            best = best.min(t2.elapsed().as_secs_f64() * 1000.0);
+            times.push(t2.elapsed().as_secs_f64() * 1000.0);
+        }
+        let best = times.iter().cloned().fold(f64::MAX, f64::min);
+        {
+            let rb = bincode::serialize(&receipt).expect("serialize receipt");
+            let t3 = Instant::now();
+            let back: risc0_zkvm::Receipt = bincode::deserialize(&rb).expect("deserialize receipt");
+            let dec_ms = t3.elapsed().as_secs_f64() * 1000.0;
+            drop(back);
+            let all: Vec<String> = times.iter().map(|x| format!("{x:.3}")).collect();
+            eprintln!("VERIFY_TIMES_MS,{},receipt_decode_ms={dec_ms:.3}", all.join(";"));
         }
         let got: $T = receipt.journal.decode().expect("decode proved journal");
         assert_eq!(&got, $expect, "proved journal != native");

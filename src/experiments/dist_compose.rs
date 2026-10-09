@@ -1298,6 +1298,17 @@ const ENV_SOCK: &str = "ZKS_COMPOSE_SOCK";
 const ENV_ID: &str = "ZKS_COMPOSE_ID";
 const ENV_CORES: &str = "ZKS_COMPOSE_CORES";
 
+/// `EXP_QUERY_LOG=1`: the coordinator's `VmHWM` / `VmRSS` at a phase
+/// boundary (`QLOG_PHASE`), so a whole-run peak can be attributed (e.g. to the
+/// auditor's one-time VK derivation rather than to the query proofs). Logging
+/// only.
+fn qlog_phase(after: &str) {
+    if super::stream_compose::qlog_on() {
+        let (hwm, rss) = super::stream_compose::qlog_mem_mb();
+        eprintln!("QLOG_PHASE,after={after},coord_hwm_mb={hwm:.1},coord_rss_mb={rss:.1}");
+    }
+}
+
 /// Peak (high-water) RSS of this process, in MB — `VmHWM`, not the current
 /// `VmRSS`, so a child can report after its proofs are dropped.
 fn read_vmhwm_mb() -> f64 {
@@ -2509,6 +2520,7 @@ pub fn measure_compose_dist(
     // ship each query's prefix certificate ([`CtxCollector`]).
     let mut audit =
         if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m, commit.mode()) };
+    qlog_phase("auditor_new");
     let mut ctx = CtxCollector::new(audit.is_some(), mode, machines_eff);
 
     let t_start = Instant::now();
@@ -2870,6 +2882,7 @@ pub fn measure_compose_dist(
     // (prover side); each answer is pinned to the decode VK of the run's
     // commitment mode and bound to the certified history by the
     // certificates the workers shipped, against the published log `log`.
+    qlog_phase("before_query_phase");
     let leaf_finals = reported_leaf_finals(leaf_finals)?;
     let store = ctx.finish(query_at, &ranges, &leaf_proofs)?;
     let q = measure_queries_dist(
@@ -3082,6 +3095,7 @@ fn measure_compose_dist_staged(
     // ship each query's prefix certificate ([`CtxCollector`]).
     let mut audit =
         if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m, commit.mode()) };
+    qlog_phase("auditor_new");
     let mut ctx = CtxCollector::new(audit.is_some(), mode, machines_eff);
 
     let t_start = Instant::now();
@@ -3388,6 +3402,7 @@ fn measure_compose_dist_staged(
     // (prover side); each answer is pinned to the decode VK of the run's
     // commitment mode and bound to the certified history by the
     // certificates the workers shipped, against the published log `log`.
+    qlog_phase("before_query_phase");
     let leaf_finals = reported_leaf_finals(leaf_finals)?;
     let store = ctx.finish(query_at, &ranges, &[])?;
     let q = measure_queries_dist(

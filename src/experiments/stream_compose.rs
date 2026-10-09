@@ -419,6 +419,54 @@ pub(crate) fn qlog_on() -> bool {
     std::env::var("EXP_QUERY_LOG").map(|v| v == "1").unwrap_or(false)
 }
 
+/// `EXP_VERIFY_REPEATS=R` (read only under `EXP_QUERY_LOG=1`; default 1):
+/// after the timed first verification of a query proof or of a prefix
+/// certificate part (the value the CSV reports, unchanged), verify the same
+/// proof `R - 1` more times and log every time (`QLOG_VERIFY`, `QLOG_BINDV`),
+/// so a min / median of `R` warm runs can be compared with a baseline that
+/// reports one. Outside every timed window of the CSV.
+pub(crate) fn qlog_verify_repeats() -> usize {
+    if !qlog_on() {
+        return 1;
+    }
+    std::env::var("EXP_VERIFY_REPEATS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&r| r >= 1)
+        .unwrap_or(1)
+}
+
+/// `(VmHWM, VmRSS)` of this process in MB (0 when unreadable).
+pub(crate) fn qlog_mem_mb() -> (f64, f64) {
+    let (mut hwm, mut rss) = (0.0, 0.0);
+    if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+        for line in s.lines() {
+            let kb = |rest: &str| {
+                rest.split_whitespace().next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) as f64
+                    / 1024.0
+            };
+            if let Some(rest) = line.strip_prefix("VmHWM:") {
+                hwm = kb(rest);
+            } else if let Some(rest) = line.strip_prefix("VmRSS:") {
+                rss = kb(rest);
+            }
+        }
+    }
+    (hwm, rss)
+}
+
+/// Reset this process's peak-RSS high-water mark (`VmHWM`) to its current RSS
+/// (Linux `/proc/self/clear_refs` value 5), so the next [`qlog_mem_mb`] reads
+/// the peak of the work in between. Best effort, logging only.
+pub(crate) fn qlog_reset_hwm() -> bool {
+    std::fs::write("/proc/self/clear_refs", "5").is_ok()
+}
+
+/// `a;b;c` with 3 decimals.
+pub(crate) fn qlog_join(v: &[f64]) -> String {
+    v.iter().map(|x| format!("{x:.3}")).collect::<Vec<_>>().join(";")
+}
+
 /// A boundary-exposing leaf proof plus the Send metrics we keep off-thread.
 struct LeafArt {
     output: RecursionOutput<ConfigWithFriParams>,
@@ -529,6 +577,21 @@ fn record_query(
             tm.witness.as_secs_f64() * 1000.0,
             dp.answer
         );
+        // Peak RSS since the reset in `prove_query_at`: witness + prove + the
+        // first verify of this one query.
+        let (hwm, rss) = qlog_mem_mb();
+        eprintln!("QLOG_MEM,at_leaf={at_leaf},query_hwm_mb={hwm:.1},rss_end_mb={rss:.1}");
+        // Warm repeats of the same pinned verification (not in the CSV).
+        if let Some(vk) = decode_vk {
+            let mut times = vec![verify_ms];
+            for _ in 1..qlog_verify_repeats() {
+                let t0 = std::time::Instant::now();
+                verify_decode_proof(&dp.output.0, vk)
+                    .unwrap_or_else(|e| panic!("query proof at t'={at_leaf} (repeat): {e}"));
+                times.push(t0.elapsed().as_secs_f64() * 1000.0);
+            }
+            eprintln!("QLOG_VERIFY,at_leaf={at_leaf},decode_verify_ms={}", qlog_join(&times));
+        }
     }
     queries.push(QueryArt { at_leaf, prove_ms, verify_ms, proof_bytes, statement, bind: None });
 }
@@ -566,6 +629,11 @@ fn prove_query_at(
             QueryState::Kmv(s) => format!("kmv_k={}", s.k),
         };
         eprintln!("QLOG_KEY,at_leaf={t},{key}");
+        // Peak RSS of this query alone: reset the high-water mark here; read
+        // back in `record_query` (`QLOG_MEM`).
+        let reset = qlog_reset_hwm();
+        let (_, rss) = qlog_mem_mb();
+        eprintln!("QLOG_MEMSTART,at_leaf={t},hwm_reset={reset},rss_start_mb={rss:.1}");
     }
     // The version's randomizer. Under `Hiding` only the genesis state (t = 0)
     // opens with the public zero; a zero salt at t ≥ 1 would publish the

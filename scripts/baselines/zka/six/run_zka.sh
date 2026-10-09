@@ -8,12 +8,15 @@
 #                               job = <fam>:aggr:<epoch> | <fam>:query:<n>[:<arg>]
 #                               (gk query arg = rank value; bloom query arg = first|key:<u32>)
 # ProverOpts::succinct(), CPU r0vm. Every job is wrapped by rss_tree.sh (r0vm peak RSS).
+# SIX_ZKA_PREFIX (default six_zka) names the output files: <prefix>_<fam>_{exec,prove}.csv/.log,
+# <prefix>_jobs.csv (e.g. six_zka_vt for the verify-protocol re-proofs).
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE6/../common.sh"   # BASELINE_DIR, ZKA, ZKS, RESULTS, PATH
 WT=$ZKS
 Z=$HERE6/..
 OUTD=$RESULTS
+PFX=${SIX_ZKA_PREFIX:-six_zka}
 EB=$BASELINE_DIR/build
 KEYS=$WT/data/aol.keys
 M=2048
@@ -65,11 +68,11 @@ common() {
 }
 
 phase_exec() {
-  local log=$OUTD/six_zka_exec.log
+  local log=$OUTD/${PFX}_exec.log
   provenance "run_zka.sh exec" >> "$log"
   local fam e out
   for fam in cm hll ss gk; do
-    out=$OUTD/six_zka_${fam}_exec.csv
+    out=$OUTD/${PFX}_${fam}_exec.csv
     csv_init "$out" "$fam"
     for e in 0 1 2 3 4 5 6 7; do
       echo "# exec $fam aggr epoch $e $(date -Is) load1=$(cut -d' ' -f1 /proc/loadavg)" >> "$log"
@@ -79,7 +82,7 @@ phase_exec() {
     done
   done
   for fam in bloom kmv; do
-    out=$OUTD/six_zka_${fam}_exec.csv
+    out=$OUTD/${PFX}_${fam}_exec.csv
     csv_init "$out" "$fam"
     local extra=""; [[ $fam == bloom ]] && extra="--probe first,absent"
     echo "# exec $fam pipeline $(date -Is) load1=$(cut -d' ' -f1 /proc/loadavg)" >> "$log"
@@ -89,14 +92,14 @@ phase_exec() {
   done
 }
 
-JOBS=$OUTD/six_zka_jobs.csv
+JOBS=$OUTD/${PFX}_jobs.csv
 phase_prove() {
   [[ -s $JOBS ]] || echo "job,family,op,n_or_epoch,arg,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,r0vm_peak_rss_mb,main_peak_rss_mb" > "$JOBS"
   local job fam op x arg out log args g L1 T0 rc wall rl r0 mn start
   for job in "$@"; do
     IFS=: read -r fam op x arg <<< "$job"
-    out=$OUTD/six_zka_${fam}_prove.csv
-    log=$OUTD/six_zka_${fam}_prove.log
+    out=$OUTD/${PFX}_${fam}_prove.csv
+    log=$OUTD/${PFX}_${fam}_prove.log
     csv_init "$out" "$fam"
     # shellcheck disable=SC2207
     args=($(common "$fam"))

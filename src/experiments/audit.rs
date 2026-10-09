@@ -556,6 +556,12 @@ pub(crate) struct QueryAudit {
     /// (Even a collision would only serve a statement that WAS verified for
     /// that interval and bracketing.)
     fingerprint: RandomState,
+    /// `EXP_QUERY_LOG=1` only (logging, never read by the binding): per
+    /// verified part, the postcard decode time and every verify time (first
+    /// plus `EXP_VERIFY_REPEATS - 1` warm repeats); and the last `bind`'s
+    /// per-part detail and statement-check time, printed as `QLOG_BINDV`.
+    qlog_parts: HashMap<(u64, u64, ForestShape, u64), (f64, Vec<f64>)>,
+    qlog_last: Option<String>,
 }
 
 impl QueryAudit {
@@ -631,6 +637,8 @@ impl QueryAudit {
             genesis,
             memo: HashMap::new(),
             fingerprint: RandomState::new(),
+            qlog_parts: HashMap::new(),
+            qlog_last: None,
         })
     }
 
@@ -680,11 +688,26 @@ impl QueryAudit {
                         &owned
                     }
                 };
+                let decode_ms = t0.elapsed().as_secs_f64() * 1000.0;
                 let st = self
                     .prefix
                     .verify_interval(proof, shape)
                     .map_err(|e| format!("part {} [{lo}, {hi}]: {e}", k + 1))?;
-                self.memo.insert(key.clone(), (t0.elapsed().as_secs_f64() * 1000.0, st));
+                let first_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                if super::stream_compose::qlog_on() {
+                    // Logging only: the binding uses `first_ms` (decode + first
+                    // verify) and the statement of the first verification.
+                    let mut times = vec![first_ms - decode_ms];
+                    for _ in 1..super::stream_compose::qlog_verify_repeats() {
+                        let t1 = std::time::Instant::now();
+                        self.prefix
+                            .verify_interval(proof, shape)
+                            .map_err(|e| format!("part {} [{lo}, {hi}] (repeat): {e}", k + 1))?;
+                        times.push(t1.elapsed().as_secs_f64() * 1000.0);
+                    }
+                    self.qlog_parts.insert(key.clone(), (decode_ms, times));
+                }
+                self.memo.insert(key.clone(), (first_ms, st));
             }
             let (part_ms, st) = &self.memo[&key];
             ms += part_ms;
@@ -703,8 +726,25 @@ impl QueryAudit {
                 q.at_leaf
             ));
         }
-        ms += t0.elapsed().as_secs_f64() * 1000.0;
+        let check_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        ms += check_ms;
         q.bind = Some(QueryBind { ctx_proofs: parts.len() as u64, ms });
+        if super::stream_compose::qlog_on() {
+            let mut dec = Vec::with_capacity(parts.len());
+            let mut ver = Vec::with_capacity(parts.len());
+            for (lo, hi, shape, src) in parts.iter() {
+                let fp = self.fingerprint(src)?;
+                if let Some((d, v)) = self.qlog_parts.get(&(*lo, *hi, shape.clone(), fp)) {
+                    dec.push(format!("{d:.3}"));
+                    ver.push(super::stream_compose::qlog_join(v));
+                }
+            }
+            self.qlog_last = Some(format!(
+                "decode_ms={},verify_ms={},check_ms={check_ms:.3}",
+                dec.join("|"),
+                ver.join("|")
+            ));
+        }
         Ok(())
     }
 }
@@ -784,6 +824,9 @@ impl ContextStore {
                     sizes.join(";"),
                     b.ms
                 );
+                if let Some(d) = audit.qlog_last.take() {
+                    eprintln!("QLOG_BINDV,at_leaf={},{d}", q.at_leaf);
+                }
             }
         }
         Ok(())
