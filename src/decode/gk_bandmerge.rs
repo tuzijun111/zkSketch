@@ -620,10 +620,20 @@ mod tests {
                 })
                 .collect()
         };
+        #[cfg(not(feature = "zk"))]
         let recorded = [
             (Binding::Semantic, [203355892u64, 237880594, 1750979469, 1997198089, 576604346, 52959881, 1491069700, 322413283]),
             (Binding::Bound, [203355892, 237880594, 1750979469, 1997198089, 576604346, 52959881, 1491069700, 322413283]),
             (Binding::Legacy, [1884057042, 1978897654, 1908599913, 512142752, 520418862, 202716958, 153147690, 1581877963]),
+        ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        let recorded = [
+            (Binding::Semantic, [902496403u64, 515422773, 159835801, 720520716, 37006762, 1887509070, 1251845308, 1474720669]),
+            (Binding::Bound, [902496403, 515422773, 159835801, 720520716, 37006762, 1887509070, 1251845308, 1474720669]),
+            (Binding::Legacy, [1444927145, 1247787850, 2006318704, 329517752, 294097233, 916706900, 1968166527, 680753177]),
         ];
         let gk = CommitFamily::GreenwaldKhanna;
         let cap = 16;

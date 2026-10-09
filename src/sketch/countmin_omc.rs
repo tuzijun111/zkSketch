@@ -2554,11 +2554,22 @@ mod tests {
     /// `build_countmin_omc_leaf_commit(.., Plain)`.
     #[test]
     fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+        #[cfg(not(feature = "zk"))]
         let recorded = [
             (Expose::Interval, Binding::Semantic, [311146798, 1251184148, 67745973, 1950185229, 813267801, 1800539963, 440903848, 825798510]),
             (Expose::Interval, Binding::Bound, [609245164, 1860305887, 1884344271, 1329743628, 615658389, 735468151, 734990312, 1891164946]),
             (Expose::Boundary, Binding::Legacy, [1736090810, 1831588262, 662316068, 1368614943, 306038768, 912717005, 886156929, 1189438024]),
             (Expose::None, Binding::Semantic, [1834649507, 1407219679, 827127958, 416953406, 1951498694, 439518398, 1447935561, 760283013]),
+        ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        let recorded = [
+            (Expose::Interval, Binding::Semantic, [915538416, 805890308, 1446156539, 1794458649, 1137162986, 225840416, 87116904, 1724929484]),
+            (Expose::Interval, Binding::Bound, [1054103375, 149905224, 138759737, 1631666192, 667042757, 1449942649, 484713610, 1239276555]),
+            (Expose::Boundary, Binding::Legacy, [281810551, 1683065848, 825570010, 462261378, 1602227210, 1373720362, 561491641, 188345834]),
+            (Expose::None, Binding::Semantic, [987175626, 1989593189, 867651757, 195827829, 733036987, 1016381982, 1863087611, 761442376]),
         ];
         for (expose, binding, vk) in recorded {
             let old = build_countmin_omc_leaf_expose(HP, expose, binding).vk_pin_values();

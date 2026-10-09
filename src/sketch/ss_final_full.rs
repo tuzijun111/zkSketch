@@ -3018,10 +3018,20 @@ mod tests {
     /// old one.
     #[test]
     fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+        #[cfg(not(feature = "zk"))]
         let recorded = [
             (Expose::None, [244076800, 348624130, 86818571, 987364216, 794433870, 1128569993, 1199812825, 207596035]),
             (Expose::Boundary, [1660367479, 141433590, 1771118436, 411651249, 1631202690, 816723062, 1223335467, 1149506330]),
             (Expose::Interval, [407321886, 607299717, 1921107414, 734011497, 1873119001, 1590884499, 189246359, 7492791]),
+        ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        let recorded = [
+            (Expose::None, [1355298051, 1036571591, 1287557254, 679024213, 1596268254, 523994451, 1238270595, 553662535]),
+            (Expose::Boundary, [31819246, 1187830807, 1483792271, 352768436, 346734232, 1202192361, 269926645, 301018502]),
+            (Expose::Interval, [484782031, 509188508, 819031150, 744439087, 133272039, 2004911268, 1306215133, 126093274]),
         ];
         for (expose, vk) in recorded {
             let old = build_ss_full_leaf_expose(HP, expose).vk_pin_values();

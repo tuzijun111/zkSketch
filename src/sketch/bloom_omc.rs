@@ -1873,9 +1873,18 @@ mod tests {
     #[test]
     fn standalone_leaf_vk_is_pinned() {
         // (k, log_w, batch, live keys) → (commitment, metadata) fingerprints.
+        #[cfg(not(feature = "zk"))]
         const PINNED: [((usize, usize, usize, usize), (u64, u64)); 2] = [
             ((3, 7, 8, 6), (0x5799_0f46_158c_a38e, 0xb2c4_1ac7_ed6a_d550)),
             ((7, 8, 4, 3), (0x6e87_0de0_0d50_0e7b, 0xc986_76c8_919c_a78b)),
+        ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        const PINNED: [((usize, usize, usize, usize), (u64, u64)); 2] = [
+            ((3, 7, 8, 6), (0xd9f0_8d56_6a6c_eac6, 0x395b_b466_75fb_5f14)),
+            ((7, 8, 4, 3), (0x1b0d_1bac_eb90_68c7, 0xe4d4_2c1b_9768_cb0b)),
         ];
         for ((k, log_w, batch, live), pin) in PINNED {
             let p = BloomOmcParams { k, log_w, batch };

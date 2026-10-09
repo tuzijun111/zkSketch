@@ -781,10 +781,20 @@ mod tests {
                 })
                 .collect()
         };
+        #[cfg(not(feature = "zk"))]
         let recorded = [
             (Binding::Semantic, [1773978634u64, 384655842, 294999589, 1673679358, 228006917, 1314500707, 1408979141, 851131018]),
             (Binding::Bound, [463599477, 1112163925, 541462878, 1485602053, 736039150, 1630584522, 230137302, 1981838388]),
             (Binding::Legacy, [228825302, 1995195332, 1399604520, 922024243, 1544049975, 1169568391, 1127353679, 1729298590]),
+        ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        let recorded = [
+            (Binding::Semantic, [701891560u64, 1553654348, 625590183, 1637796432, 1111255607, 277584737, 1732842313, 25210588]),
+            (Binding::Bound, [826685437, 134741180, 95614928, 153540057, 759225782, 498247850, 810342931, 918297598]),
+            (Binding::Legacy, [981977393, 1685632322, 140073096, 1201236892, 1461686164, 852152570, 86405302, 608570410]),
         ];
         let seed = SaltSeed::for_tests(61);
         let (rho, rho2) = (rho_state_bb(&seed, CommitFamily::CountMin, 4), rho_state_bb(&seed, CommitFamily::CountMin, 5));

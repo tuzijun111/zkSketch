@@ -922,11 +922,22 @@ mod tests {
     fn hiding_decode_exposes_hiding_commit() {
         use crate::recursion::recursive::statement::Expose;
         let pt = SsDecodeParams { capacity: 4, c: 2, release: ReleasePolicy::Threshold(5) };
+        #[cfg(not(feature = "zk"))]
         let recorded = [
             (QP, Binding::Semantic, [1234796130u64, 1600695541, 1257673928, 717761815, 1443374029, 1308102251, 1978591557, 264335655]),
             (QP, Binding::Bound, [1234796130, 1600695541, 1257673928, 717761815, 1443374029, 1308102251, 1978591557, 264335655]),
             (QP, Binding::Legacy, [1792098982, 1363832560, 1349599348, 687201561, 767526637, 335296869, 6449583, 1244360319]),
             (pt, Binding::Semantic, [1505638691, 1635076016, 407453922, 1183580053, 983916629, 1541970621, 1133455193, 1298685842]),
+        ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        let recorded = [
+            (QP, Binding::Semantic, [2005685577u64, 1363187835, 1172209401, 1267778161, 1582520583, 204270659, 1697779123, 345629809]),
+            (QP, Binding::Bound, [2005685577, 1363187835, 1172209401, 1267778161, 1582520583, 204270659, 1697779123, 345629809]),
+            (QP, Binding::Legacy, [142755969, 810121609, 826034106, 1457777420, 1354546861, 1946376458, 1702494384, 720748291]),
+            (pt, Binding::Semantic, [679067396, 1949673892, 350689796, 1237397967, 295649614, 1558880769, 415310955, 1675877773]),
         ];
         let seed = SaltSeed::for_tests(61);
         let (rho, rho2) = (rho_state_bb(&seed, SS, 4), rho_state_bb(&seed, SS, 5));

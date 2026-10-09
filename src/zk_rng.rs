@@ -1,4 +1,5 @@
-//! [`ZkRng`] — the mask RNG of the hiding PCS (`--features zk`).
+//! [`ZkRng`] — the mask RNG of the hiding PCS (the default `zk` feature), which
+//! also draws the ZK LogUp masks (see `crate::config`).
 //!
 //! `HidingFriPcs` draws every trace-randomization row, random codeword and
 //! quotient-chunk mask from the RNG it is constructed with, so hiding holds

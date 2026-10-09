@@ -1334,15 +1334,35 @@ mod tests {
         use crate::sketch::hll_omc::{HllOmcParams, build_hll_omc_leaf_commit, hll_omc_advance_with};
 
         let hll = CommitFamily::HyperLogLog;
+        #[cfg(not(feature = "zk"))]
         let recorded_omc = [
             (Binding::Semantic, [553619783u64, 460455411, 967440984, 478139815, 18213792, 1764800338, 1609330975, 1376495153]),
             (Binding::Bound, [128184265, 1884925790, 1404361898, 1802899203, 1720621139, 1345013240, 1702163576, 1194416800]),
             (Binding::Legacy, [1630689861, 1648956362, 701836224, 806664448, 1605616227, 1995127880, 139559199, 498339503]),
         ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        let recorded_omc = [
+            (Binding::Semantic, [745807676u64, 1517003013, 797635593, 1777540184, 1089499702, 292568590, 1752251954, 1281820321]),
+            (Binding::Bound, [1740289562, 1318647615, 1104892332, 28546038, 1008987508, 1136499603, 1309186419, 1290521390]),
+            (Binding::Legacy, [911311606, 626597574, 1928281573, 1483013710, 502591810, 442262474, 1320386814, 1045970138]),
+        ];
+        #[cfg(not(feature = "zk"))]
         let recorded_full = [
             (Binding::Semantic, [1646968299u64, 1561807953, 1751689998, 1111581370, 668467397, 1083039643, 1053758752, 928644370]),
             (Binding::Bound, [1274148678, 1510692462, 184212138, 695814638, 1857215020, 1434953037, 86045661, 293491081]),
             (Binding::Legacy, [24680293, 460647713, 1936709773, 1332581232, 733900906, 1018094016, 781985858, 1374363088]),
+        ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        let recorded_full = [
+            (Binding::Semantic, [1991928127u64, 1769292359, 1557968689, 700457342, 1844980469, 1983013899, 9753387, 1616020905]),
+            (Binding::Bound, [1920338310, 1586366633, 685654760, 1841784861, 184865601, 1470004794, 288763186, 1492602903]),
+            (Binding::Legacy, [523479527, 912124971, 1259593317, 778667156, 674782681, 86043682, 1761891918, 1627298451]),
         ];
         let lit = |v: [u64; 8]| -> Vec<u64> { v.iter().flat_map(|&x| [x, 0, 0, 0]).collect() };
         let p = HllDecodeParams { b: 4, release: ReleasePolicy::Identity };

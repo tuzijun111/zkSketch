@@ -37,3 +37,45 @@ git-fetch-with-cli = true
 #p3-circuit               = { path = "/path/to/Plonky3_RangeAir/circuit" }
 #p3-circuit-prover        = { path = "/path/to/Plonky3_RangeAir/circuit-prover" }
 #p3-poseidon2-circuit-air = { path = "/path/to/Plonky3_RangeAir/poseidon2-circuit-air" }
+
+# ---------------------------------------------------------------------------
+# Option 3 (zero-knowledge LogUp masks, until Cargo.toml pins the published
+# forks): build against local clones of the `zk-logup-mask` branches of the
+# Plonky3 core fork (based on Plonky3 56952503) and of July620/Plonky3_RangeAir
+# (based on fbcc78f). Patch EVERY core crate in Cargo.lock: a partial core
+# patch duplicates the p3-air / p3-field types (`cargo tree -d` must list no
+# p3-* crate). Do not combine with Option 2. A build with this block rewrites
+# Cargo.lock to path sources; never commit that Cargo.lock.
+#[patch."https://github.com/Plonky3/Plonky3"]
+#p3-air              = { path = "/path/to/pl3-core-zkmask/air" }
+#p3-baby-bear        = { path = "/path/to/pl3-core-zkmask/baby-bear" }
+#p3-batch-stark      = { path = "/path/to/pl3-core-zkmask/batch-stark" }
+#p3-challenger       = { path = "/path/to/pl3-core-zkmask/challenger" }
+#p3-circle           = { path = "/path/to/pl3-core-zkmask/circle" }
+#p3-commit           = { path = "/path/to/pl3-core-zkmask/commit" }
+#p3-dft              = { path = "/path/to/pl3-core-zkmask/dft" }
+#p3-field            = { path = "/path/to/pl3-core-zkmask/field" }
+#p3-fri              = { path = "/path/to/pl3-core-zkmask/fri" }
+#p3-goldilocks       = { path = "/path/to/pl3-core-zkmask/goldilocks" }
+#p3-keccak           = { path = "/path/to/pl3-core-zkmask/keccak" }
+#p3-koala-bear       = { path = "/path/to/pl3-core-zkmask/koala-bear" }
+#p3-lookup           = { path = "/path/to/pl3-core-zkmask/lookup" }
+#p3-matrix           = { path = "/path/to/pl3-core-zkmask/matrix" }
+#p3-maybe-rayon      = { path = "/path/to/pl3-core-zkmask/maybe-rayon" }
+#p3-mds              = { path = "/path/to/pl3-core-zkmask/mds" }
+#p3-merkle-tree      = { path = "/path/to/pl3-core-zkmask/merkle-tree" }
+#p3-monty-31         = { path = "/path/to/pl3-core-zkmask/monty-31" }
+#p3-multilinear-util = { path = "/path/to/pl3-core-zkmask/multilinear-util" }
+#p3-poseidon1        = { path = "/path/to/pl3-core-zkmask/poseidon1" }
+#p3-poseidon1-air    = { path = "/path/to/pl3-core-zkmask/poseidon1-air" }
+#p3-poseidon2        = { path = "/path/to/pl3-core-zkmask/poseidon2" }
+#p3-poseidon2-air    = { path = "/path/to/pl3-core-zkmask/poseidon2-air" }
+#p3-symmetric        = { path = "/path/to/pl3-core-zkmask/symmetric" }
+#p3-uni-stark        = { path = "/path/to/pl3-core-zkmask/uni-stark" }
+#p3-util             = { path = "/path/to/pl3-core-zkmask/util" }
+#
+#[patch."https://github.com/July620/Plonky3_RangeAir"]
+#p3-recursion             = { path = "/path/to/pl3-rangeair-zkmask/recursion" }
+#p3-circuit               = { path = "/path/to/pl3-rangeair-zkmask/circuit" }
+#p3-circuit-prover        = { path = "/path/to/pl3-rangeair-zkmask/circuit-prover" }
+#p3-poseidon2-circuit-air = { path = "/path/to/pl3-rangeair-zkmask/poseidon2-circuit-air" }

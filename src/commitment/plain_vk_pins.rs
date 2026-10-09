@@ -18,6 +18,16 @@
 //! commitments added later (recorded on main @ e647585). A
 //! deliberate circuit change, a Plonky3-fork bump or a new `BoundProofShape`
 //! field moves a pin too; re-pin only once that is confirmed as the cause.
+//!
+//! The literals above are the non-ZK build's (`--no-default-features`); they
+//! are compiled only without the `zk` feature and stay byte-for-byte the
+//! pre-B2 values. The `zk` build (the default) proves every circuit with the
+//! hiding PCS and per-interaction LogUp masks, which widens each main trace
+//! and changes every VK, so each table has a `#[cfg(feature = "zk")]` twin:
+//! the same shapes, checked through the same paths and assertions, recorded
+//! on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06)
+//! and equal across separate processes (VK derivation is deterministic under
+//! `zk`: the preprocessed commitment is not randomized).
 
 use p3_circuit_prover::BatchStarkProof;
 use p3_field::{BasedVectorSpace, PrimeField32};
@@ -103,27 +113,63 @@ fn ei(e: Expose) -> usize {
 #[test]
 fn plain_decode_vks_are_pinned() {
     // Per binding [Legacy, Semantic, Bound].
+    #[cfg(not(feature = "zk"))]
     const CM: [Pin; 3] = [
         (0x0380_967e_cd80_c80f, 0x22ea_510a_ed75_b500),
         (0x75b3_fd42_f1f9_7cf6, 0x5bba_5323_64ff_a31e),
         (0x68c0_5982_e5fd_656f, 0xcdef_af16_b2aa_3adb),
     ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const CM: [Pin; 3] = [
+        (0xb9e2_841b_1bfa_9431, 0x101a_9293_640a_6666),
+        (0x8671_c7ae_0e92_de7b, 0x64db_00ea_eafa_216c),
+        (0x8e32_04f0_8639_f111, 0x8124_de44_3b12_e2f9),
+    ];
+    #[cfg(not(feature = "zk"))]
     const HLL: [Pin; 3] = [
         (0x6ba3_8d13_fb73_225e, 0xe2c2_1843_7df2_4d29),
         (0x8636_a1a1_35f9_2dcd, 0x934d_6763_371d_1e41),
         (0xcfdb_4792_dfec_3b69, 0xf45f_b7a4_086f_8d86),
     ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const HLL: [Pin; 3] = [
+        (0x36e9_4507_1b5d_8e43, 0xaf51_883d_46d6_a193),
+        (0x4327_e87c_7a4b_94af, 0x85b9_6a45_10a2_db03),
+        (0xca6a_bbcf_bc1d_507e, 0x45ce_007a_74be_6088),
+    ];
+    #[cfg(not(feature = "zk"))]
     const SS: [Pin; 3] = [
         (0xda12_d19d_4b94_bf85, 0xc67a_1da8_abce_3602),
         (0xd927_61c0_8478_0f4a, 0x5bc6_4477_0a29_1c80),
         (0xd927_61c0_8478_0f4a, 0x5bc6_4477_0a29_1c80),
     ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const SS: [Pin; 3] = [
+        (0xecff_5a35_2702_a790, 0xfd9a_2d7a_8512_ccdc),
+        (0x04e0_b3c4_50d3_b3b5, 0x60d4_f199_2ed5_928e),
+        (0x04e0_b3c4_50d3_b3b5, 0x60d4_f199_2ed5_928e),
+    ];
+    #[cfg(not(feature = "zk"))]
     const GK2: [Pin; 3] = [
         (0x72d4_26a8_cffd_2c9a, 0x8915_e947_5caf_76ef),
         (0xa250_a733_9fcf_a893, 0xad53_7bad_6672_e995),
         (0xa250_a733_9fcf_a893, 0xad53_7bad_6672_e995),
     ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const GK2: [Pin; 3] = [
+        (0xd386_8d74_6102_5f39, 0x2b0b_8a9b_ae05_cf01),
+        (0x0911_0f12_e137_382a, 0xe5f3_a38b_67f2_289b),
+        (0x0911_0f12_e137_382a, 0xe5f3_a38b_67f2_289b),
+    ];
+    #[cfg(not(feature = "zk"))]
     const BLOOM_DEC: Pin = (0xb714_98cf_245e_8b1c, 0x93c3_4097_d658_f723);
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const BLOOM_DEC: Pin = (0x5a19_2444_4387_6156, 0xcb94_e0ba_a22e_4da5);
 
     let id = ReleasePolicy::Identity;
     let plain = CommitMode::Plain;
@@ -154,6 +200,7 @@ fn plain_decode_vks_are_pinned() {
 #[test]
 fn plain_noop_leaf_vks_are_pinned() {
     // [expose][binding].
+    #[cfg(not(feature = "zk"))]
     const CM: [[Pin; 3]; 2] = [
         [
             (0xd860_293f_3063_4d6f, 0x8437_d470_6774_eb55),
@@ -166,6 +213,21 @@ fn plain_noop_leaf_vks_are_pinned() {
             (0x2444_65d9_a664_0117, 0xddc4_b114_50ed_3764),
         ],
     ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const CM: [[Pin; 3]; 2] = [
+        [
+            (0x4350_556d_d0f9_8359, 0xbbba_9320_51c0_3969),
+            (0x3973_137b_053f_252c, 0x9be0_dbb3_794c_dbda),
+            (0xb27f_6226_b524_f0a8, 0xc05b_034c_cb1e_9e06),
+        ],
+        [
+            (0x34ba_9b18_6e28_1732, 0x3924_162d_bfdf_69f6),
+            (0xdf20_19ed_c3ad_63c3, 0x4e78_56b9_3eaf_8cf4),
+            (0xc371_47f7_36bb_f343, 0x4f45_9e8d_03e3_aa3c),
+        ],
+    ];
+    #[cfg(not(feature = "zk"))]
     const HLL: [[Pin; 3]; 2] = [
         [
             (0xde05_022f_7c51_52a3, 0x2a5d_4fd2_26e1_5a57),
@@ -178,6 +240,21 @@ fn plain_noop_leaf_vks_are_pinned() {
             (0x5ed1_1b7f_c457_454f, 0x54e3_416d_8fe3_ff4e),
         ],
     ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const HLL: [[Pin; 3]; 2] = [
+        [
+            (0x48ec_ca7a_ec07_47c3, 0x3704_47ee_f7ae_ea1b),
+            (0x8270_8bb6_89d0_c237, 0x781d_6f4c_c6c1_26da),
+            (0x27a8_80e1_9b6f_807e, 0x9c8a_5c00_9462_ad50),
+        ],
+        [
+            (0xb04b_1a04_8c4a_be15, 0x0c3f_b077_f19f_97bd),
+            (0xe1fa_598f_1b11_14ab, 0x5232_4910_65f0_999c),
+            (0x6fc5_2609_1f2b_ccf4, 0x4558_2071_e515_6dda),
+        ],
+    ];
+    #[cfg(not(feature = "zk"))]
     const GK2: [[Pin; 3]; 2] = [
         [
             (0xc928_a4cd_0a04_86ce, 0xb2ba_cdbf_bf08_5515),
@@ -190,6 +267,21 @@ fn plain_noop_leaf_vks_are_pinned() {
             (0x1b65_790c_9269_6713, 0x3600_52d3_2744_da3d),
         ],
     ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const GK2: [[Pin; 3]; 2] = [
+        [
+            (0x588c_97e4_9bd9_c934, 0x2857_42a0_8b13_53a9),
+            (0x9426_f190_2edf_4b87, 0x3c6e_4a25_f85e_e38f),
+            (0x9426_f190_2edf_4b87, 0x3c6e_4a25_f85e_e38f),
+        ],
+        [
+            (0x22f4_7830_c949_7784, 0x1732_b83f_8462_9f1c),
+            (0x6c07_0844_89f8_5cbb, 0x8dfa_9bf9_0aa8_4415),
+            (0x6c07_0844_89f8_5cbb, 0x8dfa_9bf9_0aa8_4415),
+        ],
+    ];
+    #[cfg(not(feature = "zk"))]
     const KMV: [[Pin; 3]; 2] = [
         [
             (0xce0b_5633_af82_58ad, 0x7a56_5484_532d_6ef8),
@@ -202,14 +294,42 @@ fn plain_noop_leaf_vks_are_pinned() {
             (0xfd5a_bc10_a728_72e5, 0x03e8_22ac_588e_2f97),
         ],
     ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const KMV: [[Pin; 3]; 2] = [
+        [
+            (0x5a21_eafe_d246_4780, 0xb385_bfa3_ff51_5b84),
+            (0x5a21_eafe_d246_4780, 0xb385_bfa3_ff51_5b84),
+            (0x57b0_6f0f_5a54_8748, 0x1527_bfd3_4b6c_2d37),
+        ],
+        [
+            (0x9272_a804_8765_f2bc, 0x271d_3438_90c4_15f8),
+            (0x9272_a804_8765_f2bc, 0x271d_3438_90c4_15f8),
+            (0x2346_87cf_297a_54bc, 0x3d01_d761_0e73_92b7),
+        ],
+    ];
     // [expose]; neither depends on the binding.
+    #[cfg(not(feature = "zk"))]
     const SS: [Pin; 2] = [
         (0xbc99_7939_79d9_097c, 0xc6bb_97b9_3580_ed22),
         (0xd1c6_1ed8_f8b6_d76d, 0x3d3d_d29f_33bb_ecdc),
     ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const SS: [Pin; 2] = [
+        (0x6fec_e563_b5f7_ab1b, 0xa219_f2fa_02de_5916),
+        (0x6a77_9803_3737_5683, 0x2c9d_62ee_dba8_7bc0),
+    ];
+    #[cfg(not(feature = "zk"))]
     const BLOOM_LEAF: [Pin; 2] = [
         (0x29c8_fe41_ab7b_fccb, 0x5241_0950_c3f4_3623),
         (0xe063_6f18_af7a_6404, 0x86cd_6b7d_13c9_daf1),
+    ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const BLOOM_LEAF: [Pin; 2] = [
+        (0x371d_489a_48cf_16ca, 0x5e85_4c89_94aa_a1ef),
+        (0xff51_56ce_4fb7_bede, 0x26a8_4677_d0c0_90a5),
     ];
 
     let plain = CommitMode::Plain;
@@ -245,10 +365,18 @@ fn plain_kmv_vks_are_pinned_through_the_commit_api() {
     use crate::decode::kmv::{kmv_decode_vk, kmv_decode_vk_commit, KmvDecodeParams};
     use crate::recursion::recursive::noop_leaf::kmv_noop_leaf_commit;
     // Per binding [Legacy, Semantic, Bound].
+    #[cfg(not(feature = "zk"))]
     const KMV_DEC: [Pin; 3] = [
         (0x8f9f_a6f3_aaf6_b97f, 0x4fbf_20bf_96a1_916f),
         (0x8f9f_a6f3_aaf6_b97f, 0x4fbf_20bf_96a1_916f),
         (0x8982_758f_3700_f5ca, 0x4fbf_20bf_96a1_916f),
+    ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const KMV_DEC: [Pin; 3] = [
+        (0x560f_6888_bb41_1a7d, 0xdb43_f861_574e_b949),
+        (0x560f_6888_bb41_1a7d, 0xdb43_f861_574e_b949),
+        (0xb446_d72e_0b85_03ed, 0xdb43_f861_574e_b949),
     ];
     let plain = CommitMode::Plain;
     let dp = KmvDecodeParams { k: 4, release: ReleasePolicy::Identity };

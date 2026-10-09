@@ -6015,6 +6015,7 @@ mod tests {
     /// the zero-salt no-op leaf's VK.
     #[test]
     fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+        #[cfg(not(feature = "zk"))]
         let recorded = [
             (Expose::None, Binding::Legacy, [136473872, 825731566, 962898407, 309390011, 609662534, 1217038996, 1392535772, 796016774]),
             (Expose::None, Binding::Semantic, [1415204840, 644540092, 979374553, 1488538109, 890992880, 1292472623, 218367329, 1170482399]),
@@ -6025,6 +6026,21 @@ mod tests {
             (Expose::Interval, Binding::Legacy, [1951736277, 454005402, 1529845001, 1118438533, 1534690931, 1281097441, 1099235087, 1789611541]),
             (Expose::Interval, Binding::Semantic, [1787104344, 561887143, 1588586756, 19183557, 35691611, 1215045558, 1104902655, 1099938511]),
             (Expose::Interval, Binding::Bound, [1787104344, 561887143, 1588586756, 19183557, 35691611, 1215045558, 1104902655, 1099938511]),
+        ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        let recorded = [
+            (Expose::None, Binding::Legacy, [69744273, 1849456600, 492210391, 582955548, 1941433492, 435265109, 1275377710, 80264505]),
+            (Expose::None, Binding::Semantic, [1220676684, 1131900130, 479114870, 1974530856, 1329720393, 442989842, 817975268, 1326548145]),
+            (Expose::None, Binding::Bound, [1220676684, 1131900130, 479114870, 1974530856, 1329720393, 442989842, 817975268, 1326548145]),
+            (Expose::Boundary, Binding::Legacy, [358448247, 1433590892, 1954585140, 1066362735, 247491272, 1456945772, 1614681218, 1076296925]),
+            (Expose::Boundary, Binding::Semantic, [1633347235, 339062650, 768421233, 1479563592, 58205746, 1747940434, 271115321, 636131592]),
+            (Expose::Boundary, Binding::Bound, [1633347235, 339062650, 768421233, 1479563592, 58205746, 1747940434, 271115321, 636131592]),
+            (Expose::Interval, Binding::Legacy, [883391405, 1926596795, 811071814, 1125540336, 1547079331, 24099729, 1348287992, 524126935]),
+            (Expose::Interval, Binding::Semantic, [463266406, 722854247, 1467200510, 220992646, 1115023530, 716725650, 1828216247, 564036358]),
+            (Expose::Interval, Binding::Bound, [463266406, 722854247, 1467200510, 220992646, 1115023530, 716725650, 1828216247, 564036358]),
         ];
         for (expose, binding, vk) in recorded {
             let old = build_gkb2_leaf_expose_with(HP, expose, binding);

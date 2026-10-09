@@ -15,7 +15,7 @@
 //! BabyBear [`crate::config`] header documents). Mirrors the fork's
 //! `recursion/tests/goldilocks.rs` reference wiring exactly.
 //!
-//! ### Zero knowledge (`--features zk`)
+//! ### Zero knowledge (the `zk` feature, on by default)
 //!
 //! Mirrors [`crate::config`]: `HidingFriPcs` over the plain Merkle MMCS, the
 //! OS-seeded [`crate::zk_rng::ZkRng`], and `NUM_RANDOM_CODEWORDS`
@@ -23,8 +23,10 @@
 //! BabyBear side the FRI batch is masked by batch-stark's randomization
 //! polynomial, not by these; they give each committed Merkle leaf row 2
 //! random Goldilocks values (about 128 bits) for the plain-MMCS argument. The
-//! salted-MMCS caveat and the LogUp / statistical-ZK gaps documented there
-//! apply here too.
+//! revealed LogUp sums are masked per global interaction exactly as there,
+//! here with `D = 2` mask columns per interaction; the hiding budget is
+//! `2(54 + 2·2) = 116 → 128 <= 512` rows. The salted-MMCS caveat and the
+//! remaining heuristic / not-hidden items documented there apply here too.
 
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -55,10 +57,10 @@ pub type ValMmcs =
 pub type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 pub type Challenger = DuplexChallenger<Val, Perm, 8, 4>;
 pub type Dft = Radix2DitParallel<Val>;
-/// Non-hiding PCS (default build).
+/// Non-hiding PCS (`--no-default-features`).
 #[cfg(not(feature = "zk"))]
 pub type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-/// Hiding PCS (`--features zk`; see [`crate::config`]).
+/// Hiding PCS (the default `zk` feature; see [`crate::config`]).
 #[cfg(feature = "zk")]
 pub type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, crate::zk_rng::ZkRng>;
 

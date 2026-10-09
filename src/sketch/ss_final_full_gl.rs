@@ -2778,10 +2778,20 @@ mod tests {
     /// `build_ss_full_leaf_commit(.., Plain)`, for every statement layout.
     #[test]
     fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+        #[cfg(not(feature = "zk"))]
         let recorded = [
             (Expose::None, [4633752459041422998, 17452556857357849351, 18127644367153290963, 264090878000814557]),
             (Expose::Boundary, [12778058211499291925, 17586788496412847627, 12410193273840537267, 874854919538388358]),
             (Expose::Interval, [6306263333184229153, 41855191592855568, 16716971515655028172, 5590991646340356760]),
+        ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        let recorded = [
+            (Expose::None, [1234165865970482558, 11012027928548522146, 8165939554710924946, 9445719136878406759]),
+            (Expose::Boundary, [17727174015778238316, 16040833805807070545, 18259227417686714703, 14988682335220682386]),
+            (Expose::Interval, [16711973859379267587, 16731091065764545426, 4973519637171148499, 17227503913011712936]),
         ];
         for (expose, vk) in recorded {
             let old = build_ss_full_leaf_expose(HP, expose).vk_pin_values();
@@ -2822,10 +2832,20 @@ mod tests {
     /// The salted sponges are Semantic (this leaf has no binding parameter).
     #[test]
     fn hiding_leaf_vk_is_pinned() {
+        #[cfg(not(feature = "zk"))]
         let recorded = [
             (Expose::None, [17430242135028665733, 8910990021061221859, 7642923676271818013, 14624438684522492806]),
             (Expose::Boundary, [5127476512929420219, 14949157042305783351, 988902786580556422, 18373836634480779209]),
             (Expose::Interval, [9365049537508816069, 15386676715998429990, 10121922348505152518, 16059434801545063679]),
+        ];
+        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
+        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
+        // 3acdc06); equal across separate processes.
+        #[cfg(feature = "zk")]
+        let recorded = [
+            (Expose::None, [5455560250119538704, 833071011683561009, 923701327813067044, 8158380323884740374]),
+            (Expose::Boundary, [1940750177447330883, 7684751253292874042, 11869343082475294773, 7917963413566924896]),
+            (Expose::Interval, [4956786672882511872, 13895103188125999235, 12118928644938104222, 13183397246854192251]),
         ];
         for (expose, vk) in recorded {
             let hid = build_ss_full_leaf_commit(HP, expose, CommitMode::Hiding).vk_pin_values();
