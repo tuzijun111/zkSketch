@@ -1,0 +1,7 @@
+system,arm,mode,guest,family,query,topk_slots,histogram_slots,epochs,epoch_index,epoch_records,records,batch,value_enc,limit,distinct_keys,per_key_entries,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,journal_bytes,state_commits,journal_eq_native,result,exact,prove_s,verify_ms,receipt_bytes,s_per_segment,key_id
+zka,shipped,aggr,aggr_cm,cm,-,1,32,1,0,2048,2048,8,1,-,1234,1,176264,22540245,25165824,24,20,0.339,1304,1,true,heap_occupied=1,distinct=1234,711.590,11.472,225834,29.650,aol
+zka,shipped,aggr,aggr_cm,cm,-,1,32,1,7,2048,2048,8,1,-,1271,1,176404,22545042,25165824,24,20,0.341,1304,1,true,heap_occupied=1,distinct=1271,713.036,11.522,225834,29.710,aol
+zka,shipped,query,querier_cm,cm,estimate,1,32,1,-,2048,2048,8,1,-,1234,1,12840,845442,1048576,1,20,0.036,412,1,true,estimate=115,key=3011223745 exact=115,27.884,9.705,224050,27.884,aol
+zka,shipped,query,querier_cm,cm,estimate,1,32,2,-,2048,4096,8,1,-,2372,2,25608,1676303,2097152,2,20,0.048,540,2,true,estimate=116,key=3011223745 exact=115,59.016,9.779,224306,29.508,aol
+zka,shipped,query,querier_cm,cm,estimate,1,32,4,-,2048,8192,8,1,-,4432,4,51144,3338025,3670016,4,20,0.067,796,4,true,estimate=119,key=3011223745 exact=115,106.793,9.805,224818,26.698,aol
+zka,shipped,query,querier_cm,cm,estimate,1,32,8,-,2048,16384,8,1,-,8433,8,102216,6661469,7340032,7,20,0.119,1308,8,true,estimate=189,key=3780053395 exact=180,209.999,9.734,225842,30.000,aol

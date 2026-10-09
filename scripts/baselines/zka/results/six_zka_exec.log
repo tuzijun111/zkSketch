@@ -1,0 +1,95 @@
+# run_zka.sh exec 2026-10-09T14:47:33+08:00 host=SPRL6201019991 nproc=64 load=[9.45 8.49 8.07]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=4 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# exec cm aggr epoch 0 2026-10-09T14:47:33+08:00 load1=9.45
+# rc=0
+# exec cm aggr epoch 1 2026-10-09T14:47:33+08:00 load1=9.45
+# rc=0
+# exec cm aggr epoch 2 2026-10-09T14:47:34+08:00 load1=9.45
+# rc=0
+# exec cm aggr epoch 3 2026-10-09T14:47:34+08:00 load1=9.45
+# rc=0
+# exec cm aggr epoch 4 2026-10-09T14:47:34+08:00 load1=9.45
+# rc=0
+# exec cm aggr epoch 5 2026-10-09T14:47:35+08:00 load1=9.45
+# rc=0
+# exec cm aggr epoch 6 2026-10-09T14:47:35+08:00 load1=9.45
+# rc=0
+# exec cm aggr epoch 7 2026-10-09T14:47:35+08:00 load1=9.45
+# rc=0
+# exec hll aggr epoch 0 2026-10-09T14:47:36+08:00 load1=9.45
+# rc=0
+# exec hll aggr epoch 1 2026-10-09T14:47:36+08:00 load1=9.45
+# rc=0
+# exec hll aggr epoch 2 2026-10-09T14:47:36+08:00 load1=9.45
+# rc=0
+# exec hll aggr epoch 3 2026-10-09T14:47:36+08:00 load1=9.45
+# rc=0
+# exec hll aggr epoch 4 2026-10-09T14:47:37+08:00 load1=9.45
+# rc=0
+# exec hll aggr epoch 5 2026-10-09T14:47:37+08:00 load1=9.45
+# rc=0
+# exec hll aggr epoch 6 2026-10-09T14:47:37+08:00 load1=9.45
+# rc=0
+# exec hll aggr epoch 7 2026-10-09T14:47:37+08:00 load1=8.77
+# rc=0
+# exec ss aggr epoch 0 2026-10-09T14:47:37+08:00 load1=8.77
+# rc=0
+# exec ss aggr epoch 1 2026-10-09T14:47:38+08:00 load1=8.77
+# rc=0
+# exec ss aggr epoch 2 2026-10-09T14:47:38+08:00 load1=8.77
+# rc=0
+# exec ss aggr epoch 3 2026-10-09T14:47:39+08:00 load1=8.77
+# rc=0
+# exec ss aggr epoch 4 2026-10-09T14:47:39+08:00 load1=8.77
+# rc=0
+# exec ss aggr epoch 5 2026-10-09T14:47:39+08:00 load1=8.77
+# rc=0
+# exec ss aggr epoch 6 2026-10-09T14:47:40+08:00 load1=8.77
+# rc=0
+# exec ss aggr epoch 7 2026-10-09T14:47:40+08:00 load1=8.77
+# rc=0
+# exec gk aggr epoch 0 2026-10-09T14:47:41+08:00 load1=8.77
+# rc=0
+# exec gk aggr epoch 1 2026-10-09T14:47:41+08:00 load1=8.77
+# rc=0
+# exec gk aggr epoch 2 2026-10-09T14:47:41+08:00 load1=8.77
+# rc=0
+# exec gk aggr epoch 3 2026-10-09T14:47:41+08:00 load1=8.77
+# rc=0
+# exec gk aggr epoch 4 2026-10-09T14:47:42+08:00 load1=8.77
+# rc=0
+# exec gk aggr epoch 5 2026-10-09T14:47:42+08:00 load1=8.77
+# rc=0
+# exec gk aggr epoch 6 2026-10-09T14:47:42+08:00 load1=8.15
+# rc=0
+# exec gk aggr epoch 7 2026-10-09T14:47:42+08:00 load1=8.15
+# rc=0
+# exec bloom pipeline 2026-10-09T14:47:43+08:00 load1=8.15
+# rc=0
+# exec kmv pipeline 2026-10-09T14:47:44+08:00 load1=8.15
+# rc=0

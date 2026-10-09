@@ -40,6 +40,7 @@ they sit in, so a worktree measures its own sources.
 | `kmv/run_exec.sh` | no (`PROVE=1`: yes) | `zka_kmv_exec.csv` (`PROVE=1`: `zka_kmv_prove.csv`) + `.log` | OUR KMV / bottom-k guests (†) in their architecture: per-epoch aggregation and query-time bottom-k union, plus the `kmv_query_words` sensitivity (see "Bloom filter and KMV guests") |
 | `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 | `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
+| `six/build.sh`, `six/run_zka.sh`, `six/run_zks.sh`, `six/assemble.py`, `six/table.py` | yes, ~3.5 h | `six_*` (see "Six-sketch comparison (small scale)") | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †) at 8 x 2,048 AOL records: update proving per epoch, query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -534,7 +535,8 @@ with the stored state that the guest re-hashes and merges:
 - **MODELED prove times rest on the four CM-guest anchors.** Each family has one
   proved anchor, for the aggregation guest at 2,048 records only. Those anchors
   agree with the model within 2%, but every full-epoch and every query prove
-  time is an extrapolation. No query guest was proved.
+  time is an extrapolation. No query guest was proved here (the six-sketch
+  comparison below proves them at 2,048-record epochs).
   - The whole-segment model overstates rows whose last segment is partial.
     `padded_cycles / 2^20 x 30.1 s` is the lower sensitivity bound, and the gap
     matters only for small query guests. With the model value first and the
@@ -621,10 +623,12 @@ Bloom / KMV instantiation of zk-Analytics' per-epoch / query-time-merge architec
 (†)", never as "zk-Analytics' Bloom filter / KMV". The per-family READMEs
 (`bloom/README.md`, `kmv/README.md`) have the full detail.
 
-**Status: built and validated at tiny scale only (2026-10-09).** The comparison
-measurement (8 epochs of 2,048 AOL records; aggregation proved per epoch, queries
-proved at n = 1, 2, 4, 8) has not been run. `sketch_exec.sh` does not cover these
-two families; each has its own runner.
+**Status: built and validated at tiny scale (2026-10-09); the comparison
+measurement (8 epochs of 2,048 AOL records; aggregation proved on epochs 0 and 7,
+queries proved at n = 1, 2, 4, 8) was run later the same day through
+`six/run_zka.sh`, which calls these drivers directly: see "Six-sketch comparison
+(small scale)".** `sketch_exec.sh` does not cover these two families; each has its
+own runner.
 
 ### Running
 
@@ -732,9 +736,9 @@ accuracy checks. Rows: `results/zka_{bloom,kmv}_validation.csv` (26 and 18 rows,
 ### Caveats
 
 - **Ours (†).** zk-Analytics ships neither sketch.
-- **Not yet measured.** Only the tiny validation above ran. Every number at 8 x 2,048
-  records (aggregation ~11.1M cycles and 12 segments per epoch; queries ~1.2-1.3M
-  cycles at n = 8) is an extrapolation from these rows until the measurement runs.
+- **Measured since.** The rows above are the tiny validation. The 8 x 2,048
+  measurement (executor on all 8 epochs, proofs of epochs 0 and 7 and of the
+  queries at n = 1, 2, 4, 8) is in "Six-sketch comparison (small scale)" below.
 - **State encoding is a lever (measured).** risc0's serde reads a `Vec<u32>` /
   `Vec<u8>` / `Vec<u64>` one element per word at ~150 cycles per word, a byte string
   in bulk; both encodings are the same number of words. With the state in the
@@ -758,6 +762,325 @@ accuracy checks. Rows: `results/zka_{bloom,kmv}_validation.csv` (26 and 18 rows,
   moved by -0.10% (-11,443 cycles at 2,048 records; batch-chain verification -60
   cycles per batch) and `bloom_aggr` by -19 cycles. The query guests did not move.
   The measurement must use one build for all rows.
+
+## Six-sketch comparison (small scale)
+
+zkSketch against zk-Analytics (Zhu et al., SIGCOMM '26; RISC Zero zkVM; clone at
+`d4a5a9a`) on six sketches, on one small, identical workload. zk-Analytics ships only
+Count-Min. **For HLL, SpaceSaving, GK, Bloom and KMV the zk-Analytics side is our
+plain textbook per-record code in their per-epoch pipeline with query-time merge
+(the ports above, marked †), not zk-Analytics code.** The matched-rule guests
+(`ss_mg/`, `gk_bm2/`) are not used here.
+
+> **Zero knowledge differs.** RISC Zero succinct receipts are zero-knowledge.
+> zkSketch's proofs in this run are **not** zero-knowledge: the default build
+> (Cargo feature `zk` off) uses the plain `TwoAdicFriPcs`, not `HidingFriPcs`.
+> zkSketch does use hiding (salted Poseidon2) state commitments
+> (`ZKSKETCH_COMMIT` default `hiding`, OS-seeded salt); zk-Analytics commits with
+> unsalted SHA-256. Neither difference is priced into the numbers below.
+
+### Configuration (both sides identical)
+
+- **Data.** `data/aol.keys` (md5 `01dd7d5c8a73`), the first 16,384 records, cut into
+  8 epochs / batches of 2,048 consecutive records (epoch e = records
+  `[2048 e, 2048 (e+1))` on both sides). zk-Analytics side: one source, batches of 8
+  records (their `--commit-batch-size` default), the SHA-256 batch chain and epoch
+  chain carried across epochs.
+- **Parameters.**
+
+  | sketch | zk-Analytics side | zkSketch side | query (both sides) |
+  |---|---|---|---|
+  | Count-Min | their `aggr_cm` / `querier-guest-cm`, 3 x 1024, `CM_TOPK_SLOTS=1` | `cm` (omc leaf), `EXP_D=3 EXP_W=1024` | point count of the heaviest key of the queried prefix (their `Estimate` target rule; zkSketch `EXP_QUERY_KEY_MODE=hot`; ties to the smaller key on both sides; the same key on both sides at each n: 3,011,223,745 for n <= 5, 3,780,053,395 for n >= 6) |
+  | HyperLogLog | `hll/` †, b = 14 | `hll` (omc), `EXP_HLL_B=14` | cardinality |
+  | SpaceSaving / Misra-Gries | `spacesaving/` †, SpaceSaving s = 1,024 per epoch, sum-and-truncate merge | `ss` (certified MG), `EXP_SS_CAP=1024` (MG with s counters ~ SpaceSaving with s+1) | top-1: theirs `topk --limit 1` (key, count, error); ours the top-1 mass (`c = 1`, count only, no key). This is the closest pair the two query sets allow |
+  | Greenwald-Khanna | `gk/` †, eps = 1/51, COMPRESS every 25 records | `gk` (band-merge), `EXP_GK_CAP=2048 EXP_GK_S=51` | rank of the same value on both sides: the most frequent 21-bit value of the prefix (zkSketch `EXP_QUERY_KEY_MODE=hot`; 1,810,625 for n <= 5, 985,491 for n >= 6), passed to theirs as `--rank-value` |
+  | Bloom (partitioned) | `bloom/` †, k = 7 x W = 2^14 | `bloom`, `EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14` | membership of the same two keys per n: an inserted key (the first record of batch n; zkSketch `first`, theirs `--probe first`) and an absent key (zkSketch `EXP_QUERY_KEY_MODE=absent`, a second zkSketch run; the key it drew is passed to theirs as `--probe key:<k>`) |
+  | KMV / bottom-k | `kmv/` †, k = 1,024, 64-bit hash | `kmv`, `EXP_KMV_K=1024`, 27-bit hash | distinct count |
+
+- **zk-Analytics side.** `ProverOpts::succinct()`, CPU r0vm 3.0.6 (guests link
+  risc0-zkvm 3.0.5, hosts 3.0.6), GPU not used, r0vm free to use all 64 hardware
+  threads. Executor over all 8 aggregation epochs of every family (cycles,
+  segments). **Proved: aggregation epochs 0 and 7 only (2 samples per family;
+  "sampled" below = their mean)**, and the query guest at n = 1, 2, 4, 8.
+  Every proved journal is asserted equal to the native output.
+- **zkSketch side.** `examples/exp_compose`, release build of this commit,
+  `EXP_COMPOSE_MODE=forest EXP_COMPOSE_EXEC=procs EXP_COMPOSE_MACHINES=1
+  EXP_COMPOSE_CORES=32 EXP_COMPOSE_N=16384 EXP_COMPOSE_BATCHES=2048
+  EXP_COMPOSE_QUERY_EVERY=1 EXP_DATASET=aol`, default (hiding) commitments, one run
+  per family (two for Bloom). The procs engine is set explicitly: it is the
+  documented default only for more than one machine, and it gives true per-process
+  RSS. `EXP_QUERY_LOG=1` (added for this comparison; logging only, no proof or
+  timing change) prints one line per query with its probe key, prove / verify
+  time, proof bytes, answer, and the prefix certificate it was bound to with
+  `query_bind_ms`, which the CSV only reports as sums.
+- **Quiet box.** Every timed run (each zkSketch run, each zk-Analytics proof) waited
+  until the 1-minute load was <= 8, fewer than 4 cores were busy (2 s `/proc/stat`
+  window) and no `r0vm`, `exp_compose`, procs-engine worker, `cargo` or `rustc` of
+  any user ran (`six/gate.sh`; polled every 30 s). The load at start and end of each
+  run is in `six_zka_jobs.csv` / `six_zksketch_runs.csv`. Runs were strictly
+  sequential. Box: AMD Threadripper PRO 9975WX, 32 cores / 64 threads, 559 GiB,
+  CPU only.
+
+### Running
+
+```bash
+scripts/baselines/zka/six/build.sh          # builds both sides (not timed)
+scripts/baselines/zka/six/run_zka.sh exec   # zk-Analytics executor: all 8 aggregation epochs of every family
+scripts/baselines/zka/six/run_zks.sh        # zkSketch, 7 timed runs: cm hll ss gk bloom bloom_absent kmv
+# zk-Analytics proofs, timed, one at a time. The GK rank values and the Bloom absent keys are
+# the ones zkSketch drew (QLOG_KEY lines of six_zksketch_{gk,bloom_absent}.log):
+scripts/baselines/zka/six/run_zka.sh prove \
+  cm:aggr:0 cm:aggr:7 hll:aggr:0 hll:aggr:7 ss:aggr:0 ss:aggr:7 gk:aggr:0 gk:aggr:7 \
+  bloom:aggr:0 bloom:aggr:7 kmv:aggr:0 kmv:aggr:7 \
+  cm:query:1 cm:query:2 cm:query:4 cm:query:8 hll:query:1 hll:query:2 hll:query:4 hll:query:8 \
+  gk:query:1:1810625 gk:query:2:1810625 gk:query:4:1810625 gk:query:8:985491 \
+  bloom:query:1:first bloom:query:2:first bloom:query:4:first bloom:query:8:first \
+  bloom:query:1:key:4010659695 bloom:query:2:key:3455829011 bloom:query:4:key:2391383811 bloom:query:8:key:1608305708 \
+  kmv:query:1 kmv:query:2 kmv:query:4 kmv:query:8 ss:query:1 ss:query:2 ss:query:4 ss:query:8
+python3 -I scripts/baselines/zka/six/assemble.py scripts/baselines/zka/results data/aol.keys
+python3 -I scripts/baselines/zka/six/table.py scripts/baselines/zka/results/six_sketch_comparison.csv
+```
+
+- The measured run (2026-10-09, 14:47-18:43) followed these steps in this order,
+  with `BASELINE_DIR` set to a private scratch directory whose `zka/` is a symlink
+  to `~/ext-baselines/zka`; `run_zks.sh` was invoked twice (`cm`, then the other
+  six tags). The scripts ran from that scratch directory with the same logic; only
+  their path variables differ from the tracked copies. Absolute paths in the
+  committed logs were rewritten to `$BASELINE_DIR` and `$ZKS`.
+- Wall time: zkSketch, 7 runs, 586 s of running plus 423 s of gate waits;
+  zk-Analytics, 40 proofs, 8,703 s (2 h 25 min) of running plus 4,219 s (1 h 10 min)
+  of gate waits; the executor phase took about a minute.
+- `assemble.py` checks, for every zkSketch run, that the per-query log lines add up
+  to the CSV's summed `query_*` columns, and that every zk-Analytics proved row
+  matches its job line; exact answers are recomputed from the same 16,384 records.
+
+| file | rows | what |
+|---|---|---|
+| `six_sketch_comparison.csv` | 148 | the comparison: one row per (family, system, operation), `provenance` = measured / sampled / derived, `detail` says how |
+| `six_zka_{cm,hll,ss,gk,bloom,kmv}_exec.csv` + `six_zka_exec.log` | 8 / 8 / 8 / 8 / 16 / 12 | executor, all 8 aggregation epochs (Bloom, KMV: their `--mode exec` pipeline, query executes included) |
+| `six_zka_{family}_prove.csv` / `.log` | 6 per family (Bloom 10) | proved rows: aggregation epochs 0 and 7, queries at n = 1, 2, 4, 8 (Bloom: inserted and absent key) |
+| `six_zka_jobs.csv` | 40 | one line per proof: gate result, load at start / end, busy cores at start, wall time, r0vm peak RSS |
+| `six_zksketch_{cm,hll,ss,gk,bloom,bloom_absent,kmv}.csv` / `.log` | 1 each | exp_compose's CSV row and the run's console log (per-query `QLOG_*` lines, `RSSTREE`) |
+| `six_zksketch_runs.csv` | 7 | one line per zkSketch run: gate, load at start / end, wall, coordinator / worker peak RSS, commitment mode |
+
+All 40 proofs and all 60 executor rows passed their checks (journal equals
+native output on every row; the ports' reference and accuracy checks; GK
+`q_ok`; Bloom `answer_ok`). Every proof started on a quiet box (1-minute load
+5.2-7.9, at most 3.6 busy cores); the SS, GK, Bloom and KMV drivers' own samplers
+saw no foreign r0vm during any proof. During most Bloom and KMV proofs 2.3-2.8
+other cores were busy on average (`other_cores_avg`; another user's light job),
+below those drivers' contention threshold of 4.
+
+### Results
+
+† marks the families whose zk-Analytics side is our port. zkA = zk-Analytics side,
+zkS = zkSketch. Ratios are zkA / zkS.
+
+**Update side** (one epoch = one batch of 2,048 records)
+
+| sketch | zk-Analytics prove / epoch (s) | zkSketch prove / leaf (s) | ratio | zk-Analytics 8 epochs (s) | zkSketch 8 batches incl. merges (s) | ratio | zk-Analytics receipt / epoch | zkSketch root proof | peak RSS zk-Analytics (r0vm) | peak RSS zkSketch (worker) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Count-Min 3x1024 | 712.3 (e0 711.6, e7 713.0) | 2.26 | 315x | 5,699 | 30.0 | 190x | 226 KB x 8 kept | 528 KB (one root) | 9.2 GB | 2.9 GB |
+| HLL b=14 † | 322.9 (e0 322.5, e7 323.4) | 1.89 | 170x | 2,584 | 25.7 | 100x | 225 KB x 8 kept | 528 KB (one root) | 9.2 GB | 2.7 GB |
+| SS / MG s=1,024 † | 449.3 (e0 444.8, e7 453.7) | 1.02 | 440x | 3,594 | 18.0 | 199x | 225 KB x 8 kept | 529 KB (one root) | 9.2 GB | 1.9 GB |
+| GK eps=1/51 † | 420.0 (e0 415.4, e7 424.6) | 14.59 | 29x | 3,360 | 142.2 | 24x | 225 KB x 8 kept | 528 KB (one root) | 9.2 GB | 19.4 GB |
+| Bloom 7x2^14 † | 355.2 (e0 354.2, e7 356.1) | 3.97 | 90x | 2,841 | 44.9 | 63x | 225 KB x 8 kept | 529 KB (one root) | 9.2 GB | 5.3 GB |
+| KMV k=1,024 † | 356.7 (e0 355.3, e7 358.1) | 0.73 | 486x | 2,854 | 16.2 | 176x | 225 KB x 8 kept | 529 KB (one root) | 9.2 GB | 1.5 GB |
+
+**Query proving time** (s; the query proof alone)
+
+| sketch | n=1 zkA | n=1 zkS | n=2 zkA | n=2 zkS | n=4 zkA | n=4 zkS | n=8 zkA | n=8 zkS | ratio at n=8 |
+|---|---|---|---|---|---|---|---|---|---|
+| Count-Min 3x1024 | 27.88 | 0.074 | 59.02 | 0.073 | 106.79 | 0.074 | 210.00 | 0.077 | 2,724x |
+| HLL b=14 † | 15.39 | 2.02 | 27.76 | 1.70 | 39.57 | 1.83 | 70.77 | 1.89 | 37x |
+| SS / MG s=1,024 † | 163.24 | 0.118 | 334.91 | 0.130 | 688.36 | 0.154 | 1,412.78 | 0.116 | 12,159x |
+| GK eps=1/51 † | 5.93 | 0.381 | 9.27 | 0.373 | 15.63 | 0.333 | 27.75 | 0.307 | 90x |
+| Bloom 7x2^14 † (inserted key) | 9.36 | 2.11 | 15.40 | 1.73 | 15.65 | 1.76 | 28.14 | 1.82 | 15x |
+| Bloom 7x2^14 † (absent key) | 9.28 | 1.89 | 15.66 | 1.67 | 15.71 | 1.64 | 27.50 | 1.68 | 16x |
+| KMV k=1,024 † | 9.33 | 0.118 | 15.53 | 0.111 | 27.70 | 0.105 | 46.93 | 0.093 | 502x |
+
+**Verifier work to accept one answer at n** (ms; zk-Analytics: n aggregation receipts + 1 query receipt; zkSketch: the live forest peak(s) + 1 query proof)
+
+| sketch | n=1 zkA | n=1 zkS | n=2 zkA | n=2 zkS | n=4 zkA | n=4 zkS | n=8 zkA | n=8 zkS | ratio at n=8 |
+|---|---|---|---|---|---|---|---|---|---|
+| Count-Min 3x1024 | 21.2 | 34.2 | 32.8 | 31.6 | 55.8 | 27.5 | 101.7 | 30.7 | 3.3x |
+| HLL b=14 † | 21.1 | 31.6 | 32.9 | 29.4 | 55.6 | 33.9 | 101.6 | 28.5 | 3.6x |
+| SS / MG s=1,024 † | 21.3 | 32.1 | 32.9 | 29.7 | 57.9 | 28.7 | 104.1 | 26.4 | 3.9x |
+| GK eps=1/51 † | 22.1 | 35.4 | 33.0 | 30.9 | 52.4 | 27.3 | 94.9 | 27.2 | 3.5x |
+| Bloom 7x2^14 † (inserted key) | 19.4 | 33.8 | 29.2 | 32.1 | 48.6 | 33.7 | 87.6 | 32.4 | 2.7x |
+| Bloom 7x2^14 † (absent key) | 19.4 | 34.0 | 29.2 | 30.0 | 50.5 | 31.0 | 89.4 | 33.6 | 2.7x |
+| KMV k=1,024 † | 19.5 | 28.0 | 29.2 | 26.5 | 48.7 | 29.2 | 87.9 | 25.6 | 3.4x |
+
+**Bytes the verifier receives for one answer at n** (zk-Analytics: n + 1 receipts; zkSketch: peak proof(s) + query proof)
+
+| sketch | n=1 zkA | n=1 zkS | n=2 zkA | n=2 zkS | n=4 zkA | n=4 zkS | n=8 zkA | n=8 zkS | ratio at n=8 |
+|---|---|---|---|---|---|---|---|---|---|
+| Count-Min 3x1024 | 450 KB | 1,085 KB | 676 KB | 993 KB | 1,128 KB | 955 KB | 2,033 KB | 955 KB | 2.1x |
+| HLL b=14 † | 449 KB | 1,222 KB | 673 KB | 1,160 KB | 1,123 KB | 1,123 KB | 2,022 KB | 1,122 KB | 1.8x |
+| SS / MG s=1,024 † | 449 KB | 1,110 KB | 674 KB | 1,034 KB | 1,124 KB | 996 KB | 2,025 KB | 995 KB | 2.0x |
+| GK eps=1/51 † | 449 KB | 1,281 KB | 674 KB | 1,090 KB | 1,124 KB | 1,052 KB | 2,024 KB | 1,052 KB | 1.9x |
+| Bloom 7x2^14 † (inserted key) | 449 KB | 1,229 KB | 674 KB | 1,158 KB | 1,123 KB | 1,120 KB | 2,022 KB | 1,121 KB | 1.8x |
+| Bloom 7x2^14 † (absent key) | 449 KB | 1,228 KB | 674 KB | 1,158 KB | 1,123 KB | 1,120 KB | 2,022 KB | 1,120 KB | 1.8x |
+| KMV k=1,024 † | 449 KB | 987 KB | 673 KB | 955 KB | 1,123 KB | 955 KB | 2,022 KB | 955 KB | 2.1x |
+
+**Peak RSS while proving one query** (zk-Analytics: r0vm of that proof; zkSketch: the coordinator over the whole run, see caveats)
+
+| sketch | n=1 zkA | n=2 zkA | n=4 zkA | n=8 zkA | zkSketch coordinator |
+|---|---|---|---|---|---|
+| Count-Min 3x1024 | 9.1 GB | 9.2 GB | 9.2 GB | 9.2 GB | 2.5 GB |
+| HLL b=14 † | 4.6 GB | 9.1 GB | 9.1 GB | 9.2 GB | 3.1 GB |
+| SS / MG s=1,024 † | 9.2 GB | 9.2 GB | 9.2 GB | 9.2 GB | 1.7 GB |
+| GK eps=1/51 † | 1.4 GB | 2.3 GB | 4.6 GB | 9.1 GB | 19.0 GB |
+| Bloom 7x2^14 † | 2.3 GB | 4.6 GB | 4.6 GB | 9.1 GB | 5.0 GB |
+| KMV k=1,024 † | 2.3 GB | 4.6 GB | 9.1 GB | 9.1 GB | 1.4 GB |
+
+**Answers vs exact** (same 16,384 AOL records; exact computed natively)
+
+| sketch | n | zk-Analytics answer | zkSketch answer | exact |
+|---|---|---|---|---|
+| Count-Min 3x1024 | 1 | 115 | 115 | 115 |
+| Count-Min 3x1024 | 2 | 116 | 115 | 115 |
+| Count-Min 3x1024 | 4 | 119 | 118 | 115 |
+| Count-Min 3x1024 | 8 | 189 | 185 | 180 |
+| HLL b=14 † | 1 | 1232 | 12422.5 | 1234 |
+| HLL b=14 † | 2 | 2397 | 13011.8 | 2372 |
+| HLL b=14 † | 4 | 4461 | 14078.0 | 4432 |
+| HLL b=14 † | 8 | 8472 | 16373.6 | 8433 |
+| SS / MG s=1,024 † | 1 | key 3011223745 count 115 (error 0) | count 114 (no key) | key 3011223745 count 115 |
+| SS / MG s=1,024 † | 2 | key 3011223745 count 115 (error 0) | count 113 (no key) | key 3011223745 count 115 |
+| SS / MG s=1,024 † | 4 | key 3011223745 count 115 (error 0) | count 111 (no key) | key 3011223745 count 115 |
+| SS / MG s=1,024 † | 8 | key 3780053395 count 180 (error 0) | count 172 (no key) | key 3780053395 count 180 |
+| GK eps=1/51 † | 1 | 1789 [1750..1829] | 1786 | 1789 |
+| GK eps=1/51 † | 2 | 3595 [3518..3672] | 3557 | 3569 |
+| GK eps=1/51 † | 4 | 7150 [7014..7287] | 7095 | 7115 |
+| GK eps=1/51 † | 8 | 7985 [7718..8253] | 7927 | 7967 |
+| Bloom 7x2^14 † (inserted key) | 1 | true | true | true |
+| Bloom 7x2^14 † (inserted key) | 2 | true | true | true |
+| Bloom 7x2^14 † (inserted key) | 4 | true | true | true |
+| Bloom 7x2^14 † (inserted key) | 8 | true | true | true |
+| Bloom 7x2^14 † (absent key) | 1 | false | false | false |
+| Bloom 7x2^14 † (absent key) | 2 | false | false | false |
+| Bloom 7x2^14 † (absent key) | 4 | false | false | false |
+| Bloom 7x2^14 † (absent key) | 8 | false | false | false |
+| KMV k=1,024 † | 1 | 1232 | 1241 | 1234 |
+| KMV k=1,024 † | 2 | 2290 | 2320 | 2372 |
+| KMV k=1,024 † | 4 | 4405 | 4365 | 4432 |
+| KMV k=1,024 † | 8 | 8202 | 8484 | 8433 |
+
+### Who wins where
+
+- **Update proving: zkSketch, on every family.** Per epoch of 2,048 records,
+  zkSketch's leaf is 29x (GK) to 486x (KMV) faster than the zk-Analytics
+  aggregation guest: CM 315x, HLL 170x, SS 440x, Bloom 90x. Counting zkSketch's 7
+  forest merges, the whole 8-batch stream is 24x (GK) to 199x (SS) faster (CM 190x).
+  r0vm was not core-restricted (the 1-minute load reached 58-64 during the GK,
+  Bloom and KMV aggregation proofs, where the drivers sample it); zkSketch was
+  given 32 cores.
+- **Query proving: zkSketch, on every family, and the gap grows with n.** Their
+  query guest re-hashes and merges all n epoch states, so its cost grows with n,
+  while zkSketch's decode proof reads one state. At n = 1 zkSketch is 4.4x (Bloom)
+  to 1,387x (SS) faster, at n = 8 15x (Bloom) to 12,159x (SS): CM 2,724x, HLL 37x,
+  GK 90x, KMV 502x.
+- **Verifier work: zk-Analytics at n = 1, zkSketch from n = 4.** At n = 1 the
+  zk-Analytics verifier checks two ~10 ms receipts (19-22 ms) and zkSketch a leaf
+  proof plus a query proof (28-35 ms). At n = 2 they are within 12% of each other,
+  either way. At n = 8 zk-Analytics checks 9 receipts (88-104 ms) and zkSketch one
+  forest peak plus the query proof (26-34 ms): 2.7-3.9x less.
+- **Bytes to the verifier: same crossover.** zk-Analytics sends 449 KB at n = 1
+  against zkSketch's 1.0-1.3 MB; at n = 4 they are equal (1.12 MB vs 0.96-1.12 MB);
+  at n = 8 zkSketch is 1.8-2.1x smaller (0.96-1.12 MB vs 2.02-2.03 MB).
+- **Memory: zkSketch, except GK** (GB = 2^30 bytes here and in the tables). Every
+  multi-segment r0vm proof peaks at 9.1-9.2 GB. zkSketch's update worker peaks at
+  1.5-5.3 GB, but at 19.4 GB for GK; its coordinator (query side) at 1.4-5.0 GB,
+  but at 19.0 GB for GK.
+- **Accuracy: mixed, decided by the sketches' semantics, not by the proof
+  systems.** CM: both over-estimate the heavy key by at most 5% (n = 8: zkA 189,
+  zkS 185, exact 180). HLL: **the port wins clearly** (within 1.1%), because
+  zkSketch's HLL decoder releases the raw estimator without small-range correction
+  (1.9-10x too high here; see caveats). SS: the port returns the exact top-1 key and
+  count (error 0); zkSketch's MG returns the count only, 0.9-4.4% low. GK: both
+  well inside eps N (zkS 3-40 below the exact rank, zkA 0-35 above, eps N = 40-321).
+  Bloom: both correct on all 8 probes. KMV: both within 3.5% (one standard error is
+  3.1%).
+
+### Caveats
+
+- **Zero knowledge (read this first).** RISC Zero succinct receipts are
+  zero-knowledge; zkSketch's proofs here are not (`TwoAdicFriPcs`; the `zk` feature
+  that swaps in `HidingFriPcs` was off). Turning it on costs zkSketch prove time that
+  these rows do not contain. In the other direction, zkSketch's state commitments
+  are hiding (salted) and zk-Analytics' are unsalted SHA-256, which does not hide
+  the epoch state.
+- **CPU only, one machine.** Both sides ran on this Threadripper PRO 9975WX
+  (32 cores / 64 threads), not on the paper's EPYC machines; the GPU prover was not
+  used. r0vm was not core-restricted (it may use all 64 hardware threads);
+  zkSketch was given 32 cores (`EXP_COMPOSE_CORES=32`, the matched-comparison
+  setting of `compare.sh`), its query proofs a 32-thread pool on the coordinator.
+- **Sampled epochs (zk-Analytics).** Only aggregation epochs 0 and 7 were proved per
+  family; "per epoch" is their mean and "8 epochs" is 8 x that mean (derived). The
+  executor shows how much the other six epochs can differ, in segments per epoch
+  (user cycles): CM 24 in every epoch (22.540M-22.547M), HLL 11 (10.395M-10.402M),
+  SS 15 (13.995M-14.166M), GK 14-15 (13.144M-13.617M), Bloom 12
+  (11.092M-11.099M), KMV 12 (11.042M-11.129M). The two proved epochs of each
+  family differ by at most 2.2% in prove time (GK; CM 0.2%).
+- **What each zkSketch number is.** Per-leaf prove = `leafgen_seq_ms / t` (the sum of
+  the 8 measured leaf proofs over 8). "8 batches incl. merges" = `total_time_ms`
+  (leaves plus the 7 forest merges, 1 machine). Query prove / verify / bytes and
+  `query_bind_ms` come per query from the `EXP_QUERY_LOG` lines (their sums match
+  the CSV's `query_*` columns). zkSketch's query RSS is the coordinator's whole-run
+  peak (it also derives the auditor's VKs and binds every query), an upper bound for
+  a single query; update RSS is the worker's peak. zk-Analytics RSS is the peak of
+  the r0vm process of that one proof (`six/rss_tree.sh`).
+- **What "accept at n" counts.** zk-Analytics: the n aggregation receipts (their tree
+  has no `env::verify`, so the verifier checks each; verify time and size = the
+  mean of the two proved epochs, derived) plus the query receipt (measured).
+  zkSketch: the pinned verification of the live Bentley-Saxe peak(s) at version n
+  (one peak for n = 1, 2, 4, 8) plus the statement checks against the batch log
+  (`query_bind_ms`, measured), plus the query proof's verification (measured). At
+  n = 3, 5, 6, 7 zkSketch needs 2-3 peaks (in the logs, not in the table).
+- **Proof sizes** are bincode-serialized receipts (zk-Analytics) and
+  postcard-serialized proofs (zkSketch).
+- **Per-family semantics differ; compare accuracy with that in mind.**
+  - *Count-Min.* Same 3 x 1024 geometry, different hashes (theirs FNV-1a +
+    seeded splitmix64; ours Poseidon2 in-circuit), so collisions differ. Theirs keeps
+    one CM per epoch and the query sums the n epoch tables; ours keeps one cumulative
+    table.
+  - *HLL.* **zkSketch's HLL decode certifies the raw estimator
+    `alpha m^2 / Z` in fixed point (beta = 8) with no small-range (linear counting)
+    branch.** At these cardinalities (1,234-8,433 distinct keys against
+    m = 16,384 registers) the raw estimator is far off: 12,422 / 13,012 / 14,078 /
+    16,374 against 1,234 / 2,372 / 4,432 / 8,433 exact at n = 1 / 2 / 4 / 8 (10.1x
+    down to 1.9x). The port † applies linear counting (`linear_counting=true` in its journal); its own raw
+    estimate on the same data is 12,416 / 12,999 / 14,088 / 16,376, within 0.2% of
+    zkSketch's answers, so the gap is the missing branch, not the hash or the
+    proof. This is a property of zkSketch's decoder, not of the comparison.
+  - *SpaceSaving / MG.* Ours is mergeable Misra-Gries with 1,024 counters on keys
+    mapped to `(k & 0x1FFFFFFF) | 1`, and the query releases the top-1 count only
+    (an under-estimate, no key). Theirs is per-epoch SpaceSaving with 1,024 counters
+    merged at query time by sum-and-truncate, and the query releases key, count and
+    error (count is an over-estimate per epoch). MG with s counters is roughly
+    SpaceSaving with s + 1.
+  - *GK.* Same value domain on both sides (`key & 0x1FFFFF`, 21 bits) and the same
+    rank value. Ours is the two-sided band-merge summary (s = 51, capacity 2,048)
+    and releases the bracket midpoint; theirs is per-epoch textbook GK
+    (eps = 1/51) combined at query time and releases an estimate with certified
+    bounds.
+  - *Bloom.* Same partitioned shape (7 x 2^14 bits); different hash functions and
+    seeds (theirs FNV-1a + splitmix64 with their 3 CM seeds and 4 constants of ours;
+    ours Poseidon2 routing), so false-positive sets differ. Both answered all 8 probes
+    correctly.
+  - *KMV.* k = 1,024 on both sides; hash width 27 bits (ours, Poseidon2) vs 64 bits
+    (theirs), so estimates differ by the hash draw (std err ~ 1/sqrt(k-2) = 3.1%).
+- **† ports are ours.** zk-Analytics ships only Count-Min. The HLL, SS, GK, Bloom and
+  KMV rows on their side are our textbook per-record code in their per-epoch
+  pipeline, not zk-Analytics code (see the sections above). The GK driver's query
+  `--prove` path was added for this comparison (`gk/host/src/main.rs`; the proved
+  journal is asserted equal to the native output, as for aggregation).
+- **Build provenance.** zk-Analytics-side binaries were built with the commands of
+  `six/build.sh` into a private `BASELINE_DIR` whose `zka/` links to `~/ext-baselines/zka`
+  (`d4a5a9a`), so no other job's build dir was touched; the ELF md5s are in the
+  log headers (`aggr_cm` T=1 is `90fce45d…`, the validated build). zkSketch:
+  this commit, default features, release.
 
 ## zkSketch's SpaceSaving batch rule as a RISC Zero guest (`ss_mg`, ours †): executor only
 

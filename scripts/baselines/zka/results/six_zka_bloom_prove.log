@@ -1,0 +1,310 @@
+# run_zka.sh prove job=bloom:aggr:0 gate=quiet waited_s=151 load1_start=5.89 busy_cores_start=2.6 2026-10-09T16:26:04+08:00 host=SPRL6201019991 nproc=64 load=[5.66 28.12 36.23]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=38 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# cmd: $BASELINE_DIR/build/zka-bloom/release/bloom --mode aggr --epoch-index 0 --epoch-size 2048 --batch 8 --keys $ZKS/data/aol.keys --absent 10000 --prove --gate load1_start=5.89;max_load=8;busy_cores=2.6;waited_s=151
+bloom: proved in 354.2 s, 12 segments, total_cycles=12058624 user_cycles=11091953 paging=486760; r0vm peak RSS 9390.1 MB; contention none;samples=3251;other_cores_avg=2.3;load1_max=59.0
+RSSTREE,bloom:aggr:0,main_peak_rss_mb=22.9,r0vm_peak_rss_mb=9385.9,desc_peak_rss_mb=9385.9,wall_s=354.6,rc=0
+# end job=bloom:aggr:0 2026-10-09T16:31:59+08:00 rc=0 wall_s=355 load1_end=47.04
+# run_zka.sh prove job=bloom:aggr:7 gate=quiet waited_s=150 load1_start=6.36 busy_cores_start=3.3 2026-10-09T16:34:31+08:00 host=SPRL6201019991 nproc=64 load=[6.36 27.86 35.63]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=38 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# cmd: $BASELINE_DIR/build/zka-bloom/release/bloom --mode aggr --epoch-index 7 --epoch-size 2048 --batch 8 --keys $ZKS/data/aol.keys --absent 10000 --prove --gate load1_start=6.36;max_load=8;busy_cores=3.3;waited_s=150
+bloom: proved in 356.1 s, 12 segments, total_cycles=12058624 user_cycles=11098644 paging=486103; r0vm peak RSS 9399.8 MB; contention none;samples=3256;other_cores_avg=2.7;load1_max=57.8
+RSSTREE,bloom:aggr:7,main_peak_rss_mb=23.7,r0vm_peak_rss_mb=9383.7,desc_peak_rss_mb=9383.7,wall_s=356.4,rc=0
+# end job=bloom:aggr:7 2026-10-09T16:40:28+08:00 rc=0 wall_s=356 load1_end=49.09
+# run_zka.sh prove job=bloom:query:1:first gate=quiet waited_s=121 load1_start=5.98 busy_cores_start=3.2 2026-10-09T17:32:55+08:00 host=SPRL6201019991 nproc=64 load=[5.66 12.49 19.33]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=40 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# cmd: $BASELINE_DIR/build/zka-bloom/release/bloom --mode query --epochs 1 --epoch-size 2048 --batch 8 --keys $ZKS/data/aol.keys --absent 10000 --probe first --prove --gate load1_start=5.98;max_load=8;busy_cores=3.2;waited_s=121
+bloom: proved in 9.4 s, 1 segments, total_cycles=262144 user_cycles=104907 paging=52278; r0vm peak RSS 2352.4 MB; contention none;samples=87;other_cores_avg=2.6;load1_max=15.6
+RSSTREE,bloom:query:1:first,main_peak_rss_mb=23.4,r0vm_peak_rss_mb=2352.4,desc_peak_rss_mb=2352.4,wall_s=9.5,rc=0
+# end job=bloom:query:1:first 2026-10-09T17:33:05+08:00 rc=0 wall_s=10 load1_end=15.55
+# run_zka.sh prove job=bloom:query:2:first gate=quiet waited_s=60 load1_start=7.53 busy_cores_start=2.4 2026-10-09T17:34:07+08:00 host=SPRL6201019991 nproc=64 load=[7.53 12.30 18.81]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=40 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# cmd: $BASELINE_DIR/build/zka-bloom/release/bloom --mode query --epochs 2 --epoch-size 2048 --batch 8 --keys $ZKS/data/aol.keys --absent 10000 --probe first --prove --gate load1_start=7.53;max_load=8;busy_cores=2.4;waited_s=60
+bloom: proved in 15.4 s, 1 segments, total_cycles=524288 user_cycles=192870 paging=71656; r0vm peak RSS 4695.2 MB; contention none;samples=143;other_cores_avg=2.7;load1_max=20.5
+RSSTREE,bloom:query:2:first,main_peak_rss_mb=22.6,r0vm_peak_rss_mb=4680.3,desc_peak_rss_mb=4680.3,wall_s=15.5,rc=0
+# end job=bloom:query:2:first 2026-10-09T17:34:23+08:00 rc=0 wall_s=16 load1_end=20.47
+# run_zka.sh prove job=bloom:query:4:first gate=quiet waited_s=90 load1_start=6.70 busy_cores_start=3.1 2026-10-09T17:35:55+08:00 host=SPRL6201019991 nproc=64 load=[6.32 11.62 17.93]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=40 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# cmd: $BASELINE_DIR/build/zka-bloom/release/bloom --mode query --epochs 4 --epoch-size 2048 --batch 8 --keys $ZKS/data/aol.keys --absent 10000 --probe first --prove --gate load1_start=6.70;max_load=8;busy_cores=3.1;waited_s=90
+bloom: proved in 15.6 s, 1 segments, total_cycles=524288 user_cycles=368796 paging=109872; r0vm peak RSS 4686.0 MB; contention none;samples=144;other_cores_avg=2.7;load1_max=15.2
+RSSTREE,bloom:query:4:first,main_peak_rss_mb=23.6,r0vm_peak_rss_mb=4680.0,desc_peak_rss_mb=4680.0,wall_s=15.8,rc=0
+# end job=bloom:query:4:first 2026-10-09T17:36:12+08:00 rc=0 wall_s=16 load1_end=14.22
+# run_zka.sh prove job=bloom:query:8:first gate=quiet waited_s=60 load1_start=6.87 busy_cores_start=3.2 2026-10-09T17:37:14+08:00 host=SPRL6201019991 nproc=64 load=[6.56 11.12 17.29]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=40 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# cmd: $BASELINE_DIR/build/zka-bloom/release/bloom --mode query --epochs 8 --epoch-size 2048 --batch 8 --keys $ZKS/data/aol.keys --absent 10000 --probe first --prove --gate load1_start=6.87;max_load=8;busy_cores=3.2;waited_s=60
+bloom: proved in 28.1 s, 1 segments, total_cycles=1048576 user_cycles=720648 paging=186304; r0vm peak RSS 9366.7 MB; contention none;samples=261;other_cores_avg=2.3;load1_max=24.4
+RSSTREE,bloom:query:8:first,main_peak_rss_mb=24.5,r0vm_peak_rss_mb=9366.7,desc_peak_rss_mb=9366.7,wall_s=28.4,rc=0
+# end job=bloom:query:8:first 2026-10-09T17:37:43+08:00 rc=0 wall_s=29 load1_end=22.77
+# run_zka.sh prove job=bloom:query:1:key:4010659695 gate=quiet waited_s=90 load1_start=7.37 busy_cores_start=3.1 2026-10-09T17:39:15+08:00 host=SPRL6201019991 nproc=64 load=[7.02 11.48 16.81]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=40 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# cmd: $BASELINE_DIR/build/zka-bloom/release/bloom --mode query --epochs 1 --epoch-size 2048 --batch 8 --keys $ZKS/data/aol.keys --absent 10000 --probe key:4010659695 --prove --gate load1_start=7.37;max_load=8;busy_cores=3.1;waited_s=90
+bloom: proved in 9.3 s, 1 segments, total_cycles=262144 user_cycles=104842 paging=52278; r0vm peak RSS 2352.3 MB; contention none;samples=86;other_cores_avg=2.7;load1_max=11.7
+RSSTREE,bloom:query:1:key:4010659695,main_peak_rss_mb=22.9,r0vm_peak_rss_mb=2352.3,desc_peak_rss_mb=2352.3,wall_s=9.4,rc=0
+# end job=bloom:query:1:key:4010659695 2026-10-09T17:39:25+08:00 rc=0 wall_s=10 load1_end=11.52
+# run_zka.sh prove job=bloom:query:2:key:3455829011 gate=quiet waited_s=30 load1_start=7.82 busy_cores_start=3.0 2026-10-09T17:39:57+08:00 host=SPRL6201019991 nproc=64 load=[7.82 11.35 16.55]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=40 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# cmd: $BASELINE_DIR/build/zka-bloom/release/bloom --mode query --epochs 2 --epoch-size 2048 --batch 8 --keys $ZKS/data/aol.keys --absent 10000 --probe key:3455829011 --prove --gate load1_start=7.82;max_load=8;busy_cores=3.0;waited_s=30
+bloom: proved in 15.7 s, 1 segments, total_cycles=524288 user_cycles=192805 paging=71656; r0vm peak RSS 4695.0 MB; contention none;samples=145;other_cores_avg=2.7;load1_max=21.3
+RSSTREE,bloom:query:2:key:3455829011,main_peak_rss_mb=22.9,r0vm_peak_rss_mb=4679.8,desc_peak_rss_mb=4679.8,wall_s=15.8,rc=0
+# end job=bloom:query:2:key:3455829011 2026-10-09T17:40:13+08:00 rc=0 wall_s=16 load1_end=21.30
+# run_zka.sh prove job=bloom:query:4:key:2391383811 gate=quiet waited_s=90 load1_start=5.76 busy_cores_start=0.1 2026-10-09T17:41:45+08:00 host=SPRL6201019991 nproc=64 load=[5.37 10.80 15.88]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=40 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# cmd: $BASELINE_DIR/build/zka-bloom/release/bloom --mode query --epochs 4 --epoch-size 2048 --batch 8 --keys $ZKS/data/aol.keys --absent 10000 --probe key:2391383811 --prove --gate load1_start=5.76;max_load=8;busy_cores=0.1;waited_s=90
+bloom: proved in 15.7 s, 1 segments, total_cycles=524288 user_cycles=368742 paging=109872; r0vm peak RSS 4686.0 MB; contention none;samples=148;other_cores_avg=0.1;load1_max=16.9
+RSSTREE,bloom:query:4:key:2391383811,main_peak_rss_mb=23.8,r0vm_peak_rss_mb=4681.4,desc_peak_rss_mb=4681.4,wall_s=15.8,rc=0
+# end job=bloom:query:4:key:2391383811 2026-10-09T17:42:02+08:00 rc=0 wall_s=16 load1_end=16.87
+# run_zka.sh prove job=bloom:query:8:key:1608305708 gate=quiet waited_s=60 load1_start=6.31 busy_cores_start=0.1 2026-10-09T17:43:04+08:00 host=SPRL6201019991 nproc=64 load=[6.31 10.70 15.51]
+# zka=d4a5a9a90f74 r0vm=risc0-r0vm 3.0.6 keys md5=01dd7d5c8a73
+# zkSketch=afae98cd2 dirty_files=40 build_dir=$SCRATCH/eb/build
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_cm/riscv32im-risc0-zkvm-elf/release/aggr_cm md5=90fce45df8a7 bytes=221844
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_histogram/riscv32im-risc0-zkvm-elf/release/aggr_histogram md5=c25771a6d7be bytes=248696
+# elf cyc-t1/riscv-guest/aggregator-methods/aggr_samples/riscv32im-risc0-zkvm-elf/release/aggr_samples md5=25c0803cb4e6 bytes=245000
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-cm/riscv32im-risc0-zkvm-elf/release/querier-guest-cm md5=5c5efaf279ad bytes=334416
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-histogram/riscv32im-risc0-zkvm-elf/release/querier-guest-histogram md5=9db670cddc17 bytes=326496
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-raw/riscv32im-risc0-zkvm-elf/release/querier-guest-raw md5=7759ea87c773 bytes=296396
+# elf cyc-t1/riscv-guest/querier-methods/querier-guest-samples/riscv32im-risc0-zkvm-elf/release/querier-guest-samples md5=716c30fd93ee bytes=334580
+# elf hll/riscv-guest/zka-hll-methods/hll_aggr/riscv32im-risc0-zkvm-elf/release/hll_aggr md5=193aaa64115b bytes=206480
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query md5=feb0df871d0e bytes=308768
+# elf hll/riscv-guest/zka-hll-methods/hll_query/riscv32im-risc0-zkvm-elf/release/hll_query_words md5=ae1df278e4da bytes=309164
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_aggr/riscv32im-risc0-zkvm-elf/release/bloom_aggr md5=e3e6a17a8d10 bytes=207904
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query md5=fd2477ba9d53 bytes=302420
+# elf zka-bloom/riscv-guest/zka-bloom-methods/bloom_query/riscv32im-risc0-zkvm-elf/release/bloom_query_words md5=e825612cacae bytes=305292
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk_prof/riscv32im-risc0-zkvm-elf/release/aggr_gk_prof md5=d3bb59ae7b14 bytes=223272
+# elf zka-gk/riscv-guest/gk-methods/aggr_gk/riscv32im-risc0-zkvm-elf/release/aggr_gk md5=0329973f798a bytes=221516
+# elf zka-gk/riscv-guest/gk-methods/querier_gk/riscv32im-risc0-zkvm-elf/release/querier_gk md5=145e98a2029c bytes=319848
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_aggr/riscv32im-risc0-zkvm-elf/release/kmv_aggr md5=393bc2fe5e14 bytes=221656
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query md5=726aa314793f bytes=301448
+# elf zka-kmv/riscv-guest/zka-kmv-methods/kmv_query/riscv32im-risc0-zkvm-elf/release/kmv_query_words md5=a716d09f0ec7 bytes=300324
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_prof/riscv32im-risc0-zkvm-elf/release/aggr_ss_prof md5=73e22558e4a9 bytes=262836
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss/riscv32im-risc0-zkvm-elf/release/aggr_ss md5=fd8f8e7379af bytes=253672
+# elf zka-ss/riscv-guest/ss-methods/aggr_ss_rootvar/riscv32im-risc0-zkvm-elf/release/aggr_ss_rootvar md5=b747b0eabff4 bytes=261608
+# elf zka-ss/riscv-guest/ss-methods/query_ss_prof/riscv32im-risc0-zkvm-elf/release/query_ss_prof md5=a020fd3b9b8c bytes=328684
+# elf zka-ss/riscv-guest/ss-methods/query_ss/riscv32im-risc0-zkvm-elf/release/query_ss md5=d1bd9eb9cced bytes=327028
+# cmd: $BASELINE_DIR/build/zka-bloom/release/bloom --mode query --epochs 8 --epoch-size 2048 --batch 8 --keys $ZKS/data/aol.keys --absent 10000 --probe key:1608305708 --prove --gate load1_start=6.31;max_load=8;busy_cores=0.1;waited_s=60
+bloom: proved in 27.5 s, 1 segments, total_cycles=1048576 user_cycles=720583 paging=186304; r0vm peak RSS 9367.2 MB; contention none;samples=258;other_cores_avg=0.1;load1_max=22.5
+RSSTREE,bloom:query:8:key:1608305708,main_peak_rss_mb=24.5,r0vm_peak_rss_mb=9352.6,desc_peak_rss_mb=9352.6,wall_s=27.7,rc=0
+# end job=bloom:query:8:key:1608305708 2026-10-09T17:43:32+08:00 rc=0 wall_s=28 load1_end=20.80

@@ -411,6 +411,14 @@ pub struct ComposeCell {
     pub query_bind_ms: Option<f64>,
 }
 
+/// `EXP_QUERY_LOG=1`: print one stderr line per query event (`QLOG_KEY` probe
+/// key, `QLOG_QUERY` decode prove/verify/bytes/answer, `QLOG_BIND` prefix
+/// certificate and binding cost), the per-query detail the CSV only sums.
+/// Logging only: no proof, timing window or CSV column changes.
+pub(crate) fn qlog_on() -> bool {
+    std::env::var("EXP_QUERY_LOG").map(|v| v == "1").unwrap_or(false)
+}
+
 /// A boundary-exposing leaf proof plus the Send metrics we keep off-thread.
 struct LeafArt {
     output: RecursionOutput<ConfigWithFriParams>,
@@ -513,14 +521,16 @@ fn record_query(
             (tm.verify.as_secs_f64() * 1000.0, None)
         }
     };
-    queries.push(QueryArt {
-        at_leaf,
-        prove_ms: (tm.witness + tm.prove).as_secs_f64() * 1000.0,
-        verify_ms,
-        proof_bytes: dp.proof_size() as u64,
-        statement,
-        bind: None,
-    });
+    let prove_ms = (tm.witness + tm.prove).as_secs_f64() * 1000.0;
+    let proof_bytes = dp.proof_size() as u64;
+    if qlog_on() {
+        eprintln!(
+            "QLOG_QUERY,at_leaf={at_leaf},prove_ms={prove_ms:.3},witness_ms={:.3},verify_ms={verify_ms:.3},proof_bytes={proof_bytes},answer={}",
+            tm.witness.as_secs_f64() * 1000.0,
+            dp.answer
+        );
+    }
+    queries.push(QueryArt { at_leaf, prove_ms, verify_ms, proof_bytes, statement, bind: None });
 }
 
 /// **PROVER side.** One query proof at version `t` (1-based leaf index;
@@ -546,6 +556,17 @@ fn prove_query_at(
 ) -> (DecodeProof, [Val; 8]) {
     let mode = commit.mode();
     let id = ReleasePolicy::Identity;
+    if qlog_on() {
+        let key = match &q {
+            QueryState::Cm(_, k) => format!("cm_key={k}"),
+            QueryState::Gk(_, v) => format!("gk_value={v}"),
+            QueryState::Bloom(_, _, k) => format!("bloom_key={k}"),
+            QueryState::Ss(_, c) => format!("ss_c={c}"),
+            QueryState::Hll(_, b) => format!("hll_b={b}"),
+            QueryState::Kmv(s) => format!("kmv_k={}", s.k),
+        };
+        eprintln!("QLOG_KEY,at_leaf={t},{key}");
+    }
     // The version's randomizer. Under `Hiding` only the genesis state (t = 0)
     // opens with the public zero; a zero salt at t ≥ 1 would publish the
     // guess-checkable `Com(S_t; 0)`, so refuse it here (an honest PRF output

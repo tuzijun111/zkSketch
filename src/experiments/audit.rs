@@ -767,6 +767,24 @@ impl ContextStore {
             audit
                 .bind(q, &parts, log)
                 .map_err(|e| format!("query at t'={}: {e}", q.at_leaf))?;
+            if super::stream_compose::qlog_on() {
+                let ivs: Vec<String> = list.iter().map(|(lo, hi, _)| format!("{lo}-{hi}")).collect();
+                let sizes: Vec<String> = list
+                    .iter()
+                    .map(|(lo, hi, sh)| {
+                        self.bytes.get(&(*lo, *hi, sh.clone())).map_or(0, |b| b.len()).to_string()
+                    })
+                    .collect();
+                let b = q.bind.expect("bound above");
+                eprintln!(
+                    "QLOG_BIND,at_leaf={},ctx_proofs={},intervals={},interval_bytes={},bind_ms={:.3}",
+                    q.at_leaf,
+                    b.ctx_proofs,
+                    ivs.join(";"),
+                    sizes.join(";"),
+                    b.ms
+                );
+            }
         }
         Ok(())
     }

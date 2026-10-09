@@ -24,6 +24,8 @@
 //        [--prove]                        also prove it (ProverOpts::succinct(), their tier)
 //   --mode query --epochs n --query rank|p50|p90|p99 [--rank-value v]
 //                                         aggregate epochs 0..n natively, execute querier_gk
+//        [--prove]                        also prove it (ProverOpts::succinct(); added for the
+//                                         six-sketch comparison, ../README.md)
 //   --header
 //   common: [--keys PATH] [--epoch-size 16384] [--batch 8]
 //
@@ -48,7 +50,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gk_methods::{AGGR_GK_ELF, AGGR_GK_ID, AGGR_GK_PROF_ELF, QUERIER_GK_ELF};
+use gk_methods::{AGGR_GK_ELF, AGGR_GK_ID, AGGR_GK_PROF_ELF, QUERIER_GK_ELF, QUERIER_GK_ID};
 use gk_zka_core::{
     batch_chain_hash, gk_epoch_state_commit, process_gk_aggr_with_state, run_gk_query, BatchInput,
     EpochChainLink, GkAggrInput, GkAggrOutput, GkEpochState, GkQuery, GkQueryInput, GkQueryOutput,
@@ -308,8 +310,10 @@ fn vm_hwm_kb(pid: &str) -> u64 {
 }
 
 /// Their shipped tier: ProverOpts::succinct() at every prove site. Checks the PROVED
-/// journal against the native output.
-fn prove(input: &GkAggrInput, expect: &GkAggrOutput) -> Proved {
+/// journal against the native output. Used for both guests (aggr_gk, querier_gk).
+fn prove<T: serde::Serialize, J: serde::de::DeserializeOwned + PartialEq + std::fmt::Debug>(
+    input: &T, elf: &[u8], id: [u32; 8], expect: &J,
+) -> Proved {
     if dev_mode_set() {
         die("RISC0_DEV_MODE is set: refusing to report a fake proof");
     }
@@ -347,7 +351,7 @@ fn prove(input: &GkAggrInput, expect: &GkAggrOutput) -> Proved {
     });
     let env = ExecutorEnv::builder().write(input).unwrap().build().unwrap();
     let t = Instant::now();
-    let info = default_prover().prove_with_opts(env, AGGR_GK_ELF, &ProverOpts::succinct()).expect("prove failed");
+    let info = default_prover().prove_with_opts(env, elf, &ProverOpts::succinct()).expect("prove failed");
     let prove_s = t.elapsed().as_secs_f64();
     stop.store(true, Ordering::Relaxed);
     let (peak_kb, contention) = sampler.join().unwrap_or((0, Contention::default()));
@@ -356,10 +360,10 @@ fn prove(input: &GkAggrInput, expect: &GkAggrOutput) -> Proved {
     let mut best = f64::MAX;
     for _ in 0..5 {
         let t2 = Instant::now();
-        receipt.verify(AGGR_GK_ID).expect("verify failed");
+        receipt.verify(id).expect("verify failed");
         best = best.min(t2.elapsed().as_secs_f64() * 1000.0);
     }
-    let got: GkAggrOutput = receipt.journal.decode().expect("decode proved journal");
+    let got: J = receipt.journal.decode().expect("decode proved journal");
     assert_eq!(&got, expect, "proved journal != native");
     eprintln!(
         "gk: proved in {prove_s:.1} s, {} segments, total_cycles={} user_cycles={} paging={} reserved={}; r0vm peak RSS {:.1} MB; driver VmHWM {:.1} MB; contention {}",
@@ -580,7 +584,7 @@ fn main() {
             if !checks_ok {
                 eprintln!("gk: WARNING accuracy check failed (min_kept/q_ok/rank columns)");
             }
-            let proved = if do_prove && eq && checks_ok { Some(prove(inp, &native)) } else { None };
+            let proved = if do_prove && eq && checks_ok { Some(prove(inp, AGGR_GK_ELF, AGGR_GK_ID, &native)) } else { None };
             emit(if proved.is_some() { "proved" } else { "exec" }, "aggr", "aggr_gk", "-", 1, idx.to_string(), m, m,
                 cbs, st.tuples.len(), &x, 1, eq, result_base, exact, &acc, &qc, proved);
             if !eq || !checks_ok {
@@ -588,9 +592,10 @@ fn main() {
             }
         }
         "query" => {
-            if flag("--prove") || flag("--profile") {
-                die("--prove/--profile are only wired for --mode aggr");
+            if flag("--profile") {
+                die("--profile is only wired for --mode aggr");
             }
+            let do_prove = flag("--prove");
             let n = arg_u64("--epochs", 1) as usize;
             if n == 0 || n * m > keys.len() {
                 die(&format!("--epochs {n} needs {} keys, {keys_path} has {}", n * m, keys.len()));
@@ -645,8 +650,10 @@ fn main() {
                 }
             };
             let checks_ok = qc.all_ok(&acc);
-            emit("exec", "query", "querier_gk", &qname, n, "-".into(), m, n * m, cbs, tuples, &x,
-                got.state_commits.len(), eq, result, exact, &acc, &qc, None);
+            let proved =
+                if do_prove && eq && checks_ok { Some(prove(&input, QUERIER_GK_ELF, QUERIER_GK_ID, &native)) } else { None };
+            emit(if proved.is_some() { "proved" } else { "exec" }, "query", "querier_gk", &qname, n, "-".into(), m,
+                n * m, cbs, tuples, &x, got.state_commits.len(), eq, result, exact, &acc, &qc, proved);
             if !eq {
                 eprintln!("gk: WARNING query journal != native output");
             }
