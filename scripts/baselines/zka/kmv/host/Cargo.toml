@@ -1,0 +1,16 @@
+[package]
+name = "zka-kmv-host"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "kmv"
+path = "src/main.rs"
+
+[dependencies]
+zka-kmv-core = { path = "../core" }
+zka-kmv-methods = { path = "../methods" }
+zkvm-common = { path = "../../.zka/zkvm-common" }
+risc0-zkvm = "3"
+serde = "1"
+bincode = "1"

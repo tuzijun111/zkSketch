@@ -1,0 +1,16 @@
+[package]
+name = "zka-bloom-host"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "bloom"
+path = "src/main.rs"
+
+[dependencies]
+zka-bloom-core = { path = "../core" }
+zka-bloom-methods = { path = "../methods" }
+zkvm-common = { path = "../../.zka/zkvm-common" }
+risc0-zkvm = "3"
+serde = "1"
+bincode = "1"
