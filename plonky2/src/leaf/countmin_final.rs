@@ -320,7 +320,7 @@ pub fn build_countmin_final_leaf(params: CmFinalParams) -> CountMinFinalLeaf {
         b.connect(updated, final_cells[idx]);
     }
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     CountMinFinalLeaf {
         data,
         t: Tgt {

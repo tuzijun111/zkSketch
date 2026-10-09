@@ -4,3 +4,7 @@
 # is a moving target), so checkouts reproduce this build.
 
 /results/
+
+# Local Cargo overrides (e.g. a [patch] onto a local plonky2 fork). Per-developer,
+# may hold absolute paths; never tracked.
+/.cargo/config.toml

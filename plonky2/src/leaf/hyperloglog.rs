@@ -229,7 +229,7 @@ pub fn build_hll_leaf(params: HllLeafParams) -> HllLeaf {
         b.connect(prod, zero); // final[r] is one of the candidates
     }
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     HllLeaf {
         data,
         t: HllTargets { init_commit, final_commit, batch_commit, keys, init_regs, final_regs, selectors },

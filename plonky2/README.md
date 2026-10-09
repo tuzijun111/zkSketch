@@ -81,7 +81,9 @@ root digest.
 
 ## Measured (debug build, deps at opt-level 3)
 
-From `cargo run --example countmin_chain` (`d=2, w=4, batch=2`):
+From `cargo run --example countmin_chain` (`d=2, w=4, batch=2`), measured before the `zk`
+feature existed, i.e. plain proofs (now `--no-default-features`; with `zk` every proof is at
+least 2^14 rows and larger and slower):
 
 ```
 leaf 1: prove 17.5ms    proof 121556 bytes
@@ -99,9 +101,26 @@ O(1), while the flat baseline re-verifies every leaf — exactly the paper §4 t
 plonky2 requires **nightly Rust** (it uses `#![feature(specialization)]`); `rust-toolchain.toml`
 pins it automatically.
 
+**Zero knowledge is on by default** (cargo feature `zk`, mirroring the root crate): the one
+`CircuitConfig` (`src/config.rs`) sets plonky2's `zero_knowledge`, which adds random blinding
+rows (so every circuit is at least 2^14 rows) and salts the wires, Z and quotient Merkle leaves.
+`--no-default-features` builds the plain proofs, with the same circuits and digests as before
+`zk` existed, so it reproduces the stored numbers. Under `zk`, three things matter:
+
+- plonky2 at the pinned rev does **not** blind Z: `blind()` joins each Z-blinding row pair with
+  `generate_copy` instead of `connect`. `zk` therefore needs a plonky2 build with that one-line
+  fix, supplied for now by a `[patch."https://github.com/0xPolygonZero/plonky2"]` in a local,
+  git-ignored `.cargo/config.toml`. `tests/zk_blinding.rs` (a guess-and-check attack on the
+  opened Z and partial products) fails without the fix.
+- the hiding is plonky2's heuristic ZK: quotient chunks are only salted, and lookup polynomials
+  are not blinded at all, so `config::build_circuit` refuses plonky2 lookups under `zk`.
+- public inputs are still plain Poseidon commitments, so low-entropy committed states or
+  batches remain open to guess-and-check whatever the proof hides.
+
 ```bash
-cargo test                              # full suite (lib + integration), ~30s
-cargo run --release --example countmin_chain   # timings / proof sizes
+cargo test --release                          # full suite (lib + integration), zk: ~3 min
+cargo test --release --no-default-features    # same suite, plain proofs: ~35 s
+cargo run --release --example countmin_chain  # timings / proof sizes
 ```
 
 ## Status / not yet ported

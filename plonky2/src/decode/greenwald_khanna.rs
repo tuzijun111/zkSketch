@@ -188,7 +188,7 @@ pub fn build_gk_decode(params: GkDecodeParams) -> GkDecodeLeaf {
     // ── Stage 5: release policy → answer (binds res, not the raw prefix) ──
     let flag = bind_release(&mut b, res, release, answer, VALUE_BITS, one, zero);
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     GkDecodeLeaf { data, t: Tgt { commit, query, answer, cells, le, sel, res, rem, flag }, params }
 }
 

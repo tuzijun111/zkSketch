@@ -237,7 +237,7 @@ pub fn build_countmin_omc_leaf(params: CmOmcParams) -> CountMinOmcLeaf {
         &[&addr_out, &val_out, &tag_out],
     );
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     CountMinOmcLeaf {
         data,
         t: Tgt {

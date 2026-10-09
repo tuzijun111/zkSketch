@@ -129,7 +129,7 @@ fn merge_parts(left: ChildParts, right: ChildParts) -> Result<Node> {
         b.register_public_input(t);
     }
 
-    let data = b.build::<C>();
+    let data = crate::config::build_circuit(b);
 
     let mut pw = PartialWitness::<F>::new();
     pw.set_proof_with_pis_target(&lpt, left.proof)?;
@@ -372,7 +372,12 @@ pub fn flat_verify(nodes: &[Node]) -> Result<HashOut<F>> {
 /// are padded (identical gate set) — makes every wrapped root the SAME size.
 /// Tuned empirically (see `shrink_normalizes_size`); revisit if a heavier family
 /// or a wider deployed shape is added.
-pub const SHRINK_DEGREE_BITS: usize = 14;
+///
+/// Under `zk`, plonky2 appends blinding rows (36 queries: ~10.7k at 2^14, ~11.6k
+/// at 2^15). 2^14 then leaves room for only ~5.7k real gates, fewer than the
+/// in-circuit verifier needs, so the wrapper is fixed at 2^15: it pads to 2^14
+/// real gates and must stay at or below ~21.2k real gates to remain at 2^15.
+pub const SHRINK_DEGREE_BITS: usize = if cfg!(feature = "zk") { 15 } else { 14 };
 
 /// Normalize a node's proof to a fixed-shape "wrapper" proof: verify the child's
 /// proof in-circuit, re-expose its 8 boundary public inputs unchanged, and pad
@@ -395,7 +400,7 @@ fn shrink_parts(child: ChildParts) -> Result<Node> {
     while b.num_gates() < (1usize << (SHRINK_DEGREE_BITS - 1)) {
         b.add_gate(NoopGate, vec![]);
     }
-    let data = b.build::<C>();
+    let data = crate::config::build_circuit(b);
     ensure!(
         data.common.degree_bits() == SHRINK_DEGREE_BITS,
         "shrink wrapper degree {} != target {SHRINK_DEGREE_BITS}; retune SHRINK_DEGREE_BITS",

@@ -235,7 +235,7 @@ pub fn build_countmin_memcheck_leaf(params: CmMemcheckParams) -> CountMinMemchec
         b.connect(digest.elements[i], final_commit.elements[i]);
     }
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     CountMinMemcheckLeaf {
         data,
         t: Tgt { final_commit, batch_commit, key, val, combined_sorted, val_sorted, inv_diff },

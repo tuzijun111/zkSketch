@@ -18,7 +18,8 @@ use zksketch_snark::sketch::gk_bandmerge2::Gk2Params;
 /// Each family: circuit size (degree_bits) must be **monotone non-decreasing in
 /// capacity** and larger at the big capacity than the small one — the
 /// capacity-governed shape. (`degree_bits` is quantized to a power of two, so we
-/// require strictly-greater across a 4× capacity jump.)
+/// require strictly-greater across a 4× capacity jump; under `zk` the blinding
+/// floor at 2^14 moves the strict check to larger capacities, see below.)
 #[test]
 fn cost_is_capacity_governed() {
     // (label, small-shape bits, big-shape bits)
@@ -40,10 +41,27 @@ fn cost_is_capacity_governed() {
     println!("  ss_certified cap 4 → 32: {ss_small} → {ss_big}");
     println!("  gk_bandmrg2  cap 8 → 60: {gk_small} → {gk_big}");
 
-    assert!(cm_big > cm_small, "CM omc: circuit must grow with capacity d·w");
-    assert!(hll_big > hll_small, "HLL omc: circuit must grow with capacity 2^b");
-    assert!(ss_big > ss_small, "SS certified: circuit must grow with capacity");
-    assert!(gk_big > gk_small, "GK bandmerge2: circuit must grow with capacity");
+    // Under `zk`, plonky2's blinding rows (~10.7k at 2^14, 36 queries) floor every
+    // circuit with at most ~5.7k real gates at degree 2^14, so these ~8× capacity
+    // jumps can land on the same degree: only non-decreasing is meaningful there.
+    // Strict growth is checked below on shapes large enough to leave the floor.
+    let grows = |big: usize, small: usize| if cfg!(feature = "zk") { big >= small } else { big > small };
+    assert!(grows(cm_big, cm_small), "CM omc: circuit must grow with capacity d·w");
+    assert!(grows(hll_big, hll_small), "HLL omc: circuit must grow with capacity 2^b");
+    assert!(grows(ss_big, ss_small), "SS certified: circuit must grow with capacity");
+    assert!(grows(gk_big, gk_small), "GK bandmerge2: circuit must grow with capacity");
+
+    if cfg!(feature = "zk") {
+        // Capacities that cross the 2^14 zk floor (measured: CM d·w 4096, HLL 2^12
+        // and GK cap 60 reach 2^15; SS is still on the floor at cap 512).
+        let cm_huge = build_countmin_omc_leaf(CmOmcParams { d: 2, w: 2048, batch: 2 }).data.common.degree_bits();
+        let hll_huge = build_hll_omc_leaf(HllOmcParams { b: 12, batch: 4 }).data.common.degree_bits();
+        println!("  zk, past the 2^14 floor: cm_omc d·w 8 → 4096: {cm_small} → {cm_huge}");
+        println!("  zk, past the 2^14 floor: hll_omc 2^b 8 → 4096: {hll_small} → {hll_huge}");
+        assert!(cm_huge > cm_small, "CM omc (zk): circuit must grow with capacity d·w past the floor");
+        assert!(hll_huge > hll_small, "HLL omc (zk): circuit must grow with capacity 2^b past the floor");
+        assert!(gk_big > gk_small, "GK bandmerge2 (zk): circuit must grow with capacity past the floor");
+    }
 }
 
 /// History-independence + build-once reuse: a leaf circuit built for a shape is a

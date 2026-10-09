@@ -168,7 +168,7 @@ pub fn build_countmin_leaf(params: CmLeafParams) -> CountMinLeaf {
         }
     }
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     CountMinLeaf {
         data,
         t: CmTargets { init_commit, final_commit, records, init_cells, final_cells, selectors },

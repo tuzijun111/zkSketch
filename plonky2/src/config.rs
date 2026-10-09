@@ -8,7 +8,8 @@
 //! alignment trick the original required.
 
 use plonky2::field::goldilocks_field::GoldilocksField;
-use plonky2::plonk::circuit_data::CircuitConfig;
+use plonky2::plonk::circuit_builder::CircuitBuilder;
+use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData, CommonCircuitData};
 use plonky2::plonk::config::PoseidonGoldilocksConfig;
 
 /// Base field — Goldilocks, `p = 2^64 - 2^32 + 1`.
@@ -30,9 +31,44 @@ pub const D: usize = 2;
 /// target (degree-2 Goldilocks extension ≈ 128 bits, `num_challenges = 2`).
 /// Everything else (wires, arity, cap height) keeps the recursion-friendly
 /// defaults.
+///
+/// Zero knowledge follows the `zk` cargo feature (on by default, like the
+/// plonky3 backend): plonky2 then adds random blinding rows for the wires and
+/// for Z / the partial products, and salts the wires, Z and quotient Merkle
+/// leaves. That makes every circuit at least 2^14 rows (about 10.7k blinding
+/// rows at 36 queries). The Z blinding needs plonky2's `blind()` fix
+/// (`connect`, not `generate_copy`, between each blinding pair);
+/// `tests/zk_blinding.rs` checks it. The hiding is plonky2's standard heuristic
+/// ZK: quotient chunks are only salted, and lookup polynomials are not blinded
+/// at all, which [`build_circuit`] guards against.
 pub fn circuit_config() -> CircuitConfig {
     let mut config = CircuitConfig::standard_recursion_config();
     config.security_bits = 124;
     config.fri_config.num_query_rounds = 36;
+    config.zero_knowledge = cfg!(feature = "zk");
     config
+}
+
+/// Build a circuit, checking that it is safe to publish under zero knowledge.
+/// Every circuit in this crate is built through this function.
+pub fn build_circuit(builder: CircuitBuilder<F, D>) -> CircuitData<F, C, D> {
+    let data = builder.build::<C>();
+    assert_zk_safe(&data.common);
+    data
+}
+
+/// Under `zero_knowledge`, require that the circuit uses no plonky2 lookups:
+/// plonky2 computes its lookup polynomials (RE and the partial SLDCs) only from
+/// the lookup and table rows, so the blinding rows do not randomize them and they
+/// would leak the looked-up witness values.
+pub fn assert_zk_safe(common: &CommonCircuitData<F, D>) {
+    if common.config.zero_knowledge {
+        assert!(
+            common.num_lookup_polys == 0 && common.luts.is_empty(),
+            "zero-knowledge circuit uses plonky2 lookups ({} lookup polys, {} tables), \
+             whose polynomials plonky2 does not blind",
+            common.num_lookup_polys,
+            common.luts.len()
+        );
+    }
 }

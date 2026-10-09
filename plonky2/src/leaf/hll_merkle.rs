@@ -238,7 +238,7 @@ pub fn build_hll_merkle_leaf(params: HllMerkleParams) -> HllMerkleLeaf {
         b.verify_merkle_proof::<PoseidonHash>(vec![op_new[c]], &op_pos_bits[c], r_out, &op_proof[c]);
     }
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     HllMerkleLeaf {
         data,
         t: Tgt {

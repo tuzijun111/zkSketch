@@ -284,7 +284,7 @@ pub fn build_hll_omc_leaf(params: HllOmcParams) -> HllOmcLeaf {
         &[&addr_out, &val_out, &ts_out, &tag_out],
     );
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     HllOmcLeaf {
         data,
         t: Tgt {

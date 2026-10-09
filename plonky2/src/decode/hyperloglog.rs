@@ -226,7 +226,7 @@ pub fn build_hll_decode(params: HllDecodeParams) -> HllDecodeLeaf {
         }
     };
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     HllDecodeLeaf { data, t: Tgt { commit, answer, cells, sel, invz, flag }, params }
 }
 

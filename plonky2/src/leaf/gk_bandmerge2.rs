@@ -428,7 +428,7 @@ pub fn build_gk2_bm2_leaf(params: Gk2Params) -> Gk2Bm2Leaf {
     let np_plus_b = b.add(n_prev, count_batch);
     b.connect(np_plus_b, n_t);
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     Gk2Bm2Leaf {
         data,
         t: Tgt {

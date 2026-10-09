@@ -39,7 +39,7 @@ pub fn build_fib_leaf(num_steps: usize) -> FibLeaf {
     builder.register_public_input(a);
     builder.register_public_input(b);
 
-    let data = builder.build::<C>();
+    let data = crate::config::build_circuit(builder);
     FibLeaf { data, a0, b0 }
 }
 
@@ -78,7 +78,7 @@ mod tests {
         let pt = builder.add_virtual_proof_with_pis(&leaf.data.common);
         let vdt = builder.add_virtual_verifier_data(leaf.data.common.config.fri_config.cap_height);
         builder.verify_proof::<C>(&pt, &vdt, &leaf.data.common);
-        let outer = builder.build::<C>();
+        let outer = crate::config::build_circuit(builder);
 
         let mut pw = PartialWitness::<F>::new();
         pw.set_proof_with_pis_target(&pt, &inner)?;
