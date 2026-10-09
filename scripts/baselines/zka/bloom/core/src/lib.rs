@@ -276,6 +276,23 @@ pub fn run_bloom_query(input: &BloomQueryInput) -> BloomQueryOutput {
     run_bloom_query_probed(input, &mut || {})
 }
 
+/// OR a packed filter (`BLOOM_BYTES` bytes) into `merged`, one native-endian u32 word at
+/// a time. The deserialized byte buffer is 4-aligned in practice, so the word view covers
+/// all of it; an unaligned buffer takes the same word-wise path through `chunks_exact`.
+fn or_words_into(merged: &mut [u32], bits: &[u8]) {
+    // SAFETY: every bit pattern is a valid u32; `align_to` returns only the aligned middle.
+    let (head, words, tail) = unsafe { bits.align_to::<u32>() };
+    if head.is_empty() && tail.is_empty() && words.len() == merged.len() {
+        for (m, &w) in merged.iter_mut().zip(words) {
+            *m |= w;
+        }
+    } else {
+        for (m, c) in merged.iter_mut().zip(bits.chunks_exact(4)) {
+            *m |= u32::from_ne_bytes([c[0], c[1], c[2], c[3]]);
+        }
+    }
+}
+
 /// Query with a phase probe (4 calls: chain links, state commits, merge, answer).
 pub fn run_bloom_query_probed(input: &BloomQueryInput, probe: &mut dyn FnMut()) -> BloomQueryOutput {
     let epochs = input.epoch_states.len();
@@ -316,19 +333,20 @@ pub fn run_bloom_query_probed(input: &BloomQueryInput, probe: &mut dyn FnMut()) 
         .collect();
 
     // --- merge at query time: filters by bitwise OR (the Bloom union), counts by sum
-    let mut merged = vec![0u8; BLOOM_BYTES];
+    // OR a 32-bit word at a time, as upstream's CM merge works on u32 elements.
+    let mut merged = vec![0u32; BLOOM_BYTES / 4];
     let mut support = 0u64;
     for state in &input.epoch_states {
         assert!(state.bits.len() == BLOOM_BYTES, "epoch state has {} bytes, expected {}", state.bits.len(), BLOOM_BYTES);
         support = support.wrapping_add(state.total_count);
-        for (m, &b) in merged.iter_mut().zip(state.bits.iter()) {
-            *m |= b;
-        }
+        or_words_into(&mut merged, &state.bits);
     }
     probe(); // phase 3: merge
 
+    // SAFETY: every bit pattern is a valid u8, and a u32 slice is always u8-aligned.
+    let merged_bytes: &[u8] = unsafe { merged.align_to::<u8>().1 };
     let result = match input.query {
-        BloomQuery::Contains { key } => BloomQueryResult::Contains { key, member: bloom_contains(&merged, &key) },
+        BloomQuery::Contains { key } => BloomQueryResult::Contains { key, member: bloom_contains(merged_bytes, &key) },
     };
     probe(); // phase 4: answer
 

@@ -174,6 +174,14 @@ state has a fixed size; first number = `first` probe (inserted, answered
 `bloom_query_words` returns the same journal; its extra phase `convert` copies the
 words into the packed bytes:
 
+**Update (2026-10-09): the query now ORs the filters a 32-bit word at a time** (as
+upstream's CM merge works on u32 elements); the byte loop below cost 100,810 cycles per
+epoch. Executor re-run at 8 x 2,048 AOL records, journal equal to native on every row:
+`bloom_query` 104,907 / 104,842 (n = 1), 192,870 / 192,805 (n = 2), 368,796 (n = 4),
+720,648 (n = 8, 1 segment); `bloom_query_words` 705,882 (n = 1) to 5,526,880 (n = 8, 6
+segments). The table and the n = 2 increment below are the pre-fix validation run,
+kept for the record.
+
 | guest | n | user cycles | segments (po2) | read | convert | links | commits | merge (OR) | answer |
 |---|---|---|---|---|---|---|---|---|---|
 | `bloom_query` | 1 | 180,159 / 180,094 | 1 (18) | 23,043 | - | 1,427 | 38,724 | 100,810 | 712 / 647 |
@@ -184,8 +192,8 @@ words into the packed bytes:
 - The increment from n = 1 to n = 2 is 163,219 cycles per epoch for `bloom_query`
   (read ~20K, commit recomputation ~39K, OR merge ~101K, chain link ~1.5K) and
   760,386 for `bloom_query_words` (read ~556K, convert ~61K). Linear extrapolation to
-  the planned n = 8 gives ~1.3M cycles (2 segments) for `bloom_query`; that is an
-  extrapolation, not a run.
+  the planned n = 8 gave ~1.3M cycles (2 segments) for the byte-loop `bloom_query`;
+  the word-wise merge measures 720,648 cycles (1 segment) at n = 8 (update above).
 - Merged 2-epoch filter at 2,048 records per epoch: 15,430 bits set (13.45%),
   `fpr_fill` 8.0e-7, `fpr_theory` 8.1e-7, 0 false positives in 10,000 absent keys
   (expected 0.008). At the planned 8 x 2,048 records (8,433 distinct AOL keys) the
@@ -252,9 +260,11 @@ proved journal was asserted equal to the native output:
   words directly would save most of that, so read the words rows as an upper bound of
   a direct port (minus ~61K per epoch). The packed form is the headline: it is the
   cheaper (conservative) baseline, as for HLL.
-- **Byte-wise OR merge.** The query merges with a byte loop, ~7 cycles per byte
-  (100,810 cycles per epoch). A word-wise OR would need the bytes converted, which
-  costs about what it saves in safe Rust; no `unsafe` reinterpretation is used.
+- **Word-wise OR merge.** The query ORs each filter into the merged one a native u32
+  word at a time over the aligned view of the deserialized buffer (`align_to`, with a
+  `chunks_exact` fallback), as upstream's CM merge works on u32 words. The first build
+  used a byte loop (~7 cycles per byte, 100,810 cycles per epoch); the word OR cut the
+  n = 1 query from 180,159 to 104,907 cycles and n = 2 from 343,378 to 192,870.
 - **Aggregation is dominated by their input format.** About 69% of `bloom_aggr`'s
   cycles deserialize their `Event` batches (~3,710 cycles per record, the same as the
   HLL port) and 20% verify the batch chain. Any summary in their framework pays this.

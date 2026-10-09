@@ -206,7 +206,7 @@ proved journal was asserted equal to the native output:
   "zk-Analytics' KMV".
 - **Data-dependent cost.** Plain code, no padding: the update phase depends on how
   many records enter or evict from the ordered set (epochs 0 and 1 at 2,048 records:
-  1,107,941 vs 1,101,290 cycles), and the merge on how the epoch sets interleave.
+  1,111,918 vs 1,105,266 cycles), and the merge on how the epoch sets interleave.
   Cycles leak input properties, exactly as in their guests.
 - **The state encoding is a ~2.8x lever on the query (measured).** risc0's serde
   reads a plain `Vec<u64>` one word at a time (~150 cycles per word, 2 words per

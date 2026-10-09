@@ -704,10 +704,10 @@ accuracy checks. Rows: `results/zka_{bloom,kmv}_validation.csv` (26 and 18 rows,
 |---|---|---|---|---|---|---|
 | `bloom_aggr` † | 256 | 1 (epoch 0) | 1,445,193 | 2 | 5,645 / rec | 0 false negatives; 0 / 10,000 FP |
 | `bloom_aggr` † | 2,048 | 1 (epoch 0) | 11,091,937 | 12 | 5,416 / rec (update 543) | 0 false negatives; 0 / 10,000 FP |
-| `bloom_query` † | 256 or 2,048 | 1 | 180,159 | 1 (po2 18) | - | inserted key: true; absent key: false |
-| `bloom_query` † | 256 or 2,048 | 2 | 343,378 | 1 (po2 19) | +163,219 / epoch | inserted key: true; absent key: false |
-| `bloom_query_words` † | 256 or 2,048 | 1 | 777,550 | 1 (po2 20) | - | same journal as `bloom_query` |
-| `bloom_query_words` † | 256 or 2,048 | 2 | 1,537,936 | 2 | +760,386 / epoch | same journal as `bloom_query` |
+| `bloom_query` † | 256 or 2,048 | 1 | 104,907 (byte-loop merge: 180,159) | 1 | - | inserted key: true; absent key: false |
+| `bloom_query` † | 256 or 2,048 | 2 | 192,870 (byte-loop merge: 343,378) | 1 | +87,963 / epoch | inserted key: true; absent key: false |
+| `bloom_query_words` † | 256 or 2,048 | 1 | 705,882 (byte-loop merge: 777,550) | 1 | - | same journal as `bloom_query` |
+| `bloom_query_words` † | 256 or 2,048 | 2 | 1,394,596 (byte-loop merge: 1,537,936) | 2 | +688,714 / epoch | same journal as `bloom_query` |
 | `kmv_aggr` † | 256 | 1 (epoch 0) | 1,404,153 | 2 | 5,485 / rec | 174 = exact (exact branch) |
 | `kmv_aggr` † | 2,048 | 1 (epoch 0) | 11,104,487 | 12 | 5,422 / rec (update 543) | 1,232 vs 1,234 (-0.16%) |
 | `kmv_query` † | 2,048 | 1 | 151,365 | 1 (po2 18) | - | 1,232 vs 1,234 (-0.16%) |
