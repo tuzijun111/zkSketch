@@ -144,7 +144,11 @@
 #                        27-bit key hashes kept (default 1024): a multiple of 4
 #                        in 4..=32768 with k + m < 2^24; set e.g. 4 for quick
 #                        smokes. A bad value exits 2 with the reason. CSV shape
-#                        column: k{k}.
+#                        column: k{k}. The KMV leaf and decoder take
+#                        ZKSKETCH_BINDING=semantic|bound; there is no pre-fix
+#                        KMV circuit, so legacy builds the semantic one (a
+#                        legacy kmv row reports the semantic cost; the CSV has
+#                        no binding column).
 #   EXP_DATASET          uniform|gaussian|zipf|aol|netflix        (default uniform)
 #   EXP_OUT / $1         rename output to results/<name>.csv
 #   --- commitments (plonky3; revision B2, see README) ---

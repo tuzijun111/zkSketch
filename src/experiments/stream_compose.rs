@@ -2365,8 +2365,9 @@ mod tests {
         assert!(r.is_err(), "chain root vs another seed's log");
     }
 
-    /// The binding fails closed, for Count-Min and the Bloom filter, under
-    /// both commitment modes: a query answered against the state at t' is
+    /// The binding fails closed, for Count-Min, the Bloom filter and the
+    /// KMV sketch (its keyless 12-value statement), under both commitment
+    /// modes: a query answered against the state at t' is
     /// rejected with the certificate of t'-1 (stale peaks), with a certificate
     /// over a different batch log, and when its exposed Com(S) is not the
     /// certified one. The log is the one the prover publishes (under `Hiding`
@@ -2381,7 +2382,7 @@ mod tests {
         let (sh, m) = (shape(), 4usize);
         for commit in both_modes() {
             let tag = commit.label();
-            for fam in [StreamFamily::CmOmc, StreamFamily::BloomOmc] {
+            for fam in [StreamFamily::CmOmc, StreamFamily::BloomOmc, StreamFamily::KmvSketch] {
                 let batches: Vec<Vec<u32>> =
                     (0..3u32).map(|i| (1..=4).map(|k| k * 5 + i * 11).collect()).collect();
                 let Some(mut audit) = QueryAudit::new(fam, &sh, m, commit.mode()) else {

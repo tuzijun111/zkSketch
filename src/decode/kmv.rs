@@ -603,7 +603,8 @@ mod tests {
     /// plain one — each mode's proof fails the other mode's VK. The salt is a
     /// witness (no salt value is a public value; +3 ALU rows, its creators),
     /// and the public zero salt opens only the empty genesis state. `Plain`
-    /// through the commit API is the pre-B2 decoder.
+    /// through the commit API is the pre-B2 decoder. Under both `Semantic`
+    /// and `Bound` (the salted sponge with the bound zero IV).
     #[test]
     fn hiding_decode_exposes_hiding_commit_and_pins_to_the_hiding_vk() {
         use crate::commitment::hiding::probe::{leaked_salts, proof_alu_rows};
@@ -611,36 +612,37 @@ mod tests {
         use crate::recursion::recursive::statement::Expose;
         use crate::sketch::kmv::{KmvParams, build_kmv_leaf_commit};
         let params = KmvDecodeParams { k: 4, release: ReleasePolicy::Identity };
-        let sem = Binding::Semantic;
-        let seed = SaltSeed::for_tests(61);
-        let t = 2u64;
-        let s1 = kmv_advance(&KmvState::empty(4), &[1, 2, 3]);
-        let leaf = build_kmv_leaf_commit(KmvParams { k: 4, batch: 4 }, Expose::Interval, sem, CommitMode::Hiding)
-            .prove_epoch_commit(t, s1, vec![4, 5, 1], &Openings::for_leaf(&seed, CommitFamily::Kmv, t));
-        let s2 = leaf.final_state.clone();
-        let salt = rho_state_bb(&seed, CommitFamily::Kmv, t);
-        let (vk_h, vk_p) = (kmv_decode_vk_commit(params, sem, CommitMode::Hiding), kmv_decode_vk(params, sem));
-        assert_ne!(vk_h.commitment, vk_p.commitment, "the hiding decoder is another circuit");
-        let q = prove_kmv_decode_commit(params, &s2, sem, CommitMode::Hiding, &salt);
-        let st = verify_kmv_decode_proof(&q.output.0, &vk_h).expect("hiding proof under the hiding pin");
-        assert_eq!(st, KmvStatement::new(leaf.final_commit, kmv_estimate(&s2)), "exposes leaf t's final");
-        assert_eq!(st.commit, commit_kmv_state_with(&s2, CommitMode::Hiding, &salt));
-        assert!(verify_kmv_decode_proof(&q.output.0, &vk_p).is_err(), "the plain VK rejects a hiding proof");
-        let p = prove_kmv_decode_with(params, &s2, sem);
-        assert!(verify_kmv_decode_proof(&p.output.0, &vk_h).is_err(), "the hiding VK rejects a plain proof");
-        assert_eq!(proof_alu_rows(&q.output.0), proof_alu_rows(&p.output.0) + 3, "the salt's 3 ALU creators");
-        assert_eq!(leaked_salts(&q.output.0, &[salt]), vec![], "no salt in the public values");
-        // The zero salt opens only the empty genesis state.
-        let r = forge::catch_msg(|| prove_kmv_decode_commit(params, &s2, sem, CommitMode::Hiding, &SaltBb::ZERO).answer);
-        assert!(r.is_err_and(|e| e.contains("public zero salt opens only the empty genesis state")));
-        let e = KmvState::empty(4);
-        let g = prove_kmv_decode_commit(params, &e, sem, CommitMode::Hiding, &SaltBb::ZERO);
-        let gs = verify_kmv_decode_proof(&g.output.0, &vk_h).expect("the genesis query under the hiding pin");
-        assert_eq!(gs, KmvStatement::new(commit_kmv_state_with(&e, CommitMode::Hiding, &SaltBb::ZERO), 0));
-        // Plain through the commit API (salt ignored) is the pre-B2 decoder.
-        let pc = prove_kmv_decode_commit(params, &s2, sem, CommitMode::Plain, &salt);
-        let ps = verify_kmv_decode_proof(&pc.output.0, &vk_p).expect("plain proof under the plain pin");
-        assert_eq!(ps, KmvStatement::new(commit_kmv_state(&s2), kmv_estimate(&s2)));
+        for sem in [Binding::Semantic, Binding::Bound] {
+            let seed = SaltSeed::for_tests(61);
+            let t = 2u64;
+            let s1 = kmv_advance(&KmvState::empty(4), &[1, 2, 3]);
+            let leaf = build_kmv_leaf_commit(KmvParams { k: 4, batch: 4 }, Expose::Interval, sem, CommitMode::Hiding)
+                .prove_epoch_commit(t, s1, vec![4, 5, 1], &Openings::for_leaf(&seed, CommitFamily::Kmv, t));
+            let s2 = leaf.final_state.clone();
+            let salt = rho_state_bb(&seed, CommitFamily::Kmv, t);
+            let (vk_h, vk_p) = (kmv_decode_vk_commit(params, sem, CommitMode::Hiding), kmv_decode_vk(params, sem));
+            assert_ne!(vk_h.commitment, vk_p.commitment, "the hiding decoder is another circuit");
+            let q = prove_kmv_decode_commit(params, &s2, sem, CommitMode::Hiding, &salt);
+            let st = verify_kmv_decode_proof(&q.output.0, &vk_h).expect("hiding proof under the hiding pin");
+            assert_eq!(st, KmvStatement::new(leaf.final_commit, kmv_estimate(&s2)), "{sem:?}: exposes leaf t's final");
+            assert_eq!(st.commit, commit_kmv_state_with(&s2, CommitMode::Hiding, &salt));
+            assert!(verify_kmv_decode_proof(&q.output.0, &vk_p).is_err(), "the plain VK rejects a hiding proof");
+            let p = prove_kmv_decode_with(params, &s2, sem);
+            assert!(verify_kmv_decode_proof(&p.output.0, &vk_h).is_err(), "the hiding VK rejects a plain proof");
+            assert_eq!(proof_alu_rows(&q.output.0), proof_alu_rows(&p.output.0) + 3, "{sem:?}: the salt's 3 ALU creators");
+            assert_eq!(leaked_salts(&q.output.0, &[salt]), vec![], "no salt in the public values");
+            // The zero salt opens only the empty genesis state.
+            let r = forge::catch_msg(|| prove_kmv_decode_commit(params, &s2, sem, CommitMode::Hiding, &SaltBb::ZERO).answer);
+            assert!(r.is_err_and(|e| e.contains("public zero salt opens only the empty genesis state")));
+            let e = KmvState::empty(4);
+            let g = prove_kmv_decode_commit(params, &e, sem, CommitMode::Hiding, &SaltBb::ZERO);
+            let gs = verify_kmv_decode_proof(&g.output.0, &vk_h).expect("the genesis query under the hiding pin");
+            assert_eq!(gs, KmvStatement::new(commit_kmv_state_with(&e, CommitMode::Hiding, &SaltBb::ZERO), 0));
+            // Plain through the commit API (salt ignored) is the pre-B2 decoder.
+            let pc = prove_kmv_decode_commit(params, &s2, sem, CommitMode::Plain, &salt);
+            let ps = verify_kmv_decode_proof(&pc.output.0, &vk_p).expect("plain proof under the plain pin");
+            assert_eq!(ps, KmvStatement::new(commit_kmv_state(&s2), kmv_estimate(&s2)));
+        }
     }
 
     /// `Binding::Legacy` (a `ZKSKETCH_BINDING=legacy` run) builds the Semantic

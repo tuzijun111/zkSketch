@@ -4198,6 +4198,11 @@ mod tests {
                 FamState::Bloom(p, bits) => crate::sketch::bloom_omc::build_bloom_omc_leaf_expose(*p, expose)
                     .prove_epoch_at(1, bits, &bloom_keys_of(&batch))
                     .output,
+                // Always passes: `build_kmv_leaf_expose` is
+                // `build_kmv_leaf_commit(.., Plain)` on this branch, so this
+                // arm only checks the harness dispatch. The pre-B2 KMV guard
+                // is the pinned fingerprints (`plain_noop_leaf_vks_are_pinned`
+                // and `plain_kmv_vks_are_pinned_through_the_commit_api`).
                 FamState::Kmv(p, s) => crate::sketch::kmv::build_kmv_leaf_expose(*p, expose, binding)
                     .prove_records_at(1, s.clone(), kmv_records_of(&batch))
                     .output,

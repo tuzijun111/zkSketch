@@ -7,8 +7,8 @@
 //! child spawned as a worker serves its role through
 //! [`maybe_run_child`] and never reaches the scenarios. Each scenario folds a
 //! small forest over 4 pinned machines in 2 waves of 2 (intra-wave and
-//! cross-wave rounds), for Count-Min and the Bloom filter under both
-//! commitment modes, then requires every query to be pinned to the decoder VK
+//! cross-wave rounds), for Count-Min, the Bloom filter and the KMV sketch
+//! under both commitment modes, then requires every query to be pinned to the decoder VK
 //! of the run's commitment mode and bound (`query_bind_ms` set) against the
 //! batch log the prover published (salted under `Hiding`). A few minutes on
 //! a many-core machine (each machine gets up to 4 cores).
@@ -47,7 +47,7 @@ fn main() {
     // SAFETY: no other thread reads the environment yet (no worker, pool or
     // reader thread is alive); the engine reads the knob at dispatch.
     unsafe { std::env::set_var("EXP_COMPOSE_WAVE_SIZE", wave.to_string()) };
-    for family in [StreamFamily::CmOmc, StreamFamily::BloomOmc] {
+    for family in [StreamFamily::CmOmc, StreamFamily::BloomOmc, StreamFamily::KmvSketch] {
         for commit in [ProverCommit::plain(), ProverCommit::hiding(SaltSeed::for_tests(41))] {
             runs += 1;
             let label = format!("wave={wave} cores={cores} {family:?} commit={}", commit.label());

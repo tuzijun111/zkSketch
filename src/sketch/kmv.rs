@@ -2408,11 +2408,34 @@ mod tests {
         /// The Plain leaf through the commit API is the pre-B2 leaf (same VK
         /// and commitments as the `*_expose` builder, every layout); the hiding
         /// VK differs, does not depend on the salts, and is the zero-salt no-op
-        /// leaf's. A hiding leaf costs exactly +9 ALU rows (3 salts) and
-        /// exposes no salt value.
+        /// leaf's. A hiding leaf costs exactly +9 ALU rows (3 salts), exposes
+        /// no salt value and no plaintext state or batch data (the prior and
+        /// final values and packed rows, the keys, their record limbs and
+        /// hashes, and the plain `Com(S)` / `Com(B)` a dictionary attack
+        /// would test against); controls: the scans see the statement, and
+        /// the Plain leaf's exposed plain commitments.
         #[test]
         fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
-            let (pr, keys) = (prior(), vec![5u64, 66]);
+            use crate::commitment::hiding::probe::public_values;
+            // Keys whose limbs differ from the public batch index t = 5.
+            let (pr, keys) = (prior(), vec![505u64, 66]);
+            let fin = kmv_advance(&pr, &keys);
+            let plain_commits: Vec<Val> =
+                [commit_kmv_state(&pr), commit_kmv_state(&fin), commit_kmv_batch(&HP, &keys)].concat();
+            let mut plaintext: Vec<Val> = plain_commits.clone();
+            for st in [&pr, &fin] {
+                plaintext.extend(st.vals.iter().map(|&h| Val::from_u64(h as u64)));
+                plaintext.extend(st.rows().into_iter().filter(|r| r.1 == 1).map(row_value));
+            }
+            for &key in &keys {
+                plaintext.push(Val::from_u64(key));
+                plaintext.push(Val::from_u64(kmv_hash(key) as u64));
+                plaintext.extend(record_vals(rec_raw(Some(key))));
+            }
+            let seen = |o: &KmvProof, vals: &[Val]| -> Vec<Val> {
+                let pv = public_values(&o.output.0);
+                vals.iter().copied().filter(|v| *v != Val::ZERO && pv.contains(v)).collect()
+            };
             let vk = |o: &KmvProof| vk_pin_values(&o.output.0);
             let sem = Binding::Semantic;
             for expose in [Expose::None, Expose::Boundary, Expose::Interval] {
@@ -2438,10 +2461,13 @@ mod tests {
                 assert_eq!(vk(&a), vk(&b), "{expose:?}: salt-independent VK");
                 assert_eq!(proof_alu_rows(&a.output.0), proof_alu_rows(&old.output.0) + 9, "{expose:?}: ALU rows");
                 assert_eq!(leaked_salts(&a.output.0, &[o5.init, o5.final_, o5.batch]), vec![], "{expose:?}");
+                assert_eq!(seen(&a, &plaintext), vec![], "{expose:?}: plaintext state / batch data published");
                 if expose != Expose::None {
                     let mut control = SaltBb::ZERO;
                     control.0[0] = a.final_commit[0];
                     assert!(!leaked_salts(&a.output.0, &[control]).is_empty(), "{expose:?}: the scan sees the statement");
+                    assert!(!seen(&a, &a.final_commit).is_empty(), "{expose:?}: the plaintext scan sees the statement");
+                    assert!(!seen(&old, &plain_commits).is_empty(), "{expose:?}: a Plain leaf publishes plain commitments");
                     assert_eq!(vk_pin_values(&kmv_noop_leaf_expose(HP, expose, sem)), vk(&old));
                     assert_eq!(vk_pin_values(&kmv_noop_leaf_commit(HP, expose, sem, CommitMode::Plain)), vk(&old));
                     assert_eq!(vk_pin_values(&kmv_noop_leaf_commit(HP, expose, sem, HIDING)), vk(&a));

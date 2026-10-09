@@ -482,11 +482,11 @@ pub fn check_query_exposure(
                 .iter()
                 .map(|e| &e.public_values)
                 .find(|v| v.len() == 12)
-                .unwrap_or_else(|| panic!("hll query proof at t'={at_leaf} exposes no (Com(S), answer)"));
-            assert_eq!(&pv[..8], &commit[..], "hll query proof at t'={at_leaf}: exposed Com(S)");
+                .unwrap_or_else(|| panic!("keyless (hll/kmv) query proof at t'={at_leaf} exposes no (Com(S), answer)"));
+            assert_eq!(&pv[..8], &commit[..], "keyless (hll/kmv) query proof at t'={at_leaf}: exposed Com(S)");
             use p3_field::PrimeCharacteristicRing;
-            assert_eq!(pv[8], Val::from_u64(dp.answer), "hll query proof at t'={at_leaf}: exposed answer");
-            assert!(pv[9..].iter().all(|v| *v == Val::ZERO), "hll answer must be a base element");
+            assert_eq!(pv[8], Val::from_u64(dp.answer), "keyless (hll/kmv) query proof at t'={at_leaf}: exposed answer");
+            assert!(pv[9..].iter().all(|v| *v == Val::ZERO), "keyless (hll/kmv) answer must be a base element");
         }
     }
 }
