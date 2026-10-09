@@ -52,14 +52,17 @@ fn cost_is_capacity_governed() {
     assert!(grows(gk_big, gk_small), "GK bandmerge2: circuit must grow with capacity");
 
     if cfg!(feature = "zk") {
-        // Capacities that cross the 2^14 zk floor (measured: CM d·w 4096, HLL 2^12
-        // and GK cap 60 reach 2^15; SS is still on the floor at cap 512).
+        // Capacities that cross the 2^14 zk floor (measured: CM d·w 4096, HLL 2^12,
+        // SS cap 1024 and GK cap 60 reach 2^15; SS is still on the floor at cap 512).
         let cm_huge = build_countmin_omc_leaf(CmOmcParams { d: 2, w: 2048, batch: 2 }).data.common.degree_bits();
         let hll_huge = build_hll_omc_leaf(HllOmcParams { b: 12, batch: 4 }).data.common.degree_bits();
+        let ss_huge = build_spacesaving_leaf(SsLeafParams { capacity: 1024, batch: 4 }).data.common.degree_bits();
         println!("  zk, past the 2^14 floor: cm_omc d·w 8 → 4096: {cm_small} → {cm_huge}");
         println!("  zk, past the 2^14 floor: hll_omc 2^b 8 → 4096: {hll_small} → {hll_huge}");
+        println!("  zk, past the 2^14 floor: ss_certified cap 4 → 1024: {ss_small} → {ss_huge}");
         assert!(cm_huge > cm_small, "CM omc (zk): circuit must grow with capacity d·w past the floor");
         assert!(hll_huge > hll_small, "HLL omc (zk): circuit must grow with capacity 2^b past the floor");
+        assert!(ss_huge > ss_small, "SS certified (zk): circuit must grow with capacity past the floor");
         assert!(gk_big > gk_small, "GK bandmerge2 (zk): circuit must grow with capacity past the floor");
     }
 }

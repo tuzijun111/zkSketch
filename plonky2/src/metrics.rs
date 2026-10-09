@@ -242,8 +242,53 @@ fn json_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Where this build's plonky2 comes from, as far as the crate can tell at run
+/// time. With a local `[patch]` in `<crate>/.cargo/config.toml` (the plonky2 fork
+/// carrying the Z-blinding fix), that path plus the fork's `HEAD` and whether its
+/// tracked files have uncommitted changes, since the patch points at a mutable
+/// working tree. Without one, the git rev pinned in `Cargo.toml`. Read when
+/// `env.json` is written, so it describes the build only if neither file changed
+/// in between (a `cargo run` rebuilds on such changes).
+fn plonky2_source() -> String {
+    let quoted_after = |line: &str, key: &str| -> Option<String> {
+        let rest = &line[line.find(key)? + key.len()..];
+        let start = rest.find('"')? + 1;
+        Some(rest[start..start + rest[start..].find('"')?].to_string())
+    };
+    let is_plonky2 = |line: &str| line.trim_start().strip_prefix("plonky2").is_some_and(|r| r.trim_start().starts_with('='));
+    let config = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/.cargo/config.toml")).unwrap_or_default();
+    if let Some(path) = config.lines().filter(|l| is_plonky2(l)).find_map(|l| quoted_after(l, "path")) {
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(args)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+        };
+        let rev = git(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
+        let dirty = match git(&["status", "--porcelain", "--untracked-files=no"]) {
+            Some(s) if s.is_empty() => "",
+            Some(_) => " (uncommitted changes)",
+            None => " (git status unknown)",
+        };
+        return format!("[patch] path {path} at {rev}{dirty}");
+    }
+    let manifest = include_str!("../Cargo.toml");
+    match manifest.lines().filter(|l| is_plonky2(l)).find_map(|l| quoted_after(l, "rev")) {
+        Some(rev) => format!("Cargo.toml git rev {rev}"),
+        None => "unknown".into(),
+    }
+}
+
 /// Write `env.json` capturing the machine + backend environment. `extras` are
 /// backend-specific `(key, value)` pairs (field, hash, FRI params, commit hash).
+/// Every file also records whether the circuits were built with zero knowledge
+/// (the `zk` feature, which changes proof size and time several-fold) and where
+/// plonky2 came from ([`plonky2_source`]).
 pub fn write_env_json(dir: &std::path::Path, extras: &[(&str, String)]) -> std::path::PathBuf {
     std::fs::create_dir_all(dir).expect("create results dir");
     let cores = thread::available_parallelism().map(|n| n.get()).unwrap_or(0);
@@ -264,6 +309,8 @@ pub fn write_env_json(dir: &std::path::Path, extras: &[(&str, String)]) -> std::
         ("cpu_model".into(), cpu),
         ("mem_total".into(), mem),
         ("rustc".into(), rustc),
+        ("zero_knowledge".into(), cfg!(feature = "zk").to_string()),
+        ("plonky2_source".into(), plonky2_source()),
     ];
     for (k, v) in extras {
         pairs.push((k.to_string(), v.clone()));
@@ -365,5 +412,17 @@ mod tests {
         assert_eq!(row.constraint_count, 64);
         assert_eq!(row.proof_size_bytes, 123);
         assert!(row.prove_total_ms_median >= 3.0);
+    }
+
+    #[test]
+    fn env_json_records_zk_and_plonky2_source() {
+        let dir = std::env::temp_dir().join(format!("zksketch_snark_env_{}", std::process::id()));
+        let json = std::fs::read_to_string(write_env_json(&dir, &[("experiment", "unit".into())])).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(json.contains(&format!("\"zero_knowledge\": \"{}\"", cfg!(feature = "zk"))), "{json}");
+        let source = plonky2_source();
+        println!("plonky2_source: {source}");
+        assert!(source.starts_with("[patch] path ") || source.starts_with("Cargo.toml git rev "), "{source}");
+        assert!(json.contains("\"plonky2_source\": "), "{json}");
     }
 }
