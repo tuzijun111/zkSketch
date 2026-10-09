@@ -118,6 +118,27 @@
 //!   Interval layout is [`statement::expose_leaf_interval`] over the
 //!   in-circuit batch digest with [`IndexPin::Range`].
 //!
+//! ## Hiding commitments (revision B2)
+//!
+//! [`build_kmv_leaf_commit`] takes a [`CommitMode`]. `Plain` is the leaf
+//! above op for op (no new op, same VK: [`build_kmv_leaf_expose`] delegates
+//! to it). Under `Hiding` the three commitments absorb the prefix `[kind,
+//! family, 0, 0, ρ_0..ρ_11]` of [`crate::commitment::hiding`] (tag
+//! `TAG_STATE` / `TAG_BATCH`, family [`CommitFamily::Kmv`] = 6) before the
+//! same header and rows / records, with the three salts (init, final, batch)
+//! the FIRST private inputs; natively [`commit_kmv_state_with`],
+//! [`commit_kmv_rows_with`] and [`kmv_batch_commit_with`]. The salts are
+//! witnesses (each gets an ALU creator, [`hiding::alloc_salt_targets`]),
+//! hashed with the leaf's own sponge under its binding
+//! ([`hiding::commit_hash`]), so binding holds for every `ρ`. A hiding leaf
+//! is proved with [`KmvLeafCircuit::prove_epoch_commit`] (or
+//! [`KmvLeafCircuit::prove_records_commit`]) and the prover's openings of
+//! leaf `t`; `prove_epoch_at` / `prove_records_at` refuse to run on it, and
+//! the one zero-salt path, [`KmvLeafCircuit::prove_records_public_zero`],
+//! accepts only the public no-op input of the VK-derivation leaf (the empty
+//! state and an all-dummy batch at `t = 1`). The decoder twin is
+//! [`crate::decode::kmv::prove_kmv_decode_commit`].
+//!
 //! ## Binding
 //!
 //! The state values, records and certificate tables are base-pinned private
@@ -172,6 +193,9 @@ use p3_recursion::RecursionOutput;
 use p3_symmetric::CryptographicHasher;
 use p3_uni_stark::StarkGenericConfig;
 
+use crate::commitment::hiding::{
+    self, CommitFamily, CommitKind, CommitMode, Openings, SaltBb, SaltTargets,
+};
 use crate::config::{Challenge, LOG_BLOWUP, MyHash, Val, make_perm};
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::countmin_leaf::{DIGEST_PACKING, make_leaf_config};
@@ -261,16 +285,23 @@ impl KmvParams {
         self.k + self.batch
     }
     pub fn validate(&self) {
-        assert!(
-            self.k >= 4 && self.k.is_multiple_of(4) && self.k <= MAX_K,
-            "k must be a multiple of 4 in 4..={MAX_K}, got {}",
-            self.k
-        );
-        assert!(self.batch >= 1, "batch must be ≥ 1");
-        assert!(
-            self.union_size() < (1usize << COUNT_BITS),
-            "k + batch must be < 2^{COUNT_BITS}"
-        );
+        if let Err(e) = self.check() {
+            panic!("{e}");
+        }
+    }
+    /// [`Self::validate`] without the panic: the reason a shape is rejected,
+    /// for callers that report bad configuration instead of aborting.
+    pub fn check(&self) -> Result<(), String> {
+        if !(self.k >= 4 && self.k.is_multiple_of(4) && self.k <= MAX_K) {
+            return Err(format!("k must be a multiple of 4 in 4..={MAX_K}, got {}", self.k));
+        }
+        if self.batch < 1 {
+            return Err("batch must be ≥ 1".into());
+        }
+        if self.union_size() >= (1usize << COUNT_BITS) {
+            return Err(format!("k + batch must be < 2^{COUNT_BITS}"));
+        }
+        Ok(())
     }
 }
 
@@ -364,19 +395,44 @@ fn row_value((h, act): (u32, u32)) -> Val {
     Val::from_u64(h as u64 + ((act as u64) << HASH_BITS))
 }
 
+/// The flat input of `Com(S)` over explicit rows: `[TAG_KMV_STATE, k, 0, 0]
+/// ‖ p_0 … p_{k−1}` (`4 + k` values, a multiple of 4).
+fn state_flat(k: usize, rows: &[(u32, u32)]) -> Vec<Val> {
+    assert_eq!(rows.len(), k);
+    let mut flat = vec![Val::from_u64(TAG_KMV_STATE), Val::from_u64(k as u64), Val::ZERO, Val::ZERO];
+    flat.extend(rows.iter().map(|&r| row_value(r)));
+    flat
+}
+
 /// `Com(S)` of explicit rows (`k` of them; rows need not be well formed —
 /// the forgery tests commit to malformed states).
 pub fn commit_kmv_rows(k: usize, rows: &[(u32, u32)]) -> [Val; 8] {
-    assert_eq!(rows.len(), k);
     let hasher = MyHash::new(make_perm());
-    let mut flat = vec![Val::from_u64(TAG_KMV_STATE), Val::from_u64(k as u64), Val::ZERO, Val::ZERO];
-    flat.extend(rows.iter().map(|&r| row_value(r)));
-    hasher.hash_iter(flat)
+    hasher.hash_iter(state_flat(k, rows))
 }
 
 /// `Com(S)`.
 pub fn commit_kmv_state(state: &KmvState) -> [Val; 8] {
     commit_kmv_rows(state.k, &state.rows())
+}
+
+/// [`commit_kmv_rows`] under `mode` (revision B2): `Plain` is exactly
+/// [`commit_kmv_rows`] (`salt` ignored); `Hiding` is
+/// `MyHash([TAG_STATE, Kmv, 0, 0, ρ] ‖ [TAG_KMV_STATE, k, 0, 0] ‖ p_0 …)`
+/// over the same flat, the value a hiding leaf exposes for `Com(S; ρ)`.
+pub fn commit_kmv_rows_with(k: usize, rows: &[(u32, u32)], mode: CommitMode, salt: &SaltBb) -> [Val; 8] {
+    match mode {
+        CommitMode::Plain => commit_kmv_rows(k, rows),
+        CommitMode::Hiding => {
+            hiding::commit_flat_bb(mode, CommitKind::State, CommitFamily::Kmv, salt, &state_flat(k, rows))
+        }
+    }
+}
+
+/// [`commit_kmv_state`] under `mode` (revision B2): the `Com(S; ρ)` a hiding
+/// leaf exposes and a hiding distinct-count query opens.
+pub fn commit_kmv_state_with(state: &KmvState, mode: CommitMode, salt: &SaltBb) -> [Val; 8] {
+    commit_kmv_rows_with(state.k, &state.rows(), mode, salt)
 }
 
 /// A record as the circuit sees it: `(key, act)`; a real key is `(x, 1)`,
@@ -402,18 +458,48 @@ pub fn kmv_records(params: &KmvParams, keys: &[u64]) -> Vec<Option<u64>> {
 
 /// `Com(B)` of an explicit record sequence (`params.batch` records).
 pub fn commit_kmv_records(params: &KmvParams, records: &[Option<u64>]) -> [Val; 8] {
-    let raw: Vec<(u64, u32)> = records.iter().map(|&r| rec_raw(r)).collect();
-    commit_records_raw(params, &raw)
+    kmv_batch_commit(params.batch, records)
 }
 
-/// `Com(B)` of raw `(key, act)` records (non-canonical dummies included).
-fn commit_records_raw(params: &KmvParams, records: &[(u64, u32)]) -> [Val; 8] {
-    assert_eq!(records.len(), params.batch);
-    let hasher = MyHash::new(make_perm());
-    let mut flat =
-        vec![Val::from_u64(TAG_KMV_BATCH), Val::from_u64(params.batch as u64), Val::ZERO, Val::ZERO];
+/// [`commit_kmv_records`] from the slot count alone: `Com(B)` depends on the
+/// `batch` record slots, not on the capacity `k`. What a public batch log
+/// lists for the leaf.
+pub fn kmv_batch_commit(batch: usize, records: &[Option<u64>]) -> [Val; 8] {
+    kmv_batch_commit_with(batch, records, CommitMode::Plain, &SaltBb::ZERO)
+}
+
+/// [`kmv_batch_commit`] under `mode` (revision B2): `Plain` is exactly
+/// [`kmv_batch_commit`]; `Hiding` is `MyHash([TAG_BATCH, Kmv, 0, 0, ρ] ‖
+/// [TAG_KMV_BATCH, batch, 0, 0] ‖ rec_0 …)` over the same flat, the
+/// `Com(B_t; ρ^B_t)` a hiding leaf binds and the prover publishes in the
+/// batch log.
+pub fn kmv_batch_commit_with(
+    batch: usize,
+    records: &[Option<u64>],
+    mode: CommitMode,
+    salt: &SaltBb,
+) -> [Val; 8] {
+    let raw: Vec<(u64, u32)> = records.iter().map(|&r| rec_raw(r)).collect();
+    commit_records_raw_with(batch, &raw, mode, salt)
+}
+
+/// The flat input of `Com(B)`: `[TAG_KMV_BATCH, batch, 0, 0] ‖ rec_0 …`
+/// (`4 + 4·batch` values).
+fn batch_flat(batch: usize, records: &[(u64, u32)]) -> Vec<Val> {
+    assert_eq!(records.len(), batch);
+    let mut flat = vec![Val::from_u64(TAG_KMV_BATCH), Val::from_u64(batch as u64), Val::ZERO, Val::ZERO];
     flat.extend(records.iter().flat_map(|&r| record_vals(r)));
-    hasher.hash_iter(flat)
+    flat
+}
+
+/// `Com(B)` of raw `(key, act)` records (non-canonical dummies included)
+/// under `mode` (the `Plain` arm is the pre-B2 commitment, byte for byte).
+fn commit_records_raw_with(batch: usize, records: &[(u64, u32)], mode: CommitMode, salt: &SaltBb) -> [Val; 8] {
+    let flat = batch_flat(batch, records);
+    match mode {
+        CommitMode::Plain => MyHash::new(make_perm()).hash_iter(flat),
+        CommitMode::Hiding => hiding::commit_flat_bb(mode, CommitKind::Batch, CommitFamily::Kmv, salt, &flat),
+    }
 }
 
 /// `Com(B)` of real keys padded with dummies — what the public log publishes.
@@ -671,7 +757,11 @@ pub(crate) fn state_row_gadget(
 /// `Com(S)` of `k` state rows in-circuit: [`state_row_gadget`] per row, four
 /// `p` values per extension element (ALU), then the sponge over the family
 /// header and the packed values. Returns the packed elements and the digest.
-/// `abl` as in [`state_row_gadget`] (the decoder passes 0).
+/// `abl` as in [`state_row_gadget`] (the decoder passes 0). `salt` (revision
+/// B2): `None` is the `Plain` sponge, op for op; `Some` prepends the hiding
+/// prefix `[tag, salt_0, salt_1, salt_2]` ([`hiding::commit_hash`], family
+/// [`CommitFamily::Kmv`]), the in-circuit image of [`commit_kmv_rows_with`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn state_commit_gadget(
     b: &mut CircuitBuilder<Challenge>,
     cfg: &Poseidon2Config,
@@ -680,6 +770,7 @@ pub(crate) fn state_commit_gadget(
     binding: Binding,
     exact: bool,
     abl: u32,
+    salt: Option<&SaltTargets>,
 ) -> (Vec<ExprId>, Vec<ExprId>) {
     assert!(rows.len().is_multiple_of(4));
     let ps: Vec<ExprId> = rows.iter().map(|&r| state_row_gadget(b, r, c, exact, abl)).collect();
@@ -689,7 +780,16 @@ pub(crate) fn state_commit_gadget(
         .collect();
     let mut inputs = vec![c.state_hdr];
     inputs.extend_from_slice(&packs);
-    let digest = bind::hash_slice(b, cfg, &inputs, c.zero, binding);
+    let digest = hiding::commit_hash::<Val, Challenge>(
+        b,
+        cfg,
+        CommitKind::State,
+        CommitFamily::Kmv,
+        salt,
+        &inputs,
+        c.zero,
+        binding,
+    );
     (packs, digest)
 }
 
@@ -765,6 +865,8 @@ pub struct KmvLeafCircuit {
     params: KmvParams,
     binding: Binding,
     expose: Expose,
+    /// Commitment mode the circuit was built with (revision B2).
+    mode: CommitMode,
     /// Ablation mask the circuit was built with (0 outside tests).
     #[cfg_attr(not(test), allow(dead_code))]
     ablate: u32,
@@ -804,7 +906,24 @@ pub fn kmv_binding(binding: Binding) -> Binding {
 /// (`Semantic` or `Bound`; `Legacy` builds `Semantic`, [`kmv_binding`]).
 /// `Interval` appends the batch index `t` as the last public input and
 /// exposes `(init, final, (t, t, 0, 0), Poseidon2(TAG_LEAF, t, Com(B_t)))`.
+/// The `Plain` commitments: [`build_kmv_leaf_commit`] with
+/// [`CommitMode::Plain`].
 pub fn build_kmv_leaf_expose(params: KmvParams, expose: Expose, binding: Binding) -> KmvLeafCircuit {
+    build_kmv_leaf_commit(params, expose, binding, CommitMode::Plain)
+}
+
+/// [`build_kmv_leaf_expose`] under the commitment mode `mode` (revision B2,
+/// module doc "Hiding commitments"). `Plain` is the pre-B2 circuit op for op
+/// (same VK). `Hiding` allocates the three salts (init, final, batch) as the
+/// first private inputs and absorbs them, behind the kind/family tag, into
+/// `Com(S_{t-1})`, `Com(S_t)` and `Com(B_t)`; prove it with
+/// [`KmvLeafCircuit::prove_epoch_commit`].
+pub fn build_kmv_leaf_commit(
+    params: KmvParams,
+    expose: Expose,
+    binding: Binding,
+    mode: CommitMode,
+) -> KmvLeafCircuit {
     params.validate();
     let binding = kmv_binding(binding);
     let abl = ablation();
@@ -882,6 +1001,9 @@ pub fn build_kmv_leaf_expose(params: KmvParams, expose: Expose, binding: Binding
         (0..k).map(|j| b.alloc_const(Challenge::from_u64(j as u64 + 1), "slot_label")).collect();
 
     // ── Private inputs (allocation order == push order in `inputs`) ──
+    // B2: under `Hiding` the 9 salt inputs (init, final, batch) come first;
+    // `Plain` allocates nothing.
+    let salts = hiding::alloc_leaf_salts(&mut b, mode);
     let s_old: Vec<[ExprId; 2]> =
         (0..k).map(|_| std::array::from_fn(|_| b.alloc_private_input("old_row"))).collect();
     let s_new: Vec<[ExprId; 2]> =
@@ -897,8 +1019,26 @@ pub fn build_kmv_leaf_expose(params: KmvParams, expose: Expose, binding: Binding
     let w: Vec<ExprId> = (0..n).map(|_| b.alloc_private_input("w")).collect();
 
     // ── Stage A: both states → their commitments ──
-    let (_, d_old) = state_commit_gadget(&mut b, &cfg, &s_old, &c, binding, false, 0);
-    let (_, d_new) = state_commit_gadget(&mut b, &cfg, &s_new, &c, binding, false, abl);
+    let (_, d_old) = state_commit_gadget(
+        &mut b,
+        &cfg,
+        &s_old,
+        &c,
+        binding,
+        false,
+        0,
+        salts.as_ref().map(|s| &s.init),
+    );
+    let (_, d_new) = state_commit_gadget(
+        &mut b,
+        &cfg,
+        &s_new,
+        &c,
+        binding,
+        false,
+        abl,
+        salts.as_ref().map(|s| &s.final_),
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(d_old[i], init_pis[i]);
         b.connect(d_new[i], final_pis[i]);
@@ -951,7 +1091,16 @@ pub fn build_kmv_leaf_expose(params: KmvParams, expose: Expose, binding: Binding
         let hg = b.mul(act, sp[0]);
         u_elems.push(enc(&mut b, hg, act, sort_base));
     }
-    let hb = bind::hash_slice(&mut b, &cfg, &recs, zero, binding);
+    let hb = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::Batch,
+        CommitFamily::Kmv,
+        salts.as_ref().map(|s| &s.batch),
+        &recs,
+        zero,
+        binding,
+    );
     for i in 0..DIGEST_PACKING {
         b.connect(hb[i], batch_pis[i]);
     }
@@ -1107,6 +1256,7 @@ pub fn build_kmv_leaf_expose(params: KmvParams, expose: Expose, binding: Binding
         params,
         binding,
         expose,
+        mode,
         ablate: abl,
         circuit,
         prover,
@@ -1145,31 +1295,128 @@ impl KmvLeafCircuit {
         &self.table_rows
     }
 
+    /// The commitment mode the circuit was built with.
+    pub fn commit_mode(&self) -> CommitMode {
+        self.mode
+    }
+
     /// Prove batch 1 (`keys` padded with dummies to `params.batch`).
+    /// `Plain` circuits only, like [`Self::prove_epoch_at`].
     pub fn prove_epoch(&mut self, initial: KmvState, keys: Vec<u64>) -> KmvProof {
         self.prove_epoch_at(1, initial, keys)
     }
 
     /// Prove batch `t` (1-based; part of the Interval statement) from
-    /// `initial` over `keys` padded with dummies to `params.batch`.
+    /// `initial` over `keys` padded with dummies to `params.batch`. `Plain`
+    /// circuits only (see [`Self::prove_records_at`]).
     pub fn prove_epoch_at(&mut self, t: u64, initial: KmvState, keys: Vec<u64>) -> KmvProof {
         let records = kmv_records(&self.params, &keys);
         self.prove_records_at(t, initial, records)
     }
 
     /// Prove batch `t` over an explicit record sequence (`None` = a dummy at
-    /// that position; `params.batch` records).
+    /// that position; `params.batch` records). `Plain` circuits only: on a
+    /// `Hiding` circuit this would open every commitment with the public zero
+    /// salt, so it panics; use [`Self::prove_records_commit`] (or, for the
+    /// no-op leaf, [`Self::prove_records_public_zero`]).
     pub fn prove_records_at(
         &mut self,
         t: u64,
         initial: KmvState,
         records: Vec<Option<u64>>,
     ) -> KmvProof {
+        assert!(
+            !self.mode.is_hiding(),
+            "prove_epoch_at on a Hiding leaf would publish Com(S; 0): use prove_epoch_commit with \
+             Openings::for_leaf(..)"
+        );
+        self.prove_records_opened(t, initial, records, &Openings::plain())
+    }
+
+    /// [`Self::prove_epoch_at`] with the commitment openings of leaf `t`
+    /// (`Openings::for_leaf(seed, CommitFamily::Kmv, t)` for an honest
+    /// prover; ignored by a `Plain` circuit). See [`Self::prove_records_commit`].
+    pub fn prove_epoch_commit(
+        &mut self,
+        t: u64,
+        initial: KmvState,
+        keys: Vec<u64>,
+        openings: &Openings,
+    ) -> KmvProof {
+        let records = kmv_records(&self.params, &keys);
+        self.prove_records_commit(t, initial, records, openings)
+    }
+
+    /// [`Self::prove_records_at`] with the commitment openings of leaf `t`.
+    /// The proof's commitments are then `Com(S_{t-1}; ρ^S_{t-1})`,
+    /// `Com(S_t; ρ^S_t)` and `Com(B_t; ρ^B_t)`. A `Hiding` circuit panics when
+    /// `openings.final_` or `openings.batch` is the public zero salt (never an
+    /// honest PRF output), and accepts a zero init salt only at `t = 1` on the
+    /// empty genesis state ([`hiding::assert_zero_init_opens_public_state`]).
+    pub fn prove_records_commit(
+        &mut self,
+        t: u64,
+        initial: KmvState,
+        records: Vec<Option<u64>>,
+        openings: &Openings,
+    ) -> KmvProof {
+        if self.mode.is_hiding() {
+            assert!(
+                !openings.final_.is_zero() && !openings.batch.is_zero(),
+                "Hiding leaf t = {t}: the final and batch commitments need secret randomizers \
+                 (Openings::for_leaf), not the public zero salt"
+            );
+            hiding::assert_zero_init_opens_public_state(t, openings.init.is_zero(), || {
+                initial.vals.is_empty()
+            });
+        }
+        self.prove_records_opened(t, initial, records, openings)
+    }
+
+    /// The no-op VK-derivation leaf's epoch over `keys` (padded with dummies):
+    /// see [`Self::prove_records_public_zero`].
+    pub fn prove_epoch_public_zero(&mut self, t: u64, initial: KmvState, keys: Vec<u64>) -> KmvProof {
+        let records = kmv_records(&self.params, &keys);
+        self.prove_records_public_zero(t, initial, records)
+    }
+
+    /// The no-op VK-derivation leaf's epoch: all three commitments opened
+    /// with [`Openings::public_zero`], so it exposes `init == final` in
+    /// either mode. The only path that proves a `Hiding` leaf with zero
+    /// final/batch salts, so it accepts exactly the public no-op input: batch
+    /// index `t = 1`, the empty state and every record slot the canonical
+    /// dummy. It publishes only `Com(S_0; 0)` and `Com(dummies; 0)`,
+    /// commitments to public data.
+    pub fn prove_records_public_zero(
+        &mut self,
+        t: u64,
+        initial: KmvState,
+        records: Vec<Option<u64>>,
+    ) -> KmvProof {
+        assert!(
+            initial.vals.is_empty() && records.iter().all(Option::is_none),
+            "prove_epoch_public_zero is for the no-op leaf: the public no-op input only (the empty \
+             state and an all-dummy batch)"
+        );
+        assert_eq!(t, 1, "prove_epoch_public_zero is for the no-op leaf: it is proved at batch index 1");
+        self.prove_records_opened(t, initial, records, &Openings::public_zero())
+    }
+
+    /// Shared body of the `prove_*` entry points (no opening checks): the
+    /// commitments are opened with `openings` (ignored under `Plain`).
+    fn prove_records_opened(
+        &mut self,
+        t: u64,
+        initial: KmvState,
+        records: Vec<Option<u64>>,
+        openings: &Openings,
+    ) -> KmvProof {
         let params = self.params;
         assert_eq!(records.len(), params.batch, "records != batch");
         let t_w = std::time::Instant::now();
         let wit = honest_witness(&params, &initial, &records);
-        let (traces, ep) = self.run_witness(t, &wit).unwrap_or_else(|e| panic!("run kmv: {e}"));
+        let (traces, ep) =
+            self.run_witness_opened(t, &wit, openings).unwrap_or_else(|e| panic!("run kmv: {e}"));
         let witness = t_w.elapsed();
         let t_p = std::time::Instant::now();
         let proof = self
@@ -1195,12 +1442,14 @@ impl KmvLeafCircuit {
         }
     }
 
-    /// Public and private inputs of a witness, in allocation order.
-    fn epoch(&self, t: u64, w: &KmvWitness) -> KmvEpoch {
+    /// Public and private inputs of a witness, in allocation order, with the
+    /// commitments opened by `openings` (ignored under `Plain`).
+    fn epoch(&self, t: u64, w: &KmvWitness, openings: &Openings) -> KmvEpoch {
         let params = self.params;
-        let initial_commit = commit_kmv_rows(params.k, &w.initial);
-        let final_commit = commit_kmv_rows(params.k, &w.fin);
-        let batch_commit = commit_records_raw(&params, &w.records);
+        let mode = self.mode;
+        let initial_commit = commit_kmv_rows_with(params.k, &w.initial, mode, &openings.init);
+        let final_commit = commit_kmv_rows_with(params.k, &w.fin, mode, &openings.final_);
+        let batch_commit = commit_records_raw_with(params.batch, &w.records, mode, &openings.batch);
         let ch = |d: &[Val; 8]| -> [Challenge; 2] {
             [
                 Challenge::from_basis_coefficients_slice(&d[0..4]).expect("4 coeffs"),
@@ -1220,6 +1469,10 @@ impl KmvLeafCircuit {
             out.push(Challenge::from_u32(a));
         };
         let mut private_inputs: Vec<Challenge> = Vec::new();
+        if mode.is_hiding() {
+            // B2: the salts first, in allocation order (init, final, batch).
+            private_inputs.extend(openings.private_inputs());
+        }
         w.initial.iter().for_each(|r| row(&mut private_inputs, r));
         w.fin.iter().for_each(|r| row(&mut private_inputs, r));
         for &(key, act) in &w.records {
@@ -1238,16 +1491,18 @@ impl KmvLeafCircuit {
         KmvEpoch { public_inputs, private_inputs, initial_commit, final_commit, batch_commit }
     }
 
-    /// Install the witness's permutation hints and run the circuit.
-    fn run_witness(
+    /// Install the witness's permutation hints and run the circuit, the
+    /// commitments opened with `openings` (ignored under `Plain`).
+    fn run_witness_opened(
         &mut self,
         t: u64,
         w: &KmvWitness,
+        openings: &Openings,
     ) -> Result<(p3_circuit::tables::Traces<Challenge>, KmvEpoch), String> {
         self.circuit
             .update_permute_witnesses(&[w.sigma_sort.clone(), w.sigma_compact.clone()])
             .map_err(|e| format!("update permute witnesses: {e:?}"))?;
-        let ep = self.epoch(t, w);
+        let ep = self.epoch(t, w, openings);
         let mut runner = self.circuit.runner();
         runner.set_public_inputs(&ep.public_inputs).map_err(|e| format!("pubs: {e:?}"))?;
         runner.set_private_inputs(&ep.private_inputs).map_err(|e| format!("privs: {e:?}"))?;
@@ -1279,7 +1534,7 @@ impl KmvLeafCircuit {
         t: u64,
         w: &KmvWitness,
     ) -> Result<p3_circuit_prover::BatchStarkProof<ConfigWithFriParams>, String> {
-        let (traces, _) = crate::sketch::forge::catch_msg(|| self.run_witness(t, w))
+        let (traces, _) = crate::sketch::forge::catch_msg(|| self.run_witness_opened(t, w, &Openings::plain()))
             .map_err(|e| format!("run (panic): {e}"))??;
         crate::sketch::forge::catch_msg(|| self.prove_traces(&traces))
             .map_err(|e| format!("prove (panic): {e}"))?
@@ -2060,6 +2315,224 @@ mod tests {
                 .prove_epoch_at(1, KmvState::empty(8), keys.clone())
                 .output;
             assert!(verify_leaves_against_log(&[&other.0], &vk, &log, Expose::Interval).is_err());
+        }
+    }
+
+    // ─── Hiding commitments (revision B2) ────────────────────────────────────
+
+    mod hiding_b2 {
+        use super::*;
+        use crate::commitment::hiding::probe::{leaked_salts, proof_alu_rows};
+        use crate::commitment::hiding::{
+            SaltSeed, TAG_BATCH, TAG_STATE, rho_batch_bb as batch_salt, rho_state_bb as state_salt,
+        };
+        use crate::recursion::recursive::expose_forest::vk_pin_values;
+        use crate::recursion::recursive::noop_leaf::{kmv_noop_leaf_commit, kmv_noop_leaf_expose};
+        use crate::recursion::recursive::statement::{hash_bb, leaf_digest};
+        use crate::sketch::forge;
+
+        const KMV: CommitFamily = CommitFamily::Kmv;
+        const HIDING: CommitMode = CommitMode::Hiding;
+        const HP: KmvParams = KmvParams { k: 4, batch: 4 };
+
+        /// A full prior state (5 distinct keys, capacity 4).
+        fn prior() -> KmvState {
+            kmv_advance(&KmvState::empty(HP.k), &[11, 22, 33, 44, 55])
+        }
+
+        /// Natives: `Plain` ignores the salt; `Hiding` is
+        /// `MyHash([TAG_STATE | TAG_BATCH, Kmv = 6, 0, 0, salt…] ‖ flat)` over
+        /// exactly the Plain flat (the state header and `k` packed rows; the
+        /// batch header and `4·batch` record values).
+        #[test]
+        fn hiding_natives_match_layout() {
+            let seed = SaltSeed::for_tests(51);
+            let (s1, s2) = (state_salt(&seed, KMV, 1), state_salt(&seed, KMV, 2));
+            let st = prior();
+            assert!(st.is_full());
+            assert_eq!(commit_kmv_state_with(&st, CommitMode::Plain, &s1), commit_kmv_state(&st));
+            let h = MyHash::new(make_perm());
+            let mut input = vec![Val::from_u64(TAG_STATE), Val::from_u64(6), Val::ZERO, Val::ZERO];
+            input.extend_from_slice(&s1.0);
+            input.extend([Val::from_u64(TAG_KMV_STATE), Val::from_u64(HP.k as u64), Val::ZERO, Val::ZERO]);
+            input.extend(st.rows().into_iter().map(row_value));
+            let want: [Val; 8] = h.hash_iter(input);
+            let c1 = commit_kmv_state_with(&st, HIDING, &s1);
+            assert_eq!(c1, want, "state layout drift");
+            assert_eq!(commit_kmv_rows_with(HP.k, &st.rows(), HIDING, &s1), c1);
+            assert_ne!(c1, commit_kmv_state_with(&st, HIDING, &s2), "two versions, two commitments");
+            assert_ne!(c1, commit_kmv_state(&st));
+            let recs = kmv_records(&HP, &[7, 8]);
+            let b1 = batch_salt(&seed, KMV, 1);
+            assert_eq!(kmv_batch_commit_with(HP.batch, &recs, CommitMode::Plain, &b1), commit_kmv_records(&HP, &recs));
+            assert_eq!(kmv_batch_commit(HP.batch, &recs), commit_kmv_batch(&HP, &[7, 8]));
+            let mut input = vec![Val::from_u64(TAG_BATCH), Val::from_u64(6), Val::ZERO, Val::ZERO];
+            input.extend_from_slice(&b1.0);
+            input.extend([Val::from_u64(TAG_KMV_BATCH), Val::from_u64(HP.batch as u64), Val::ZERO, Val::ZERO]);
+            input.extend(recs.iter().flat_map(|&r| record_vals(rec_raw(r))));
+            let want: [Val; 8] = h.hash_iter(input);
+            assert_eq!(kmv_batch_commit_with(HP.batch, &recs, HIDING, &b1), want, "batch layout drift");
+            // The tag prefix separates hiding from plain even under the zero salt.
+            assert_ne!(commit_kmv_state_with(&st, HIDING, &SaltBb::ZERO), commit_kmv_state(&st));
+        }
+
+        /// A hiding leaf's commitments (proof fields and the exposed Interval
+        /// statement, under both bindings) are the NATIVE hiding commitments
+        /// under the leaf-`t` openings, and differ from the Plain ones.
+        #[test]
+        fn hiding_leaf_exposes_native_hiding_commitments() {
+            let seed = SaltSeed::for_tests(52);
+            let t = 3u64;
+            let (pr, keys) = (prior(), vec![5u64, 66, 5, 77]);
+            let fin = kmv_advance(&pr, &keys);
+            let o = Openings::for_leaf(&seed, KMV, t);
+            let init = commit_kmv_state_with(&pr, HIDING, &state_salt(&seed, KMV, t - 1));
+            let fc = commit_kmv_state_with(&fin, HIDING, &state_salt(&seed, KMV, t));
+            let bc = kmv_batch_commit_with(HP.batch, &kmv_records(&HP, &keys), HIDING, &batch_salt(&seed, KMV, t));
+            assert_ne!(fc, commit_kmv_state(&fin));
+            assert_ne!(bc, commit_kmv_batch(&HP, &keys));
+            for binding in [Binding::Semantic, Binding::Bound] {
+                let mut iv = build_kmv_leaf_commit(HP, Expose::Interval, binding, HIDING);
+                assert_eq!(iv.commit_mode(), HIDING);
+                let r = iv.prove_epoch_commit(t, pr.clone(), keys.clone(), &o);
+                assert_eq!(r.final_state, fin, "{binding:?}");
+                assert_eq!((r.initial_commit, r.final_commit, r.batch_commit), (init, fc, bc), "{binding:?}");
+                let st = read_exposed_statement(&r.output.0);
+                assert_eq!((st.init, st.final_), (init.to_vec(), fc.to_vec()), "{binding:?}");
+                let ip = st.interval.expect("interval part");
+                assert_eq!((ip.lo, ip.hi), (Val::from_u64(t), Val::from_u64(t)));
+                assert_eq!(ip.digest, leaf_digest(&hash_bb, 4, t, &bc), "H(TAG_LEAF, t, Com(B_t; salt))");
+            }
+        }
+
+        /// The Plain leaf through the commit API is the pre-B2 leaf (same VK
+        /// and commitments as the `*_expose` builder, every layout); the hiding
+        /// VK differs, does not depend on the salts, and is the zero-salt no-op
+        /// leaf's. A hiding leaf costs exactly +9 ALU rows (3 salts) and
+        /// exposes no salt value.
+        #[test]
+        fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+            let (pr, keys) = (prior(), vec![5u64, 66]);
+            let vk = |o: &KmvProof| vk_pin_values(&o.output.0);
+            let sem = Binding::Semantic;
+            for expose in [Expose::None, Expose::Boundary, Expose::Interval] {
+                let old = build_kmv_leaf_expose(HP, expose, sem).prove_epoch_at(2, pr.clone(), keys.clone());
+                let plain = build_kmv_leaf_commit(HP, expose, sem, CommitMode::Plain)
+                    .prove_epoch_at(2, pr.clone(), keys.clone());
+                assert_eq!(vk(&plain), vk(&old), "{expose:?}: Plain VK");
+                assert_eq!(
+                    (plain.initial_commit, plain.final_commit, plain.batch_commit),
+                    (old.initial_commit, old.final_commit, old.batch_commit),
+                    "{expose:?}"
+                );
+                let mut leaf = build_kmv_leaf_commit(HP, expose, sem, HIDING);
+                let o5 = Openings::for_leaf(&SaltSeed::for_tests(1), KMV, 5);
+                let a = leaf.prove_epoch_commit(5, pr.clone(), keys.clone(), &o5);
+                let b = leaf.prove_epoch_commit(
+                    1,
+                    KmvState::empty(HP.k),
+                    keys.clone(),
+                    &Openings::for_leaf(&SaltSeed::for_tests(2), KMV, 1),
+                );
+                assert_ne!(vk(&a), vk(&old), "{expose:?}: the hiding circuit differs");
+                assert_eq!(vk(&a), vk(&b), "{expose:?}: salt-independent VK");
+                assert_eq!(proof_alu_rows(&a.output.0), proof_alu_rows(&old.output.0) + 9, "{expose:?}: ALU rows");
+                assert_eq!(leaked_salts(&a.output.0, &[o5.init, o5.final_, o5.batch]), vec![], "{expose:?}");
+                if expose != Expose::None {
+                    let mut control = SaltBb::ZERO;
+                    control.0[0] = a.final_commit[0];
+                    assert!(!leaked_salts(&a.output.0, &[control]).is_empty(), "{expose:?}: the scan sees the statement");
+                    assert_eq!(vk_pin_values(&kmv_noop_leaf_expose(HP, expose, sem)), vk(&old));
+                    assert_eq!(vk_pin_values(&kmv_noop_leaf_commit(HP, expose, sem, CommitMode::Plain)), vk(&old));
+                    assert_eq!(vk_pin_values(&kmv_noop_leaf_commit(HP, expose, sem, HIDING)), vk(&a));
+                }
+            }
+        }
+
+        /// A hiding leaf never falls back to zero salts silently: the old
+        /// entry points panic, and so do zero final / batch salts and a zero
+        /// init on a real prior (or at `t ≥ 2`); the explicit no-op path
+        /// accepts only the empty state with an all-dummy batch at `t = 1`,
+        /// and then exposes `init == final == Com(S_0; 0)`. Controls: leaf 1
+        /// from the empty state opens `Com(S_0; 0)`, and a Plain leaf ignores
+        /// its openings.
+        #[test]
+        fn hiding_leaf_rejects_zero_openings_outside_the_noop_path() {
+            let seed = SaltSeed::for_tests(53);
+            let (pr, keys) = (prior(), vec![5u64, 66]);
+            let empty = KmvState::empty(HP.k);
+            let mut leaf = build_kmv_leaf_commit(HP, Expose::Interval, Binding::Semantic, HIDING);
+            let msg = forge::catch_msg(|| leaf.prove_epoch_at(2, pr.clone(), keys.clone()).final_commit).unwrap_err();
+            assert!(msg.contains("prove_epoch_at on a Hiding leaf"), "{msg}");
+            assert!(forge::catch(|| leaf.prove_records_at(1, empty.clone(), vec![None; HP.batch]).final_commit).is_none());
+            let honest = Openings::for_leaf(&seed, KMV, 2);
+            for (what, o) in [
+                ("plain", Openings::plain()),
+                ("zero final", Openings { final_: SaltBb::ZERO, ..honest }),
+                ("zero batch", Openings { batch: SaltBb::ZERO, ..honest }),
+            ] {
+                let msg = forge::catch_msg(|| leaf.prove_epoch_commit(2, pr.clone(), keys.clone(), &o).final_commit)
+                    .unwrap_err();
+                assert!(msg.contains("public zero salt"), "{what}: {msg}");
+            }
+            let forgot = Openings { init: SaltBb::ZERO, ..honest };
+            for (what, t, init) in [("real prior", 2u64, &pr), ("t = 2 on the empty state", 2, &empty)] {
+                let msg = forge::catch_msg(|| leaf.prove_epoch_commit(t, init.clone(), keys.clone(), &forgot).final_commit)
+                    .unwrap_err();
+                assert!(msg.contains("zero init salt"), "{what}: {msg}");
+            }
+            let local = Openings::for_leaf(&seed, KMV, 1);
+            let msg = forge::catch_msg(|| leaf.prove_epoch_commit(1, pr.clone(), keys.clone(), &local).final_commit)
+                .unwrap_err();
+            assert!(msg.contains("zero init salt"), "leaf-1 openings on a real prior: {msg}");
+            for (what, t, init, k) in [
+                ("a real prior", 1u64, &pr, vec![]),
+                ("a real key", 1, &empty, vec![5u64]),
+                ("another batch index", 2, &empty, vec![]),
+            ] {
+                let msg = forge::catch_msg(|| leaf.prove_epoch_public_zero(t, init.clone(), k.clone()).final_commit)
+                    .unwrap_err();
+                assert!(msg.contains("no-op leaf"), "{what}: {msg}");
+            }
+            let noop = leaf.prove_epoch_public_zero(1, empty.clone(), vec![]);
+            let z = commit_kmv_state_with(&empty, HIDING, &SaltBb::ZERO);
+            assert_eq!((noop.initial_commit, noop.final_commit), (z, z));
+            let st = read_exposed_statement(&noop.output.0);
+            assert_eq!(st.init, st.final_, "the zero-salt no-op leaf exposes init == final");
+            let r = leaf.prove_epoch_commit(1, empty.clone(), keys.clone(), &local);
+            assert_eq!(r.initial_commit, z, "leaf 1 opens the public genesis Com(S_0; 0)");
+            let mut plain = build_kmv_leaf_commit(HP, Expose::Interval, Binding::Semantic, CommitMode::Plain);
+            let p = plain.prove_epoch_commit(2, pr.clone(), keys.clone(), &honest);
+            assert_eq!(p.initial_commit, commit_kmv_state(&pr), "Plain ignores the openings");
+            assert_eq!(p.batch_commit, commit_kmv_batch(&HP, &keys));
+        }
+
+        /// Hiding leaves chain: leaf `t`'s final and leaf `t + 1`'s init are
+        /// the same `Com(S_t; ρ^S_t)`, and the merge of two hiding leaves
+        /// verifies (an inconsistent init salt breaks the merge's in-circuit
+        /// boundary bind).
+        #[test]
+        fn hiding_leaves_chain_and_merge() {
+            use crate::recursion::recursive::expose_forest::prove_hiding_merge;
+            let seed = SaltSeed::for_tests(54);
+            let (k1, k2) = (vec![1u64, 2, 3], vec![4u64, 2, 5, 6]);
+            let s0 = KmvState::empty(HP.k);
+            let s1 = kmv_advance(&s0, &k1);
+            let mut leaf = build_kmv_leaf_commit(HP, Expose::Interval, Binding::Semantic, HIDING);
+            let l1 = leaf.prove_epoch_commit(1, s0.clone(), k1.clone(), &Openings::for_leaf(&seed, KMV, 1));
+            let l2 = leaf.prove_epoch_commit(2, s1.clone(), k2.clone(), &Openings::for_leaf(&seed, KMV, 2));
+            assert_eq!(l1.final_commit, l2.initial_commit, "leaf 1's final is leaf 2's init");
+            let root = prove_hiding_merge(&l1.output, &l2.output);
+            let st = read_exposed_statement(&root.0);
+            assert_eq!(st.init, l1.initial_commit.to_vec());
+            assert_eq!(st.final_, l2.final_commit.to_vec());
+            let bad = Openings { init: state_salt(&SaltSeed::for_tests(55), KMV, 1), ..Openings::for_leaf(&seed, KMV, 2) };
+            let l2b = leaf.prove_epoch_commit(2, s1.clone(), k2.clone(), &bad);
+            assert_ne!(l1.final_commit, l2b.initial_commit);
+            let r = forge::catch_msg(|| {
+                let _ = prove_hiding_merge(&l1.output, &l2b.output);
+            });
+            assert!(r.is_err(), "a merge across inconsistent salts must fail");
         }
     }
 

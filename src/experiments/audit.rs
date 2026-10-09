@@ -37,6 +37,7 @@ use crate::decode::bloom::bloom_decode_vk_commit;
 use crate::decode::countmin::{cm_decode_vk_commit, CmDecodeParams};
 use crate::decode::gk_bandmerge::{gk2_decode_vk_commit, Gkb2DecodeParams};
 use crate::decode::hyperloglog::{hll_omc_decode_vk_commit, HllDecodeParams};
+use crate::decode::kmv::kmv_decode_vk_commit;
 use crate::decode::spacesaving::{ss_decode_vk_commit, SsDecodeParams};
 use crate::decode::{check_query_statement, DecodeProof, DecodeVk, QueryStatement, ReleasePolicy};
 use crate::recursion::recursive::config::ConfigWithFriParams;
@@ -109,6 +110,10 @@ pub fn genesis_commit_bb(pp: &PublicParams) -> [Val; 8] {
         StreamFamily::BloomOmc => {
             use crate::sketch::bloom_omc::{bloom_empty, commit_bloom_with};
             commit_bloom_with(&bloom_empty(&s.bloom_params(pp.m)), mode, zero)
+        }
+        StreamFamily::KmvSketch => {
+            use crate::sketch::kmv::{commit_kmv_state_with, KmvState};
+            commit_kmv_state_with(&KmvState::empty(s.kmv_params(pp.m).k), mode, zero)
         }
         other => panic!("{other:?} is a Goldilocks family: use genesis_commit_gl"),
     }
@@ -453,10 +458,10 @@ pub(crate) fn audit_root(
 /// Property 3 at the harness level: the query proof must EXPOSE `commit`
 /// (the published `Com(S_{t'})` it answers against: leaf `t'`'s final), the
 /// query that was asked and the answer it reports (`(Com(S), q, answer)`, 16
-/// values; hll `(Com(S), answer)`, 12), so a verifier reading only the proof
-/// learns what was certified. Fails closed (panics). Skipped under
-/// `ZKSKETCH_BINDING=legacy`, whose pre-fix decoders expose nothing (the
-/// Legacy warning is printed when it is selected).
+/// values; the keyless hll / kmv `(Com(S), answer)`, 12), so a verifier
+/// reading only the proof learns what was certified. Fails closed (panics).
+/// Skipped under `ZKSKETCH_BINDING=legacy`, whose pre-fix decoders expose
+/// nothing (the Legacy warning is printed when it is selected).
 pub fn check_query_exposure(
     dp: &DecodeProof,
     commit: [Val; 8],
@@ -611,6 +616,11 @@ impl QueryAudit {
             // The membership circuit has one (bound) construction; it does
             // not depend on the binding, nor on the batch size.
             StreamFamily::BloomOmc => bloom_decode_vk_commit(shape.bloom_params(m), commit_mode),
+            // The distinct-count decoder depends on `k` only (not on the
+            // batch size); `Legacy` builds the Semantic decoder.
+            StreamFamily::KmvSketch => {
+                kmv_decode_vk_commit(shape.kmv_decode_params(), default_binding(), commit_mode)
+            }
             _ => unreachable!("Goldilocks families are rejected above"),
         };
         let noop = super::dist_compose::prove_noop_leaf(family, shape, m, commit_mode);

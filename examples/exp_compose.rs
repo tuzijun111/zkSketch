@@ -2,7 +2,9 @@
 //! Composition modes (**per-batch chain**, **recursive linear chain**,
 //! **streaming forest**) over four sketch families, each pinned to one leaf
 //! variant: cm/omc, hll/omc, ss/certified, gk/bandmerge2 — plus the Bloom
-//! filter (bloom/omc, opt-in via `EXP_COMPOSE_FAMILY=bloom`, BabyBear only).
+//! filter (bloom/omc, opt-in via `EXP_COMPOSE_FAMILY=bloom`, BabyBear only)
+//! and the KMV / bottom-`k` distinct-count sketch (kmv, opt-in via
+//! `EXP_COMPOSE_FAMILY=kmv`, BabyBear only).
 //!
 //! Fixes a total stream size `N`, derives `t = ⌈N/m⌉` leaves per batch size `m`,
 //! draws keys from a chosen dataset, and for each (family, mode, cores,
@@ -52,9 +54,14 @@
 //!        — the deployed `M = 7·2^14` filter (~1% FPR at 12k keys). The CSV
 //!        shape reads `k{k}_logw{logw}`. There is no Goldilocks Bloom leaf
 //!        (`bloom_gl` is rejected).
+//! - kmv: `EXP_KMV_K` (capacity `k` = the number of smallest distinct 27-bit
+//!        key hashes kept, default 1024) — needs `k` a multiple of 4 in
+//!        `4..=32768` and `k + m < 2^24` (a bad value exits 2 with the
+//!        reason). The CSV shape reads `k{k}`. There is no Goldilocks KMV
+//!        leaf (`kmv_gl` is rejected).
 //!
-//! Config: `EXP_COMPOSE_FAMILY` (cm,hll,ss,gk,bloom and the `_gl` variants of
-//! the first four; default cm,hll,ss,gk),
+//! Config: `EXP_COMPOSE_FAMILY` (cm,hll,ss,gk,bloom,kmv and the `_gl`
+//! variants of the first four; default cm,hll,ss,gk),
 //! `EXP_COMPOSE_N` (`2^k` ok; default 32), `EXP_COMPOSE_BATCHES` (m list;
 //! default 8), `EXP_DATASET` (uniform|gaussian|zipf|aol|netflix; default
 //! uniform), `EXP_OUT`/`$1` (rename CSV).
@@ -62,7 +69,7 @@
 //! ## Mixed updates + queries (`EXP_COMPOSE_QUERY_EVERY`, default 0 = off)
 //! With `EXP_COMPOSE_QUERY_EVERY=k`, one **query leaf** (the family's decode
 //! circuit: cm point count, hll cardinality, ss top-1 mass, gk rank, bloom
-//! membership) is proved
+//! membership, kmv distinct count) is proved
 //! after every `k`-th batch against the state commitment the update leaf just
 //! exposed. Query costs land in the `query_*` columns (kept separate from the
 //! update-side totals). The auditor verifies each query proof pinned to the
@@ -92,7 +99,8 @@
 //! alignment required: a query landing mid-batch seals the batch early and
 //! pads its tail with the family's provable no-op records (cm value-0 update,
 //! ss circuit dummy, gk E_MAX dummy via a short batch, bloom `act = 0` dummy
-//! via a short batch, hll repeated key — `max` is idempotent), so the state is
+//! via a short batch, kmv `act = 0` dummy record in place, hll repeated key
+//! — `max` is idempotent), so the state is
 //! committed at the exact stream
 //! position and the circuit shape stays uniform. The early-sealed leaves are
 //! the honest "query at any point" premium, reported in `query_split_leaves`
@@ -110,8 +118,9 @@
 //! updates on a live-stream critical path; that is a deliberate first cut.
 //!
 //! `EXP_QUERY_KEY_MODE` (default `first`) picks the probe key a KEYED query
-//! targets — cm point-count / gk rank / bloom membership (hll cardinality and
-//! ss top-1 are keyless and ignore it): `first` = the batch's first key (baseline); `uniform_stream`
+//! targets — cm point-count / gk rank / bloom membership (hll cardinality,
+//! ss top-1 and kmv distinct count are keyless and ignore it): `first` = the
+//! batch's first key (baseline); `uniform_stream`
 //! = a frequency-weighted sample of keys seen so far (S³-style); `hot` = the
 //! most-frequent key; `absent` = an in-domain key NOT in the stream. All modes
 //! are deterministic in the query index, so runs are reproducible.
@@ -143,7 +152,9 @@
 //! never printed; the `commit` / `salt_seed` columns (and env.json) record
 //! the mode and the seed's source (`env` / `os`; `n/a` under `plain`).
 //! `ZKSKETCH_COMMIT=plain` runs the pre-B2 circuits, commitments and VKs byte
-//! for byte. The Bloom filter has hiding commitments too (family id 5).
+//! for byte. The Bloom filter has hiding commitments too (family id 5), and
+//! so does the KMV sketch (family id 6: hiding leaf, no-op leaf and
+//! distinct-count decoder).
 //!
 //! RUNTIME WARNING: every leaf and every merge is a real STARK proof. Under
 //! `sim` everything proves sequentially (the k-machine split is a makespan
@@ -276,6 +287,7 @@ fn shape_str(family: StreamFamily, s: &StreamShape) -> String {
             format!("cap{}_s{}", s.capacity, s.gk_s)
         }
         StreamFamily::BloomOmc => format!("k{}_logw{}", s.bloom_k, s.bloom_log_w),
+        StreamFamily::KmvSketch => format!("k{}", s.kmv_k),
     }
 }
 
@@ -444,7 +456,8 @@ fn main() {
     // membership) targets: first
     // (baseline, the batch's first key) | uniform_stream (frequency-weighted
     // sample of seen keys, S³-style) | hot (most-frequent key) | absent (an
-    // in-domain key NOT in the stream). No effect on hll/ss (keyless queries).
+    // in-domain key NOT in the stream). No effect on hll/ss/kmv (keyless
+    // queries).
     let query_key_mode = {
         let raw = env_str("EXP_QUERY_KEY_MODE", "first");
         QueryKeyMode::parse(&raw).unwrap_or_else(|| {
@@ -508,8 +521,15 @@ fn main() {
                         "ignoring family '{s}': the Bloom filter has a BabyBear leaf only \
                          (no Goldilocks variant); use 'bloom'"
                     );
+                } else if s.to_ascii_lowercase().starts_with("kmv") {
+                    eprintln!(
+                        "ignoring family '{s}': the KMV sketch has a BabyBear leaf only \
+                         (no Goldilocks variant); use 'kmv'"
+                    );
                 } else {
-                    eprintln!("ignoring unknown family '{s}' (cm|hll|ss|gk|bloom, or cm_gl|hll_gl|ss_gl|gk_gl)");
+                    eprintln!(
+                        "ignoring unknown family '{s}' (cm|hll|ss|gk|bloom|kmv, or cm_gl|hll_gl|ss_gl|gk_gl)"
+                    );
                 }
             }
             f
@@ -575,6 +595,8 @@ fn main() {
         // Bloom: the deployed k = 7 slices of 2^14 bits by default.
         bloom_k: env_size("EXP_BLOOM_K", 7),
         bloom_log_w: env_size("EXP_BLOOM_LOGW", 14),
+        // KMV: keep the k = 1024 smallest distinct hashes by default.
+        kmv_k: env_size("EXP_KMV_K", 1024),
     };
 
     let dataset_str = env_str("EXP_DATASET", "uniform");
@@ -597,6 +619,15 @@ fn main() {
                     "bad Bloom shape (EXP_BLOOM_K={}, EXP_BLOOM_LOGW={}, m={m}): {e}",
                     shape.bloom_k, shape.bloom_log_w
                 );
+                std::process::exit(2);
+            }
+        }
+    }
+    // Likewise a bad KMV capacity (k a multiple of 4 in 4..=2^15, k + m < 2^24).
+    if families.contains(&StreamFamily::KmvSketch) {
+        for &m in &batches_m {
+            if let Err(e) = shape.check_kmv(m) {
+                eprintln!("bad KMV shape (EXP_KMV_K={}, m={m}): {e}", shape.kmv_k);
                 std::process::exit(2);
             }
         }

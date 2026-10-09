@@ -8,7 +8,8 @@
 # recursive linear chain, and streaming forest — over four sketch families, each
 # pinned to one leaf variant:
 #     cm → omc, hll → omc, ss → certified, gk → bandmerge2,
-# plus the opt-in Bloom filter (bloom → omc; plonky3/BabyBear only).
+# plus the opt-in Bloom filter (bloom → omc) and KMV / bottom-k distinct-count
+# sketch (kmv), both plonky3/BabyBear only.
 #
 # For a stream of N records cut into t = ceil(N/m) batches, each cell reports the
 # whole-stream prove time (leafgen + merge), the verifier-facing proof size +
@@ -49,11 +50,12 @@
 #                        (merge_wire tag in env.json), so its comm bytes run a
 #                        bit above plonky3's proof-only wire. Builds on nightly
 #                        (pinned by plonky2/rust-toolchain.toml, auto-selected).
-#   EXP_COMPOSE_FAMILY   cm|hll|ss|gk|bloom comma-list           (default cm,hll,ss,gk)
-#                        plus the Goldilocks cm_gl|hll_gl|ss_gl|gk_gl. bloom is
-#                        opt-in (not in the default list) and BabyBear only:
-#                        there is no bloom_gl (rejected with a message), and the
-#                        plonky2 backend has no Bloom family (it ignores 'bloom').
+#   EXP_COMPOSE_FAMILY   cm|hll|ss|gk|bloom|kmv comma-list       (default cm,hll,ss,gk)
+#                        plus the Goldilocks cm_gl|hll_gl|ss_gl|gk_gl. bloom and
+#                        kmv are opt-in (not in the default list) and BabyBear
+#                        only: there is no bloom_gl / kmv_gl (rejected with a
+#                        message), and the plonky2 backend has neither family
+#                        (it ignores 'bloom' and 'kmv').
 #   EXP_COMPOSE_MODE     per_batch|chain|forest comma-list       (default all three;
 #                        `recursive` is accepted as an alias for forest)
 #   EXP_COMPOSE_N        total stream records — int or `2^k`      (default 32)
@@ -71,7 +73,8 @@
 #   EXP_COMPOSE_PROOF_DIR folder the per_batch mode stores proofs (default results/compose_per_batch_proofs)
 #   EXP_COMPOSE_QUERY_EVERY  MIXED updates+queries: prove one query leaf (the
 #                        family's decode circuit — cm point count, hll cardinality,
-#                        ss top-1 mass, gk rank, bloom membership) after every
+#                        ss top-1 mass, gk rank, bloom membership, kmv distinct
+#                        count) after every
 #                        k-th batch, bound to the state commitment at that point
 #                        (default 0 = off).
 #                        Query costs land in the query_* columns, separate from
@@ -102,7 +105,8 @@
 #                        EARLY and pads its tail with the family's provable
 #                        no-op records (cm value-0 update, ss circuit dummy,
 #                        gk E_MAX dummy via a short batch, bloom act=0 dummy
-#                        via a short batch, hll repeated key — max is
+#                        via a short batch, kmv act=0 dummy record in place,
+#                        hll repeated key — max is
 #                        idempotent), so the state is committed at the
 #                        exact stream position with a uniform circuit shape.
 #                        The early-sealed leaves are the honest "query at any
@@ -112,8 +116,8 @@
 #                        the stream tail is pad-sealed, not extended).
 #                        plonky3 only.
 #   EXP_QUERY_KEY_MODE   which probe key a KEYED query targets (cm point-count,
-#                        gk rank, bloom membership; no effect on hll/ss which
-#                        are keyless):
+#                        gk rank, bloom membership; no effect on hll/ss/kmv
+#                        which are keyless):
 #                        first (default — the batch's first key, the baseline) |
 #                        uniform_stream (frequency-weighted sample of keys seen
 #                        so far, S³-style) | hot (most-frequent key) | absent
@@ -136,6 +140,11 @@
 #                        Defaults are the deployed M = 7·2^14 filter; set e.g.
 #                        3 / 7 for quick smokes. An out-of-range value exits 2
 #                        with the reason. CSV shape column: k{k}_logw{logw}.
+#   EXP_KMV_K            KMV capacity k = the number of smallest distinct
+#                        27-bit key hashes kept (default 1024): a multiple of 4
+#                        in 4..=32768 with k + m < 2^24; set e.g. 4 for quick
+#                        smokes. A bad value exits 2 with the reason. CSV shape
+#                        column: k{k}.
 #   EXP_DATASET          uniform|gaussian|zipf|aol|netflix        (default uniform)
 #   EXP_OUT / $1         rename output to results/<name>.csv
 #   --- commitments (plonky3; revision B2, see README) ---
@@ -145,7 +154,8 @@
 #                        randomizers, the batch log is built prover-side and the
 #                        auditor sees only that log, the proofs and public
 #                        parameters. plain: the pre-B2 circuits, commitments and
-#                        VKs byte for byte.
+#                        VKs byte for byte. Every BabyBear family has hiding
+#                        commitments (Bloom family id 5, KMV family id 6).
 #   ZKSKETCH_SALT_SEED   the prover's salt seed, 64 hex chars (reproducible
 #                        runs); unset = OS RNG. Never printed; the salt_seed
 #                        column records only its source (env|os; n/a if plain).

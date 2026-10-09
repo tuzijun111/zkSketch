@@ -233,6 +233,7 @@ mod tests {
             CommitFamily::SpaceSaving,
             CommitFamily::GreenwaldKhanna,
             CommitFamily::Bloom,
+            CommitFamily::Kmv,
         ] {
             for t in 1..=3u64 {
                 assert_eq!(c.openings(fam, t), Openings::for_leaf(&seed, fam, t));

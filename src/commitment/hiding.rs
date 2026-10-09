@@ -135,7 +135,9 @@
 //!     `S_noop`, not `S_0`); SpaceSaving the empty state and every update
 //!     `SsFullUpdate::dummy()`; GK the empty state and an empty batch;
 //!     Bloom ([`crate::sketch::bloom_omc`]) the empty filter and an
-//!     all-dummy batch (no key). It
+//!     all-dummy batch (no key); KMV ([`crate::sketch::kmv`]) the empty
+//!     state and an all-dummy batch (every record slot the canonical
+//!     dummy). It
 //!     publishes only zero-salt commitments of public data. "The
 //!     batch does not move the state" alone would not do: a real state
 //!     with a no-op or repeated-key batch does not move either, and would
@@ -145,7 +147,8 @@
 //!     `public_zero_path_requires_the_empty_state`,
 //!     `noop_path_refuses_a_real_state_or_another_index`).
 //!   - A `Hiding` decoder (Count-Min, HLL `omc`, SpaceSaving, GK
-//!     bandmerge2, Bloom membership) refuses [`SaltBb::ZERO`] unless the
+//!     bandmerge2, Bloom membership, KMV distinct count) refuses
+//!     [`SaltBb::ZERO`] unless the
 //!     queried state is the
 //!     empty genesis state (all counters 0, all registers 0, every row or
 //!     tuple the dummy): `Com(S_0; 0)` is the one state commitment the
@@ -423,6 +426,8 @@ pub enum CommitFamily {
     SpaceSaving = 3,
     GreenwaldKhanna = 4,
     Bloom = 5,
+    /// KMV / bottom-`k` distinct counting ([`crate::sketch::kmv`]).
+    Kmv = 6,
 }
 
 impl CommitFamily {
@@ -1110,12 +1115,13 @@ mod tests {
     };
     use p3_poseidon2_circuit_air::BabyBearD4Width16;
 
-    const FAMILIES: [CommitFamily; 5] = [
+    const FAMILIES: [CommitFamily; 6] = [
         CommitFamily::CountMin,
         CommitFamily::HyperLogLog,
         CommitFamily::SpaceSaving,
         CommitFamily::GreenwaldKhanna,
         CommitFamily::Bloom,
+        CommitFamily::Kmv,
     ];
 
     #[test]
@@ -1127,7 +1133,7 @@ mod tests {
         assert_eq!(&TAG_STATE.to_be_bytes()[4..], b"STAT");
         assert_eq!(&TAG_BATCH.to_be_bytes()[4..], b"BATC");
         let ids: Vec<u64> = FAMILIES.iter().map(|f| f.id()).collect();
-        assert_eq!(ids, vec![1, 2, 3, 4, 5]);
+        assert_eq!(ids, vec![1, 2, 3, 4, 5, 6]);
     }
 
     /// (7) The PRF: deterministic, `ρ^S_0` is the public zero, and distinct

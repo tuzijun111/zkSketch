@@ -320,3 +320,25 @@ pub fn kmv_noop_leaf_expose(
         .output
         .0
 }
+
+/// [`kmv_noop_leaf_expose`] with an explicit
+/// [`CommitMode`](crate::commitment::hiding::CommitMode) (revision B2). The
+/// no-op leaf (empty state, all-dummy batch) opens all three commitments
+/// with the public zero salt
+/// ([`Openings::public_zero`](crate::commitment::hiding::Openings::public_zero),
+/// through the explicit `prove_records_public_zero` path), so `ρ_in = ρ_out`
+/// and it still exposes `init == final`; the salts are witnesses, so its VK
+/// is that of every real leaf of the same mode. Under `Plain` it is
+/// [`kmv_noop_leaf_expose`], op for op.
+pub fn kmv_noop_leaf_commit(
+    params: crate::sketch::kmv::KmvParams,
+    expose: Expose,
+    binding: crate::sketch::bind::Binding,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::sketch::kmv::{KmvState, build_kmv_leaf_commit};
+    build_kmv_leaf_commit(params, expose, binding, mode)
+        .prove_records_public_zero(1, KmvState::empty(params.k), vec![None; params.batch])
+        .output
+        .0
+}

@@ -13,7 +13,9 @@
 //! side by side) through the APIs that existed there (`*_decode_vk`,
 //! `*_noop_leaf_expose`), at small shapes. They cover the deployed decoders
 //! (Count-Min, HLL omc, SpaceSaving, GK bandmerge2, Bloom) and the deployed
-//! no-op leaves under both composable layouts and all three bindings. A
+//! no-op leaves under both composable layouts and all three bindings, and
+//! the KMV decoder and leaf through the commitment API that the KMV hiding
+//! commitments added later (recorded on main @ e647585). A
 //! deliberate circuit change, a Plonky3-fork bump or a new `BoundProofShape`
 //! field moves a pin too; re-pin only once that is confirmed as the cause.
 
@@ -225,6 +227,38 @@ fn plain_noop_leaf_vks_are_pinned() {
             check(&format!("gk2 leaf {e:?} {b:?}"), of_proof(&gk), GK2[ei(e)][bi(b)]);
             let kmv = kmv_noop_leaf_expose(KmvParams { k: 4, batch: 4 }, e, b);
             check(&format!("kmv leaf {e:?} {b:?}"), of_proof(&kmv), KMV[ei(e)][bi(b)]);
+        }
+    }
+}
+
+/// The KMV Plain VKs through the B2 commitment API (the KMV hiding
+/// commitments, family id 6, came after the B2 merge). The decoder (k = 4)
+/// through `kmv_decode_vk_commit` with [`CommitMode::Plain`] and through the
+/// pre-B2 entry point `kmv_decode_vk`, pinned per binding to the
+/// fingerprints recorded on the tree before the KMV hiding change (main @
+/// e647585, built side by side; `Legacy` builds the `Semantic` decoder). The
+/// no-op leaf through `kmv_noop_leaf_commit` with [`CommitMode::Plain`] is
+/// the leaf of `kmv_noop_leaf_expose`, whose VKs
+/// [`plain_noop_leaf_vks_are_pinned`] holds to the pre-B2 literals.
+#[test]
+fn plain_kmv_vks_are_pinned_through_the_commit_api() {
+    use crate::decode::kmv::{kmv_decode_vk, kmv_decode_vk_commit, KmvDecodeParams};
+    use crate::recursion::recursive::noop_leaf::kmv_noop_leaf_commit;
+    // Per binding [Legacy, Semantic, Bound].
+    const KMV_DEC: [Pin; 3] = [
+        (0x8f9f_a6f3_aaf6_b97f, 0x4fbf_20bf_96a1_916f),
+        (0x8f9f_a6f3_aaf6_b97f, 0x4fbf_20bf_96a1_916f),
+        (0x8982_758f_3700_f5ca, 0x4fbf_20bf_96a1_916f),
+    ];
+    let plain = CommitMode::Plain;
+    let dp = KmvDecodeParams { k: 4, release: ReleasePolicy::Identity };
+    let kp = KmvParams { k: 4, batch: 4 };
+    for b in BINDINGS {
+        check(&format!("kmv decoder {b:?} (commit)"), of_vk(&kmv_decode_vk_commit(dp, b, plain)), KMV_DEC[bi(b)]);
+        check(&format!("kmv decoder {b:?}"), of_vk(&kmv_decode_vk(dp, b)), KMV_DEC[bi(b)]);
+        for e in EXPOSES {
+            let pinned = of_proof(&kmv_noop_leaf_expose(kp, e, b));
+            check(&format!("kmv leaf {e:?} {b:?} (commit)"), of_proof(&kmv_noop_leaf_commit(kp, e, b, plain)), pinned);
         }
     }
 }

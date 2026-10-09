@@ -3,7 +3,7 @@
 //!
 //! Benchmarks the three composition modes — **per-batch proof chain**, the
 //! **recursive linear chain**, and the **streaming forest** — over a stream of
-//! `t = ⌈N/m⌉` transition leaves, for five sketch families each pinned to one
+//! `t = ⌈N/m⌉` transition leaves, for six sketch families each pinned to one
 //! leaf variant:
 //!
 //! | family | variant           | leaf prover (exposed)          |
@@ -13,11 +13,14 @@
 //! | ss     | certified         | `prove_ss_full_exposed`        |
 //! | gk     | bandmerge2        | `prove_gkb2_exposed`           |
 //! | bloom  | omc               | `build_bloom_omc_leaf_expose`  |
+//! | kmv    | kmv (bottom-`k`)  | `build_kmv_leaf_commit`        |
 //!
 //! (The first four are the measured families; the Bloom filter, a generality
-//! instance of the timestamped OR rebind, runs through the same harness.)
+//! instance of the timestamped OR rebind, and the KMV / bottom-`k`
+//! distinct-count sketch, a verified sorted reduction, run through the same
+//! harness.)
 //!
-//! All five leaves surface their `(Com(S_{i-1}), Com(S_i))` boundary via the
+//! All six leaves surface their `(Com(S_{i-1}), Com(S_i))` boundary via the
 //! Expose NPO, so the **family-agnostic** folds
 //! ([`prove_forest_over`](crate::recursion::recursive::expose_forest::prove_forest_over)
 //! Bentley–Saxe tree, [`prove_chain_over`](crate::recursion::recursive::expose_forest::prove_chain_over)
@@ -55,7 +58,8 @@
 //!
 //! With a non-empty `query_at` schedule (1-based batch indices), a **query
 //! leaf** (the family's `src/decode/*` circuit: cm point count, hll
-//! cardinality, ss top-1 mass, gk rank, bloom membership) is proved after each listed batch
+//! cardinality, ss top-1 mass, gk rank, bloom membership, kmv distinct
+//! count) is proved after each listed batch
 //! against the state at that point. Queries at ARBITRARY stream positions
 //! (the paper's operation-stream model: a query OCCUPIES a position, so `n`
 //! points carry `n − ⌊n/Q⌋` update records) are supported by building the
@@ -109,6 +113,7 @@ use crate::decode::gk_bandmerge::{prove_gk2_decode, prove_gk2_decode_commit, Gkb
 use crate::decode::hyperloglog::{
     prove_hll_decode_omc, prove_hll_decode_omc_commit, HllDecodeParams,
 };
+use crate::decode::kmv::{prove_kmv_decode_commit, prove_kmv_decode_with, KmvDecodeParams};
 use crate::decode::spacesaving::{prove_ss_decode, prove_ss_decode_commit, SsDecodeParams};
 use crate::decode::{verify_decode_proof, DecodeProof, DecodeVk, QueryStatement, ReleasePolicy};
 use crate::recursion::recursive::config::ConfigWithFriParams;
@@ -135,6 +140,10 @@ use crate::sketch::hll_omc::{
     build_hll_omc_leaf_commit, commit_hll_omc, commit_hll_omc_with, hll_omc_advance, hll_omc_empty,
     HllOmcParams,
 };
+use crate::sketch::kmv::{
+    build_kmv_leaf_commit, commit_kmv_state, commit_kmv_state_with, kmv_advance, KmvParams,
+    KmvState,
+};
 use crate::sketch::ss_final_full::{
     apply_batch_ss_full, build_ss_full_leaf_commit, commit_ss_state, commit_ss_state_with,
     SsFullParams, SsFullState, SsFullUpdate,
@@ -152,7 +161,8 @@ use super::prover_commit::ProverCommit;
 use crate::commitment::countmin::{commit_countmin, commit_countmin_with};
 
 /// The (family, variant) leaf types the composition benchmark folds: the four
-/// measured families, their Goldilocks variants, and the Bloom filter.
+/// measured families, their Goldilocks variants, the Bloom filter and the
+/// KMV / bottom-`k` sketch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamFamily {
     /// Count-Min, offline-memory-checking rebind (`prove_countmin_omc_exposed`).
@@ -182,6 +192,12 @@ pub enum StreamFamily {
     /// `2^log_w` bits ([`StreamShape::bloom_k`] / [`StreamShape::bloom_log_w`]).
     /// BabyBear only: there is no Goldilocks Bloom leaf.
     BloomOmc,
+    /// KMV / bottom-`k` distinct counting (`crate::sketch::kmv`): the `k`
+    /// smallest distinct 27-bit key hashes, a verified sorted reduction of
+    /// `S_{t-1} ⊎ B_t` ([`StreamShape::kmv_k`]); its query is the
+    /// distinct-count estimate (`crate::decode::kmv`). BabyBear only: there
+    /// is no Goldilocks KMV leaf.
+    KmvSketch,
 }
 
 impl StreamFamily {
@@ -199,6 +215,7 @@ impl StreamFamily {
             "hll_gl" | "hll_omc_gl" | "hyperloglog_gl" => Some(Self::HllOmcGl),
             "cm_gl" | "cm_omc_gl" | "countmin_gl" => Some(Self::CmOmcGl),
             "bloom" | "bloom_omc" | "bloomfilter" | "bloom_filter" => Some(Self::BloomOmc),
+            "kmv" | "kmv_sketch" | "bottom_k" | "bottomk" => Some(Self::KmvSketch),
             _ => None,
         }
     }
@@ -213,6 +230,7 @@ impl StreamFamily {
             Self::HllOmcGl => "hll_omc_gl",
             Self::CmOmcGl => "cm_omc_gl",
             Self::BloomOmc => "bloom_omc",
+            Self::KmvSketch => "kmv",
         }
     }
     pub fn family(self) -> &'static str {
@@ -228,6 +246,7 @@ impl StreamFamily {
             Self::HllOmcGl => "hll_gl",
             Self::CmOmcGl => "cm_gl",
             Self::BloomOmc => "bloom",
+            Self::KmvSketch => "kmv",
         }
     }
     /// The base field of this family's recursion config.
@@ -306,6 +325,9 @@ pub struct StreamShape {
     pub bloom_k: usize,
     /// Bloom filter: bits per slice `W = 2^bloom_log_w` (`7..=20`).
     pub bloom_log_w: usize,
+    /// KMV: capacity `k` = the number of smallest distinct hash values kept
+    /// (a multiple of 4 in `4..=2^15`, `k + m < 2^24`).
+    pub kmv_k: usize,
 }
 
 impl StreamShape {
@@ -323,6 +345,26 @@ impl StreamShape {
         let p = BloomOmcParams { k: self.bloom_k, log_w: self.bloom_log_w, batch: m };
         p.check()?;
         Ok(p)
+    }
+
+    /// The KMV leaf parameters at batch size `m`. Panics on a bad `(k, m)`;
+    /// a runner that takes the shape from configuration calls
+    /// [`Self::check_kmv`] first so the reason is reported.
+    pub fn kmv_params(&self, m: usize) -> KmvParams {
+        self.check_kmv(m).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`Self::kmv_params`] without the panic: the parameters, or why
+    /// `(kmv_k, m)` is not a valid KMV leaf shape.
+    pub fn check_kmv(&self, m: usize) -> Result<KmvParams, String> {
+        let p = KmvParams { k: self.kmv_k, batch: m };
+        p.check()?;
+        Ok(p)
+    }
+
+    /// The KMV distinct-count decoder parameters (identity release).
+    pub fn kmv_decode_params(&self) -> KmvDecodeParams {
+        KmvDecodeParams { k: self.kmv_k, release: ReleasePolicy::Identity }
     }
 }
 
@@ -437,7 +479,8 @@ fn bind_due<'a>(
 /// reported.
 /// `query` is the keyed families' query as the decoder exposes it
 /// ([`cm_query`] for a cm key, [`scalar_query`] for ss `c` / gk value,
-/// [`bloom_query`] for a Bloom key); `None` for hll (cardinality, no query).
+/// [`bloom_query`] for a Bloom key); `None` for hll (cardinality) and kmv
+/// (distinct count), which take no query.
 fn record_query(
     queries: &mut Vec<QueryArt>,
     at_leaf: usize,
@@ -492,6 +535,8 @@ enum QueryState<'a> {
     Gk(&'a Gk2State, u32),
     /// The filter bits, its shape (`batch` ignored) and the probe key.
     Bloom(&'a [u8], BloomOmcParams, u64),
+    /// The KMV state (its capacity is `state.k`); keyless.
+    Kmv(&'a KmvState),
 }
 
 fn prove_query_at(
@@ -598,6 +643,21 @@ fn prove_query_at(
                 )
             }
         },
+        QueryState::Kmv(state) => {
+            let params = KmvDecodeParams { k: state.k, release: id };
+            match mode {
+                CommitMode::Plain => {
+                    (prove_kmv_decode_with(params, state, default_binding()), commit_kmv_state(state))
+                }
+                CommitMode::Hiding => {
+                    let salt = salt_of(CommitFamily::Kmv, &|| state.vals.is_empty());
+                    (
+                        prove_kmv_decode_commit(params, state, default_binding(), mode, &salt),
+                        commit_kmv_state_with(state, mode, &salt),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -623,8 +683,8 @@ fn bloom_query(key: u64) -> [Val; 4] {
 
 /// How the probe key for a **keyed** decode query is chosen at each query event.
 /// Only the keyed families use it — cm (point-count), gk (rank) and bloom
-/// (membership); hll (cardinality) and ss (top-1) take no probe key and ignore
-/// the mode.
+/// (membership); hll (cardinality), ss (top-1) and kmv (distinct count) take
+/// no probe key and ignore the mode.
 ///
 /// `First` is the baseline (the batch's first key, matching the original
 /// behaviour); the others sample against the multiset of keys seen so far,
@@ -746,6 +806,8 @@ pub const PAD_KEY: u32 = u32::MAX;
 //   hll → no sentinel (pads are repeated real keys; `max` is idempotent)
 //   bloom → stripped (a short batch: the leaf fills its free record slots
 //           with the canonical `act = 0` dummy, which ORs in nothing)
+//   kmv → the canonical dummy record IN PLACE (`None`: `act = 0`, all-zero
+//         limbs), which enters the sorted union as the never-kept sentinel
 
 pub fn cm_updates_of(batch: &[u32]) -> Vec<CountMinUpdate> {
     batch
@@ -792,6 +854,23 @@ pub fn hll_keys_of(batch: &[u32]) -> Vec<u64> {
 /// canonical dummy record (`act = 0`, all-zero limbs), a provable no-op.
 pub fn bloom_keys_of(batch: &[u32]) -> Vec<u64> {
     batch.iter().filter(|&&k| k != PAD_KEY).map(|&k| k as u64).collect()
+}
+
+/// KMV records of a wire batch, slot for slot: a real key `Some(k)`, and a
+/// `PAD_KEY` slot the canonical dummy record `None` (`act = 0`, all-zero
+/// limbs: it enters the sorted union as the sentinel `(0, 0)` and is never
+/// kept, a provable no-op). The leaf, the batch commitment
+/// ([`crate::sketch::kmv::kmv_batch_commit`]) and the native replay
+/// ([`kmv_advance_records`]) all take exactly this sequence.
+pub fn kmv_records_of(batch: &[u32]) -> Vec<Option<u64>> {
+    batch.iter().map(|&k| (k != PAD_KEY).then_some(k as u64)).collect()
+}
+
+/// The native KMV batch rule over a record sequence (dummies contribute
+/// nothing): `bottom_k(S ∪ {h(x) : x a real record})`.
+pub fn kmv_advance_records(state: &KmvState, records: &[Option<u64>]) -> KmvState {
+    let keys: Vec<u64> = records.iter().flatten().copied().collect();
+    kmv_advance(state, &keys)
 }
 
 /// Build the batch list for a **mixed workload over an operation stream**:
@@ -1059,6 +1138,18 @@ fn prove_queries_only(
                 }
             }
         }
+        StreamFamily::KmvSketch => {
+            let params = shape.kmv_params(batches[0].len());
+            let mut state = KmvState::empty(params.k);
+            for (bi, batch) in batches.iter().enumerate() {
+                state = kmv_advance_records(&state, &kmv_records_of(batch));
+                if query_due(bi) {
+                    // Distinct-count query (no probe key).
+                    let (dp, c) = prove_query_at(QueryState::Kmv(&state), bi + 1, commit);
+                    record_query(&mut queries, bi + 1, &dp, c, leaf_finals[bi], None, decode_vk);
+                }
+            }
+        }
         StreamFamily::SsCertifiedGl
         | StreamFamily::GkBandmerge2Gl
         | StreamFamily::HllOmcGl
@@ -1153,8 +1244,9 @@ pub(crate) fn measure_queries_dist(
 /// boundary (asserted here), so a verifier holding the composition proof(s) at
 /// `t'` can check the answer against `Com(S_{t'})`. The keyed probes (cm point
 /// count, gk rank) target the key chosen by `query_key_mode` (default `First` =
-/// the batch's first key), as does bloom membership; hll = cardinality and
-/// ss = top-1 heavy-hitter mass are keyless and ignore the mode.
+/// the batch's first key), as does bloom membership; hll = cardinality,
+/// ss = top-1 heavy-hitter mass and kmv = distinct count are keyless and
+/// ignore the mode.
 fn prove_leaves(
     family: StreamFamily,
     shape: StreamShape,
@@ -1374,6 +1466,32 @@ fn prove_leaves(
                     );
                     let (dp, c) = prove_query_at(QueryState::Bloom(&bits, params, key), bi + 1, commit);
                     record_query(&mut queries, bi + 1, &dp, c, leaf_final, Some(bloom_query(key)), decode_vk);
+                }
+            }
+            e
+        }
+        StreamFamily::KmvSketch => {
+            let params = shape.kmv_params(m);
+            let mut state = KmvState::empty(params.k);
+            let e = commit_kmv_state_with(&state, mode, &SaltBb::ZERO);
+            for (bi, batch) in batches.iter().enumerate() {
+                // PAD_KEY slots become the canonical dummy record in place
+                // (the canonical `kmv_records_of` mapping).
+                let records = kmv_records_of(batch);
+                let t = bi as u64 + 1;
+                let mut l = build_kmv_leaf_commit(params, composition_expose(), default_binding(), mode);
+                let leaf = if commit.is_hiding() {
+                    l.prove_records_commit(t, state.clone(), records.clone(), &commit.openings(cf, t))
+                } else {
+                    l.prove_records_at(t, state.clone(), records.clone())
+                };
+                let leaf_final = leaf.final_commit;
+                push(leaf.output, leaf.initial_commit, leaf_final);
+                state = kmv_advance_records(&state, &records);
+                if query_due(bi) {
+                    // Distinct-count query (no probe key).
+                    let (dp, c) = prove_query_at(QueryState::Kmv(&state), bi + 1, commit);
+                    record_query(&mut queries, bi + 1, &dp, c, leaf_final, None, decode_vk);
                 }
             }
             e
@@ -1692,15 +1810,16 @@ mod tests {
     use crate::recursion::recursive::expose_forest::{prove_chain_over, read_exposed_statement};
 
     fn shape() -> StreamShape {
-        StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2, bloom_k: 3, bloom_log_w: 7 }
+        StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2, bloom_k: 3, bloom_log_w: 7, kmv_k: 4 }
     }
 
-    const FAMILIES: [StreamFamily; 5] = [
+    const FAMILIES: [StreamFamily; 6] = [
         StreamFamily::CmOmc,
         StreamFamily::HllOmc,
         StreamFamily::SsCertified,
         StreamFamily::GkBandmerge2,
         StreamFamily::BloomOmc,
+        StreamFamily::KmvSketch,
     ];
 
     /// Both commitment contexts: `Plain` (pre-B2) and `Hiding` under a
@@ -2007,6 +2126,14 @@ mod tests {
                         let key = batches[1][0] as u64;
                         let (dp, c) = prove_query_at(QueryState::Bloom(&bits, params, key), t, &hid);
                         (dp, c, commit_bloom(&bits), Some(bloom_query(key)))
+                    }
+                    StreamFamily::KmvSketch => {
+                        let mut st = KmvState::empty(sh.kmv_k);
+                        for b in &batches {
+                            st = kmv_advance_records(&st, &kmv_records_of(b));
+                        }
+                        let (dp, c) = prove_query_at(QueryState::Kmv(&st), t, &hid);
+                        (dp, c, commit_kmv_state(&st), None)
                     }
                     _ => {
                         let mut st = Gk2State::empty(GkbParams { capacity: sh.capacity, batch: 4, s: sh.gk_s });
@@ -2462,5 +2589,73 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The KMV family end to end in the harness, under both commitment
+    /// modes: the procs engine's query replay ([`prove_queries_only`]) and the
+    /// sim engine's interleaved queries ([`prove_leaves`]) over the
+    /// operation-stream schedule (split and padded leaves: `PAD_KEY` slots
+    /// become in-place dummy records) pin to the same KMV decode VK and expose
+    /// the SAME keyless statements `(Com(S_{t'}), answer)`, with the answer
+    /// the native distinct-count estimate of the replayed state (exact below
+    /// capacity); the replay's answers bind to the leaves' prefix certificate
+    /// against the published log. A hiding query at version 0 opens only the
+    /// genesis (empty) state.
+    #[test]
+    fn kmv_query_replay_matches_sim_and_binds() {
+        if std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive") {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        use p3_field::PrimeCharacteristicRing;
+        let (sh, m, fam) = (shape(), 4usize, StreamFamily::KmvSketch);
+        // 13 operations, a query every 3rd: 9 update records, distinct keys
+        // with repeats, past capacity k = 4.
+        let base: Vec<u32> = [3u32, 5, 3, 8, 13, 21, 5, 34, 55, 3].to_vec();
+        for commit in both_modes() {
+            let Some(mut audit) = QueryAudit::new(fam, &sh, m, commit.mode()) else {
+                eprintln!("skipped: binding off under a legacy opt-in");
+                return;
+            };
+            let (batches, query_at, pads, _) = build_query_schedule_batches(&base, 13, m, 3, fam);
+            assert!(pads > 0, "the schedule splits and pads leaves");
+            let log = super::super::dist_compose::publish_batch_log(fam, &sh, m, &batches, &commit);
+            let (leaves, _, sim) =
+                prove_leaves(fam, sh, &batches, &query_at, QueryKeyMode::UniformStream, &commit, Some(&audit.decode_vk));
+            let finals: Vec<[Val; 8]> = leaves.iter().map(|l| l.final_).collect();
+            let mut replay = prove_queries_only(
+                fam, sh, &batches, &query_at, QueryKeyMode::UniformStream, &commit, &finals, Some(&audit.decode_vk),
+            );
+            assert_eq!(replay.len(), query_at.len());
+            let mut st = KmvState::empty(sh.kmv_k);
+            let mut applied = 0usize;
+            for (a, b) in sim.iter().zip(&replay) {
+                assert_eq!((a.at_leaf, a.statement), (b.at_leaf, b.statement), "{}", commit.label());
+                while applied < a.at_leaf {
+                    st = kmv_advance_records(&st, &kmv_records_of(&batches[applied]));
+                    applied += 1;
+                }
+                let s = b.statement.expect("bound statement");
+                assert_eq!(s.query, [Val::ZERO; 4], "keyless");
+                assert_eq!(s.answer[0], Val::from_u64(crate::sketch::kmv::kmv_estimate(&st)));
+                assert_eq!(s.commit, finals[a.at_leaf - 1], "the query opens leaf t''s final");
+            }
+            for q in replay.iter_mut() {
+                let parts: Vec<CtxPart<'_>> = (1..=q.at_leaf)
+                    .map(|k| (k as u64, k as u64, ForestShape::Leaf, CtxProof::Proof(&leaves[k - 1].output.0)))
+                    .collect();
+                audit.bind(q, &parts, &log).expect("replayed answer binds");
+            }
+        }
+        // Version 0 under Hiding: the empty state opens the genesis anchor;
+        // any other state is refused before proving.
+        let hid = ProverCommit::hiding(SaltSeed::for_tests(4));
+        let empty = KmvState::empty(sh.kmv_k);
+        let (dp, c) = prove_query_at(QueryState::Kmv(&empty), 0, &hid);
+        assert_eq!(c, commit_kmv_state_with(&empty, CommitMode::Hiding, &SaltBb::ZERO), "kmv genesis anchor");
+        check_query_exposure(&dp, c, None, 0);
+        let full = kmv_advance(&empty, &[1, 2, 3, 4, 5]);
+        let r = crate::sketch::forge::catch_msg(|| prove_query_at(QueryState::Kmv(&full), 0, &hid));
+        assert!(r.is_err_and(|e| e.contains("version 0")), "a non-genesis state at version 0");
     }
 }

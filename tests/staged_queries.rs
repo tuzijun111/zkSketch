@@ -23,7 +23,7 @@ use zksketch::experiments::prover_commit::ProverCommit;
 use zksketch::experiments::stream_compose::{QueryKeyMode, StreamFamily, StreamMode, StreamShape};
 
 const SHAPE: StreamShape =
-    StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2, bloom_k: 3, bloom_log_w: 7 };
+    StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2, bloom_k: 3, bloom_log_w: 7, kmv_k: 4 };
 
 fn main() {
     if maybe_run_child() {
