@@ -111,7 +111,7 @@ fork's HEAD). Under `zk`:
 
 - plonky2 at the pinned rev does **not** blind Z: `blind()` joins each Z-blinding row pair with
   `generate_copy` instead of `connect`. `zk` therefore needs a plonky2 build with that one-line
-  fix: `Cargo.toml` pins the fork `July620/plonky2` @ `66427b0` (branch `zk-blinding-fix`).
+  fix: `Cargo.toml` pins the fork `tuzijun111/plonky2` @ `66427b0` (branch `zk-blinding-fix`).
   **A build against upstream plonky2 fails closed**: `config::build_circuit` counts
   the sigma-swapped Z-blinding row pairs, finds 0 instead of one per Z opening (3568 at 2^14),
   and panics, so no zk circuit builds and the default `cargo test` fails; use

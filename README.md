@@ -83,11 +83,13 @@ scripts/run_experiments.sh e1
   auto-installs/selects it when you `cd plonky2`). It is fully decoupled from the
   root build.
 - **Network on first build:** dependencies are pinned to exact GitHub revisions
-  (no crates.io release). Plonky3 core is pinned to one rev; the recursion crates
-  come from a fork (`July620/Plonky3_RangeAir`) that adds the extension-degree-
-  `D>1` `PermuteAir`, `ExposeAir`, and byte-table `RangeAir` support this project
-  needs. Both that fork and Plonky3 core are **public** — no GitHub credentials
-  or authentication are required to build.
+  (no crates.io release). Plonky3 core comes from a fork (`tuzijun111/Plonky3`,
+  branch `zk-logup-mask`: the zero-knowledge LogUp masks); the recursion crates
+  come from a fork (`tuzijun111/Plonky3_RangeAir`, branch `zk-logup-mask`) that
+  adds the extension-degree-`D>1` `PermuteAir`, `ExposeAir`, byte-table
+  `RangeAir` and in-circuit mask support this project needs; the plonky2 backend
+  uses `tuzijun111/plonky2` (branch `zk-blinding-fix`). All three forks are
+  **public** — no GitHub credentials or authentication are required to build.
 - **Spurious `failed to authenticate` / `revision … not found` on first build?**
   That is a transient hiccup in cargo's built-in git client (libgit2) on an
   *anonymous* fetch of the public forks — not a real access problem. Re-run
@@ -112,8 +114,8 @@ scripts/run_experiments.sh e1
   per-bus zero sum (`tests/zk_logup_blinding.rs` runs the guess-and-check
   replay: no candidate matches under `zk`, the true one does without it).
   This needs the `zk-logup-mask` branches of the Plonky3 core fork
-  (`July620/Plonky3` @ `280b1a0`) and of `July620/Plonky3_RangeAir`
-  (@ `ed8ba88`); `Cargo.toml` pins both, so a plain clone builds them.
+  (`tuzijun111/Plonky3` @ `280b1a0`) and of `tuzijun111/Plonky3_RangeAir`
+  (@ `e11b1a6`); `Cargo.toml` pins both, so a plain clone builds them.
   The default build refuses to compile without them: `src/config.rs` names
   one fork-only item of each fork outside any test, so a `zk` build against
   the unforked pins fails (library, binaries, examples and tests) instead of
@@ -388,9 +390,9 @@ scripts/run_decode.sh                 # decode/query circuits (tests + table)
 `semantic` is only sound on the merged soundness fork (decompose coefficients
 bound through `recompose/coeff`, zero IV on every `new_start` sponge row, bound
 constants, full top-byte range check). `Cargo.toml` pins that fork
-(`July620/Plonky3_RangeAir` @ `ed8ba88`, branch `zk-logup-mask`, which also
-carries the LogUp masks, over the Plonky3 core fork `July620/Plonky3` @
-`280b1a0`), so a plain clone links it; no `[patch]` or local fork checkout is
+(`tuzijun111/Plonky3_RangeAir` @ `e11b1a6`, branch `zk-logup-mask`, which
+also carries the LogUp masks, over the Plonky3 core fork `tuzijun111/Plonky3`
+@ `280b1a0`), so a plain clone links it; no `[patch]` or local fork checkout is
 needed.
 `cargo test --release --lib bind::tests::fork_probe_report -- --nocapture`
 prints which of these the linked fork provides.

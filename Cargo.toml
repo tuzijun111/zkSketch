@@ -12,22 +12,22 @@ license = "MIT OR Apache-2.0"
 # STARK prover scales across CPU cores; `bench_v3_prover` in
 # `src/sketch/countmin_v3.rs` lets callers cap the thread count per call via
 # a custom `rayon::ThreadPool`.
-p3-air         = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-baby-bear   = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-batch-stark = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
-p3-challenger  = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-commit      = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-dft         = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
-p3-field       = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-goldilocks  = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-fri         = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-lookup      = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
-p3-matrix      = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-merkle-tree = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-poseidon2   = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-symmetric   = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
-p3-uni-stark   = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
-p3-util        = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
+p3-air         = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-baby-bear   = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-batch-stark = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
+p3-challenger  = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-commit      = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-dft         = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
+p3-field       = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-goldilocks  = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-fri         = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-lookup      = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
+p3-matrix      = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-merkle-tree = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-poseidon2   = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-symmetric   = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-uni-stark   = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
+p3-util        = { git = "https://github.com/tuzijun111/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
 
 # Plonky3-recursion: in-circuit STARK verifier for the merge atom.
 # Sourced from a fork that adds D > 1 PermuteAir support (Phase 8d patch) plus
@@ -35,10 +35,10 @@ p3-util        = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ff
 # necessary for this project's PermuteAir + Recompose + Poseidon2 combined
 # circuits at extension degree D = 4. Upstream Plonky3-recursion at the
 # parent commit (524665d) only exercises D = 1 and panics for D > 1.
-p3-recursion             = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "ed8ba880d4fe8955ed38f68f9c177b80b13644c2" }
-p3-circuit               = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "ed8ba880d4fe8955ed38f68f9c177b80b13644c2" }
-p3-circuit-prover        = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "ed8ba880d4fe8955ed38f68f9c177b80b13644c2", features = ["parallel"] }
-p3-poseidon2-circuit-air = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "ed8ba880d4fe8955ed38f68f9c177b80b13644c2", features = ["parallel"] }
+p3-recursion             = { git = "https://github.com/tuzijun111/Plonky3_RangeAir", rev = "e11b1a6913957147e4f8664c42cde02c5bb54274" }
+p3-circuit               = { git = "https://github.com/tuzijun111/Plonky3_RangeAir", rev = "e11b1a6913957147e4f8664c42cde02c5bb54274" }
+p3-circuit-prover        = { git = "https://github.com/tuzijun111/Plonky3_RangeAir", rev = "e11b1a6913957147e4f8664c42cde02c5bb54274", features = ["parallel"] }
+p3-poseidon2-circuit-air = { git = "https://github.com/tuzijun111/Plonky3_RangeAir", rev = "e11b1a6913957147e4f8664c42cde02c5bb54274", features = ["parallel"] }
 
 postcard           = { version = "1.1", features = ["alloc"] }
 rand               = "0.10"
@@ -73,8 +73,10 @@ lto = "thin"
 codegen-units = 1
 
 # NOTE: The four Plonky3-recursion crates above are pulled from a GitHub fork
-# (https://github.com/July620/Plonky3_RangeAir) that adds D > 1 PermuteAir,
-# ExposeAir, and RangeAir support — no local clone needed for a fresh checkout.
+# (https://github.com/tuzijun111/Plonky3_RangeAir, branch zk-logup-mask) that adds
+# D > 1 PermuteAir, ExposeAir, RangeAir and the zero-knowledge LogUp masks; it
+# builds on a Plonky3 core fork (https://github.com/tuzijun111/Plonky3, branch
+# zk-logup-mask) — no local clone needed for a fresh checkout.
 # If you want to edit the fork against this project (faster iteration), copy
 # `.cargo/config.toml.example` to `.cargo/config.toml` and adjust the paths to
 # point at a local clone of the fork; the `[patch]` section there overrides the
