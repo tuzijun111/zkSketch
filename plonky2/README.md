@@ -111,15 +111,15 @@ fork's HEAD). Under `zk`:
 
 - plonky2 at the pinned rev does **not** blind Z: `blind()` joins each Z-blinding row pair with
   `generate_copy` instead of `connect`. `zk` therefore needs a plonky2 build with that one-line
-  fix (branch `zk-blinding-fix` of a plonky2 fork, not yet hosted), supplied for now by a
-  `[patch."https://github.com/0xPolygonZero/plonky2"]` in a local, git-ignored
-  `.cargo/config.toml`. **A checkout without it fails closed**: `config::build_circuit` counts
+  fix: `Cargo.toml` pins the fork `July620/plonky2` @ `66427b0` (branch `zk-blinding-fix`).
+  **A build against upstream plonky2 fails closed**: `config::build_circuit` counts
   the sigma-swapped Z-blinding row pairs, finds 0 instead of one per Z opening (3568 at 2^14),
-  and panics, so no zk circuit builds and the default `cargo test` fails. Use
-  `--no-default-features` there until `Cargo.toml` pins the fork. `tests/zk_blinding.rs` also
+  and panics, so no zk circuit builds and the default `cargo test` fails; use
+  `--no-default-features` with an upstream plonky2. `tests/zk_blinding.rs` also
   runs a guess-and-check attack on the opened Z and partial products, which reproduces 22 of 22
   openings without the fix, in both feature modes.
-- With the local `[patch]`, every cargo command rewrites the tracked `Cargo.lock` (the four
+- If you wire a local plonky2 checkout in through a `[patch]`, every cargo command rewrites the
+  tracked `Cargo.lock` (the four
   plonky2 crates lose their `source = "git+..."` lines). Do not commit that: check
   `git diff --quiet Cargo.lock` first and put back the committed lock if it changed.
 - The hiding is plonky2's heuristic ZK, with no formal proof. The wires get one random row per

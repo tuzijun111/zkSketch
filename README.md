@@ -111,9 +111,9 @@ scripts/run_experiments.sh e1
   the lookup challenges; the revealed sums are then uniform subject to the
   per-bus zero sum (`tests/zk_logup_blinding.rs` runs the guess-and-check
   replay: no candidate matches under `zk`, the true one does without it).
-  This needs the `zk-logup-mask` branches of the Plonky3 core fork and of
-  `July620/Plonky3_RangeAir` (until `Cargo.toml` pins them, wire both in
-  through `.cargo/config.toml`, see `.cargo/config.toml.example`, Option 3).
+  This needs the `zk-logup-mask` branches of the Plonky3 core fork
+  (`July620/Plonky3` @ `280b1a0`) and of `July620/Plonky3_RangeAir`
+  (@ `ed8ba88`); `Cargo.toml` pins both, so a plain clone builds them.
   The default build refuses to compile without them: `src/config.rs` names
   one fork-only item of each fork outside any test, so a `zk` build against
   the unforked pins fails (library, binaries, examples and tests) instead of
@@ -388,8 +388,10 @@ scripts/run_decode.sh                 # decode/query circuits (tests + table)
 `semantic` is only sound on the merged soundness fork (decompose coefficients
 bound through `recompose/coeff`, zero IV on every `new_start` sponge row, bound
 constants, full top-byte range check). `Cargo.toml` pins that fork
-(`July620/Plonky3_RangeAir` @ `fbcc78f`), so a plain clone links it; no
-`[patch]` or local fork checkout is needed.
+(`July620/Plonky3_RangeAir` @ `ed8ba88`, branch `zk-logup-mask`, which also
+carries the LogUp masks, over the Plonky3 core fork `July620/Plonky3` @
+`280b1a0`), so a plain clone links it; no `[patch]` or local fork checkout is
+needed.
 `cargo test --release --lib bind::tests::fork_probe_report -- --nocapture`
 prints which of these the linked fork provides.
 

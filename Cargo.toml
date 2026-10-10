@@ -12,22 +12,22 @@ license = "MIT OR Apache-2.0"
 # STARK prover scales across CPU cores; `bench_v3_prover` in
 # `src/sketch/countmin_v3.rs` lets callers cap the thread count per call via
 # a custom `rayon::ThreadPool`.
-p3-air         = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-baby-bear   = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-batch-stark = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
-p3-challenger  = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-commit      = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-dft         = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
-p3-field       = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-goldilocks  = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-fri         = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-lookup      = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
-p3-matrix      = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-poseidon2   = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-symmetric   = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803" }
-p3-uni-stark   = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
-p3-util        = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1401a62982ceaf952c5e4a829b61803", features = ["parallel"] }
+p3-air         = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-baby-bear   = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-batch-stark = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
+p3-challenger  = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-commit      = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-dft         = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
+p3-field       = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-goldilocks  = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-fri         = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-lookup      = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
+p3-matrix      = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-merkle-tree = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-poseidon2   = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-symmetric   = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217" }
+p3-uni-stark   = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
+p3-util        = { git = "https://github.com/July620/Plonky3", rev = "280b1a07ffa959a30a9bd86959bcd13e13895217", features = ["parallel"] }
 
 # Plonky3-recursion: in-circuit STARK verifier for the merge atom.
 # Sourced from a fork that adds D > 1 PermuteAir support (Phase 8d patch) plus
@@ -35,10 +35,10 @@ p3-util        = { git = "https://github.com/Plonky3/Plonky3", rev = "56952503e1
 # necessary for this project's PermuteAir + Recompose + Poseidon2 combined
 # circuits at extension degree D = 4. Upstream Plonky3-recursion at the
 # parent commit (524665d) only exercises D = 1 and panics for D > 1.
-p3-recursion             = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287" }
-p3-circuit               = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287" }
-p3-circuit-prover        = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287", features = ["parallel"] }
-p3-poseidon2-circuit-air = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "fbcc78fd3bfbcb5c7a3b84a05a68b6e5b209f287", features = ["parallel"] }
+p3-recursion             = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "ed8ba880d4fe8955ed38f68f9c177b80b13644c2" }
+p3-circuit               = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "ed8ba880d4fe8955ed38f68f9c177b80b13644c2" }
+p3-circuit-prover        = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "ed8ba880d4fe8955ed38f68f9c177b80b13644c2", features = ["parallel"] }
+p3-poseidon2-circuit-air = { git = "https://github.com/July620/Plonky3_RangeAir", rev = "ed8ba880d4fe8955ed38f68f9c177b80b13644c2", features = ["parallel"] }
 
 postcard           = { version = "1.1", features = ["alloc"] }
 rand               = "0.10"
@@ -53,14 +53,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # `--no-default-features` for the plain (non-hiding) PCS. See src/config.rs.
 default = ["zk"]
 zk = []
-# TEST-ONLY: exposes `CmOmcLeafCircuit::prove_epoch_with_mask_hook` for the
-# zero-mask positive control in tests/zk_logup_blinding.rs. It must be enabled
-# together with the forks' own hook, which this manifest cannot name while it
-# pins the unforked Plonky3_RangeAir (Cargo rejects a dependency feature the
-# pinned revision lacks, even when unused):
-#   cargo test --release --features test-hooks,p3-circuit-prover/test-hooks --test zk_logup_blinding
+# TEST-ONLY: exposes `CmOmcLeafCircuit::prove_epoch_with_mask_hook` (and the
+# forks' own mask hook) for the zero-mask positive control in
+# tests/zk_logup_blinding.rs:
+#   cargo test --release --features test-hooks --test zk_logup_blinding
 # Never enable it outside tests.
-test-hooks = []
+test-hooks = ["p3-circuit-prover/test-hooks"]
 
 # Procs regression test of the staged-wave engine: it spawns its workers by
 # re-executing itself, so it runs its own `main` (no libtest harness).

@@ -13,7 +13,7 @@ license = "MIT OR Apache-2.0"
 # NOTE: both the crates.io release and git `main` need nightly
 # (`#![feature(specialization)]`; see rust-toolchain.toml). Pinned to the exact
 # commit the results were measured at.
-plonky2 = { git = "https://github.com/0xPolygonZero/plonky2", rev = "5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f" }
+plonky2 = { git = "https://github.com/July620/plonky2", rev = "66427b0ed22d7fe36f575adc117b745a2c8f75f4" }
 anyhow = "1.0"
 # Used only to report the prover thread count in the benchmark output, matching
 # the plonky3 `countmin_final` benchmarks. plonky2 already depends on rayon.

@@ -366,7 +366,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "plonky2"
 version = "1.1.0"
-source = "git+https://github.com/0xPolygonZero/plonky2?rev=5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f#5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f"
+source = "git+https://github.com/July620/plonky2?rev=66427b0ed22d7fe36f575adc117b745a2c8f75f4#66427b0ed22d7fe36f575adc117b745a2c8f75f4"
 dependencies = [
  "ahash",
  "anyhow",
@@ -390,7 +390,7 @@ dependencies = [
 [[package]]
 name = "plonky2_field"
 version = "1.0.0"
-source = "git+https://github.com/0xPolygonZero/plonky2?rev=5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f#5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f"
+source = "git+https://github.com/July620/plonky2?rev=66427b0ed22d7fe36f575adc117b745a2c8f75f4#66427b0ed22d7fe36f575adc117b745a2c8f75f4"
 dependencies = [
  "anyhow",
  "itertools",
@@ -405,7 +405,7 @@ dependencies = [
 [[package]]
 name = "plonky2_maybe_rayon"
 version = "1.0.0"
-source = "git+https://github.com/0xPolygonZero/plonky2?rev=5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f#5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f"
+source = "git+https://github.com/July620/plonky2?rev=66427b0ed22d7fe36f575adc117b745a2c8f75f4#66427b0ed22d7fe36f575adc117b745a2c8f75f4"
 dependencies = [
  "rayon",
 ]
@@ -413,7 +413,7 @@ dependencies = [
 [[package]]
 name = "plonky2_util"
 version = "1.0.0"
-source = "git+https://github.com/0xPolygonZero/plonky2?rev=5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f#5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f"
+source = "git+https://github.com/July620/plonky2?rev=66427b0ed22d7fe36f575adc117b745a2c8f75f4#66427b0ed22d7fe36f575adc117b745a2c8f75f4"
 
 [[package]]
 name = "postcard"
