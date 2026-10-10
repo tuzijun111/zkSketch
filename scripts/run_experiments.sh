@@ -215,6 +215,7 @@ if [[ "$want_p3" == 1 ]]; then
 fi
 if [[ "$want_p2" == 1 ]]; then
   echo "-- plonky2 (SNARK) --"  # plonky2/ pins nightly via rust-toolchain.toml
+  echo "   note: plonky2 proofs are NOT zero-knowledge (CircuitConfig zero_knowledge = false); only the plonky3 rows are"
   ( cd plonky2 && cargo run --release --example "$P2_EX" )
 fi
 

@@ -787,9 +787,10 @@ mod tests {
             (Binding::Bound, [463599477, 1112163925, 541462878, 1485602053, 736039150, 1630584522, 230137302, 1981838388]),
             (Binding::Legacy, [228825302, 1995195332, 1399604520, 922024243, 1544049975, 1169568391, 1127353679, 1729298590]),
         ];
-        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
-        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
-        // 3acdc06); equal across separate processes.
+        // The same circuits under the `zk` feature: hiding-PCS VKs, recorded on the
+        // zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06), equal
+        // across separate processes. The LogUp masks do not move them (main-trace
+        // columns; see `config::tests::leaf_opens_logup_mask_columns`).
         #[cfg(feature = "zk")]
         let recorded = [
             (Binding::Semantic, [701891560u64, 1553654348, 625590183, 1637796432, 1111255607, 277584737, 1732842313, 25210588]),

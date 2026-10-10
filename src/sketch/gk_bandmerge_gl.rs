@@ -3220,9 +3220,10 @@ mod tests {
             (Expose::Interval, Binding::Semantic, [1177917408512823668, 7183958709189815382, 5583135678615390458, 15052598159657248002]),
             (Expose::Interval, Binding::Bound, [1177917408512823668, 7183958709189815382, 5583135678615390458, 15052598159657248002]),
         ];
-        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
-        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
-        // 3acdc06); equal across separate processes.
+        // The same circuits under the `zk` feature: hiding-PCS VKs, recorded on the
+        // zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06), equal
+        // across separate processes. The LogUp masks do not move them (main-trace
+        // columns; see `config::tests::leaf_opens_logup_mask_columns`).
         #[cfg(feature = "zk")]
         let recorded = [
             (Expose::None, Binding::Legacy, [10596668003548948268, 15775127507371649029, 2880162508455786619, 5418139929418936883]),
@@ -3283,9 +3284,10 @@ mod tests {
             (Expose::Interval, Binding::Semantic, [17948282801466964897, 16583181577784489926, 13993560794779333575, 3530354182268625117]),
             (Expose::Interval, Binding::Bound, [17948282801466964897, 16583181577784489926, 13993560794779333575, 3530354182268625117]),
         ];
-        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
-        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
-        // 3acdc06); equal across separate processes.
+        // The same circuits under the `zk` feature: hiding-PCS VKs, recorded on the
+        // zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06), equal
+        // across separate processes. The LogUp masks do not move them (main-trace
+        // columns; see `config::tests::leaf_opens_logup_mask_columns`).
         #[cfg(feature = "zk")]
         let recorded = [
             (Expose::None, Binding::Legacy, [8160412530494249895, 2388254384114998720, 1684633681978947491, 13067799765691047662]),

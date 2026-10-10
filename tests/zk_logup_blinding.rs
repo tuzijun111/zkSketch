@@ -27,6 +27,25 @@
 //! `--no-default-features` the same code runs as the unmasked control: the
 //! sums repeat across proofs, the constant table's sum is recomputed
 //! exactly, and the replay finds exactly the true key.
+//!
+//! The `zk` negative result ("no candidate matches") is only meaningful if
+//! the replay reproduces the `zk` transcript exactly (instance bindings with
+//! the doubled hiding domain, hiding-PCS commitments, mask-widened main
+//! traces); a replay that drifted after a transcript change would also find
+//! nothing. The `--no-default-features` control cannot show that, since it
+//! replays a different (non-hiding) transcript. The third test does, in the
+//! `zk` build itself: `zero_masks_make_the_zk_replay_exact` proves the same
+//! leaf under `zk` with every mask replaced by zero through the forks'
+//! test-only mask hook and requires the replay to reproduce the constant
+//! table's sum and to single out the secret key. It needs the hook, so it
+//! runs only with
+//!
+//! ```text
+//! cargo test --release --features test-hooks,p3-circuit-prover/test-hooks --test zk_logup_blinding
+//! ```
+//!
+//! (an out-of-tree check that zeroed every mask inside the core fork made
+//! both `zk` assertions above fail, as expected).
 
 use std::collections::BTreeMap;
 
@@ -239,16 +258,12 @@ fn revealed_sums_are_fresh_per_proof_and_zero_sum_per_bus() {
     }
 }
 
-/// Guess-and-check replay. The verifier knows everything but one batch key,
-/// replays the transcript to the lookup challenges, and for every candidate
-/// key rebuilds the public-input table and recomputes its revealed sum.
-/// Masked: no candidate (the true key included) reproduces it, and neither
-/// does the constant table's sum, which needs no guess at all. Control
-/// (`--no-default-features`): the constant table's sum is reproduced and
-/// exactly one candidate, the true key, matches.
-#[test]
-fn guess_and_check_replay_of_revealed_sums() {
-    let leaf = prove_leaf();
+/// Guess-and-check replay of one proved leaf. The verifier knows everything
+/// but one batch key, replays the transcript to the lookup challenges, and
+/// for every candidate key rebuilds the public-input table and recomputes
+/// its revealed sum. Returns `(constant-table sums reproduced, constant-table
+/// sums, matching candidate keys)`.
+fn replay_guess_and_check(leaf: &CountMinOmcProof) -> (usize, usize, Vec<u64>) {
     let (proof, data) = (&leaf.output.0, &*leaf.output.1);
 
     // The guess function reproduces the leaf's own commitments.
@@ -288,17 +303,57 @@ fn guess_and_check_replay_of_revealed_sums() {
             hits.push(key);
         }
     }
+    (const_hits, const_sums.len(), hits)
+}
 
+/// Guess-and-check replay of an honest proof. Masked: no candidate (the true
+/// key included) reproduces the public table's revealed sum, and neither
+/// does the constant table's sum, which needs no guess at all. Control
+/// (`--no-default-features`): the constant table's sum is reproduced and
+/// exactly one candidate, the true key, matches.
+#[test]
+fn guess_and_check_replay_of_revealed_sums() {
+    let (const_hits, const_len, hits) = replay_guess_and_check(&prove_leaf());
     println!(
-        "zk = {ZK}: const table {const_hits}/{} sums reproduced; public table: {} of {CANDIDATES} keys match ({hits:?}), secret {SECRET_KEY}",
-        const_sums.len(),
+        "zk = {ZK}: const table {const_hits}/{const_len} sums reproduced; public table: {} of {CANDIDATES} keys match ({hits:?}), secret {SECRET_KEY}",
         hits.len()
     );
     if ZK {
         assert_eq!(const_hits, 0, "zk: even a sum of public data only is masked");
         assert!(hits.is_empty(), "zk: no key guess reproduces the revealed sum");
     } else {
-        assert_eq!(const_hits, const_sums.len(), "control: the replay is exact");
+        assert_eq!(const_hits, const_len, "control: the replay is exact");
         assert_eq!(hits, vec![SECRET_KEY], "control: the unmasked sum singles out the secret key");
     }
+}
+
+/// Positive control in the `zk` build: the same leaf proved under `zk` with
+/// every LogUp mask set to zero (through the forks' test-only hook; the proof
+/// still verifies, zero masks balance every bus) reveals the true sums, and
+/// the same replay then reproduces the constant table's sum and singles out
+/// the secret key. So the replay matches the `zk` transcript exactly, and the
+/// `zk` result of `guess_and_check_replay_of_revealed_sums` is due to the
+/// masks, not to a replay that drifted.
+#[cfg(all(feature = "zk", feature = "test-hooks"))]
+#[test]
+fn zero_masks_make_the_zk_replay_exact() {
+    let mut zeroed = 0usize;
+    let leaf = build_countmin_omc_leaf_expose(PARAMS, Expose::None, BINDING).prove_epoch_with_mask_hook(
+        prior(),
+        batch(SECRET_KEY),
+        |plan| {
+            for m in plan.committed.iter_mut().flatten() {
+                *m = Challenge::ZERO;
+                zeroed += 1;
+            }
+        },
+    );
+    assert!(zeroed > 2, "the hook ran and saw the masks ({zeroed})");
+    let (const_hits, const_len, hits) = replay_guess_and_check(&leaf);
+    println!(
+        "zk = {ZK}, masks zeroed ({zeroed}): const table {const_hits}/{const_len} sums reproduced; public table: {} of {CANDIDATES} keys match ({hits:?}), secret {SECRET_KEY}",
+        hits.len()
+    );
+    assert_eq!(const_hits, const_len, "zero masks: the zk replay is exact");
+    assert_eq!(hits, vec![SECRET_KEY], "zero masks: the revealed sum singles out the secret key");
 }

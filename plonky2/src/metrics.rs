@@ -244,6 +244,9 @@ fn json_escape(s: &str) -> String {
 
 /// Write `env.json` capturing the machine + backend environment. `extras` are
 /// backend-specific `(key, value)` pairs (field, hash, FRI params, commit hash).
+/// Always records `zero_knowledge` (`on` / `off`) from [`crate::config::circuit_config`]:
+/// this backend's proofs are not zero-knowledge (`off`), unlike the plonky3
+/// backend's default `zk` build.
 pub fn write_env_json(dir: &std::path::Path, extras: &[(&str, String)]) -> std::path::PathBuf {
     std::fs::create_dir_all(dir).expect("create results dir");
     let cores = thread::available_parallelism().map(|n| n.get()).unwrap_or(0);
@@ -264,6 +267,10 @@ pub fn write_env_json(dir: &std::path::Path, extras: &[(&str, String)]) -> std::
         ("cpu_model".into(), cpu),
         ("mem_total".into(), mem),
         ("rustc".into(), rustc),
+        (
+            "zero_knowledge".into(),
+            if crate::config::circuit_config().zero_knowledge { "on" } else { "off" }.into(),
+        ),
     ];
     for (k, v) in extras {
         pairs.push((k.to_string(), v.clone()));

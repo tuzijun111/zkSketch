@@ -22,6 +22,6 @@ QLOG_BINDV,at_leaf=1,decode_ms=1.005,verify_ms=20.244;20.022;19.985,check_ms=0.0
 QLOG_BIND,at_leaf=2,ctx_proofs=1,intervals=1-2,interval_bytes=752461,bind_ms=18.962
 QLOG_BINDV,at_leaf=2,decode_ms=0.749,verify_ms=18.204;18.065;18.047,check_ms=0.009
   kmv           k1024      m=2048 t=2   [forest   ] cores=32 mach=1 procs=1 total=11.43s (wpass=0.00s leaf=11.42s merge=4.9s [fold 4.9s + xmerge 0.00s]) verify=0.019s proof=734.8KB comm=734.8KB/1 msgs (200Mbps model 31.3ms) rss=3078MB | q=2 /query: 444.0ms prove, 603.6KB, 1.0 ctx, bind 20.1ms
-results -> /home/binbin/zkSketch/.claude/worktrees/wf_e14f455f-2a8-1/results/zk2_zksketch_kmv.csv
+results -> $ZKS/results/zk2_zksketch_kmv.csv
 RSSTREE,zks_kmv,main_peak_rss_mb=3593.6,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=3077.8,wall_s=29.3,rc=0
 # end 2026-10-09T20:48:49+08:00 rc=0 wall_s=30 load1_end=33.70

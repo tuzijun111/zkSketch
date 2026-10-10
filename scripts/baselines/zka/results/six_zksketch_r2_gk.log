@@ -65,6 +65,6 @@ QLOG_BINDV,at_leaf=7,decode_ms=0.549|0.416|0.558,verify_ms=13.043;12.919;12.878;
 QLOG_BIND,at_leaf=8,ctx_proofs=1,intervals=1-8,interval_bytes=528321,bind_ms=13.633
 QLOG_BINDV,at_leaf=8,decode_ms=0.559,verify_ms=13.042;12.916;12.872;12.842;12.830,check_ms=0.032
   gk_bandmerge2 cap2048_s51 m=2048 t=8   [forest   ] cores=32 mach=1 procs=1 total=143.52s (wpass=0.01s leaf=143.50s merge=10.6s [fold 10.6s + xmerge 0.00s]) verify=0.016s proof=515.9KB comm=515.9KB/1 msgs (200Mbps model 25.6ms) rss=19848MB | q=8 /query: 386.7ms prove, 511.3KB, 1.6 ctx, bind 25.8ms
-results -> /home/binbin/zkSketch/.claude/worktrees/wf_e14f455f-2a8-1/results/six_zksketch_r2_gk.csv
+results -> $ZKS/results/six_zksketch_r2_gk.csv
 RSSTREE,zks_gk,main_peak_rss_mb=19473.0,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=19848.4,wall_s=214.3,rc=0
 # end 2026-10-09T19:28:38+08:00 rc=0 wall_s=215 load1_end=19.76

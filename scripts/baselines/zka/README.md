@@ -773,11 +773,25 @@ plain textbook per-record code in their per-epoch pipeline with query-time merge
 (`ss_mg/`, `gk_bm2/`) are not used here.
 
 > **Zero knowledge differs.** RISC Zero succinct receipts are zero-knowledge.
-> zkSketch's proofs in this run are **not** zero-knowledge: the default build
-> (Cargo feature `zk` off) uses the plain `TwoAdicFriPcs`, not `HidingFriPcs`.
-> zkSketch does use hiding (salted Poseidon2) state commitments
+> zkSketch's proofs in this run are **not** zero-knowledge: the build it used
+> (Cargo feature `zk` off, the default at the time; `six_zksketch_*` and
+> `six_zksketch_r2_*`, `features=default`) used the plain `TwoAdicFriPcs`, not
+> `HidingFriPcs`. zkSketch does use hiding (salted Poseidon2) state commitments
 > (`ZKSKETCH_COMMIT` default `hiding`, OS-seeded salt); zk-Analytics commits with
 > unsalted SHA-256. Neither difference is priced into the numbers below.
+>
+> **The `zk` rows are pre-masking.** `zk2_zksketch_*` and `tiny_zksketch_*`
+> (`features=zk-default`, zkSketch `da4ff6e`) and any `six_zksketch_zk_*` set were
+> measured with `HidingFriPcs` on the UNFORKED Plonky3 / Plonky3_RangeAir pins,
+> i.e. before the LogUp masks (`src/config.rs`, "LogUp sums: masked per global
+> interaction"): their proofs reveal unmasked LogUp sums, which a verifier can
+> test witness guesses against, so they are not zero-knowledge either (e.g.
+> `zk2_zksketch_cm.csv` has a 752,564-byte root; a re-run of that exact CM shape
+> on 2026-10-10 gave 752,728 bytes unmasked and 804,048 masked, and took 26.2 s
+> unmasked vs 30.3 s masked). The masking costs the composed run more than the
+> leaf (`src/config.rs`, "Cost of the masks"); re-measure on the masked build
+> (its CSV rows say `pcs=hiding,logup_mask=on`) before quoting zkSketch
+> zero-knowledge numbers.
 
 ### Configuration (both sides identical)
 
@@ -1007,7 +1021,8 @@ zkS = zkSketch. Ratios are zkA / zkS.
 
 - **Zero knowledge (read this first).** RISC Zero succinct receipts are
   zero-knowledge; zkSketch's proofs here are not (`TwoAdicFriPcs`; the `zk` feature
-  that swaps in `HidingFriPcs` was off). Turning it on costs zkSketch prove time that
+  that swaps in `HidingFriPcs` was off; the later `zk` rows are pre-masking, see the
+  note at the top of this section). Turning it on costs zkSketch prove time that
   these rows do not contain. In the other direction, zkSketch's state commitments
   are hiding (salted) and zk-Analytics' are unsalted SHA-256, which does not hide
   the epoch state.

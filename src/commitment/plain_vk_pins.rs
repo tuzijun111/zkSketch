@@ -22,12 +22,18 @@
 //! The literals above are the non-ZK build's (`--no-default-features`); they
 //! are compiled only without the `zk` feature and stay byte-for-byte the
 //! pre-B2 values. The `zk` build (the default) proves every circuit with the
-//! hiding PCS and per-interaction LogUp masks, which widens each main trace
-//! and changes every VK, so each table has a `#[cfg(feature = "zk")]` twin:
-//! the same shapes, checked through the same paths and assertions, recorded
-//! on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06)
-//! and equal across separate processes (VK derivation is deterministic under
-//! `zk`: the preprocessed commitment is not randomized).
+//! hiding PCS, which commits each preprocessed trace on its doubled domain
+//! and so changes every VK commitment; each table therefore has a
+//! `#[cfg(feature = "zk")]` twin: the same shapes, checked through the same
+//! paths and assertions, recorded on the zk-logup-mask forks (Plonky3
+//! 280b1a07, Plonky3_RangeAir 3acdc06) and equal across separate processes
+//! (VK derivation is deterministic under `zk`: the preprocessed commitment is
+//! not randomized). These twins pin the hiding PCS, NOT the LogUp masks: the
+//! mask columns live in the main trace, which no leaf or decoder VK commits
+//! to, so the same values come out of a hiding build against the unmasked
+//! forks. The masks are checked by `config::tests::leaf_opens_logup_mask_columns`
+//! and `tests/zk_logup_blinding.rs` (and they do move every merge and root
+//! circuit, hence every derived root VK).
 
 use p3_circuit_prover::BatchStarkProof;
 use p3_field::{BasedVectorSpace, PrimeField32};

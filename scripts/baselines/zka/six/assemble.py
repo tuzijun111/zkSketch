@@ -13,7 +13,8 @@ Inputs (all in <results dir>):
     six_zka_vt_jobs.csv
   zkSketch side (`run_zks.sh`), one exp_compose run per tag and run set:
     six_zksketch_r2_<tag>.csv/.log   default build (no `zk` feature): the PRIMARY zkSketch numbers
-    six_zksketch_zk_<tag>.csv/.log   `--features zk` build (HidingFriPcs)
+    six_zksketch_zk_<tag>.csv/.log   `--features zk` build (HidingFriPcs), measured before the
+                                     LogUp-mask forks (revealed LogUp sums unmasked)
     six_zksketch_<tag>.csv/.log      the first run (r1), default build, kept as a repeat
     <set>_runs.csv                   gate, load, RSSTREE peaks per run
 Exact answers are recomputed here from the same 16,384 AOL records.

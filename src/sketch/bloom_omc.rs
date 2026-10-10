@@ -1878,9 +1878,10 @@ mod tests {
             ((3, 7, 8, 6), (0x5799_0f46_158c_a38e, 0xb2c4_1ac7_ed6a_d550)),
             ((7, 8, 4, 3), (0x6e87_0de0_0d50_0e7b, 0xc986_76c8_919c_a78b)),
         ];
-        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
-        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
-        // 3acdc06); equal across separate processes.
+        // The same circuits under the `zk` feature: hiding-PCS VKs, recorded on the
+        // zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06), equal
+        // across separate processes. The LogUp masks do not move them (main-trace
+        // columns; see `config::tests::leaf_opens_logup_mask_columns`).
         #[cfg(feature = "zk")]
         const PINNED: [((usize, usize, usize, usize), (u64, u64)); 2] = [
             ((3, 7, 8, 6), (0xd9f0_8d56_6a6c_eac6, 0x395b_b466_75fb_5f14)),

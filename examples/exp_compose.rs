@@ -136,7 +136,7 @@
 //!   scatter_state_bytes,scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,
 //!   local_fold_ms,merges_local,merges_cross,cross_rounds,
 //!   comm_msgs,comm_bytes,comm_ms_measured,comm_model_ms,merge_total_ms,
-//!   query_bind_ms,query_bind_ms_avg,commit,salt_seed,status
+//!   query_bind_ms,query_bind_ms_avg,commit,salt_seed,pcs,logup_mask,status
 //!
 //! ## Commitments (`ZKSKETCH_COMMIT`, `ZKSKETCH_SALT_SEED`)
 //! The run's commitment mode is read ONCE (`ProverCommit::from_env`):
@@ -151,6 +151,10 @@
 //! comes from `ZKSKETCH_SALT_SEED` (64 hex characters) or the OS RNG and is
 //! never printed; the `commit` / `salt_seed` columns (and env.json) record
 //! the mode and the seed's source (`env` / `os`; `n/a` under `plain`).
+//! Separately, the `pcs` / `logup_mask` columns (and env.json) record the
+//! proof system this binary was built with: `hiding` / `on` for the default
+//! `zk` build (hiding PCS, masked LogUp sums; it only compiles against the
+//! LogUp-mask forks), `nonhiding` / `off` for `--no-default-features`.
 //! `ZKSKETCH_COMMIT=plain` runs the pre-B2 circuits, commitments and VKs byte
 //! for byte. The Bloom filter has hiding commitments too (family id 5), and
 //! so does the KMV sketch (family id 6: hiding leaf, no-op leaf and
@@ -640,12 +644,14 @@ fn main() {
     let _ = std::fs::remove_dir_all(&proof_base);
 
     println!(
-        "Stream compose (plonky3) — N={n} datasets={datasets:?} families={:?} modes={:?} m={batches_m:?} cores={cores_list:?} machines={machines_list:?} exec={} commit={} salt_seed={} (avail={avail}){}",
+        "Stream compose (plonky3) — N={n} datasets={datasets:?} families={:?} modes={:?} m={batches_m:?} cores={cores_list:?} machines={machines_list:?} exec={} commit={} salt_seed={} pcs={} logup_mask={} (avail={avail}){}",
         families.iter().map(|f| f.label()).collect::<Vec<_>>(),
         modes.iter().map(|m| m.label()).collect::<Vec<_>>(),
         if exec_procs { "procs" } else { "sim" },
         commit.label(),
         commit.seed_label(),
+        zksketch::config::pcs_label(),
+        zksketch::config::logup_mask_label(),
         if query_every_ops > 0 {
             format!(
                 " MIXED: every {query_every_ops}-th stream position is a query (occupies the \
@@ -731,7 +737,12 @@ fn main() {
         "query_bind_ms", "query_bind_ms_avg",
         // Commitment mode of the run (plain|hiding) and the salt seed's
         // source (env|os; n/a under plain) — never the seed itself.
-        "commit", "salt_seed", "status",
+        "commit", "salt_seed",
+        // Proof system of this binary: the plonky3 PCS (hiding under the
+        // default `zk` feature) and whether the revealed LogUp sums are
+        // masked (`zksketch::config`). `commit` above is only the state
+        // commitment mode.
+        "pcs", "logup_mask", "status",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -900,6 +911,8 @@ fn main() {
                                         row.extend(bind_cols(c.query_bind_ms, c.n_queries));
                                         row.push(commit.label().into());
                                         row.push(commit.seed_label().into());
+                                        row.push(zksketch::config::pcs_label().into());
+                                        row.push(zksketch::config::logup_mask_label().into());
                                         row.push("ok".into());
                                         write_row(&csv, &row);
                                         let qstr = if c.n_queries > 0 {
@@ -950,6 +963,8 @@ fn main() {
                                         );
                                         row.push(commit.label().into());
                                         row.push(commit.seed_label().into());
+                                        row.push(zksketch::config::pcs_label().into());
+                                        row.push(zksketch::config::logup_mask_label().into());
                                         row.push(status.into());
                                         write_row(&csv, &row);
                                         eprintln!(
@@ -1001,6 +1016,8 @@ fn main() {
                                         row.extend(bind_cols(c.query_bind_ms, c.n_queries));
                                         row.push(commit.label().into());
                                         row.push(commit.seed_label().into());
+                                        row.push(zksketch::config::pcs_label().into());
+                                        row.push(zksketch::config::logup_mask_label().into());
                                         row.push("ok".into());
                                         write_row(&csv, &row);
                                         let qstr = if c.n_queries > 0 {
@@ -1047,6 +1064,8 @@ fn main() {
                                         );
                                         row.push(commit.label().into());
                                         row.push(commit.seed_label().into());
+                                        row.push(zksketch::config::pcs_label().into());
+                                        row.push(zksketch::config::logup_mask_label().into());
                                         row.push("too_large".into());
                                         write_row(&csv, &row);
                                         eprintln!(

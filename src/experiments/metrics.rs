@@ -235,6 +235,11 @@ fn json_escape(s: &str) -> String {
 }
 
 /// Write `env.json` capturing the machine + backend environment.
+///
+/// Always records the plonky3 proof system of the binary that writes it:
+/// `pcs` (`hiding` under the default `zk` feature, else `nonhiding`) and
+/// `logup_mask` (`on` when the linked core fork masks the revealed LogUp sums,
+/// see [`crate::config`]). The plonky2 backend writes its own env.json.
 pub fn write_env_json(dir: &std::path::Path, extras: &[(&str, String)]) -> std::path::PathBuf {
     std::fs::create_dir_all(dir).expect("create results dir");
     let cores = thread::available_parallelism().map(|n| n.get()).unwrap_or(0);
@@ -254,6 +259,8 @@ pub fn write_env_json(dir: &std::path::Path, extras: &[(&str, String)]) -> std::
         ("cpu_model".into(), cpu),
         ("mem_total".into(), mem),
         ("rustc".into(), rustc),
+        ("pcs".into(), crate::config::pcs_label().into()),
+        ("logup_mask".into(), crate::config::logup_mask_label().into()),
     ];
     for (k, v) in extras {
         pairs.push((k.to_string(), v.clone()));

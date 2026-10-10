@@ -113,17 +113,45 @@ scripts/run_experiments.sh e1
   replay: no candidate matches under `zk`, the true one does without it).
   This needs the `zk-logup-mask` branches of the Plonky3 core fork and of
   `July620/Plonky3_RangeAir` (until `Cargo.toml` pins them, wire both in
-  through `.cargo/config.toml`, see `.cargo/config.toml.example`).
+  through `.cargo/config.toml`, see `.cargo/config.toml.example`, Option 3).
+  The default build refuses to compile without them: `src/config.rs` names
+  one fork-only item of each fork outside any test, so a `zk` build against
+  the unforked pins fails (library, binaries, examples and tests) instead of
+  proving with unmasked sums. Every `env.json` and every `exp_compose` /
+  `exp_e0` CSV row records `pcs` (`hiding` / `nonhiding`) and `logup_mask`
+  (`on` / `off`); `commit` is only the state-commitment mode.
   `--no-default-features` builds the non-hiding PCS, whose proofs and VKs are
-  byte-identical to the unmasked builds; use it to reproduce stored non-ZK
-  numbers. The VK pin tests carry one table per build.
+  byte-identical to the unmasked builds, and still builds against the
+  upstream pins; use it to reproduce stored non-ZK numbers. The VK pin tests
+  carry one table per build; the `zk` tables pin the hiding PCS's VKs, which
+  the masks do not change (a leaf or decoder VK commits only preprocessed
+  data; the masks are main-trace columns). The masks are checked by
+  `config::tests::leaf_opens_logup_mask_columns` (opened main width = AIR
+  width + 4 per global interaction) and `tests/zk_logup_blinding.rs`; they do
+  change every merge and root circuit, hence every derived root VK.
   - *Hiding budget (precondition):* a randomized column stays hidden only if
     its table is taller than what the verifier learns about it,
-    `2(q + 2D) = 2(54 + 8) = 124` rows here; every zkSketch table is padded to
-    at least 512 (`TablePacking::with_fri_params(6, LOG_BLOWUP)`), the fork's
-    prover refuses a ZK proof below 128 rows, and `config::tests::hiding_budget_*`
-    keep the two in step. Lowering `log_final_poly_len`, `LOG_BLOWUP` or the
-    security level must re-check it.
+    `2(q + 2D) = 2(54 + 8) = 124` rows here; every table of every
+    circuit-prover proof (all sketch leaves, merges, roots and decoders) is
+    padded to at least 512 (`TablePacking::with_fri_params(6, LOG_BLOWUP)`),
+    the fork's prover refuses a ZK proof below 128 rows, and a `const`
+    assertion plus `config::tests::hiding_budget_*` keep the two in step.
+    Lowering `log_final_poly_len`, `LOG_BLOWUP` or the security level must
+    re-check it. The exception is the Phase-1 toy `FibAir` leaf
+    (`prover::prove_fib_leaf`, a plain uni-stark proof used only by tests and
+    the `chain_two` example, 16-64 rows): it is below the budget and is not
+    claimed to hide anything.
+  - *Cost:* small at the leaf, large in the recursion layer, because every
+    merge re-verifies masked proofs in-circuit (measured masked vs unmasked
+    hiding builds; details in `src/config.rs`, "Cost of the masks"). Leaf
+    prove time +9-11%, proof +5-6%. The in-circuit verifier grows ~14%, which
+    pushes the L1 merge's ALU table past 2^17 rows for all four families
+    (also over paper-geometry m = 4096 children), so that table doubles: one
+    CM merge proves in 5.7 s instead of 3.8 s. A small composed run (forest,
+    N = 32, m = 8, 16 cores) takes +40% (CM) / +55% (HLL) wall time and +46%
+    peak RSS; at the six-sketch comparison shape (m = 2,048, t = 8), +16% /
+    +18%. Stored `zk` numbers measured before the masks (`zk2_*`) understate
+    the cost.
   - *Still public, or only heuristic:* table heights (operation and batch
     counts); every Expose / NPO public value; with `ZKSKETCH_COMMIT=plain`, the
     unsalted state and batch commitments (statement-level guess-and-check).
@@ -596,9 +624,11 @@ cargo run --release --example hll_chain_n          # HLL chain sweep
 ## Tests
 
 ```bash
-cargo test --release                       # plonky3 (zk build): 751 lib unit tests (+67 #[ignore]d) + tests/ integration
-cargo test --release --no-default-features # the same suites on the non-hiding build (non-ZK VK pins)
+cargo test --release                       # plonky3 (zk build): 752 lib unit tests (+67 #[ignore]d) + tests/ integration
+cargo test --release --no-default-features # the same suites on the non-hiding build (non-ZK VK pins; 751 lib: the fork-guard test is zk-only)
 cargo test --release --test zk_logup_blinding  # LogUp-mask freshness + guess-and-check replay (control without zk)
+# + the zero-mask positive control in the zk build (needs the forks' test-only mask hook):
+cargo test --release --features test-hooks,p3-circuit-prover/test-hooks --test zk_logup_blinding
 cargo test --release --lib dataset::       # one module
 cargo test --release --test two_leaf_hll   # one integration suite
 cargo test --release --test staged_queries # procs: staged-wave engine + bound queries, both commit modes

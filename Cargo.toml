@@ -53,6 +53,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # `--no-default-features` for the plain (non-hiding) PCS. See src/config.rs.
 default = ["zk"]
 zk = []
+# TEST-ONLY: exposes `CmOmcLeafCircuit::prove_epoch_with_mask_hook` for the
+# zero-mask positive control in tests/zk_logup_blinding.rs. It must be enabled
+# together with the forks' own hook, which this manifest cannot name while it
+# pins the unforked Plonky3_RangeAir (Cargo rejects a dependency feature the
+# pinned revision lacks, even when unused):
+#   cargo test --release --features test-hooks,p3-circuit-prover/test-hooks --test zk_logup_blinding
+# Never enable it outside tests.
+test-hooks = []
 
 # Procs regression test of the staged-wave engine: it spawns its workers by
 # re-executing itself, so it runs its own `main` (no libtest harness).

@@ -25,8 +25,10 @@
 //! random Goldilocks values (about 128 bits) for the plain-MMCS argument. The
 //! revealed LogUp sums are masked per global interaction exactly as there,
 //! here with `D = 2` mask columns per interaction; the hiding budget is
-//! `2(54 + 2·2) = 116 → 128 <= 512` rows. The salted-MMCS caveat and the
-//! remaining heuristic / not-hidden items documented there apply here too.
+//! `2(54 + 2·2) = 116 → 128 <= 512` rows (a `const` assertion below). The
+//! compile-time fork guard, the salted-MMCS caveat and the remaining
+//! heuristic / not-hidden items documented there apply here too; the cost of
+//! the masks was measured on BabyBear only.
 
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -91,9 +93,21 @@ pub const COMMIT_POW_BITS: usize = 0;
 pub const QUERY_POW_BITS: usize = 15;
 pub const SECURITY_LEVEL: usize = 124;
 
-pub fn num_queries() -> usize {
+pub const fn num_queries() -> usize {
     (SECURITY_LEVEL - QUERY_POW_BITS) / LOG_BLOWUP
 }
+
+// The recursion fork's hiding budget on Goldilocks (`D = 2`, points `ζ`, `gζ`):
+// `2(54 + 2·2) = 116 -> 128` rows, within the padded table height.
+#[cfg(feature = "zk")]
+const _: () = assert!(
+    p3_circuit_prover::TablePacking::zk_hiding_budget(
+        num_queries(),
+        <Challenge as p3_field::BasedVectorSpace<Val>>::DIMENSION,
+        2
+    ) <= crate::config::MIN_TABLE_HEIGHT,
+    "Goldilocks tables padded below the ZK hiding budget"
+);
 
 /// Construct the Poseidon2-based Goldilocks StarkConfig with two-adic FRI.
 ///

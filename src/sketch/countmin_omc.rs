@@ -1419,6 +1419,41 @@ impl CmOmcLeafCircuit {
         self.prove_epoch_opened(t, initial_state, batch, &Openings::public_zero())
     }
 
+    /// TEST-ONLY: [`Self::prove_epoch`] (batch index 1, `Plain` circuits)
+    /// through the LogUp-mask fork's `prove_all_tables_with_mask_hook`, so a
+    /// test can read or replace the zero-knowledge LogUp masks before they are
+    /// committed (`tests/zk_logup_blinding.rs` zeroes them for its positive
+    /// control). The proof is self-verified like any other. The hook runs only
+    /// under `zk`. Needs `--features test-hooks,p3-circuit-prover/test-hooks`
+    /// (the second enables the forks' own `test-hooks`, which this crate's
+    /// manifest cannot name while it pins the unforked revisions); never
+    /// enable either outside tests.
+    #[cfg(feature = "test-hooks")]
+    pub fn prove_epoch_with_mask_hook(
+        &mut self,
+        initial_state: CountMinState,
+        batch: Vec<CountMinUpdate>,
+        hook: impl FnOnce(&mut p3_batch_stark::LookupMaskPlan<Challenge>),
+    ) -> CountMinOmcProof {
+        assert!(!self.mode.is_hiding(), "prove_epoch_with_mask_hook: Plain circuits only");
+        let params = self.params;
+        let (traces, ep) = self.run_epoch_commit(1, &initial_state, &batch, &Openings::plain());
+        let proof = self
+            .prover
+            .prove_all_tables_with_mask_hook(&traces, &self.circuit_prover_data, hook)
+            .expect("prove_all_tables_with_mask_hook (omc)");
+        self.prover
+            .verify_all_tables(&proof)
+            .expect("self-verify countmin_omc leaf (mask hook)");
+        CountMinOmcProof {
+            output: RecursionOutput(proof, Rc::clone(&self.circuit_prover_data)),
+            initial_commit: ep.initial_commit,
+            final_commit: ep.final_commit,
+            batch_commit: ep.batch_commit,
+            params,
+        }
+    }
+
     /// Shared body of the three `prove_epoch_*` entry points (no opening
     /// checks).
     fn prove_epoch_opened(
@@ -2561,9 +2596,10 @@ mod tests {
             (Expose::Boundary, Binding::Legacy, [1736090810, 1831588262, 662316068, 1368614943, 306038768, 912717005, 886156929, 1189438024]),
             (Expose::None, Binding::Semantic, [1834649507, 1407219679, 827127958, 416953406, 1951498694, 439518398, 1447935561, 760283013]),
         ];
-        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
-        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
-        // 3acdc06); equal across separate processes.
+        // The same circuits under the `zk` feature: hiding-PCS VKs, recorded on the
+        // zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06), equal
+        // across separate processes. The LogUp masks do not move them (main-trace
+        // columns; see `config::tests::leaf_opens_logup_mask_columns`).
         #[cfg(feature = "zk")]
         let recorded = [
             (Expose::Interval, Binding::Semantic, [915538416, 805890308, 1446156539, 1794458649, 1137162986, 225840416, 87116904, 1724929484]),

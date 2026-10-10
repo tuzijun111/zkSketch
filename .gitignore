@@ -6,6 +6,9 @@
 # committed; the real config.toml is per-developer (it may hold an absolute
 # local path) and must never be tracked.
 /.cargo/config.toml
+# Same for the plonky2 crate's own local [patch] wiring (e.g. a local
+# plonky2 fork clone).
+/plonky2/.cargo/config.toml
 
 # OS cruft
 .DS_Store

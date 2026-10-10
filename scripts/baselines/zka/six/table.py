@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Print the README's markdown tables from six_sketch_comparison.csv (python3 -I table.py <csv>).
 
-zkA = zk-Analytics side, zkS = zkSketch default build (run r2), zkS-zk = zkSketch built with
-`--features zk` (HidingFriPcs). KB / MB = 10^3 / 10^6 bytes; GB (memory) = 2^30 bytes.
+zkA = zk-Analytics side, zkS = zkSketch default build (run r2; the `zk` feature was then off),
+zkS-zk = zkSketch built with `--features zk` (HidingFriPcs) BEFORE the LogUp-mask forks: its
+revealed LogUp sums are unmasked, so it is not zero-knowledge either, and the masked build costs
+more (src/config.rs, "Cost of the masks"). KB / MB = 10^3 / 10^6 bytes; GB (memory) = 2^30 bytes.
 """
 import csv
 import statistics

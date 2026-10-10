@@ -2784,9 +2784,10 @@ mod tests {
             (Expose::Boundary, [12778058211499291925, 17586788496412847627, 12410193273840537267, 874854919538388358]),
             (Expose::Interval, [6306263333184229153, 41855191592855568, 16716971515655028172, 5590991646340356760]),
         ];
-        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
-        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
-        // 3acdc06); equal across separate processes.
+        // The same circuits under the `zk` feature: hiding-PCS VKs, recorded on the
+        // zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06), equal
+        // across separate processes. The LogUp masks do not move them (main-trace
+        // columns; see `config::tests::leaf_opens_logup_mask_columns`).
         #[cfg(feature = "zk")]
         let recorded = [
             (Expose::None, [1234165865970482558, 11012027928548522146, 8165939554710924946, 9445719136878406759]),
@@ -2838,9 +2839,10 @@ mod tests {
             (Expose::Boundary, [5127476512929420219, 14949157042305783351, 988902786580556422, 18373836634480779209]),
             (Expose::Interval, [9365049537508816069, 15386676715998429990, 10121922348505152518, 16059434801545063679]),
         ];
-        // The same circuits under the `zk` feature (hiding PCS, ZK LogUp masks):
-        // recorded on the zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir
-        // 3acdc06); equal across separate processes.
+        // The same circuits under the `zk` feature: hiding-PCS VKs, recorded on the
+        // zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06), equal
+        // across separate processes. The LogUp masks do not move them (main-trace
+        // columns; see `config::tests::leaf_opens_logup_mask_columns`).
         #[cfg(feature = "zk")]
         let recorded = [
             (Expose::None, [5455560250119538704, 833071011683561009, 923701327813067044, 8158380323884740374]),

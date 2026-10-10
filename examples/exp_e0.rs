@@ -10,8 +10,10 @@
 //! verifies its children's proofs, and under `--features zk` those are hiding
 //! proofs (random-codeword openings, the randomization-polynomial round, a
 //! doubled FRI domain), so the hiding merge circuit is larger. Every row
-//! carries the `pcs` of the build that recorded it; the hiding merges come
-//! only from a `--features zk` run. The circuits are the ones the
+//! carries the `pcs` of the build that recorded it, and `logup_mask` (`on`
+//! when the core fork masks the revealed LogUp sums: the masked in-circuit
+//! verifier makes every merge circuit larger again); the hiding merges come
+//! only from a `zk` (default) run. The circuits are the ones the
 //! composition harness deploys (`stream_compose`): CM omc, HLL omc, SS
 //! certified (`ss_final_full`), GK bandmerge2, plus the Bloom omc leaf, under
 //! `composition_expose()` (Interval unless `ZKSKETCH_STATEMENT` says otherwise),
@@ -389,6 +391,9 @@ struct Probe {
 struct Ctx {
     commit: String,
     pcs: &'static str,
+    /// `on` when the linked core fork masks the revealed LogUp sums
+    /// (`zksketch::config::logup_mask_label`); merge heights depend on it.
+    logup_mask: &'static str,
     binding: Binding,
     statement: Expose,
     /// `ZKSKETCH_COMMIT` (every family's leaf is built in it).
@@ -402,6 +407,7 @@ impl Ctx {
         vec![
             self.commit.clone(),
             self.pcs.into(),
+            self.logup_mask.into(),
             format!("{:?}", self.binding).to_lowercase(),
             format!("{:?}", self.statement).to_lowercase(),
             mode_name(self.mode).into(),
@@ -410,14 +416,14 @@ impl Ctx {
 }
 
 const TABLE_HEADER: &[&str] = &[
-    "commit", "pcs", "binding", "statement", "commit_mode", "family", "variant", "site", "level", "geometry", "m",
+    "commit", "pcs", "logup_mask", "binding", "statement", "commit_mode", "family", "variant", "site", "level", "geometry", "m",
     "table_idx", "table", "log_h", "rows_padded", "rows_unpadded", "fill", "width", "prep_width",
     "lq_nonzk", "lq_zk", "fits_nonhiding", "fits_hiding", "headroom_rows_hiding",
     "rows_per_record", "m_cross_hiding", "consistent",
 ];
 
 const SUMMARY_HEADER: &[&str] = &[
-    "commit", "pcs", "binding", "statement", "commit_mode", "family", "variant", "site", "level", "geometry", "m",
+    "commit", "pcs", "logup_mask", "binding", "statement", "commit_mode", "family", "variant", "site", "level", "geometry", "m",
     "tables", "max_log_h", "largest", "max_rows_unpadded", "max_fill", "sum_rows_padded",
     "fits_nonhiding", "fits_hiding", "min_headroom_rows_hiding", "m_cross_hiding",
     "m_cross_table", "consistent", "probe_s", "hwm_mb", "proof_check",
@@ -690,7 +696,7 @@ fn probe(ctx: &Ctx, fams: &[String], ms: &[usize], g: &Geometry) {
 }
 
 const COST_HEADER: &[&str] = &[
-    "commit", "pcs", "binding", "statement", "commit_mode", "family", "circuit", "geometry", "m", "build_s",
+    "commit", "pcs", "logup_mask", "binding", "statement", "commit_mode", "family", "circuit", "geometry", "m", "build_s",
     "witness_ms", "prove_ms", "verify_ms", "peak_rss_mb", "proof_bytes", "max_degree_bits",
 ];
 
@@ -717,8 +723,8 @@ fn cost_row(ctx: &Ctx, fam: &str, circuit: &str, geometry: &str, m: usize, build
         max_db.to_string(),
     ]);
     println!(
-        "E0C pcs={} commit_mode={} fam={fam} circuit={circuit} [{geometry}] m={m} build_s={build_s:.1} prove_ms={:.0} peak_rss_mb={:.0} proof_bytes={} max_degree_bits={max_db}",
-        ctx.pcs, mode_name(ctx.mode), agg.prove_ms_median, agg.peak_rss_mb_median, agg.proof_size_bytes
+        "E0C pcs={} logup_mask={} commit_mode={} fam={fam} circuit={circuit} [{geometry}] m={m} build_s={build_s:.1} prove_ms={:.0} peak_rss_mb={:.0} proof_bytes={} max_degree_bits={max_db}",
+        ctx.pcs, ctx.logup_mask, mode_name(ctx.mode), agg.prove_ms_median, agg.peak_rss_mb_median, agg.proof_size_bytes
     );
     metrics::append_csv(&results_dir(), "e0_cost", &header(COST_HEADER), &row);
 }
@@ -779,15 +785,17 @@ fn main() {
     let ctx = Ctx {
         commit: commit(),
         pcs: if is_zk == 1 { "hiding" } else { "nonhiding" },
+        logup_mask: zksketch::config::logup_mask_label(),
         binding: default_binding(),
         statement: composition_expose(),
         mode: commit_mode_from_env(),
         is_zk,
     };
     println!(
-        "E0 commit={} pcs={} binding={:?} statement={:?} commit_mode={} families={fams:?} m={ms:?}",
+        "E0 commit={} pcs={} logup_mask={} binding={:?} statement={:?} commit_mode={} families={fams:?} m={ms:?}",
         ctx.commit,
         ctx.pcs,
+        ctx.logup_mask,
         ctx.binding,
         ctx.statement,
         mode_name(ctx.mode)
