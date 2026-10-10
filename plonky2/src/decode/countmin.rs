@@ -155,7 +155,7 @@ pub fn build_cm_decode(params: CmDecodeParams) -> CmDecodeLeaf {
         }
     };
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     CmDecodeLeaf { data, t: Tgt { commit, key, answer, cells, sel, mn, flag }, params }
 }
 

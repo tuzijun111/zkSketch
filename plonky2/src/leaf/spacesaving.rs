@@ -258,7 +258,7 @@ pub fn build_spacesaving_leaf(params: SsLeafParams) -> SpaceSavingLeaf {
     }
     b.connect(lhs, rhs);
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     SpaceSavingLeaf {
         data,
         t: Tgt {

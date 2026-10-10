@@ -198,7 +198,7 @@ pub fn build_countmin_replay_leaf(params: CmReplayParams) -> CountMinReplayLeaf 
         }
     }
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     CountMinReplayLeaf {
         data,
         t: Tgt { init_commit, final_commit, batch_commit, key, val, init_cells, final_cells, sel },

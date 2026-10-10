@@ -309,7 +309,7 @@ pub fn build_gk_leaf_with_rounds(params: GkLeafParams, fusion_rounds: usize) -> 
     }
     b.connect(lhs, rhs);
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     GreenwaldKhannaLeaf {
         data,
         t: Tgt {

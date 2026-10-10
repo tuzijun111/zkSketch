@@ -313,7 +313,7 @@ pub fn build_cm_merkle_leaf(params: CmMerkleParams) -> CmMerkleLeaf {
         b.connect(fc.elements[i], final_commit.elements[i]);
     }
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     CmMerkleLeaf {
         data,
         t: Tgt {

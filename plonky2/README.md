@@ -81,7 +81,9 @@ root digest.
 
 ## Measured (debug build, deps at opt-level 3)
 
-From `cargo run --example countmin_chain` (`d=2, w=4, batch=2`):
+From `cargo run --example countmin_chain` (`d=2, w=4, batch=2`), measured before the `zk`
+feature existed, i.e. plain proofs (now `--no-default-features`; with `zk` every proof is at
+least 2^14 rows and larger and slower):
 
 ```
 leaf 1: prove 17.5ms    proof 121556 bytes
@@ -99,9 +101,47 @@ O(1), while the flat baseline re-verifies every leaf — exactly the paper §4 t
 plonky2 requires **nightly Rust** (it uses `#![feature(specialization)]`); `rust-toolchain.toml`
 pins it automatically.
 
+**Zero knowledge is on by default** (cargo feature `zk`, mirroring the root crate): the one
+`CircuitConfig` (`src/config.rs`) sets plonky2's `zero_knowledge`, which adds random blinding
+rows (so every circuit is at least 2^14 rows) and salts the wires, Z and quotient Merkle leaves.
+`--no-default-features` builds the plain proofs, with the same circuits and digests as before
+`zk` existed, so it reproduces the stored numbers. Every `env.json` the examples write records
+`zero_knowledge` and `plonky2_source` (the Cargo.toml rev, or the local `[patch]` path with the
+fork's HEAD). Under `zk`:
+
+- plonky2 at the pinned rev does **not** blind Z: `blind()` joins each Z-blinding row pair with
+  `generate_copy` instead of `connect`. `zk` therefore needs a plonky2 build with that one-line
+  fix (branch `zk-blinding-fix` of a plonky2 fork, not yet hosted), supplied for now by a
+  `[patch."https://github.com/0xPolygonZero/plonky2"]` in a local, git-ignored
+  `.cargo/config.toml`. **A checkout without it fails closed**: `config::build_circuit` counts
+  the sigma-swapped Z-blinding row pairs, finds 0 instead of one per Z opening (3568 at 2^14),
+  and panics, so no zk circuit builds and the default `cargo test` fails. Use
+  `--no-default-features` there until `Cargo.toml` pins the fork. `tests/zk_blinding.rs` also
+  runs a guess-and-check attack on the opened Z and partial products, which reproduces 22 of 22
+  openings without the fix, in both feature modes.
+- With the local `[patch]`, every cargo command rewrites the tracked `Cargo.lock` (the four
+  plonky2 crates lose their `source = "git+..."` lines). Do not commit that: check
+  `git diff --quiet Cargo.lock` first and put back the committed lock if it changed.
+- The hiding is plonky2's heuristic ZK, with no formal proof. The wires get one random row per
+  opened value; Z and the partial products get Mir's count of copy-constrained random row pairs,
+  one per Z value revealed, and both challenge copies of Z and all 9 partial-product polynomials
+  draw on the same 80 random routed values per pair. Quotient chunks are only salted (no
+  randomized split), and lookup polynomials are not blinded at all, so `build_circuit` also
+  refuses plonky2 lookups under `zk`.
+- plonky2's `dummy_circuit` asserts `!zero_knowledge`, so cyclic and conditional recursion are
+  unavailable under `zk` (this crate uses neither).
+- Public inputs are unchanged, and zk hides nothing a circuit makes public. The leaves publish
+  plain Poseidon commitments, so low-entropy committed states or batches remain open to
+  guess-and-check whatever the proof hides. The §5.1 strawman leaf `src/leaf/countmin.rs`
+  (used by `examples/countmin_chain.rs`, `tests/integration.rs` and the recursion tests)
+  publishes every record's key, value and `pos[0..d]` in the clear. The decoders publish the
+  state commitment, the query where there is one (CM key, SS query size `c`, GK query value)
+  and the released answer by design.
+
 ```bash
-cargo test                              # full suite (lib + integration), ~30s
-cargo run --release --example countmin_chain   # timings / proof sizes
+cargo test --release                          # full suite (lib + integration), zk: ~3 min
+cargo test --release --no-default-features    # same suite, plain proofs: ~35 s
+cargo run --release --example countmin_chain  # timings / proof sizes
 ```
 
 ## Status / not yet ported

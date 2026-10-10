@@ -24,6 +24,19 @@ rayon = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 postcard = { version = "1.1", features = ["alloc"] }
 
+[features]
+# Zero-knowledge proofs (plonky2 `zero_knowledge`: blinding rows plus salted
+# Merkle caps) for every circuit; mirrors the root crate's `zk`. On by default;
+# `--no-default-features` gives the plain (non-hiding) proofs. See src/config.rs.
+# `zk` is only meaningful with plonky2's Z-blinding fix (at the pinned rev,
+# `blind()` uses `generate_copy` instead of `connect`, so Z and the partial
+# products are not blinded). Without the fix it fails closed:
+# `config::build_circuit` panics on every zk circuit, and tests/zk_blinding.rs
+# fails in both feature modes. Until the fork is pinned here, the fix comes from
+# a local, git-ignored .cargo/config.toml [patch] (see README.md).
+default = ["zk"]
+zk = []
+
 [profile.release]
 opt-level = 3
 lto = "thin"

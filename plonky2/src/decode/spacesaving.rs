@@ -200,7 +200,7 @@ pub fn build_ss_decode(params: SsDecodeParams) -> SsDecodeLeaf {
     // ── Check 6: release policy → answer (shared with the GK decode) ──
     let flag = bind_release(&mut b, mass, release, answer, COUNT_BITS, one, zero);
 
-    let data = Arc::new(b.build::<C>());
+    let data = Arc::new(crate::config::build_circuit(b));
     SsDecodeLeaf { data, t: Tgt { commit, c, answer, cells, sel, key_inv, flag, mass }, params }
 }
 

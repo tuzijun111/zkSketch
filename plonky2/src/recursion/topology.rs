@@ -192,7 +192,7 @@ pub fn merge_cross_family(a: &Node, b: &Node) -> Result<CrossFamilyNode> {
         bld.register_public_input(t);
     }
 
-    let data = bld.build::<C>();
+    let data = crate::config::build_circuit(bld);
 
     let mut pw = PartialWitness::<F>::new();
     pw.set_proof_with_pis_target(&apt, &a.proof)?;
