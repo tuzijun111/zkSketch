@@ -260,17 +260,20 @@ fn plain_noop_leaf_vks_are_pinned() {
             (0x6fc5_2609_1f2b_ccf4, 0x4558_2071_e515_6dda),
         ],
     ];
+    // GK2 Semantic/Bound re-pinned 2026-10-11: the leaf now binds the fresh
+    // rows' arrival positions (`gk_bandmerge::bind_arrival_positions`, under
+    // Semantic/Bound only). Legacy is unchanged.
     #[cfg(not(feature = "zk"))]
     const GK2: [[Pin; 3]; 2] = [
         [
             (0xc928_a4cd_0a04_86ce, 0xb2ba_cdbf_bf08_5515),
-            (0x4e26_c2b7_f76a_72ae, 0xa56f_e2c6_f68c_c99b),
-            (0x4e26_c2b7_f76a_72ae, 0xa56f_e2c6_f68c_c99b),
+            (0xb801_9382_d18e_0329, 0x9c01_65b2_f3bb_5381),
+            (0xb801_9382_d18e_0329, 0x9c01_65b2_f3bb_5381),
         ],
         [
             (0xff92_51d8_2504_fad9, 0xe889_db25_52dd_8b3c),
-            (0x1b65_790c_9269_6713, 0x3600_52d3_2744_da3d),
-            (0x1b65_790c_9269_6713, 0x3600_52d3_2744_da3d),
+            (0x1055_d6db_6976_6422, 0x3c11_0467_aa93_bcc3),
+            (0x1055_d6db_6976_6422, 0x3c11_0467_aa93_bcc3),
         ],
     ];
     // The `zk` build (see the module docs).
@@ -278,13 +281,13 @@ fn plain_noop_leaf_vks_are_pinned() {
     const GK2: [[Pin; 3]; 2] = [
         [
             (0x588c_97e4_9bd9_c934, 0x2857_42a0_8b13_53a9),
-            (0x9426_f190_2edf_4b87, 0x3c6e_4a25_f85e_e38f),
-            (0x9426_f190_2edf_4b87, 0x3c6e_4a25_f85e_e38f),
+            (0xe20e_32c0_53ab_483b, 0xf906_cac5_bf1c_06e5),
+            (0xe20e_32c0_53ab_483b, 0xf906_cac5_bf1c_06e5),
         ],
         [
             (0x22f4_7830_c949_7784, 0x1732_b83f_8462_9f1c),
-            (0x6c07_0844_89f8_5cbb, 0x8dfa_9bf9_0aa8_4415),
-            (0x6c07_0844_89f8_5cbb, 0x8dfa_9bf9_0aa8_4415),
+            (0x4fce_c96a_99e8_0816, 0x1656_f8e9_066b_ce7b),
+            (0x4fce_c96a_99e8_0816, 0x1656_f8e9_066b_ce7b),
         ],
     ];
     #[cfg(not(feature = "zk"))]

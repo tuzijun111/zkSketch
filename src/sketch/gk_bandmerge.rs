@@ -565,6 +565,63 @@ where
     b.add_range_bits::<BF>(z, MASS_BITS).expect("θ ≤ θ_max");
 }
 
+// ── Fresh-row arrival positions t_j = N_{t-1} + 1 + j ─────────────────────
+
+/// **Bind the fresh batch rows' arrival positions to the record count**: for
+/// the `m` fresh rows of the committed batch table (timestamps `t[j]`,
+/// activity flags `act[j] = [e_j ≠ E_MAX]`), constrain
+/// * `act[j+1]·(1 − act[j]) = 0`: the active rows form a prefix (the
+///   [`fresh_tuples2`] layout);
+/// * `t[j] = act[j]·(N_{t-1} + 1 + j)`: active row `j` arrives at position
+///   `N_{t-1} + 1 + j`, and a dummy carries the fixed `t = 0` of
+///   [`Gk2Tuple::dummy`].
+///
+/// A row's arrival position decides which tuple of a fused pair is newer
+/// (`lt = [a.t > b.t]`, hence which of the two fusion tests applies) and
+/// whether neighbor-init treats a union row as fresh (`is_fresh =
+/// [N_{t-1} < t]`). Before this, `t` was set only natively
+/// ([`fresh_tuples2`]) and bound only through `Com(B_t)`, so a prover that
+/// commits the batch table itself could permute the batch's arrival order,
+/// give a fresh value a stale `t ≤ N_{t-1}` (it skips neighbor-init), leave
+/// a gap so a survivor carries `t > N_t` (the next epoch re-initializes it
+/// as fresh), or pad with a nonzero dummy `t`
+/// (`tests::gk2_forged_arrival_positions_legacy_accepts_semantic_rejects`).
+/// With the leaves' `N_t = N_{t-1} + #active(B_t)`, every fresh `t` now
+/// lies in `(N_{t-1}, N_t]` and follows the batch's row order. `n_prev` is
+/// the leaf's `N_{t-1}` input, which that identity and the mass check pin.
+///
+/// Cost: `4m − 2` ALU ops (an add and a mul per row, a sub and a mul per
+/// adjacent pair), of which the circuit builder shares `m` with ops the leaf
+/// already has (`N_{t-1} + 1` from neighbor-init, each `1 − act[j]` from the
+/// activity gadget): `+3m − 2` ALU rows, no constants, no range checks, no
+/// public inputs (measured with `tests::gk2_theta_bind_overhead`: +22 rows
+/// at `m = 8`, +46 at `m = 16`; padded trace rows unchanged at cap 16…256).
+/// Generic over the field so the Goldilocks leaf
+/// ([`crate::sketch::gk_bandmerge_gl`]) shares it.
+pub(crate) fn bind_arrival_positions<F>(
+    b: &mut CircuitBuilder<F>,
+    t: &[ExprId],
+    act: &[ExprId],
+    n_prev: ExprId,
+    one: ExprId,
+    zero: ExprId,
+) where
+    F: p3_field::Field + std::hash::Hash,
+{
+    assert_eq!(t.len(), act.len(), "one activity flag per fresh row");
+    let mut pos = n_prev;
+    for j in 0..t.len() {
+        pos = b.add(pos, one); // N_{t-1} + 1 + j
+        let want = b.mul(act[j], pos);
+        b.connect(t[j], want);
+        if j + 1 < t.len() {
+            let gap = b.sub(one, act[j]);
+            let bad = b.mul(act[j + 1], gap);
+            b.connect(bad, zero);
+        }
+    }
+}
+
 // ── Prover ───────────────────────────────────────────────────────────────
 
 // ── Op tags (shared-PermuteBus fix, revision Step 1) ──
@@ -2763,16 +2820,35 @@ pub fn commit_gk2_batch_with(
     mode: CommitMode,
     salt: &SaltBb,
 ) -> Gk2BatchCommit {
+    commit_gk2_rows_with(&fresh_tuples2(vals, m, n_prev), mode, salt)
+}
+
+/// [`commit_gk2_batch_with`] over an explicit fresh-row table (honestly
+/// [`fresh_tuples2`]; a soundness test may commit forged rows).
+fn commit_gk2_rows_with(rows: &[Gk2Tuple], mode: CommitMode, salt: &SaltBb) -> Gk2BatchCommit {
     match mode {
-        CommitMode::Plain => commit_gk2_batch(vals, m, n_prev),
+        CommitMode::Plain => {
+            let hasher = MyHash::new(make_perm());
+            Gk2BatchCommit(hasher.hash_iter(flat_tuples2(rows)))
+        }
         CommitMode::Hiding => Gk2BatchCommit(commit_flat_bb(
             mode,
             CommitKind::Batch,
             CommitFamily::GreenwaldKhanna,
             salt,
-            &flat_tuples2(&fresh_tuples2(vals, m, n_prev)),
+            &flat_tuples2(rows),
         )),
     }
+}
+
+/// The fresh-row table a band-merge leaf witness commits as `B_t` and feeds
+/// to the union: [`fresh_tuples2`] (tests may substitute forged rows).
+fn leaf_fresh_rows(vals: &[u32], m: usize, n_prev: u64) -> Vec<Gk2Tuple> {
+    #[cfg(test)]
+    if let Some(rows) = TAMPER_FRESH.with(|c| c.borrow().clone()) {
+        return rows;
+    }
+    fresh_tuples2(vals, m, n_prev)
 }
 
 /// Expand a tuple-permutation to the challenge-permutation that moves each
@@ -2987,6 +3063,11 @@ thread_local! {
     static TAMPER_NPREV: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     /// Test-only override of [`use_pair_bind`] (`Some(false)` = pre-fix layout).
     static PAIR_BIND: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// Test-only tamper: the fresh-row table the leaf witness commits as
+    /// `B_t` and feeds to the union ([`leaf_fresh_rows`]), to PoC-verify
+    /// [`bind_arrival_positions`]. `None` = the honest [`fresh_tuples2`].
+    static TAMPER_FRESH: std::cell::RefCell<Option<Vec<Gk2Tuple>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The two-sided band-merge transition circuit.
@@ -3017,6 +3098,17 @@ thread_local! {
 /// Under the default binding the circuit now forces `θ = ⌊N_t/s⌋` from the
 /// in-circuit `N_t` ([`bind_theta`]); `Binding::Legacy` keeps the pre-fix
 /// circuit for side-by-side runs.
+///
+/// **Arrival positions (2026-10-11).** A fresh row's timestamp `t` picks the
+/// newer tuple of a fused pair (so which fusion test applies) and gates
+/// neighbor-init, but it was set only natively (`fresh_tuples2`) and bound
+/// only through `Com(B_t)`: permuted, stale, gapped or nonzero-dummy
+/// timestamps were ACCEPTED
+/// (`gk2_forged_arrival_positions_legacy_accepts_semantic_rejects`). Under the
+/// default binding the circuit forces the active batch rows to a prefix with
+/// `t_j = N_{t-1} + 1 + j` and dummies to `t = 0`
+/// ([`bind_arrival_positions`]); the arrival order is then the batch's row
+/// order, which `Com(B_t)` binds.
 ///
 /// One residual assumption remains, **shared with the one-sided `prove_gkb`**
 /// and standard for these leaves: the Stage-8 mass sum `Σ(g₁+g₂)` is a field
@@ -3090,9 +3182,13 @@ pub fn build_gkb2_leaf_expose(params: GkbParams, expose: Expose) -> Gkb2LeafCirc
 /// [`build_gkb2_leaf_expose`] with an explicit [`Binding`].
 ///
 /// `Semantic` / `Bound` constrain the fusion threshold `θ = ⌊N_t/s⌋`
-/// in-circuit ([`bind_theta`], revision B6(d)). `Legacy` is the pre-fix
-/// circuit, byte-for-byte: its `θ` is a free public input, so a prover can
-/// over-merge (`tests::gk2_inflated_theta_legacy_accepts_semantic_rejects`).
+/// in-circuit ([`bind_theta`], revision B6(d)) and the fresh rows' arrival
+/// positions `t_j = N_{t-1} + 1 + j` ([`bind_arrival_positions`]). `Legacy`
+/// is the pre-fix circuit, byte-for-byte: its `θ` is a free public input, so
+/// a prover can over-merge
+/// (`tests::gk2_inflated_theta_legacy_accepts_semantic_rejects`), and its
+/// fresh-row `t` is bound only through `Com(B_t)`
+/// (`tests::gk2_forged_arrival_positions_legacy_accepts_semantic_rejects`).
 /// The GK leaf has no in-circuit coefficient re-binding (it relies on the
 /// merged fork's `recompose/coeff` binding), so `Bound` builds the same
 /// circuit as `Semantic`.
@@ -3348,7 +3444,8 @@ pub fn build_gkb2_leaf_commit(
 
     // ── Stage 3: union multiset ──
     // Fresh singletons committed as (v,0,0,0,0,t): well-formedness g₁=g₂=Δ₁=Δ₂=0,
-    // and both padding coeffs 0. The union is a permutation of init ‖ batch.
+    // and both padding coeffs 0 (the arrival position t is bound under
+    // Semantic/Bound by Stage 10). The union is a permutation of init ‖ batch.
     for j in 0..m {
         b.connect(batch_f[2 * j][1], zero); // g₁
         b.connect(batch_f[2 * j][2], zero); // g₂
@@ -3700,10 +3797,12 @@ pub fn build_gkb2_leaf_commit(
     // and ties the certified count to the committed batch. #active batch =
     // Σ [batch.e ≠ E_MAX].
     let mut count_batch = zero;
+    let mut batch_act: Vec<ExprId> = Vec::with_capacity(m);
     for j in 0..m {
         let dj = b.sub(e_max, batch_f[2 * j][0]);
         let actj = force_nz(&mut b, dj, e_inv_batch[j], one, zero);
         count_batch = b.add(count_batch, actj);
+        batch_act.push(actj);
     }
     let np_plus_b = b.add(n_prev_pi, count_batch);
     b.connect(np_plus_b, n_t_pi);
@@ -3711,6 +3810,13 @@ pub fn build_gkb2_leaf_commit(
     // Appended last so the Legacy circuit is byte-for-byte the pre-fix one.
     if binding.is_bound() {
         bind_theta::<Val, Challenge>(&mut b, theta_pi, n_t_pi, params.s);
+    }
+    // ── Stage 10: fresh-row arrival positions t_j = N_{t-1} + 1 + j ──
+    // Active batch rows form a prefix and carry t_j = N_{t-1}+1+j; dummies
+    // carry t = 0 ([`bind_arrival_positions`]). Also after the Legacy circuit.
+    if binding.is_bound() {
+        let batch_t: Vec<ExprId> = (0..m).map(|j| batch_f[2 * j + 1][1]).collect();
+        bind_arrival_positions(&mut b, &batch_t, &batch_act, n_prev_pi, one, zero);
     }
 
     let circuit = b.build().expect("build gkb2 circuit");
@@ -4041,9 +4147,11 @@ impl Gkb2LeafCircuit {
             n: build.n_t,
         };
         let mode = self.mode;
+        // The committed batch table (the fresh rows fed to the union).
+        let fresh = leaf_fresh_rows(batch_vals, m, build.n_prev);
         let initial_commit = commit_gk2_state_with(initial_state, mode, &openings.init);
         let final_commit = commit_gk2_state_with(&final_state, mode, &openings.final_);
-        let batch_commit = commit_gk2_batch_with(batch_vals, m, build.n_prev, mode, &openings.batch);
+        let batch_commit = commit_gk2_rows_with(&fresh, mode, &openings.batch);
         let lf = num_rounds(total);
         let num_pairs = total / 2;
 
@@ -4093,11 +4201,7 @@ impl Gkb2LeafCircuit {
         }
         private_inputs.extend_from_slice(&pack_tuples2(&initial_state.tuples));
         private_inputs.extend_from_slice(&pack_tuples2(&final_state.tuples));
-        private_inputs.extend_from_slice(&pack_tuples2(&fresh_tuples2(
-            batch_vals,
-            m,
-            build.n_prev,
-        )));
+        private_inputs.extend_from_slice(&pack_tuples2(&fresh));
         if self.pair_bind {
             // Permuted tables in the source-bound layout. Output halves name the
             // input position the permute took them from (σ is challenge-level).
@@ -4193,7 +4297,6 @@ impl Gkb2LeafCircuit {
                 private_inputs.push(inv((E_MAX - build.final_tuples[i].e) as u64));
             }
             // e_inv_batch = 1/(E_MAX − batch.e)  (dummy batch slot → 0)
-            let fresh = fresh_tuples2(batch_vals, m, build.n_prev);
             for j in 0..m {
                 private_inputs.push(inv((E_MAX - fresh[j].e) as u64));
             }
@@ -5285,6 +5388,232 @@ mod tests {
         assert!(post_b.is_err(), "re-paired halves with forged labels must be rejected");
     }
 
+    // ─── Arrival positions (fresh-row t binding, 2026-10-11) ───────────────
+
+    /// A band-merge witness over hand-picked fresh rows `rows` (honestly
+    /// `fresh_tuples2(batch, m, s_old.n)`): the `(e,t)`-sorted union of
+    /// `s_old ‖ rows`, then neighbor-init, the `L_f` fusion rounds and the
+    /// compaction replayed natively, so every hint is consistent with the
+    /// rows. `N_t = N_{t-1} + #active(rows)` and `θ = ⌊N_t/s⌋` are honest.
+    fn forge_arrivals(s_old: &Gk2State, rows: &[Gk2Tuple]) -> Bm2Build {
+        let n_prev = s_old.n;
+        let n_t = n_prev + rows.iter().filter(|r| r.active == 1).count() as u64;
+        let mut combined = s_old.tuples.clone();
+        combined.extend_from_slice(rows);
+        let mut idx: Vec<usize> = (0..combined.len()).collect();
+        idx.sort_by_key(|&i| (combined[i].e, combined[i].t));
+        let union_raw: Vec<Gk2Tuple> = idx.iter().map(|&i| combined[i]).collect();
+        let chal = expand_sigma(&idx);
+        finish_bm2(s_old, idx, chal, union_raw, n_prev, n_t, n_t / s_old.params.s)
+    }
+
+    /// Prove `build` on `leaf` with `rows` as the committed batch table
+    /// (`Com(B_t)` over `rows`, which feed the union).
+    fn prove_with_rows(
+        leaf: &mut Gkb2LeafCircuit,
+        s_old: &Gk2State,
+        batch: &[u32],
+        rows: &[Gk2Tuple],
+        build: &Bm2Build,
+    ) -> Result<Gk2LeafProof, String> {
+        TAMPER_FRESH.with(|c| *c.borrow_mut() = Some(rows.to_vec()));
+        let r = crate::sketch::forge::catch_msg(|| leaf.prove_build(s_old.clone(), batch.to_vec(), build));
+        TAMPER_FRESH.with(|c| *c.borrow_mut() = None);
+        r
+    }
+
+    /// One epoch of the arrival-position PoCs: `S_1` (after `B_1`), the
+    /// honest fresh rows and build of `B_2`, and the forged `(name, rows,
+    /// build)` of the four forgeries.
+    struct ArrivalPoc {
+        params: GkbParams,
+        s1: Gk2State,
+        b2: Vec<u32>,
+        stream: Vec<u32>,
+        honest_rows: Vec<Gk2Tuple>,
+        honest: Bm2Build,
+        cases: Vec<(&'static str, Vec<Gk2Tuple>, Bm2Build)>,
+    }
+
+    /// The arrival-position forgeries of one epoch at accuracy `s` (same
+    /// values, honest `N_t` and `θ`, every hint replayed under the forged
+    /// rows), or `None` unless each is visible: permuted and stale move
+    /// `S_t`, gap leaves a survivor of `S_t` arriving after `N_t`.
+    fn arrival_poc(s: u64) -> Option<ArrivalPoc> {
+        let params = GkbParams {
+            capacity: 16,
+            batch: 8,
+            s,
+        };
+        let m = params.batch;
+        let b1: Vec<u32> = vec![100, 400, 200, 700, 300, 600, 500, 800];
+        // Six values (batch rows 6 and 7 are E_MAX dummies), all above S_1's,
+        // so fresh rows meet each other in the fusion pairs and the newer
+        // one of a pair is decided by arrival position alone.
+        let b2: Vec<u32> = vec![1000, 900, 1200, 1100, 1300, 850];
+        let k = b2.len();
+        let s1 = apply_batch2(&Gk2State::empty(params), &b1);
+        let n_prev = s1.n;
+        let honest_rows = fresh_tuples2(&b2, m, n_prev);
+        let honest = build_bm2(&s1, &b2);
+        assert_eq!(
+            forge_arrivals(&s1, &honest_rows).final_tuples,
+            honest.final_tuples,
+            "the forging replay reproduces the honest build"
+        );
+        let stream: Vec<u32> = b1.iter().chain(b2.iter()).copied().collect();
+        let fits = |f: &Bm2Build| f.excess.iter().all(|t| t.active == 0);
+        let moved = |rows: &[Gk2Tuple]| -> Option<Bm2Build> {
+            let f = forge_arrivals(&s1, rows);
+            (f.final_tuples != honest.final_tuples && fits(&f)).then_some(f)
+        };
+        // permuted: two arrival positions swapped.
+        let permuted = (0..k)
+            .flat_map(|i| (i + 1..k).map(move |j| (i, j)))
+            .find_map(|(i, j)| {
+                let mut rows = honest_rows.clone();
+                let (ti, tj) = (rows[i].t, rows[j].t);
+                rows[i].t = tj;
+                rows[j].t = ti;
+                moved(&rows).map(|f| (rows, f))
+            })?;
+        // stale: a fresh value at an old timestamp t ≤ N_{t-1} (the most
+        // semantic damage, if any).
+        let stale = (0..k)
+            .flat_map(|j| (1..=n_prev).map(move |t| (j, t)))
+            .filter_map(|(j, t)| {
+                let mut rows = honest_rows.clone();
+                rows[j].t = t;
+                moved(&rows).map(|f| {
+                    let st = Gk2State {
+                        tuples: f.final_tuples.clone(),
+                        params,
+                        n: f.n_t,
+                    };
+                    let d = semantic_damage(&st, &stream);
+                    (d.0 + d.1, rows, f)
+                })
+            })
+            .max_by_key(|(d, _, _)| *d)
+            .map(|(_, rows, f)| (rows, f))?;
+        // gap: the values keep their order, each at N_{t-1} + 1 + j, but the
+        // two dummies sit among them, leaving a survivor arriving after N_t.
+        let gap = (0..m)
+            .flat_map(|x| (x + 1..m).map(move |y| (x, y)))
+            .find_map(|(x, y)| {
+                let mut rows = vec![Gk2Tuple::dummy(); m];
+                let mut vals = honest_rows[..k].iter();
+                for j in (0..m).filter(|&j| j != x && j != y) {
+                    rows[j] = *vals.next().expect("k values");
+                    rows[j].t = n_prev + 1 + j as u64;
+                }
+                let f = forge_arrivals(&s1, &rows);
+                let late = f.final_tuples.iter().any(|t| t.active == 1 && t.t > f.n_t);
+                (late && fits(&f)).then_some((rows, f))
+            })?;
+        // dummy t: a padding row with t ∈ [1, N_{t-1}] (the is_fresh gate
+        // reads t alone, so a larger dummy t would need the hint set to 1).
+        let dummy_t = {
+            let mut rows = honest_rows.clone();
+            rows[m - 1].t = 1;
+            let f = forge_arrivals(&s1, &rows);
+            fits(&f).then_some((rows, f))?
+        };
+        let cases = vec![
+            ("permuted", permuted.0, permuted.1),
+            ("stale", stale.0, stale.1),
+            ("gap", gap.0, gap.1),
+            ("dummy t", dummy_t.0, dummy_t.1),
+        ];
+        Some(ArrivalPoc {
+            params,
+            s1,
+            b2,
+            stream,
+            honest_rows,
+            honest,
+            cases,
+        })
+    }
+
+    /// **Forged arrival positions PoC.** A fresh row's timestamp picks the
+    /// newer tuple of a fused pair (so which fusion test applies) and gates
+    /// neighbor-init, but it was set only natively (`fresh_tuples2`: `t =
+    /// N_{t-1} + 1 + j`) and bound only through `Com(B_t)`. A prover that
+    /// commits the batch table itself forges one epoch four ways
+    /// ([`arrival_poc`], at the first accuracy where each is visible):
+    /// * **permuted**: two arrival positions swapped, so the leaf certifies a
+    ///   different final state for the same batch values;
+    /// * **stale**: a fresh value given an old timestamp `t ≤ N_{t-1}`, so it
+    ///   skips neighbor-init and keeps `Δ₁ = Δ₂ = 0`;
+    /// * **gap**: the dummies placed among the active rows, each value still
+    ///   at `N_{t-1} + 1 + j`, so a survivor of `S_t` arrives after `N_t`
+    ///   (the next epoch's `is_fresh` gate would re-initialize it as fresh);
+    /// * **dummy t**: a padding row carrying `t ≠ 0` (a second accepted
+    ///   `Com(B_t)` for the same batch and the same `S_t`).
+    ///
+    /// `Legacy` (the pre-fix circuit, byte-for-byte) ACCEPTS each, and the
+    /// proof exposes the forged `Com(B_t)`. `Semantic` / `Bound`
+    /// ([`bind_arrival_positions`]) reject each; the honest rows verify on the
+    /// same leaf (positive control).
+    #[test]
+    fn gk2_forged_arrival_positions_legacy_accepts_semantic_rejects() {
+        let poc = [3u64, 4, 5, 6, 8, 12, 16]
+            .into_iter()
+            .find_map(arrival_poc)
+            .expect("an accuracy s at which every arrival forgery is visible");
+        let ArrivalPoc { params, s1, b2, stream, honest_rows, honest, cases } = poc;
+        let (m, n_prev) = (params.batch, s1.n);
+        let state = |f: &Bm2Build| Gk2State {
+            tuples: f.final_tuples.clone(),
+            params,
+            n: f.n_t,
+        };
+        println!(
+            "[gk2 arrival] s={} N_(t-1)={n_prev} N_t={} θ={}; honest batch t = {:?}",
+            params.s,
+            honest.n_t,
+            honest.theta,
+            honest_rows.iter().map(|r| r.t).collect::<Vec<_>>()
+        );
+
+        let honest_bc = commit_gk2_batch(&b2, m, n_prev);
+        let mut legacy = build_gkb2_leaf_expose_with(params, Expose::None, Binding::Legacy);
+        for (name, rows, f) in &cases {
+            let st = state(f);
+            let late = st.tuples.iter().filter(|t| t.active == 1 && t.t > f.n_t).count();
+            println!(
+                "[gk2 arrival] {name}: batch t = {:?}; S_t moved: {}, survivors with t > N_t: {late}, \
+                 damage (B2, rank) {:?} (honest {:?})",
+                rows.iter().map(|r| r.t).collect::<Vec<_>>(),
+                f.final_tuples != honest.final_tuples,
+                semantic_damage(&st, &stream),
+                semantic_damage(&state(&honest), &stream)
+            );
+            match prove_with_rows(&mut legacy, &s1, &b2, rows, f) {
+                Ok(p) => {
+                    assert_eq!(p.final_, commit_gk2_state(&st), "{name}: Legacy certifies Com(S')");
+                    assert_eq!(p.batch_commit, commit_gk2_rows_with(rows, CommitMode::Plain, &SaltBb::ZERO));
+                    assert_ne!(p.batch_commit, honest_bc, "{name}: the forged rows change Com(B_t)");
+                    println!("[gk2 arrival] Legacy {name}: ACCEPTED (self-verified)");
+                }
+                Err(e) => panic!("{name}: PoC premise: the pre-fix circuit accepts it, got {e}"),
+            }
+        }
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let mut leaf = build_gkb2_leaf_expose_with(params, Expose::None, binding);
+            let ok = prove_with_rows(&mut leaf, &s1, &b2, &honest_rows, &honest);
+            assert!(ok.is_ok(), "{binding:?}: positive control (honest rows) must verify: {:?}", ok.err());
+            assert_eq!(ok.unwrap().batch_commit, honest_bc);
+            for (name, rows, f) in &cases {
+                match prove_with_rows(&mut leaf, &s1, &b2, rows, f) {
+                    Ok(_) => panic!("{binding:?}: the {name} arrival positions must be rejected"),
+                    Err(e) => println!("[gk2 arrival] {binding:?} {name}: REJECTED: {e}"),
+                }
+            }
+        }
+    }
+
     /// Cost of the source-bound layout (padded trace rows + one prove), pre-fix
     /// vs fixed. Run:
     /// `cargo test --release --lib gk_bandmerge::tests::gk2_fix_overhead -- --ignored --nocapture`
@@ -6015,17 +6344,20 @@ mod tests {
     /// the zero-salt no-op leaf's VK.
     #[test]
     fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+        // Semantic/Bound rows re-recorded 2026-10-11 for the arrival-position
+        // binding (`bind_arrival_positions`, Semantic/Bound only); the Legacy
+        // rows are unchanged.
         #[cfg(not(feature = "zk"))]
         let recorded = [
             (Expose::None, Binding::Legacy, [136473872, 825731566, 962898407, 309390011, 609662534, 1217038996, 1392535772, 796016774]),
-            (Expose::None, Binding::Semantic, [1415204840, 644540092, 979374553, 1488538109, 890992880, 1292472623, 218367329, 1170482399]),
-            (Expose::None, Binding::Bound, [1415204840, 644540092, 979374553, 1488538109, 890992880, 1292472623, 218367329, 1170482399]),
+            (Expose::None, Binding::Semantic, [728435930, 1729906957, 636169810, 463001289, 973894502, 1099865253, 754794833, 232237172]),
+            (Expose::None, Binding::Bound, [728435930, 1729906957, 636169810, 463001289, 973894502, 1099865253, 754794833, 232237172]),
             (Expose::Boundary, Binding::Legacy, [1959253283, 1123222237, 632241315, 365030987, 1581115715, 17296396, 426616552, 1762281300]),
-            (Expose::Boundary, Binding::Semantic, [1581612445, 1422677594, 527270484, 680918703, 1541779433, 2005502535, 523199868, 1766100007]),
-            (Expose::Boundary, Binding::Bound, [1581612445, 1422677594, 527270484, 680918703, 1541779433, 2005502535, 523199868, 1766100007]),
+            (Expose::Boundary, Binding::Semantic, [453529306, 719271565, 1494408462, 1592070196, 499123786, 754865709, 1543101736, 964759909]),
+            (Expose::Boundary, Binding::Bound, [453529306, 719271565, 1494408462, 1592070196, 499123786, 754865709, 1543101736, 964759909]),
             (Expose::Interval, Binding::Legacy, [1951736277, 454005402, 1529845001, 1118438533, 1534690931, 1281097441, 1099235087, 1789611541]),
-            (Expose::Interval, Binding::Semantic, [1787104344, 561887143, 1588586756, 19183557, 35691611, 1215045558, 1104902655, 1099938511]),
-            (Expose::Interval, Binding::Bound, [1787104344, 561887143, 1588586756, 19183557, 35691611, 1215045558, 1104902655, 1099938511]),
+            (Expose::Interval, Binding::Semantic, [497389573, 430418219, 147510905, 234651151, 1008148634, 652055197, 1594950853, 1377077060]),
+            (Expose::Interval, Binding::Bound, [497389573, 430418219, 147510905, 234651151, 1008148634, 652055197, 1594950853, 1377077060]),
         ];
         // The same circuits under the `zk` feature: hiding-PCS VKs, recorded on the
         // zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06), equal
@@ -6034,14 +6366,14 @@ mod tests {
         #[cfg(feature = "zk")]
         let recorded = [
             (Expose::None, Binding::Legacy, [69744273, 1849456600, 492210391, 582955548, 1941433492, 435265109, 1275377710, 80264505]),
-            (Expose::None, Binding::Semantic, [1220676684, 1131900130, 479114870, 1974530856, 1329720393, 442989842, 817975268, 1326548145]),
-            (Expose::None, Binding::Bound, [1220676684, 1131900130, 479114870, 1974530856, 1329720393, 442989842, 817975268, 1326548145]),
+            (Expose::None, Binding::Semantic, [45927312, 1411203255, 1072019975, 641968451, 894852692, 1916664644, 1039726366, 1803062539]),
+            (Expose::None, Binding::Bound, [45927312, 1411203255, 1072019975, 641968451, 894852692, 1916664644, 1039726366, 1803062539]),
             (Expose::Boundary, Binding::Legacy, [358448247, 1433590892, 1954585140, 1066362735, 247491272, 1456945772, 1614681218, 1076296925]),
-            (Expose::Boundary, Binding::Semantic, [1633347235, 339062650, 768421233, 1479563592, 58205746, 1747940434, 271115321, 636131592]),
-            (Expose::Boundary, Binding::Bound, [1633347235, 339062650, 768421233, 1479563592, 58205746, 1747940434, 271115321, 636131592]),
+            (Expose::Boundary, Binding::Semantic, [1399710662, 1070536470, 1439052877, 1432823435, 425563339, 1798854306, 10547037, 1096294064]),
+            (Expose::Boundary, Binding::Bound, [1399710662, 1070536470, 1439052877, 1432823435, 425563339, 1798854306, 10547037, 1096294064]),
             (Expose::Interval, Binding::Legacy, [883391405, 1926596795, 811071814, 1125540336, 1547079331, 24099729, 1348287992, 524126935]),
-            (Expose::Interval, Binding::Semantic, [463266406, 722854247, 1467200510, 220992646, 1115023530, 716725650, 1828216247, 564036358]),
-            (Expose::Interval, Binding::Bound, [463266406, 722854247, 1467200510, 220992646, 1115023530, 716725650, 1828216247, 564036358]),
+            (Expose::Interval, Binding::Semantic, [572517800, 470808891, 1397510267, 1291848049, 307788394, 543387045, 1771415952, 160488972]),
+            (Expose::Interval, Binding::Bound, [572517800, 470808891, 1397510267, 1291848049, 307788394, 543387045, 1771415952, 160488972]),
         ];
         for (expose, binding, vk) in recorded {
             let old = build_gkb2_leaf_expose_with(HP, expose, binding);

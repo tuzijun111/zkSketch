@@ -227,7 +227,7 @@ use crate::recursion::recursive::leaf_gl::{
     DIGEST_PACKING, GlCommit, make_leaf_config, pack_commit_to_challenge,
 };
 use crate::sketch::bind::{self, Binding};
-use crate::sketch::gk_bandmerge::bind_theta;
+use crate::sketch::gk_bandmerge::{bind_arrival_positions, bind_theta};
 
 // ── Goldilocks D=2 encoding (parallels ss_final_full_gl) ─────────────────────
 //
@@ -1239,16 +1239,35 @@ pub fn commit_gk2_batch_with(
     mode: CommitMode,
     salt: &SaltGl,
 ) -> Gk2BatchCommit {
+    commit_gk2_rows_with(&fresh_tuples2(vals, m, n_prev), mode, salt)
+}
+
+/// [`commit_gk2_batch_with`] over an explicit fresh-row table (honestly
+/// [`fresh_tuples2`]; a soundness test may commit forged rows).
+fn commit_gk2_rows_with(rows: &[Gk2Tuple], mode: CommitMode, salt: &SaltGl) -> Gk2BatchCommit {
     match mode {
-        CommitMode::Plain => commit_gk2_batch(vals, m, n_prev),
+        CommitMode::Plain => {
+            let hasher = MyHash::new(make_perm());
+            Gk2BatchCommit(hasher.hash_iter(flat_tuples2(rows)))
+        }
         CommitMode::Hiding => Gk2BatchCommit(commit_flat_gl(
             mode,
             CommitKind::Batch,
             CommitFamily::GreenwaldKhanna,
             salt,
-            &flat_tuples2(&fresh_tuples2(vals, m, n_prev)),
+            &flat_tuples2(rows),
         )),
     }
+}
+
+/// The fresh-row table a band-merge leaf witness commits as `B_t` and feeds
+/// to the union: [`fresh_tuples2`] (tests may substitute forged rows).
+fn leaf_fresh_rows(vals: &[u32], m: usize, n_prev: u64) -> Vec<Gk2Tuple> {
+    #[cfg(test)]
+    if let Some(rows) = TAMPER_FRESH.with(|c| c.borrow().clone()) {
+        return rows;
+    }
+    fresh_tuples2(vals, m, n_prev)
 }
 
 /// Expand a tuple-permutation to the atom-cell permutation that moves each
@@ -1468,6 +1487,11 @@ thread_local! {
     static TAMPER_NPREV: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     /// Test-only override of [`use_pair_bind`] (`Some(false)` = pre-fix atoms).
     static PAIR_BIND: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// Test-only tamper: the fresh-row table the leaf witness commits as
+    /// `B_t` and feeds to the union ([`leaf_fresh_rows`]), to PoC-verify
+    /// [`bind_arrival_positions`]. `None` = the honest [`fresh_tuples2`].
+    static TAMPER_FRESH: std::cell::RefCell<Option<Vec<Gk2Tuple>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The two-sided band-merge transition circuit.
@@ -1485,7 +1509,16 @@ thread_local! {
 /// **Threshold (revision B6(d)).** `θ` was a free public input "assumed to
 /// equal `⌊N_t/s⌋`"; under the default binding the circuit now forces it from
 /// the in-circuit `N_t` ([`bind_theta`]; `Binding::Legacy` keeps the pre-fix
-/// circuit). One residual assumption remains, shared with the one-sided
+/// circuit).
+///
+/// **Arrival positions (2026-10-11).** The fresh rows' timestamps (which
+/// tuple of a fused pair is newer, and the neighbor-init gate) were bound
+/// only through `Com(B_t)`; under the default binding the circuit forces the
+/// active batch rows to a prefix with `t_j = N_{t-1} + 1 + j` and dummies to
+/// `t = 0` ([`bind_arrival_positions`];
+/// `gk2_gl_forged_arrival_positions_legacy_accepts_semantic_rejects`).
+///
+/// One residual assumption remains, shared with the one-sided
 /// `prove_gkb`: the Stage-8 mass sum `Σ(g₁+g₂)` is a field add, which cannot
 /// wrap the 64-bit Goldilocks prime for any capacity here.
 pub fn prove_gkb2(
@@ -1573,7 +1606,8 @@ pub fn build_gkb2_leaf_expose_with(
 /// Challenges each), allocated as the FIRST private inputs, and hashes each
 /// commitment as `[tag, salt…, inputs…]` ([`commit_gk2_state_with`] /
 /// [`commit_gk2_batch_with`]) through the same plain sponge as before
-/// (`add_hash_slice`; `binding` only gates the `θ` constraint here). `θ`,
+/// (`add_hash_slice`; `binding` only gates the `θ` and arrival-position
+/// constraints here). `θ`,
 /// `N_{t-1}` and `N_t` stay unsalted, unexposed public inputs. The salts are
 /// witnesses, so the VK does not depend on them; prove with
 /// [`Gkb2LeafCircuit::prove_epoch_commit`].
@@ -1809,7 +1843,8 @@ pub fn build_gkb2_leaf_commit(
 
     // ── Stage 3: union multiset ──
     // Fresh singletons committed as (v,0,0,0,0,t): well-formedness g₁=g₂=Δ₁=Δ₂=0,
-    // and both padding coeffs 0. The union is a permutation of init ‖ batch.
+    // and both padding coeffs 0 (the arrival position t is bound under
+    // Semantic/Bound by Stage 10). The union is a permutation of init ‖ batch.
     for j in 0..m {
         b.connect(batch_f[2 * j][1], zero); // g₁
         b.connect(batch_f[2 * j][2], zero); // g₂
@@ -2213,10 +2248,12 @@ pub fn build_gkb2_leaf_commit(
     // and ties the certified count to the committed batch. #active batch =
     // Σ [batch.e ≠ E_MAX].
     let mut count_batch = zero;
+    let mut batch_act: Vec<ExprId> = Vec::with_capacity(m);
     for j in 0..m {
         let dj = b.sub(e_max, batch_f[2 * j][0]);
         let actj = force_nz(&mut b, dj, e_inv_batch[j], one, zero);
         count_batch = b.add(count_batch, actj);
+        batch_act.push(actj);
     }
     let np_plus_b = b.add(n_prev_pi, count_batch);
     b.connect(np_plus_b, n_t_pi);
@@ -2224,6 +2261,13 @@ pub fn build_gkb2_leaf_commit(
     // Appended last so the Legacy circuit is byte-for-byte the pre-fix one.
     if binding.is_bound() {
         bind_theta::<Val, Challenge>(&mut b, theta_pi, n_t_pi, params.s);
+    }
+    // ── Stage 10: fresh-row arrival positions t_j = N_{t-1} + 1 + j ──
+    // Active batch rows form a prefix and carry t_j = N_{t-1}+1+j; dummies
+    // carry t = 0 ([`bind_arrival_positions`]). Also after the Legacy circuit.
+    if binding.is_bound() {
+        let batch_t: Vec<ExprId> = (0..m).map(|j| batch_f[2 * j + 1][1]).collect();
+        bind_arrival_positions(&mut b, &batch_t, &batch_act, n_prev_pi, one, zero);
     }
 
     let circuit = b.build().expect("build gkb2 circuit");
@@ -2526,9 +2570,11 @@ impl Gkb2LeafCircuit {
             n: build.n_t,
         };
         let mode = self.mode;
+        // The committed batch table (the fresh rows fed to the union).
+        let fresh = leaf_fresh_rows(&batch_vals, m, build.n_prev);
         let initial_commit = commit_gk2_state_with(&initial_state, mode, &openings.init);
         let final_commit = commit_gk2_state_with(&final_state, mode, &openings.final_);
-        let batch_commit = commit_gk2_batch_with(&batch_vals, m, build.n_prev, mode, &openings.batch);
+        let batch_commit = commit_gk2_rows_with(&fresh, mode, &openings.batch);
         let lf = num_rounds(total);
         let num_pairs = total / 2;
 
@@ -2564,11 +2610,7 @@ impl Gkb2LeafCircuit {
         }
         private_inputs.extend_from_slice(&pack_tuples2(&initial_state.tuples));
         private_inputs.extend_from_slice(&pack_tuples2(&final_state.tuples));
-        private_inputs.extend_from_slice(&pack_tuples2(&fresh_tuples2(
-            &batch_vals,
-            m,
-            build.n_prev,
-        )));
+        private_inputs.extend_from_slice(&pack_tuples2(&fresh));
         private_inputs.extend_from_slice(&pack_tuples2(&build.union_raw));
         for round in &build.rounds {
             private_inputs.extend_from_slice(&pack_tuples2(&round.fused));
@@ -2638,7 +2680,6 @@ impl Gkb2LeafCircuit {
                 private_inputs.push(inv((E_MAX - build.final_tuples[i].e) as u64));
             }
             // e_inv_batch = 1/(E_MAX − batch.e)  (dummy batch slot → 0)
-            let fresh = fresh_tuples2(&batch_vals, m, build.n_prev);
             for j in 0..m {
                 private_inputs.push(inv((E_MAX - fresh[j].e) as u64));
             }
@@ -3062,6 +3103,199 @@ mod tests {
         }
     }
 
+    /// A band-merge witness over hand-picked fresh rows `rows` (honestly
+    /// `fresh_tuples2(batch, m, s_old.n)`), every hint replayed under them;
+    /// `N_t` and `θ` honest (the BabyBear twin's `forge_arrivals`).
+    fn forge_arrivals(s_old: &Gk2State, rows: &[Gk2Tuple]) -> Bm2Build {
+        let n_prev = s_old.n;
+        let n_t = n_prev + rows.iter().filter(|r| r.active == 1).count() as u64;
+        let mut combined = s_old.tuples.clone();
+        combined.extend_from_slice(rows);
+        let mut idx: Vec<usize> = (0..combined.len()).collect();
+        idx.sort_by_key(|&i| (combined[i].e, combined[i].t));
+        let union_raw: Vec<Gk2Tuple> = idx.iter().map(|&i| combined[i]).collect();
+        finish_bm2(s_old, idx, union_raw, n_prev, n_t, n_t / s_old.params.s)
+    }
+
+    /// One epoch of the arrival-position PoCs (the BabyBear twin's
+    /// `ArrivalPoc`): `S_1` (after `B_1`), the
+    /// honest fresh rows and build of `B_2`, and the forged `(name, rows,
+    /// build)` of the four forgeries.
+    struct ArrivalPoc {
+        params: GkbParams,
+        s1: Gk2State,
+        b2: Vec<u32>,
+        stream: Vec<u32>,
+        honest_rows: Vec<Gk2Tuple>,
+        honest: Bm2Build,
+        cases: Vec<(&'static str, Vec<Gk2Tuple>, Bm2Build)>,
+    }
+
+    /// The arrival-position forgeries of one epoch at accuracy `s` (same
+    /// values, honest `N_t` and `θ`, every hint replayed under the forged
+    /// rows), or `None` unless each is visible: permuted and stale move
+    /// `S_t`, gap leaves a survivor of `S_t` arriving after `N_t`.
+    fn arrival_poc(s: u64) -> Option<ArrivalPoc> {
+        let params = GkbParams {
+            capacity: 16,
+            batch: 8,
+            s,
+        };
+        let m = params.batch;
+        let b1: Vec<u32> = vec![100, 400, 200, 700, 300, 600, 500, 800];
+        // Six values (batch rows 6 and 7 are E_MAX dummies), all above S_1's,
+        // so fresh rows meet each other in the fusion pairs and the newer
+        // one of a pair is decided by arrival position alone.
+        let b2: Vec<u32> = vec![1000, 900, 1200, 1100, 1300, 850];
+        let k = b2.len();
+        let s1 = apply_batch2(&Gk2State::empty(params), &b1);
+        let n_prev = s1.n;
+        let honest_rows = fresh_tuples2(&b2, m, n_prev);
+        let honest = build_bm2(&s1, &b2);
+        assert_eq!(
+            forge_arrivals(&s1, &honest_rows).final_tuples,
+            honest.final_tuples,
+            "the forging replay reproduces the honest build"
+        );
+        let stream: Vec<u32> = b1.iter().chain(b2.iter()).copied().collect();
+        let fits = |f: &Bm2Build| f.excess.iter().all(|t| t.active == 0);
+        let moved = |rows: &[Gk2Tuple]| -> Option<Bm2Build> {
+            let f = forge_arrivals(&s1, rows);
+            (f.final_tuples != honest.final_tuples && fits(&f)).then_some(f)
+        };
+        // permuted: two arrival positions swapped.
+        let permuted = (0..k)
+            .flat_map(|i| (i + 1..k).map(move |j| (i, j)))
+            .find_map(|(i, j)| {
+                let mut rows = honest_rows.clone();
+                let (ti, tj) = (rows[i].t, rows[j].t);
+                rows[i].t = tj;
+                rows[j].t = ti;
+                moved(&rows).map(|f| (rows, f))
+            })?;
+        // stale: a fresh value at an old timestamp t ≤ N_{t-1} (the most
+        // semantic damage, if any).
+        let stale = (0..k)
+            .flat_map(|j| (1..=n_prev).map(move |t| (j, t)))
+            .filter_map(|(j, t)| {
+                let mut rows = honest_rows.clone();
+                rows[j].t = t;
+                moved(&rows).map(|f| {
+                    let st = Gk2State {
+                        tuples: f.final_tuples.clone(),
+                        params,
+                        n: f.n_t,
+                    };
+                    let d = semantic_damage(&st, &stream);
+                    (d.0 + d.1, rows, f)
+                })
+            })
+            .max_by_key(|(d, _, _)| *d)
+            .map(|(_, rows, f)| (rows, f))?;
+        // gap: the values keep their order, each at N_{t-1} + 1 + j, but the
+        // two dummies sit among them, leaving a survivor arriving after N_t.
+        let gap = (0..m)
+            .flat_map(|x| (x + 1..m).map(move |y| (x, y)))
+            .find_map(|(x, y)| {
+                let mut rows = vec![Gk2Tuple::dummy(); m];
+                let mut vals = honest_rows[..k].iter();
+                for j in (0..m).filter(|&j| j != x && j != y) {
+                    rows[j] = *vals.next().expect("k values");
+                    rows[j].t = n_prev + 1 + j as u64;
+                }
+                let f = forge_arrivals(&s1, &rows);
+                let late = f.final_tuples.iter().any(|t| t.active == 1 && t.t > f.n_t);
+                (late && fits(&f)).then_some((rows, f))
+            })?;
+        // dummy t: a padding row with t ∈ [1, N_{t-1}] (the is_fresh gate
+        // reads t alone, so a larger dummy t would need the hint set to 1).
+        let dummy_t = {
+            let mut rows = honest_rows.clone();
+            rows[m - 1].t = 1;
+            let f = forge_arrivals(&s1, &rows);
+            fits(&f).then_some((rows, f))?
+        };
+        let cases = vec![
+            ("permuted", permuted.0, permuted.1),
+            ("stale", stale.0, stale.1),
+            ("gap", gap.0, gap.1),
+            ("dummy t", dummy_t.0, dummy_t.1),
+        ];
+        Some(ArrivalPoc {
+            params,
+            s1,
+            b2,
+            stream,
+            honest_rows,
+            honest,
+            cases,
+        })
+    }
+
+    /// **Forged arrival positions PoC** (Goldilocks twin of the BabyBear
+    /// `gk2_forged_arrival_positions_legacy_accepts_semantic_rejects`): a
+    /// prover that commits the batch table itself swaps two arrival
+    /// positions (permuted), gives a fresh value an old timestamp (stale),
+    /// places the dummies among the active rows so a survivor arrives after
+    /// `N_t` (gap) or pads with a nonzero dummy `t` (dummy t). `Legacy`
+    /// accepts each; `Semantic` / `Bound` ([`bind_arrival_positions`]) reject
+    /// each, the honest rows verify.
+    #[test]
+    fn gk2_gl_forged_arrival_positions_legacy_accepts_semantic_rejects() {
+        let poc = [3u64, 4, 5, 6, 8, 12, 16]
+            .into_iter()
+            .find_map(arrival_poc)
+            .expect("an accuracy s at which every arrival forgery is visible");
+        let ArrivalPoc { params, s1, b2, stream, honest_rows, honest, cases } = poc;
+        let (m, n_prev) = (params.batch, s1.n);
+        let state = |f: &Bm2Build| Gk2State {
+            tuples: f.final_tuples.clone(),
+            params,
+            n: f.n_t,
+        };
+        // Prove `build` with `rows` as the committed batch table.
+        let prove = |leaf: &mut Gkb2LeafCircuit, rows: &[Gk2Tuple], build: &Bm2Build| {
+            let mut sigmas = vec![expand_sigma(&build.sigma_union)];
+            for rd in &build.rounds {
+                sigmas.push(expand_sigma(&rd.sigma));
+            }
+            leaf.circuit.update_permute_witnesses(&sigmas).expect("sigmas");
+            TAMPER_FRESH.with(|c| *c.borrow_mut() = Some(rows.to_vec()));
+            let r = crate::sketch::forge::catch_msg(|| leaf.prove_build(s1.clone(), b2.clone(), build));
+            TAMPER_FRESH.with(|c| *c.borrow_mut() = None);
+            r
+        };
+        let honest_bc = commit_gk2_batch(&b2, m, n_prev);
+        let mut legacy = build_gkb2_leaf_expose_with(params, Expose::None, Binding::Legacy);
+        for (name, rows, f) in &cases {
+            println!(
+                "[gk2_gl arrival] s={} {name}: batch t = {:?}; damage (B2, rank) {:?}",
+                params.s,
+                rows.iter().map(|r| r.t).collect::<Vec<_>>(),
+                semantic_damage(&state(f), &stream)
+            );
+            match prove(&mut legacy, rows, f) {
+                Ok(p) => {
+                    assert_eq!(p.final_, commit_gk2_state(&state(f)), "{name}: Legacy certifies Com(S')");
+                    assert_ne!(p.batch_commit, honest_bc, "{name}: the forged rows change Com(B_t)");
+                    println!("[gk2_gl arrival] Legacy {name}: ACCEPTED (self-verified)");
+                }
+                Err(e) => panic!("{name}: PoC premise: the pre-fix circuit accepts it, got {e}"),
+            }
+        }
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let mut leaf = build_gkb2_leaf_expose_with(params, Expose::None, binding);
+            let ok = prove(&mut leaf, &honest_rows, &honest);
+            assert!(ok.is_ok(), "{binding:?}: positive control (honest rows) must verify: {:?}", ok.err());
+            for (name, rows, f) in &cases {
+                match prove(&mut leaf, rows, f) {
+                    Ok(_) => panic!("{binding:?}: the {name} arrival positions must be rejected"),
+                    Err(e) => println!("[gk2_gl arrival] {binding:?} {name}: REJECTED: {e}"),
+                }
+            }
+        }
+    }
+
     /// Cost of the source-bound atoms (padded trace rows + one prove), pre-fix
     /// vs fixed. Run:
     /// `cargo test --release --lib gk_bandmerge_gl::tests::gk2_gl_fix_overhead -- --ignored --nocapture`
@@ -3208,17 +3442,20 @@ mod tests {
     /// (`Bound` equals `Semantic` on this leaf).
     #[test]
     fn hiding_leaf_vk_is_salt_independent_and_plain_is_unchanged() {
+        // Semantic/Bound rows re-recorded 2026-10-11 for the arrival-position
+        // binding (`bind_arrival_positions`, Semantic/Bound only); the Legacy
+        // rows are unchanged.
         #[cfg(not(feature = "zk"))]
         let recorded = [
             (Expose::None, Binding::Legacy, [17648301630814163799, 5056629490044759552, 18124287673730190577, 10229800710694710351]),
-            (Expose::None, Binding::Semantic, [15783120118502133170, 15673227004874413497, 16436335801021612575, 16167864115155413287]),
-            (Expose::None, Binding::Bound, [15783120118502133170, 15673227004874413497, 16436335801021612575, 16167864115155413287]),
+            (Expose::None, Binding::Semantic, [3015460317007812526, 4963341167627662724, 1657892355398075801, 6967999518459436704]),
+            (Expose::None, Binding::Bound, [3015460317007812526, 4963341167627662724, 1657892355398075801, 6967999518459436704]),
             (Expose::Boundary, Binding::Legacy, [8877931017855245655, 13239424998823848014, 4664278231825416898, 9226611488382758017]),
-            (Expose::Boundary, Binding::Semantic, [14695903512229121464, 7479378755966821786, 14574137524852503798, 16567183074626621323]),
-            (Expose::Boundary, Binding::Bound, [14695903512229121464, 7479378755966821786, 14574137524852503798, 16567183074626621323]),
+            (Expose::Boundary, Binding::Semantic, [5172466015247888357, 6628314482338049368, 5198721853923465224, 12915254714781338675]),
+            (Expose::Boundary, Binding::Bound, [5172466015247888357, 6628314482338049368, 5198721853923465224, 12915254714781338675]),
             (Expose::Interval, Binding::Legacy, [17969328576662778145, 15120082042092615866, 4816197231256429130, 10060820669137172799]),
-            (Expose::Interval, Binding::Semantic, [1177917408512823668, 7183958709189815382, 5583135678615390458, 15052598159657248002]),
-            (Expose::Interval, Binding::Bound, [1177917408512823668, 7183958709189815382, 5583135678615390458, 15052598159657248002]),
+            (Expose::Interval, Binding::Semantic, [15634028605003109288, 62566028125350619, 5762287889269493162, 1015442220189493242]),
+            (Expose::Interval, Binding::Bound, [15634028605003109288, 62566028125350619, 5762287889269493162, 1015442220189493242]),
         ];
         // The same circuits under the `zk` feature: hiding-PCS VKs, recorded on the
         // zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06), equal
@@ -3227,14 +3464,14 @@ mod tests {
         #[cfg(feature = "zk")]
         let recorded = [
             (Expose::None, Binding::Legacy, [10596668003548948268, 15775127507371649029, 2880162508455786619, 5418139929418936883]),
-            (Expose::None, Binding::Semantic, [4486599382895776411, 18057066003520845306, 3585903849112247816, 493966098127468621]),
-            (Expose::None, Binding::Bound, [4486599382895776411, 18057066003520845306, 3585903849112247816, 493966098127468621]),
+            (Expose::None, Binding::Semantic, [9582046055261569176, 9395593647863362701, 17300791966544406209, 8960152035316679885]),
+            (Expose::None, Binding::Bound, [9582046055261569176, 9395593647863362701, 17300791966544406209, 8960152035316679885]),
             (Expose::Boundary, Binding::Legacy, [16689959503916721164, 2648482404781477536, 14404194582397601560, 3739867500367882275]),
-            (Expose::Boundary, Binding::Semantic, [8340674300950645618, 15626659097833277797, 15304928090006326063, 17290084093191061050]),
-            (Expose::Boundary, Binding::Bound, [8340674300950645618, 15626659097833277797, 15304928090006326063, 17290084093191061050]),
+            (Expose::Boundary, Binding::Semantic, [11511406739692658957, 13351501718809319273, 8325437114712683276, 14091644430867174427]),
+            (Expose::Boundary, Binding::Bound, [11511406739692658957, 13351501718809319273, 8325437114712683276, 14091644430867174427]),
             (Expose::Interval, Binding::Legacy, [15033145205255268910, 13442023559743418372, 8817385624464788019, 18023328669391133007]),
-            (Expose::Interval, Binding::Semantic, [10080033765982214315, 9566735086817910665, 6291272209448374857, 15550723797275103179]),
-            (Expose::Interval, Binding::Bound, [10080033765982214315, 9566735086817910665, 6291272209448374857, 15550723797275103179]),
+            (Expose::Interval, Binding::Semantic, [10635185745175552992, 4246102018433806416, 13345553774730851378, 17428432559827844877]),
+            (Expose::Interval, Binding::Bound, [10635185745175552992, 4246102018433806416, 13345553774730851378, 17428432559827844877]),
         ];
         for (expose, binding, vk) in recorded {
             let old = build_gkb2_leaf_expose_with(HP, expose, binding).vk_pin_values();
@@ -3272,17 +3509,20 @@ mod tests {
     /// ones are, so the `Bound` VK equals the `Semantic` one here too.
     #[test]
     fn hiding_leaf_vk_is_pinned() {
+        // Semantic/Bound rows re-recorded 2026-10-11 for the arrival-position
+        // binding (`bind_arrival_positions`, Semantic/Bound only); the Legacy
+        // rows are unchanged.
         #[cfg(not(feature = "zk"))]
         let recorded = [
             (Expose::None, Binding::Legacy, [3029885619994448637, 17441158352762443225, 10853978290850170651, 14097643031452289306]),
-            (Expose::None, Binding::Semantic, [2553289518217700547, 11811450157687497045, 7917681042355712433, 16431477266885413259]),
-            (Expose::None, Binding::Bound, [2553289518217700547, 11811450157687497045, 7917681042355712433, 16431477266885413259]),
+            (Expose::None, Binding::Semantic, [10275698360894538084, 14373932104307865067, 1296884666628795699, 4115603181957957404]),
+            (Expose::None, Binding::Bound, [10275698360894538084, 14373932104307865067, 1296884666628795699, 4115603181957957404]),
             (Expose::Boundary, Binding::Legacy, [4254308733864687361, 12525722226883359869, 5696773030907435527, 2424577922232817698]),
-            (Expose::Boundary, Binding::Semantic, [1326411197357999998, 1628734671836764846, 10759183271107343309, 13359699208043678665]),
-            (Expose::Boundary, Binding::Bound, [1326411197357999998, 1628734671836764846, 10759183271107343309, 13359699208043678665]),
+            (Expose::Boundary, Binding::Semantic, [3209582981809319263, 5235180704044075522, 10249510706678015953, 1028539601924642507]),
+            (Expose::Boundary, Binding::Bound, [3209582981809319263, 5235180704044075522, 10249510706678015953, 1028539601924642507]),
             (Expose::Interval, Binding::Legacy, [9782628864113537765, 17236547483427436253, 1394173986358015459, 10953610386781663955]),
-            (Expose::Interval, Binding::Semantic, [17948282801466964897, 16583181577784489926, 13993560794779333575, 3530354182268625117]),
-            (Expose::Interval, Binding::Bound, [17948282801466964897, 16583181577784489926, 13993560794779333575, 3530354182268625117]),
+            (Expose::Interval, Binding::Semantic, [3909907580287401776, 15791584192779144371, 215893925456086171, 4343189490420628614]),
+            (Expose::Interval, Binding::Bound, [3909907580287401776, 15791584192779144371, 215893925456086171, 4343189490420628614]),
         ];
         // The same circuits under the `zk` feature: hiding-PCS VKs, recorded on the
         // zk-logup-mask forks (Plonky3 280b1a07, Plonky3_RangeAir 3acdc06), equal
@@ -3291,14 +3531,14 @@ mod tests {
         #[cfg(feature = "zk")]
         let recorded = [
             (Expose::None, Binding::Legacy, [8160412530494249895, 2388254384114998720, 1684633681978947491, 13067799765691047662]),
-            (Expose::None, Binding::Semantic, [3928705846298668495, 3329083729564380243, 14202875387861657120, 14111601589955894838]),
-            (Expose::None, Binding::Bound, [3928705846298668495, 3329083729564380243, 14202875387861657120, 14111601589955894838]),
+            (Expose::None, Binding::Semantic, [2313392709055401270, 6094206939115079951, 9258870147790912193, 13495142067957384902]),
+            (Expose::None, Binding::Bound, [2313392709055401270, 6094206939115079951, 9258870147790912193, 13495142067957384902]),
             (Expose::Boundary, Binding::Legacy, [2453991990287670322, 11296684779049474687, 6426737251610880015, 17547424519483404743]),
-            (Expose::Boundary, Binding::Semantic, [12756069873698785841, 9294404656211719325, 15939547296195754374, 15091447257408425758]),
-            (Expose::Boundary, Binding::Bound, [12756069873698785841, 9294404656211719325, 15939547296195754374, 15091447257408425758]),
+            (Expose::Boundary, Binding::Semantic, [9580200766788234179, 7521628272996137231, 193179810908138751, 4411882199682182010]),
+            (Expose::Boundary, Binding::Bound, [9580200766788234179, 7521628272996137231, 193179810908138751, 4411882199682182010]),
             (Expose::Interval, Binding::Legacy, [17582967024093089245, 5892217611848331104, 6470192703155724801, 16168519074575884389]),
-            (Expose::Interval, Binding::Semantic, [6897569824337741750, 17745571485243684217, 11057900853896539109, 13950821513268612740]),
-            (Expose::Interval, Binding::Bound, [6897569824337741750, 17745571485243684217, 11057900853896539109, 13950821513268612740]),
+            (Expose::Interval, Binding::Semantic, [1112630195276688814, 14067356202707495347, 13777380121619481452, 16043808271858945195]),
+            (Expose::Interval, Binding::Bound, [1112630195276688814, 14067356202707495347, 13777380121619481452, 16043808271858945195]),
         ];
         for (expose, binding, vk) in recorded {
             let hid = build_gkb2_leaf_commit(HP, expose, binding, CommitMode::Hiding).vk_pin_values();
