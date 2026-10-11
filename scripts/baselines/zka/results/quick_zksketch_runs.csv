@@ -1,0 +1,7 @@
+tag,family,key_mode,family_env,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,main_peak_rss_mb,desc_peak_rss_mb,commit,zks_head,features,bin_md5
+cm,cm,hot,EXP_D=3 EXP_W=1024,2026-10-10T19:19:43+08:00,quiet,0,3.91,3.2,16.15,30,0,5175.4,4613.2,hiding,98de6540a,zk-default,50f0d0a41b93
+hll,hll,first,EXP_HLL_B=14,2026-10-10T19:20:43+08:00,busy:load1=10.97;,30,10.97,NA,24.92,64,0,7792.9,4746.0,hiding,98de6540a,zk-default,50f0d0a41b93
+ss,ss,first,EXP_SS_CAP=1024,2026-10-10T19:22:17+08:00,busy:load1=16.28;,30,16.28,NA,19.87,35,0,5417.8,4750.3,hiding,98de6540a,zk-default,50f0d0a41b93
+kmv,kmv,first,EXP_KMV_K=1024,2026-10-10T19:23:22+08:00,busy:load1=13.29;,30,13.29,NA,14.80,31,0,4889.3,4610.1,hiding,98de6540a,zk-default,50f0d0a41b93
+gk,gk,hot,EXP_GK_CAP=512 EXP_GK_S=51,2026-10-10T19:24:23+08:00,busy:load1=10.33;,30,10.33,NA,30.95,74,0,8644.0,8575.5,hiding,98de6540a,zk-default,50f0d0a41b93
+bloom,bloom,first,EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14,2026-10-10T19:26:08+08:00,busy:load1=20.22;,31,20.22,NA,33.62,87,0,7835.5,7755.8,hiding,98de6540a,zk-default,50f0d0a41b93

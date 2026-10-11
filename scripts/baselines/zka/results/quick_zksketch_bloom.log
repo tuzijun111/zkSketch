@@ -1,0 +1,27 @@
+# six-sketch zkSketch run tag=bloom 2026-10-10T19:26:08+08:00 host=SPRL6201019991 nproc=64 gate=busy:load1=20.22; waited_s=31 load1_start=20.22 busy_cores_start=NA
+# zkSketch HEAD=98de6540a dirty_files_outside_results=0 features=zk-default bin_md5=50f0d0a41b93
+# env: EXP_COMPOSE_FAMILY=bloom EXP_COMPOSE_MODE=forest EXP_COMPOSE_EXEC=procs EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_N=512 EXP_COMPOSE_BATCHES=256 EXP_COMPOSE_QUERY_EVERY=1 EXP_DATASET=aol EXP_QUERY_KEY_MODE=first EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_QUERY_LOG=1 EXP_VERIFY_REPEATS=1 (ZKSKETCH_COMMIT unset = hiding default)
+Stream compose (plonky3) — N=512 datasets=["aol"] families=["bloom_omc"] modes=["forest"] m=[256] cores=[32] machines=[1] exec=procs commit=hiding salt_seed=os pcs=hiding logup_mask=on (avail=64) MIXED: query every 1 batch(es) key_mode=first
+procs engine: one pinned OS process per machine (numactl/taskset, disjoint physical cores), all cross-machine data over serialized sockets; the chain runs sequentially on ONE machine (folds in place), forest composes in-place on the leaf machines. Communication bytes are measured; the comm_model_ms column uses EXP_NET_MBPS=200Mb/s + EXP_NET_RTT_MS=0.2ms.
+-- dataset=aol (1048576 keys) --
+QLOG_PHASE,after=auditor_new,coord_hwm_mb=7798.0,coord_rss_mb=1164.8
+    auditor: VK derived from public parameters in 15.1s
+QLOG_PHASE,after=before_query_phase,coord_hwm_mb=7808.0,coord_rss_mb=1429.9
+QLOG_KEY,at_leaf=1,bloom_key=3707614330
+QLOG_MEMSTART,at_leaf=1,hwm_reset=true,rss_start_mb=1430.5
+QLOG_QUERY,at_leaf=1,prove_ms=7569.321,witness_ms=62.855,verify_ms=20.184,proof_bytes=828637,answer=1
+QLOG_MEM,at_leaf=1,query_hwm_mb=7791.5,rss_end_mb=2850.6
+QLOG_VERIFY,at_leaf=1,decode_verify_ms=20.184
+QLOG_KEY,at_leaf=2,bloom_key=3236760776
+QLOG_MEMSTART,at_leaf=2,hwm_reset=true,rss_start_mb=2064.4
+QLOG_QUERY,at_leaf=2,prove_ms=7463.810,witness_ms=35.986,verify_ms=20.182,proof_bytes=829131,answer=1
+QLOG_MEM,at_leaf=2,query_hwm_mb=7835.5,rss_end_mb=3119.7
+QLOG_VERIFY,at_leaf=2,decode_verify_ms=20.182
+QLOG_BIND,at_leaf=1,ctx_proofs=1,intervals=1-1,interval_bytes=848124,bind_ms=21.499
+QLOG_BINDV,at_leaf=1,decode_ms=0.726,verify_ms=20.768,check_ms=0.006
+QLOG_BIND,at_leaf=2,ctx_proofs=1,intervals=1-2,interval_bytes=791223,bind_ms=20.061
+QLOG_BINDV,at_leaf=2,decode_ms=0.711,verify_ms=19.341,check_ms=0.009
+  bloom_omc     k7_logw14  m=256  t=2   [forest   ] cores=32 mach=1 procs=1 total=28.73s (wpass=0.02s leaf=28.70s merge=4.9s [fold 4.9s + xmerge 0.00s]) verify=0.026s proof=772.7KB comm=772.7KB/1 msgs (200Mbps model 32.7ms) rss=7756MB | q=2 /query: 7516.6ms prove, 809.5KB, 1.0 ctx, bind 20.8ms
+results -> /home/binbin/zkSketch/results/quick_zksketch_bloom.csv
+RSSTREE,zks_bloom,main_peak_rss_mb=7835.5,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=7755.8,wall_s=86.7,rc=0
+# end 2026-10-10T19:27:35+08:00 rc=0 wall_s=87 load1_end=33.62

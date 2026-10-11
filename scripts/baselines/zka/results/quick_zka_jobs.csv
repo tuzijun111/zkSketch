@@ -1,0 +1,4 @@
+job,family,op,n_or_epoch,arg,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,r0vm_peak_rss_mb,main_peak_rss_mb
+hll:aggr:0,hll,aggr,0,-,2026-10-10T19:28:05+08:00,busy:load1=21.56;,30,21.56,NA,43.78,48,0,9388.7,12.1
+kmv:aggr:0,kmv,aggr,0,-,2026-10-10T19:28:53+08:00,busy:load1=40.51;,0,40.51,NA,42.10,48,0,9387.7,12.7
+bloom:aggr:0,bloom,aggr,0,-,2026-10-10T19:29:41+08:00,busy:load1=42.10;,0,42.10,NA,45.81,61,0,9375.7,22.7

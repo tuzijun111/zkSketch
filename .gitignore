@@ -55,3 +55,5 @@ Thumbs.db
 __pycache__/
 *.pyc
 /data/*.part
+/related_paper
+
