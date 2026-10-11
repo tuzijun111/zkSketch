@@ -422,7 +422,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("zksketch_snark_env_{}", std::process::id()));
         let json = std::fs::read_to_string(write_env_json(&dir, &[("experiment", "unit".into())])).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(json.contains(&format!("\"zero_knowledge\": \"{}\"", cfg!(feature = "zk"))), "{json}");
+        let zk = if cfg!(feature = "zk") { "on" } else { "off" };
+        assert!(json.contains(&format!("\"zero_knowledge\": \"{zk}\"")), "{json}");
         let source = plonky2_source();
         println!("plonky2_source: {source}");
         assert!(source.starts_with("[patch] path ") || source.starts_with("Cargo.toml git rev "), "{source}");
