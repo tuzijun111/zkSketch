@@ -25,12 +25,11 @@
 //! ## The one structural difference from plonky3
 //! plonky3 proves each sort with a dedicated `PermuteAir` table. plonky2 has no
 //! such table, so each permutation here is an **in-circuit grand-product
-//! argument**: fold each tuple with a Fiat-Shamir challenge `α`, then assert
-//! `Π(x_i + β) == Π(y_i + β)` for two independent challenges `β₁, β₂` derived
-//! (with `α`) from a Poseidon hash of both lists. Two independent base-field
-//! challenges give soundness error ≈ `(n/|F|)² ≈ 2⁻¹⁰⁰` for our list sizes over
-//! Goldilocks. Sortedness is enforced by range-checking adjacent differences
-//! (`split_le`).
+//! argument** ([`assert_perm_cols`]): fold each tuple with a Fiat-Shamir
+//! challenge `α`, then assert `Π(x_i + β) == Π(y_i + β)`, with `α, β` derived
+//! from a Poseidon hash of both lists and drawn from the degree-2 extension of
+//! Goldilocks (soundness error `≤ n/p² ≈ 2⁻¹⁰⁸` at `n = 2²⁰`). Sortedness is
+//! enforced by range-checking adjacent differences (`split_le`).
 
 use std::sync::Arc;
 
@@ -45,6 +44,7 @@ use plonky2::plonk::circuit_data::CircuitData;
 use plonky2::plonk::config::Hasher;
 
 use crate::config::{C, D, F};
+use crate::leaf::gadgets::assert_perm_cols;
 use crate::recursion::Node;
 use crate::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
 
@@ -146,35 +146,6 @@ fn vhash(b: &mut CircuitBuilder<F, D>) -> HashOutTarget {
     HashOutTarget { elements: core::array::from_fn(|_| b.add_virtual_target()) }
 }
 
-/// Grand-product permutation argument: assert the multiset of folded pairs
-/// `{a_key[i] + α·a_val[i]}` equals `{b_key[i] + α·b_val[i]}`, using two
-/// independent Fiat-Shamir challenges derived from both lists.
-fn assert_perm(b: &mut CircuitBuilder<F, D>, ak: &[Target], av: &[Target], bk: &[Target], bv: &[Target]) {
-    assert_eq!(ak.len(), bk.len());
-    let mut seed: Vec<Target> = Vec::with_capacity(ak.len() * 4);
-    seed.extend_from_slice(ak);
-    seed.extend_from_slice(av);
-    seed.extend_from_slice(bk);
-    seed.extend_from_slice(bv);
-    let h = b.hash_n_to_hash_no_pad::<PoseidonHash>(seed);
-    let alpha = h.elements[0];
-    for &beta in &[h.elements[1], h.elements[2]] {
-        let mut pa = b.one();
-        for i in 0..ak.len() {
-            let folded = b.mul_add(alpha, av[i], ak[i]); // ak + alpha*av
-            let term = b.add(folded, beta);
-            pa = b.mul(pa, term);
-        }
-        let mut pb = b.one();
-        for i in 0..bk.len() {
-            let folded = b.mul_add(alpha, bv[i], bk[i]);
-            let term = b.add(folded, beta);
-            pb = b.mul(pb, term);
-        }
-        b.connect(pa, pb);
-    }
-}
-
 /// Build the certified Count-Min circuit for the given shape.
 pub fn build_countmin_final_leaf(params: CmFinalParams) -> CountMinFinalLeaf {
     params.validate();
@@ -256,7 +227,7 @@ pub fn build_countmin_final_leaf(params: CmFinalParams) -> CountMinFinalLeaf {
     }
 
     // ---- Stage G: sort the counter updates by `combined` (permutation + sortedness) ----
-    assert_perm(&mut b, &u_combined, &u_value, &csort, &cval);
+    assert_perm_cols(&mut b, &[&u_combined, &u_value], &[&csort, &cval]);
     for r in 1..n_ctr {
         let diff = b.sub(csort[r], csort[r - 1]);
         let _ = b.split_le(diff, comb_bits + 1);

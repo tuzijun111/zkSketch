@@ -8,8 +8,9 @@
 //! - [`assert_perm_cols`] — multiset-equality (grand-product) over **multi-column
 //!   rows**, the plonky2 stand-in for the plonky3 `PermuteAir`. Folds each row's
 //!   columns with powers of a Fiat-Shamir challenge `α`, then asserts the two
-//!   shifted products match for two independent challenges `β₁, β₂` (soundness
-//!   ≈ `(n/|F|)² ≈ 2⁻¹⁰⁰` over Goldilocks).
+//!   `β`-shifted products match, with `α, β` drawn from the degree-2 extension of
+//!   Goldilocks (soundness `≤ n·max(1, k−1)/p² ≈ 2⁻¹⁰⁵` at `n = 2²⁰` rows,
+//!   `k = 6` columns).
 //! - [`is_zero`] — the standard `x == 0` flag, **forced** correct via a prover
 //!   inverse witness (`x·zf == 0`, `zf = 1 − x·inv`). Pattern-B grouping must be
 //!   exact (unlike linear Count-Min), so we use this rather than the
@@ -17,6 +18,7 @@
 
 use plonky2::hash::hash_types::HashOutTarget;
 use plonky2::hash::poseidon::PoseidonHash;
+use plonky2::iop::ext_target::ExtensionTarget;
 use plonky2::iop::target::Target;
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 
@@ -38,8 +40,21 @@ pub fn bind_commit(b: &mut CircuitBuilder<F, D>, cells: Vec<Target>, commit: &Ha
 
 /// Multiset-equality over multi-column rows: assert
 /// `{ row_a[i] }_i == { row_b[i] }_i` where each row is folded as
-/// `Σ_c α^c · col_c[i]`. `a` and `bcols` are equal-length lists of equal-length
-/// columns (one entry per row column). Uses two independent shift challenges.
+/// `β + Σ_c α^c · col_c[i]`. `a` and `bcols` are equal-length lists of
+/// equal-length columns (one entry per row column).
+///
+/// The challenges live in the degree-`D` extension `F_{p^D}` (`D = 2`,
+/// `|F_{p²}| ≈ 2¹²⁸`): `α = (h₀, h₁)` and `β = (h₂, h₃)`, where `h` is an
+/// in-circuit Poseidon digest of every cell of both tables. If the row
+/// multisets differ, `Π_i(β + A_i(α)) − Π_i(β + B_i(α))` is a nonzero
+/// polynomial of total degree `≤ n·max(1, k−1)` (`k` columns, `n` rows), so by
+/// Schwartz–Zippel a false claim passes with probability at most
+/// `n·max(1, k−1) / p²` per pair of tables the prover tries: `≈ 2⁻¹⁰⁵·⁷` at
+/// `n = 2²⁰`, `k = 6`.
+///
+/// Cost per row and side: the columns are base-field values, so each limb of
+/// the folded row is a base linear combination (`1 + D·(k−1)` arithmetic ops),
+/// then one extension multiplication into the running product.
 pub fn assert_perm_cols(b: &mut CircuitBuilder<F, D>, a: &[&[Target]], bcols: &[&[Target]]) {
     assert_eq!(a.len(), bcols.len(), "column count mismatch");
     let ncols = a.len();
@@ -58,40 +73,40 @@ pub fn assert_perm_cols(b: &mut CircuitBuilder<F, D>, a: &[&[Target]], bcols: &[
         seed.extend_from_slice(c);
     }
     let h = b.hash_n_to_hash_no_pad::<PoseidonHash>(seed);
-    let alpha = h.elements[0];
+    let alpha = ExtensionTarget::<D>(core::array::from_fn(|l| h.elements[l]));
+    let beta = ExtensionTarget::<D>(core::array::from_fn(|l| h.elements[D + l]));
 
-    // α powers [1, α, α², …, α^{ncols-1}].
-    let one = b.one();
+    // α powers [1, α, α², …, α^{ncols-1}] in the extension.
     let mut alpha_pow = Vec::with_capacity(ncols);
-    alpha_pow.push(one);
+    alpha_pow.push(b.one_extension());
     for _ in 1..ncols {
         let prev = *alpha_pow.last().unwrap();
-        alpha_pow.push(b.mul(prev, alpha));
+        alpha_pow.push(b.mul_extension(prev, alpha));
     }
 
-    let fold = |b: &mut CircuitBuilder<F, D>, cols: &[&[Target]], i: usize| -> Target {
-        let mut acc = b.mul(alpha_pow[0], cols[0][i]);
+    // β + Σ_c α^c·col_c[i], limb by limb (α⁰ = 1 touches limb 0 only).
+    let fold = |b: &mut CircuitBuilder<F, D>, cols: &[&[Target]], i: usize| -> ExtensionTarget<D> {
+        let mut acc = beta;
+        acc.0[0] = b.add(cols[0][i], beta.0[0]);
         for c in 1..cols.len() {
-            acc = b.mul_add(alpha_pow[c], cols[c][i], acc);
+            for l in 0..D {
+                acc.0[l] = b.mul_add(alpha_pow[c].0[l], cols[c][i], acc.0[l]);
+            }
         }
         acc
     };
 
-    for &beta in &[h.elements[1], h.elements[2]] {
-        let mut pa = b.one();
-        for i in 0..n {
-            let f = fold(b, a, i);
-            let term = b.add(f, beta);
-            pa = b.mul(pa, term);
-        }
-        let mut pb = b.one();
-        for i in 0..n {
-            let f = fold(b, bcols, i);
-            let term = b.add(f, beta);
-            pb = b.mul(pb, term);
-        }
-        b.connect(pa, pb);
+    let mut pa = b.one_extension();
+    for i in 0..n {
+        let term = fold(b, a, i);
+        pa = b.mul_extension(pa, term);
     }
+    let mut pb = b.one_extension();
+    for i in 0..n {
+        let term = fold(b, bcols, i);
+        pb = b.mul_extension(pb, term);
+    }
+    b.connect_extension(pa, pb);
 }
 
 /// `x == 0` flag, forced correct by the prover-supplied `inv`:
@@ -106,4 +121,48 @@ pub fn is_zero(b: &mut CircuitBuilder<F, D>, x: Target, inv: Target) -> Target {
     let zero = b.zero();
     b.connect(chk, zero);
     zf
+}
+
+#[cfg(test)]
+mod tests {
+    use plonky2::field::types::Field;
+    use plonky2::iop::witness::{PartialWitness, WitnessWrite};
+
+    use super::*;
+    use crate::config::{build_circuit, circuit_config};
+
+    /// Build `assert_perm_cols` over two 2-column tables and try to prove it on
+    /// the given rows; `true` iff a proof is produced and verifies.
+    fn perm_holds(rows_a: &[[u64; 2]], rows_b: &[[u64; 2]]) -> bool {
+        let n = rows_a.len();
+        let mut b = CircuitBuilder::<F, D>::new(circuit_config());
+        let cols: Vec<Vec<Target>> = (0..4).map(|_| b.add_virtual_targets(n)).collect();
+        assert_perm_cols(&mut b, &[&cols[0], &cols[1]], &[&cols[2], &cols[3]]);
+        let data = build_circuit(b);
+        let mut pw = PartialWitness::<F>::new();
+        for (side, rows) in [rows_a, rows_b].into_iter().enumerate() {
+            for (i, row) in rows.iter().enumerate() {
+                for (c, &v) in row.iter().enumerate() {
+                    pw.set_target(cols[2 * side + c][i], F::from_canonical_u64(v)).unwrap();
+                }
+            }
+        }
+        data.prove(pw).is_ok_and(|p| data.verify(p).is_ok())
+    }
+
+    #[test]
+    fn perm_cols_accepts_row_permutation() {
+        assert!(perm_holds(&[[1, 2], [3, 4], [5, 6]], &[[5, 6], [1, 2], [3, 4]]));
+    }
+
+    #[test]
+    fn perm_cols_rejects_recombined_rows() {
+        // Each column is a permutation of the other side's, but the rows are not.
+        assert!(!perm_holds(&[[1, 2], [3, 4], [5, 6]], &[[1, 4], [3, 2], [5, 6]]));
+    }
+
+    #[test]
+    fn perm_cols_rejects_changed_multiplicity() {
+        assert!(!perm_holds(&[[1, 2], [1, 2], [3, 4]], &[[1, 2], [3, 4], [3, 4]]));
+    }
 }
