@@ -208,7 +208,7 @@ case "$BACKEND" in
     ;;
   plonky2|p2|snark)
     echo "-- plonky2 (SNARK) --  (dataset=${EXP_DATASET:-uniform}; single-value CORES/MACHINES; nightly via plonky2/rust-toolchain.toml)"
-    echo "   note: plonky2 proofs are NOT zero-knowledge (CircuitConfig zero_knowledge = false); only the plonky3 rows are"
+    echo "   note: plonky2 proofs are zero-knowledge under the default zk feature, like the plonky3 rows (recorded as zero_knowledge in plonky2/results/env.json)"
     NAME="${OUT_CSV:-stream_compose_p2}"; NAME="${NAME%.csv}"
     # plonky2/ is a self-contained crate; run its example there and surface the
     # CSV in the shared results/ dir so both backends land side by side.

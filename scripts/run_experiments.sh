@@ -215,7 +215,7 @@ if [[ "$want_p3" == 1 ]]; then
 fi
 if [[ "$want_p2" == 1 ]]; then
   echo "-- plonky2 (SNARK) --"  # plonky2/ pins nightly via rust-toolchain.toml
-  echo "   note: plonky2 proofs are NOT zero-knowledge (CircuitConfig zero_knowledge = false); only the plonky3 rows are"
+  echo "   note: plonky2 proofs are zero-knowledge under the default zk feature, like the plonky3 rows (recorded as zero_knowledge in plonky2/results/env.json)"
   ( cd plonky2 && cargo run --release --example "$P2_EX" )
 fi
 
