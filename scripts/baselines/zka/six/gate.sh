@@ -1,5 +1,5 @@
 # Quiet-box gate for TIMED runs (sourced).
-#   quiet := 1-minute load <= GATE_MAX_LOAD (default: CPUs / 8, i.e. 8 on a 64-thread box)
+#   quiet := 1-minute load <= GATE_MAX_LOAD (default: CPUs / 8, i.e. 8 on a 64-thread box; 2 below 16 CPUs)
 #            AND no r0vm / exp_compose / procs-engine worker / cargo / rustc of ANY user
 #            AND < GATE_MAX_BUSY (default 4) cores busy over a 2 s /proc/stat window.
 # Polls every 30 s for up to GATE_WAIT_S (default 1800 s); then the run starts anyway and its

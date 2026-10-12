@@ -31,6 +31,11 @@ ap.add_argument('--zka', default='six_zka')
 ap.add_argument('--raw')
 A = ap.parse_args()
 rows = list(csv.DictReader(open(A.csv)))
+if rows and 'run' not in rows[0]:
+    sys.exit(f'{A.csv}: no "run" column: written by assemble.py as of 6cac471 (like the committed '
+             f'scripts/baselines/zka/results/six_sketch_comparison.csv). Re-assemble its directory: '
+             f'assemble.py <dir> data/aol.keys --out <file>, then table.py <file> --raw <dir>; or print it '
+             f'with that version: git show 6cac471:scripts/baselines/zka/six/table.py')
 FAMS = ['cm', 'hll', 'ss', 'gk', 'bloom', 'kmv']
 NAME = {'cm': 'Count-Min 3x1024', 'hll': 'HLL b=14 † ‡', 'ss': 'SS / MG s=1,024 † §', 'gk': 'GK eps=1/51 †',
         'bloom': 'Bloom 7x2^14 †', 'kmv': 'KMV k=1,024 †'}

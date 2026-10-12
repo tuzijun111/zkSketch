@@ -789,9 +789,9 @@ plain textbook per-record code in their per-epoch pipeline with query-time merge
 > +18% (HLL) end to end over an unmasked hiding build; `src/config.rs`, "Cost of the
 > masks"), and much more for GK at this shape: one GK run of the default (ZK) build
 > on 2026-10-12, on a shared, loaded machine, took 824 s wall, 70 s of leaf proving
-> per batch and 60 GB peak RSS (coordinator 59 GB while deriving the root VK), against
-> 215 s, 14.7 s and 19.8 GB in `six_zksketch_r2_gk`. Re-run with `six/run_all.sh full`
-> before quoting zero-knowledge numbers. The committed `quick_zksketch_*` rows (2026-10-10,
+> per batch and 58.8 GiB peak RSS (worker; coordinator 57.9 GiB while deriving the
+> root VK), against 215 s, 14.7 s and 19.4 GiB in `six_zksketch_r2_gk`. Re-run with
+> `six/run_all.sh full` before quoting zero-knowledge numbers. The committed `quick_zksketch_*` rows (2026-10-10,
 > 256 records per batch, `pcs=hiding,logup_mask=on`) are from the ZK build. Both
 > zkSketch builds use hiding (salted Poseidon2) state commitments (`ZKSKETCH_COMMIT`
 > default `hiding`, OS-seeded salt); zk-Analytics commits with unsalted SHA-256.
@@ -873,11 +873,13 @@ tables below), `six_sketch_comparison.csv`, and the raw files of the table below
 planned ones from their executor cycle counts: padded cycles x the seconds per 2^20
 padded cycles measured over this run's proofs. Those cells say `est`; `provenance`
 says ESTIMATED. Across the 40 proofs of the measured run, this model (k = 30.06 s per
-2^20) was within -9% / +5% for proofs of >= 2^20 padded cycles and underestimated
-proofs of <= 2^18 cycles by 19-37% (fixed overhead).
+2^20) gave between 5% below and 9% above the measured time for proofs of >= 2^19
+padded cycles (2^20 and up: -5.0% .. +9.3%, 28 proofs; 2^19: -4.3% .. -2.3%, 7 proofs)
+and underestimated proofs of <= 2^18 cycles by 19-37% (fixed overhead; 5 proofs).
 
-What `full` runs, step by step (each script also runs on its own; defaults = this
-configuration; `RESULTS` must be the same fresh directory for all steps):
+What `full` runs, step by step, from the repository root (the relative paths below
+assume it; each script also runs on its own; defaults = this configuration; `RESULTS`
+must be the same fresh directory for all steps):
 
 ```bash
 export RESULTS=$PWD/results/six/manual-1   # fresh, git-ignored; the six/ scripts refuse a directory with tracked files
@@ -907,18 +909,21 @@ bloom:query:1:key:4010659695 bloom:query:2:key:3455829011 bloom:query:4:key:2391
 kmv:query:1 kmv:query:2 kmv:query:4 kmv:query:8 ss:query:1 ss:query:2 ss:query:4 ss:query:8
 ```
 
-Knobs (environment): `BASELINE_DIR`, `RESULTS`; `SIX_M`, `SIX_T` (records per epoch,
-epochs; `N = M x T`), `SIX_GK_CAP`, `SIX_QNS` (query points), `SIX_CORES` (zkSketch
-cores; default: physical cores, at most 32); `GATE_WAIT_S` (default 1800; `quick` 0),
-`GATE_MAX_LOAD` (default CPUs / 8), `GATE_MAX_BUSY` (default 4); `EXP_VERIFY_REPEATS`
-(default 5). The run scripts ignore inherited `EXP_*` / `ZKSKETCH_*` /
-`RAYON_NUM_THREADS` settings and RISC Zero's `BONSAI_API_*`, `RISC0_PROVER` and
-`RISC0_DEV_MODE`, and exit non-zero when a run fails (a non-zero exit code, a missing
+Knobs (environment): `BASELINE_DIR`, `RESULTS`, `SIX_CORES` (zkSketch cores;
+default: physical cores, at most 32); `GATE_WAIT_S` (default 1800; `quick` 0),
+`GATE_MAX_LOAD` (default CPUs / 8; 2 below 16 CPUs), `GATE_MAX_BUSY` (default 4);
+`EXP_VERIFY_REPEATS` (default 5). The run shape `SIX_M`, `SIX_T` (records per epoch,
+epochs; `N = M x T`), `SIX_GK_CAP` and `SIX_QNS` (query points) applies only to the
+individual `six/*.sh` scripts (`jobs.py` takes `--m`, `--t`, `--qns`): `run_all.sh
+quick` / `full` use their fixed shapes and say so when these are set. The run
+scripts ignore inherited `EXP_*` / `ZKSKETCH_*` / `RAYON_NUM_THREADS` settings and
+RISC Zero's `BONSAI_API_*`, `RISC0_PROVER` and `RISC0_DEV_MODE`, and exit non-zero when a run fails (a non-zero exit code, a missing
 CSV, a zkSketch CSV `status` other than `ok`, or a proof that wrote no row). Ctrl-C
 stops the running job: each one runs in its own process group, which is stopped as a
 whole; no process is killed by name. `run_all.sh quick` / `full` refuse binaries
-older than their sources (`SIX_ALLOW_STALE=1` overrides; a `BASELINE_DIR` built from
-an older checkout, for instance, lacks the GK driver's query `--prove` path), and the
+older than their sources, i.e. sources changed since the last `run_all.sh build`, which
+refreshes them (`SIX_ALLOW_STALE=1` overrides; a `BASELINE_DIR` built from an older
+checkout, for instance, lacks the GK driver's query `--prove` path), and the
 `six/` scripts refuse a `RESULTS` directory holding git-tracked files
 (`SIX_ALLOW_TRACKED=1` overrides).
 

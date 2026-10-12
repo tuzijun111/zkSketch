@@ -21,9 +21,12 @@
 #                  must be new or empty
 #   SIX_CORES      zkSketch cores (default: physical cores, at most 32 = the paper configuration)
 #   GATE_WAIT_S    seconds to wait for a quiet box before each timed job (quick 0, full 1800)
-#   GATE_MAX_LOAD, GATE_MAX_BUSY  the quiet thresholds (gate.sh; defaults CPUs/8 and 4)
+#   GATE_MAX_LOAD, GATE_MAX_BUSY  the quiet thresholds (gate.sh; defaults CPUs/8 (2 below 16 CPUs) and 4)
 #   SIX_QUICK_PROVE  quick: the jobs proved for real (default kmv:aggr:0,gk:query:1,bloom:query:1:key)
-#   SIX_ALLOW_STALE=1  let quick/full use binaries older than their sources (refused by default)
+#   SIX_ALLOW_STALE=1  let quick/full use binaries older than their sources (refused by default;
+#                  `run_all.sh build` refreshes them)
+# quick and full use fixed run shapes: SIX_M, SIX_T, SIX_N, SIX_GK_CAP and SIX_QNS are ignored
+# here (they apply to the individual six/*.sh scripts).
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZKS="$(cd "$HERE6/../../../.." && pwd)"
@@ -59,7 +62,7 @@ warn() { printf 'WARN    %s\n' "$*"; NWARN=$((NWARN + 1)); }
 info() { printf 'INFO    %s\n' "$*"; }
 miss() { printf 'MISSING %s\n' "$1"; [[ -n ${2:-} ]] && printf '        fix: %s\n' "$2"; NMISS=$((NMISS + 1)); }
 APT="sudo apt-get install -y build-essential git curl ca-certificates python3 procps util-linux numactl"
-RUSTUP="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable && . \"\$HOME/.cargo/env\""
+RUSTUP="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.1 && . \"\$HOME/.cargo/env\""
 RZUP_INSTALL="curl -L https://risczero.com/install | bash && export PATH=\"\$HOME/.risc0/bin:\$PATH\""
 
 check_tools() {  # what building and running need (also used by `build`)
@@ -89,28 +92,35 @@ check_tools() {  # what building and running need (also used by `build`)
   local rv cv
   rv=$(rustc --version 2>/dev/null | awk '{print $2}'); cv=$(cargo --version 2>/dev/null | awk '{print $2}')
   if [[ -z $rv || -z $cv ]]; then miss "Rust (rustc + cargo) via rustup" "$RUSTUP"
-  elif ver_ge "${rv%%-*}" 1.90; then ok "rustc $rv, cargo $cv (>= 1.90: zkSketch needs 1.88, the zk-Analytics hosts 1.90)"
-  else miss "rustc $rv: need >= 1.90 (zk-Analytics host lockfiles pin ruint 1.20.0)" "rustup update stable && rustup default stable"; fi
+  elif ver_ge "${rv%%-*}" 1.90; then ok "rustc $rv, cargo $cv (>= 1.90: zkSketch needs 1.88, the zk-Analytics hosts 1.90; reference 1.97.1)"
+  else miss "rustc $rv: need >= 1.90 (zk-Analytics host lockfiles pin ruint 1.20.0)" "rustup toolchain install 1.97.1 --profile minimal && rustup default 1.97.1"; fi
   local rzup=
   if command -v rzup >/dev/null; then rzup=$(command -v rzup); fi
   if [[ -z $rzup ]]; then miss "rzup (RISC Zero toolchain manager)" "$RZUP_INSTALL"
   else ok "rzup $("$rzup" --version 2>/dev/null | awk '{print $NF}') ($rzup)"; fi
-  if compgen -G "$RZ_HOME/toolchains/v1.97.0-rust-*" >/dev/null; then ok "RISC Zero rust toolchain 1.97.0 (guest builds)"
-  else miss "RISC Zero rust toolchain 1.97.0 under $RZ_HOME/toolchains" "rzup install rust 1.97.0"; fi
+  # risc0-build compiles the guests with rzup's DEFAULT rust version (settings.toml), not
+  # merely an installed one; `rzup install` sets the default only when it installs.
+  local rzdef
+  rzdef=$(awk -F'"' '/^\[/{s=($0 ~ /^\[default_versions\]/)} s && /^[[:space:]]*rust[[:space:]]*=/{print $2}' "$RZ_HOME/settings.toml" 2>/dev/null)
+  if ! compgen -G "$RZ_HOME/toolchains/v1.97.0-rust-*" >/dev/null; then
+    miss "RISC Zero rust toolchain 1.97.0 under $RZ_HOME/toolchains" "rzup install rust 1.97.0 && rzup default rust 1.97.0"
+  elif [[ $rzdef == 1.97.0 ]]; then ok "RISC Zero rust toolchain 1.97.0, the rzup default (guest builds)"
+  elif [[ -z $rzdef ]]; then warn "RISC Zero rust toolchain 1.97.0 installed, but no rzup default rust version in $RZ_HOME/settings.toml; fix: rzup default rust 1.97.0"
+  else miss "rzup's default rust toolchain is $rzdef, not 1.97.0 (risc0-build compiles the guests with the default)" "rzup default rust 1.97.0"; fi
   local r0 r0v
   r0=$(command -v r0vm 2>/dev/null || true)
   [[ -n $r0 ]] || r0=$(compgen -G "$RZ_HOME/extensions/v3.0.6-cargo-risczero-*/r0vm" | head -1)
   r0v=$([[ -n $r0 ]] && "$r0" --version 2>/dev/null | awk '{print $NF}')
   if [[ $r0v == 3.0.6 ]]; then ok "r0vm 3.0.6 ($r0)"
-  else miss "r0vm 3.0.6 (have: ${r0v:-none}; the hosts link risc0-zkvm 3.0.6 and accept r0vm 3.0.x only)" "rzup install r0vm 3.0.6"; fi
+  else miss "r0vm 3.0.6 (have: ${r0v:-none}; the hosts link risc0-zkvm 3.0.6 and accept r0vm 3.0.x only)" "rzup install r0vm 3.0.6 && rzup default r0vm 3.0.6"; fi
 }
 
 check_run() {  # machine resources and run-time settings
   local mem_kb mem_g pc cores allowed c bad free_b free_r d
   mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo); mem_g=$((mem_kb / 1024 / 1024))
-  if (( mem_g >= 96 )); then ok "RAM ${mem_g} GiB (quick needs >= 16; full >= 96, its zkSketch GK run peaks at ~60 GB)"
-  elif (( mem_g >= 16 )); then warn "RAM ${mem_g} GiB: enough for quick, not for full (its zkSketch GK run peaks at ~60 GB under the default zero-knowledge build; >= 96 GiB, 128 recommended)"
-  else miss "RAM ${mem_g} GiB: need >= 16 GiB (one zk-Analytics proof alone peaks at ~9.4 GB)"; fi
+  if (( mem_g >= 96 )); then ok "RAM ${mem_g} GiB (quick needs >= 16; full >= 96, its zkSketch GK run peaks at ~59 GiB)"
+  elif (( mem_g >= 16 )); then warn "RAM ${mem_g} GiB: enough for quick, not for full (its zkSketch GK run peaks at ~59 GiB under the default zero-knowledge build; >= 96 GiB, 128 recommended)"
+  else miss "RAM ${mem_g} GiB: need >= 16 GiB (one zk-Analytics proof alone peaks at ~9.2 GiB)"; fi
   pc=$(phys_cores); cores=${SIX_CORES:-$(default_cores)}
   if (( pc >= 32 )); then ok "CPU: $pc physical cores, $(nproc) usable CPUs; zkSketch runs on SIX_CORES=$cores"
   else warn "CPU: $pc physical cores (< 32): zkSketch runs on SIX_CORES=$cores, the paper used 32; set SIX_CORES to change"; fi
@@ -136,8 +146,8 @@ print(" ".join(str(c) for c in range(n) if c not in cpus))' "$allowed" "$cores" 
   free_r=$(( $(df -Pk "$ZKS" | awk 'NR==2{print $4}') / 1024 / 1024 ))
   if built_all; then ok "builds present; free disk: ${free_b} GiB under $d, ${free_r} GiB under the repo"
   elif (( free_b >= 20 )); then ok "free disk under $d: ${free_b} GiB (the zk-Analytics builds take ~12.5 GB)"
-  else miss "free disk under $d: ${free_b} GiB; the zk-Analytics builds need ~12.5 GB plus ~2 GB for zkSketch (>= 20 GiB free recommended)" "set BASELINE_DIR to a larger disk"; fi
-  (( free_r >= 3 )) || warn "free disk under $ZKS: ${free_r} GiB (zkSketch target/ and results need ~3 GB)"
+  else miss "free disk under $d: ${free_b} GiB; the zk-Analytics builds need ~12.5 GB (>= 20 GiB free recommended)" "set BASELINE_DIR to a larger disk"; fi
+  (( free_r >= 3 )) || warn "free disk under $ZKS: ${free_r} GiB (zkSketch's target/ takes ~0.3 GB, a run's results and proof scratch < 1 GB; >= 3 GiB free recommended)"
   local t=${TMPDIR:-/tmp} o
   o=$(findmnt -no OPTIONS -T "$t" 2>/dev/null)
   if [[ -d $t && -w $t ]] && (( ${#t} <= 60 )) && [[ ,$o, != *,noexec,* ]]; then ok "TMPDIR $t (procs engine: exec copy + unix socket)"
@@ -172,7 +182,9 @@ check_repo() {
 }
 built_all() { local b; for b in "${ZKA_BINS[@]}" "$ZKS_BIN"; do [[ -x $b ]] || return 1; done; }
 # Built binaries older than their sources (e.g. a BASELINE_DIR built from an older checkout:
-# the GK driver gained query proving on 2026-10-09). `run_all.sh build` refreshes them.
+# the GK driver gained query proving on 2026-10-09), i.e. sources changed since the last
+# `run_all.sh build`, which refreshes them (build.sh sets each binary's mtime to the build
+# time even when cargo had nothing to recompile).
 stale_builds() {
   local z=$ZKS/scripts/baselines/zka i src bin
   local -a pairs=("$z/cyc" "${ZKA_BINS[0]}" "$z/hll" "${ZKA_BINS[1]}" "$z/spacesaving" "${ZKA_BINS[2]}"
@@ -184,8 +196,9 @@ stale_builds() {
       echo "$bin"
     fi
   done
-  if [[ -x $ZKS_BIN ]] && [[ -n $(find "$ZKS/src" "$ZKS/examples/exp_compose.rs" "$ZKS/Cargo.toml" "$ZKS/Cargo.lock" \
-        -type f -newer "$ZKS_BIN" 2>/dev/null | head -1) ]]; then
+  # src/proofs/ is git-ignored output of the #[ignore]d *_generate_and_store_proof tests
+  if [[ -x $ZKS_BIN ]] && [[ -n $(find "$ZKS/src" -path "$ZKS/src/proofs" -prune -o -type f -name '*.rs' -newer "$ZKS_BIN" -print 2>/dev/null | head -1;
+        find "$ZKS/examples/exp_compose.rs" "$ZKS/Cargo.toml" "$ZKS/Cargo.lock" -newer "$ZKS_BIN" 2>/dev/null | head -1) ]]; then
     echo "$ZKS_BIN"
   fi
 }
@@ -206,7 +219,7 @@ cmd_build() {
   check_tools
   (( NMISS == 0 )) || die "fix the MISSING items above first (run_all.sh check lists everything)"
   echo "== fetch zk-Analytics @ ${ZKA_REV:0:7} into $BASELINE_DIR/zka"
-  BASELINE_DIR=$BASELINE_DIR "$ZKS/scripts/baselines/fetch_baselines.sh" zka || die "fetch failed"
+  BASELINE_DIR=$BASELINE_DIR FETCH_NO_NEXT=1 "$ZKS/scripts/baselines/fetch_baselines.sh" zka || die "fetch failed"
   local t0=$SECONDS
   BASELINE_DIR=$BASELINE_DIR "$HERE6/build.sh" all || die "build failed (see the output above)"
   echo "build: done in $(hms $((SECONDS - t0)))"
@@ -230,7 +243,8 @@ write_manifest() {  # write_manifest <mode>
     echo "mode=$1"
     echo "started=$(date -Is)"
     echo "N=$SIX_N M=$SIX_M T=$SIX_T gk_cap=$SIX_GK_CAP query_points=$SIX_QNS aggr_epochs=0,$((SIX_T - 1)) cores=$SIX_CORES"
-    echo "verify_repeats=${EXP_VERIFY_REPEATS:-5} gate: GATE_WAIT_S=${GATE_WAIT_S:-1800} GATE_MAX_LOAD=${GATE_MAX_LOAD:-cpus/8} GATE_MAX_BUSY=${GATE_MAX_BUSY:-4}"
+    local ncpu; ncpu=$(grep -c '^cpu[0-9]' /proc/stat)   # gate.sh's default GATE_MAX_LOAD
+    echo "verify_repeats=${EXP_VERIFY_REPEATS:-5} gate: GATE_WAIT_S=${GATE_WAIT_S:-1800} GATE_MAX_LOAD=${GATE_MAX_LOAD:-$(( ncpu >= 16 ? ncpu / 8 : 2 ))} GATE_MAX_BUSY=${GATE_MAX_BUSY:-4}"
     echo "zksketch=$(git -C "$ZKS" rev-parse HEAD 2>/dev/null) changed_files=$(git -C "$ZKS" status --porcelain 2>/dev/null | wc -l) checkout=$ZKS"
     echo "exp_compose_md5=$(md5sum < "$ZKS_BIN" | cut -c1-12)"
     echo "zka=$(git -C "$BASELINE_DIR/zka" rev-parse HEAD 2>/dev/null) baseline_dir=$BASELINE_DIR"
@@ -285,11 +299,16 @@ summary() {  # summary <mode> <rc>
   echo "  manifest.txt                 run configuration and versions"
   echo "  six_sketch_table.md          all tables (markdown)"
   echo "  six_sketch_comparison.csv    one row per (family, system, operation); provenance says measured / derived / ESTIMATED"
-  echo "  six_zksketch_*.csv/.log      zkSketch runs;  six_zka_*.csv/.log  zk-Analytics executor and proofs"
+  echo "  six_zksketch_*.csv/.log      zkSketch runs;  six_zka_*.csv/.log  zk-Analytics executor, profile and proofs"
   if (( rc == 0 )); then echo "$mode: OK in $(hms $SECONDS)"; else echo "$mode: FAILED (rc=$rc) after $(hms $SECONDS); see the logs above"; fi
 }
 
 load_shape() {  # load_shape <mode>: export the run shape for the child scripts
+  local v given=()
+  for v in SIX_M SIX_T SIX_N SIX_GK_CAP SIX_QNS; do [[ -n ${!v:-} ]] && given+=("$v=${!v}"); done
+  if (( ${#given[@]} )); then
+    echo "note: run_all.sh $1 uses its fixed run shape; ignoring ${given[*]} (those apply to the individual six/*.sh scripts)" >&2
+  fi
   if [[ $1 == quick ]]; then
     export SIX_M=256 SIX_T=2 SIX_N=512 SIX_GK_CAP=512 SIX_QNS=1,2
     export GATE_WAIT_S=${GATE_WAIT_S:-0}

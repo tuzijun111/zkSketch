@@ -18,12 +18,21 @@ case $WHAT in all|zka|zks) ;; *) echo "usage: $0 [all|zka|zks]" >&2; exit 2 ;; e
 command -v cargo >/dev/null || { echo "cargo not found: install Rust with rustup (scripts/baselines/zka/six/run_all.sh check)" >&2; exit 2; }
 
 FAIL=()
-step() {  # step <name> <function>: run the build in a subshell, record failures
-  local name=$1 rc; shift
+# step <name> <binary> <function>: run the build in a subshell, record failures. After a
+# successful build the binary's mtime is set to now: cargo relinks only when a file it
+# depends on changed, and run_all.sh's stale-build check compares the binary's mtime with
+# the whole source directory, so `build` must clear that check even when cargo had
+# nothing to do (e.g. after a pull that touched only another bin of the same crate).
+step() {
+  local name=$1 bin=$2 rc; shift 2
   echo "== build $name ($(date +%T))"
   ( "$@" ); rc=$?
   echo "rc_$name=$rc"
-  (( rc == 0 )) || FAIL+=("$name(rc=$rc)")
+  if (( rc == 0 )); then
+    [[ -x $bin ]] && touch -c -- "$bin"
+  else
+    FAIL+=("$name(rc=$rc)")
+  fi
 }
 b_cyc()   { source "$Z/common.sh"; build_cyc 1 --bin shipped; }
 b_hll()   { source "$Z/hll/hll_common.sh"; build_hll; }
@@ -40,20 +49,20 @@ if [[ $WHAT != zks ]]; then
   fi
   have=$(git -C "$ZKA" rev-parse HEAD 2>/dev/null)
   [[ $have == "$ZKA_REV" ]] || { echo "$ZKA is at ${have:-?}, expected $ZKA_REV -- re-run fetch_baselines.sh zka" >&2; exit 2; }
-  step cyc b_cyc
-  step hll b_hll
-  step ss b_ss
-  step gk b_gk
-  step bloom b_bloom
-  step kmv b_kmv
   EB=$BASELINE_DIR/build
+  step cyc "$EB/cyc-t1/release/shipped" b_cyc
+  step hll "$EB/hll/release/hll" b_hll
+  step ss "$EB/zka-ss/release/ss" b_ss
+  step gk "$EB/zka-gk/release/gk" b_gk
+  step bloom "$EB/zka-bloom/release/bloom" b_bloom
+  step kmv "$EB/zka-kmv/release/kmv" b_kmv
   for b in "$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-ss/release/ss" "$EB/zka-gk/release/gk" \
            "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv"; do
     [[ -x $b ]] || FAIL+=("missing:$b")
   done
 fi
 if [[ $WHAT != zka ]]; then
-  step zks b_zks
+  step zks "$ZKS/target/release/examples/exp_compose" b_zks
   [[ -x $ZKS/target/release/examples/exp_compose ]] || FAIL+=("missing:$ZKS/target/release/examples/exp_compose")
 fi
 if (( ${#FAIL[@]} )); then

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fetch the external comparison systems at the exact revisions used in the paper.
 # They are deliberately cloned OUTSIDE this repository: both carry their own git
-# history and ~6 GB of build artifacts, and neither is ours to redistribute.
+# history and many GB of build artifacts (the six-sketch comparison's zk-Analytics-side
+# builds alone take ~12.5 GB), and neither is ours to redistribute.
 #
 #   zk-Analytics  MIT           Zhu et al., "Zero-Knowledge Cloud Analytics", SIGCOMM '26
 #   zkStream      BSD-3-Clear   Swalens et al., Middleware '24
@@ -11,7 +12,9 @@
 #   zka            zk-Analytics only: all the six-sketch comparison needs
 #                  (scripts/baselines/zka/six/run_all.sh)
 #   zkstream       zkStream + ZoKrates 0.8.8
-# Destination: $BASELINE_DIR (default ~/ext-baselines).
+# Destination: $BASELINE_DIR (default ~/ext-baselines). Safe to re-run: an existing clone is
+# re-checked-out at the pinned revision. FETCH_NO_NEXT=1 (set by run_all.sh build) drops the
+# "Next" note printed after `zka`.
 set -euo pipefail
 
 WHAT=${1:-all}
@@ -62,12 +65,14 @@ if [ "$WHAT" != zka ]; then
 fi
 
 if [ "$WHAT" = zka ]; then
+  [ "${FETCH_NO_NEXT:-0}" = 1 ] && exit 0
   cat <<'NOTE'
 
 Next (six-sketch comparison): scripts/baselines/zka/six/run_all.sh check, then build.
 It needs Rust >= 1.90, a C compiler (cc) and the RISC Zero toolchain (no sudo):
   curl -L https://risczero.com/install | bash        # installs rzup into ~/.risc0/bin
   ~/.risc0/bin/rzup install rust 1.97.0 && ~/.risc0/bin/rzup install r0vm 3.0.6
+  ~/.risc0/bin/rzup default rust 1.97.0 && ~/.risc0/bin/rzup default r0vm 3.0.6
 NOTE
   exit 0
 fi
@@ -79,6 +84,7 @@ Build notes (no sudo required):
                 Rust >= 1.90, a C compiler (cc) and the RISC Zero toolchain:
                   curl -L https://risczero.com/install | bash      # installs rzup
                   rzup install rust 1.97.0 && rzup install r0vm 3.0.6
+                  rzup default rust 1.97.0 && rzup default r0vm 3.0.6
                 `run_all.sh check` lists everything; libclang, numpy and GNU time are
                 not used there.
   zk-Analytics  the other scripts in scripts/baselines/zka/ use the same toolchain plus
