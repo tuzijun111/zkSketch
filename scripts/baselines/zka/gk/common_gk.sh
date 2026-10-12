@@ -20,7 +20,7 @@ gk_elf() { echo "$GK_TARGET/riscv-guest/gk-methods/$1/riscv32im-risc0-zkvm-elf/r
 
 gk_preflight() {
   case "${RISC0_DEV_MODE:-}" in ""|0|false|no|off) ;; *) echo "RISC0_DEV_MODE is set; refusing" >&2; exit 2;; esac
-  [[ -s $KEYS ]] || { echo "missing $KEYS (gitignored dataset; run scripts/fetch_datasets.py)" >&2; exit 2; }
+  [[ -s $KEYS ]] || { echo "missing $KEYS (it is tracked in git; re-checkout data/aol.keys)" >&2; exit 2; }
   if [[ ${SKIP_BUILD:-0} != 1 ]]; then
     build_gk >&2 || { echo "build failed" >&2; exit 2; }
   fi

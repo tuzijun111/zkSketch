@@ -15,10 +15,15 @@ scripts/baselines/zka/a1_cycles.sh
 
 Scripts run from any directory; `common.sh` resolves locations.
 
+For the six-sketch comparison (zkSketch vs zk-Analytics on CM, HLL, SS, GK, Bloom,
+KMV) use the single entry point `six/run_all.sh` (`check`, `build`, `quick`, `full`);
+see "Six-sketch comparison (small scale)" below and the top-level README. Its
+scripts write to `results/six/` at the repository root, never into `results/` here.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `BASELINE_DIR` | `~/ext-baselines` | zk-Analytics clone and its builds |
-| `RESULTS` | `results/` next to the scripts | where CSVs and logs are written |
+| `RESULTS` | `results/` next to the scripts | where CSVs and logs are written (`six/` scripts: `<repo>/results/six/...`; they refuse a directory holding tracked files) |
 | `CM_TOPK_SLOTS` | per script | zk-Analytics top-k heap slots, a build-time constant |
 
 `ourcm/`, `zksq/`, `ss_mg/` and `gk_bm2/` build against the zkSketch checkout
@@ -40,7 +45,7 @@ they sit in, so a worktree measures its own sources.
 | `kmv/run_exec.sh` | no (`PROVE=1`: yes) | `zka_kmv_exec.csv` (`PROVE=1`: `zka_kmv_prove.csv`) + `.log` | OUR KMV / bottom-k guests (†) in their architecture: per-epoch aggregation and query-time bottom-k union, plus the `kmv_query_words` sensitivity (see "Bloom filter and KMV guests") |
 | `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 | `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
-| `six/build.sh`, `six/run_zka.sh`, `six/run_zks.sh`, `six/assemble.py`, `six/table.py` | yes, ~3.5 h | `six_*` (see "Six-sketch comparison (small scale)") | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †) at 8 x 2,048 AOL records: update proving per epoch, query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy |
+| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~8 min, `full` ~3 h plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †) at 8 x 2,048 AOL records: update proving per epoch, query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -772,13 +777,24 @@ plain textbook per-record code in their per-epoch pipeline with query-time merge
 (the ports above, marked †), not zk-Analytics code.** The matched-rule guests
 (`ss_mg/`, `gk_bm2/`) are not used here.
 
-> **Zero knowledge differs.** RISC Zero succinct receipts are zero-knowledge.
-> zkSketch's proofs in this run are **not** zero-knowledge: the build it used
-> (Cargo feature `zk` off, the default at the time; `six_zksketch_*` and
-> `six_zksketch_r2_*`, `features=default`) used the plain `TwoAdicFriPcs`, not
-> `HidingFriPcs`. zkSketch does use hiding (salted Poseidon2) state commitments
-> (`ZKSKETCH_COMMIT` default `hiding`, OS-seeded salt); zk-Analytics commits with
-> unsalted SHA-256. Neither difference is priced into the numbers below.
+> **Zero knowledge.** RISC Zero succinct receipts are zero-knowledge. zkSketch now
+> builds with zero knowledge ON by default (Cargo feature `zk`, default since
+> 2026-10-10: `HidingFriPcs` plus masked LogUp sums, from the forks pinned in
+> `Cargo.toml`); its CSV rows then say `pcs=hiding,logup_mask=on`, and
+> `six/run_all.sh` measures that build. **The committed `six_zksketch_*` and
+> `six_zksketch_r2_*` rows below (2026-10-09, `features=default`) PREDATE it**: they
+> used the plain `TwoAdicFriPcs`, not `HidingFriPcs`, so those proofs are **not**
+> zero-knowledge, and the Results tables below are those non-ZK numbers. Zero
+> knowledge costs zkSketch more (at this shape the LogUp masks alone add +16% (CM) /
+> +18% (HLL) end to end over an unmasked hiding build; `src/config.rs`, "Cost of the
+> masks"), and much more for GK at this shape: one GK run of the default (ZK) build
+> on 2026-10-12, on a shared, loaded machine, took 824 s wall, 70 s of leaf proving
+> per batch and 60 GB peak RSS (coordinator 59 GB while deriving the root VK), against
+> 215 s, 14.7 s and 19.8 GB in `six_zksketch_r2_gk`. Re-run with `six/run_all.sh full`
+> before quoting zero-knowledge numbers. The committed `quick_zksketch_*` rows (2026-10-10,
+> 256 records per batch, `pcs=hiding,logup_mask=on`) are from the ZK build. Both
+> zkSketch builds use hiding (salted Poseidon2) state commitments (`ZKSKETCH_COMMIT`
+> default `hiding`, OS-seeded salt); zk-Analytics commits with unsalted SHA-256.
 >
 > **The `zk` rows are pre-masking.** `zk2_zksketch_*` and `tiny_zksketch_*`
 > (`features=zk-default`, zkSketch `da4ff6e`) and any `six_zksketch_zk_*` set were
@@ -837,30 +853,94 @@ plain textbook per-record code in their per-epoch pipeline with query-time merge
 
 ### Running
 
+One entry point, from the repository root (prerequisites, times and outputs: the
+top-level README, "Reproducing the zkSketch vs zk-Analytics comparison"):
+
 ```bash
-scripts/baselines/zka/six/build.sh          # builds both sides (not timed)
-scripts/baselines/zka/six/run_zka.sh exec   # zk-Analytics executor: all 8 aggregation epochs of every family
-scripts/baselines/zka/six/run_zks.sh        # zkSketch, 7 timed runs: cm hll ss gk bloom bloom_absent kmv
-# zk-Analytics proofs, timed, one at a time. The GK rank values and the Bloom absent keys are
-# the ones zkSketch drew (QLOG_KEY lines of six_zksketch_{gk,bloom_absent}.log):
-scripts/baselines/zka/six/run_zka.sh prove \
-  cm:aggr:0 cm:aggr:7 hll:aggr:0 hll:aggr:7 ss:aggr:0 ss:aggr:7 gk:aggr:0 gk:aggr:7 \
-  bloom:aggr:0 bloom:aggr:7 kmv:aggr:0 kmv:aggr:7 \
-  cm:query:1 cm:query:2 cm:query:4 cm:query:8 hll:query:1 hll:query:2 hll:query:4 hll:query:8 \
-  gk:query:1:1810625 gk:query:2:1810625 gk:query:4:1810625 gk:query:8:985491 \
-  bloom:query:1:first bloom:query:2:first bloom:query:4:first bloom:query:8:first \
-  bloom:query:1:key:4010659695 bloom:query:2:key:3455829011 bloom:query:4:key:2391383811 bloom:query:8:key:1608305708 \
-  kmv:query:1 kmv:query:2 kmv:query:4 kmv:query:8 ss:query:1 ss:query:2 ss:query:4 ss:query:8
-python3 -I scripts/baselines/zka/six/assemble.py scripts/baselines/zka/results data/aol.keys
-python3 -I scripts/baselines/zka/six/table.py scripts/baselines/zka/results/six_sketch_comparison.csv
+scripts/baselines/zka/six/run_all.sh check   # prerequisites; exit 1 + the fix if anything blocking is missing
+scripts/baselines/zka/six/run_all.sh build   # fetch zk-Analytics @ d4a5a9a into $BASELINE_DIR; build both sides
+scripts/baselines/zka/six/run_all.sh quick   # smoke test of the whole pipeline (N = 512 = 2 x 256), ~8 min
+scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~3 h + gate waits
+scripts/baselines/zka/six/run_all.sh full --dry-run   # the plan and the 40 jobs, nothing run
 ```
 
-- The measured run (2026-10-09, 14:47-18:43) followed these steps in this order,
-  with `BASELINE_DIR` set to a private scratch directory whose `zka/` is a symlink
-  to `~/ext-baselines/zka`; `run_zks.sh` was invoked twice (`cm`, then the other
-  six tags). The scripts ran from that scratch directory with the same logic; only
-  their path variables differ from the tracked copies. Absolute paths in the
-  committed logs were rewritten to `$BASELINE_DIR` and `$ZKS`.
+Every `quick` / `full` writes a fresh `results/six/<mode>-<YYYYmmdd-HHMMSS>/` at the
+repository root (git-ignored; `RESULTS=...` to choose; never this directory):
+`manifest.txt` (configuration, versions), `run_all.log`, `six_sketch_table.md` (the
+tables below), `six_sketch_comparison.csv`, and the raw files of the table below.
+`quick` proves three zk-Analytics jobs for real (`kmv:aggr:0`, `gk:query:1:<v>`,
+`bloom:query:1:key:<k>`; `SIX_QUICK_PROVE` to change) and ESTIMATES the other 23
+planned ones from their executor cycle counts: padded cycles x the seconds per 2^20
+padded cycles measured over this run's proofs. Those cells say `est`; `provenance`
+says ESTIMATED. Across the 40 proofs of the measured run, this model (k = 30.06 s per
+2^20) was within -9% / +5% for proofs of >= 2^20 padded cycles and underestimated
+proofs of <= 2^18 cycles by 19-37% (fixed overhead).
+
+What `full` runs, step by step (each script also runs on its own; defaults = this
+configuration; `RESULTS` must be the same fresh directory for all steps):
+
+```bash
+export RESULTS=$PWD/results/six/manual-1   # fresh, git-ignored; the six/ scripts refuse a directory with tracked files
+scripts/baselines/fetch_baselines.sh zka    # zk-Analytics only (no argument: also zkStream + ZoKrates)
+scripts/baselines/zka/six/build.sh          # both sides, not timed; exits 1 if any build fails
+scripts/baselines/zka/six/run_zks.sh        # zkSketch, 7 timed runs: cm hll ss gk bloom bloom_absent kmv
+scripts/baselines/zka/six/run_zka.sh exec   # zk-Analytics executor: all 8 aggregation epochs of every family
+scripts/baselines/zka/six/prof_exec.sh      # executor only: SS / GK guest phase profile (last table)
+# the 40 zk-Analytics jobs; the GK rank values and Bloom absent keys are read from this run's
+# zkSketch logs (QLOG_KEY lines) and cross-checked against a native re-derivation:
+JOBS=$(python3 -I scripts/baselines/zka/six/jobs.py --keys data/aol.keys --logs "$RESULTS")
+scripts/baselines/zka/six/run_zka.sh prove $JOBS   # timed, one at a time
+python3 -I scripts/baselines/zka/six/assemble.py "$RESULTS" data/aol.keys --zka six_zka --zks six_zksketch \
+  --out "$RESULTS/six_sketch_comparison.csv"
+python3 -I scripts/baselines/zka/six/table.py "$RESULTS/six_sketch_comparison.csv" > "$RESULTS/six_sketch_table.md"
+```
+
+For this configuration `jobs.py` prints exactly the 40 jobs of the measured run:
+
+```
+cm:aggr:0 cm:aggr:7 hll:aggr:0 hll:aggr:7 ss:aggr:0 ss:aggr:7 gk:aggr:0 gk:aggr:7
+bloom:aggr:0 bloom:aggr:7 kmv:aggr:0 kmv:aggr:7
+cm:query:1 cm:query:2 cm:query:4 cm:query:8 hll:query:1 hll:query:2 hll:query:4 hll:query:8
+gk:query:1:1810625 gk:query:2:1810625 gk:query:4:1810625 gk:query:8:985491
+bloom:query:1:first bloom:query:2:first bloom:query:4:first bloom:query:8:first
+bloom:query:1:key:4010659695 bloom:query:2:key:3455829011 bloom:query:4:key:2391383811 bloom:query:8:key:1608305708
+kmv:query:1 kmv:query:2 kmv:query:4 kmv:query:8 ss:query:1 ss:query:2 ss:query:4 ss:query:8
+```
+
+Knobs (environment): `BASELINE_DIR`, `RESULTS`; `SIX_M`, `SIX_T` (records per epoch,
+epochs; `N = M x T`), `SIX_GK_CAP`, `SIX_QNS` (query points), `SIX_CORES` (zkSketch
+cores; default: physical cores, at most 32); `GATE_WAIT_S` (default 1800; `quick` 0),
+`GATE_MAX_LOAD` (default CPUs / 8), `GATE_MAX_BUSY` (default 4); `EXP_VERIFY_REPEATS`
+(default 5). The run scripts ignore inherited `EXP_*` / `ZKSKETCH_*` /
+`RAYON_NUM_THREADS` settings and RISC Zero's `BONSAI_API_*`, `RISC0_PROVER` and
+`RISC0_DEV_MODE`, and exit non-zero when a run fails (a non-zero exit code, a missing
+CSV, a zkSketch CSV `status` other than `ok`, or a proof that wrote no row). Ctrl-C
+stops the running job: each one runs in its own process group, which is stopped as a
+whole; no process is killed by name. `run_all.sh quick` / `full` refuse binaries
+older than their sources (`SIX_ALLOW_STALE=1` overrides; a `BASELINE_DIR` built from
+an older checkout, for instance, lacks the GK driver's query `--prove` path), and the
+`six/` scripts refuse a `RESULTS` directory holding git-tracked files
+(`SIX_ALLOW_TRACKED=1` overrides).
+
+To re-tabulate the committed reference run (this directory), write elsewhere:
+`assemble.py` refuses to overwrite the tracked `six_sketch_comparison.csv`, which the
+`6cac471` version of `assemble.py` produced (148 rows, 12 columns; `table.py` at
+`6cac471` prints the Results tables below from it). The current scripts give a
+318-row, 18-column CSV from the same inputs:
+
+```bash
+python3 -I scripts/baselines/zka/six/assemble.py scripts/baselines/zka/results data/aol.keys --out /tmp/six.csv
+python3 -I scripts/baselines/zka/six/table.py /tmp/six.csv --raw scripts/baselines/zka/results
+```
+
+- The measured run (2026-10-09, 14:47-18:43) predates `run_all.sh`: it ran
+  `build.sh`, `run_zka.sh exec`, `run_zks.sh` and `run_zka.sh prove` with the 40
+  jobs above, in that order, with `RESULTS` = this directory and `BASELINE_DIR` set to
+  a private scratch directory whose `zka/` is a symlink to `~/ext-baselines/zka`;
+  `run_zks.sh` was invoked twice (`cm`, then the other six tags). The scripts ran
+  from that scratch directory with the same logic; only their path variables differ
+  from the tracked copies of that day. Absolute paths in the committed logs were
+  rewritten to `$BASELINE_DIR` and `$ZKS`.
 - Wall time: zkSketch, 7 runs, 586 s of running plus 423 s of gate waits;
   zk-Analytics, 40 proofs, 8,703 s (2 h 25 min) of running plus 4,219 s (1 h 10 min)
   of gate waits; the executor phase took about a minute.
@@ -870,7 +950,7 @@ python3 -I scripts/baselines/zka/six/table.py scripts/baselines/zka/results/six_
 
 | file | rows | what |
 |---|---|---|
-| `six_sketch_comparison.csv` | 148 | the comparison: one row per (family, system, operation), `provenance` = measured / sampled / derived, `detail` says how |
+| `six_sketch_comparison.csv` | 148 | the comparison: one row per (family, system, operation), `provenance` = measured / sampled / derived, `detail` says how (written by `assemble.py` as of `6cac471`; see above) |
 | `six_zka_{cm,hll,ss,gk,bloom,kmv}_exec.csv` + `six_zka_exec.log` | 8 / 8 / 8 / 8 / 16 / 12 | executor, all 8 aggregation epochs (Bloom, KMV: their `--mode exec` pipeline, query executes included) |
 | `six_zka_{family}_prove.csv` / `.log` | 6 per family (Bloom 10) | proved rows: aggregation epochs 0 and 7, queries at n = 1, 2, 4, 8 (Bloom: inserted and absent key) |
 | `six_zka_jobs.csv` | 40 | one line per proof: gate result, load at start / end, busy cores at start, wall time, r0vm peak RSS |

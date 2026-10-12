@@ -638,6 +638,11 @@ fn main() {
     }
 
     let dir = results_dir();
+    // `results/` is git-ignored, so a fresh clone does not have it yet.
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("cannot create results dir {}: {e}", dir.display());
+        std::process::exit(2);
+    }
     let proof_base = std::env::var("EXP_COMPOSE_PROOF_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| dir.join("compose_per_batch_proofs"));

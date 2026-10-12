@@ -1,43 +1,48 @@
 #!/usr/bin/env bash
 # Six-sketch comparison, zk-Analytics side, EXECUTOR ONLY (not timed; cycle counts are
-# deterministic): the per-phase profile of the SS and GK aggregation guests at 2,048-record
+# deterministic): the per-phase profile of the SS and GK aggregation guests at SIX_M-record
 # epochs (how much of an epoch is their Event read + batch chain), and the SS port's point
-# query (`estimate`) next to the `topk --limit 1` query the comparison proves.
-#   -> six_zka_prof_ss.csv, six_zka_prof_gk.csv, six_zka_prof.log
-# HLL, Bloom and KMV carry the same phase profile in their six_zka_*_exec.csv rows already.
+# query (`estimate`) next to the `topk --limit 1` query the comparison proves. Epochs 0 and
+# T-1, queries at n = 1 and T (paper configuration: 2,048 records, epochs 0/7, n = 1/8).
+#   -> <prefix>_prof_ss.csv, <prefix>_prof_gk.csv, <prefix>_prof.log   (prefix: SIX_ZKA_PREFIX, default six_zka)
+# HLL, Bloom and KMV carry the same phase profile in their <prefix>_*_exec.csv rows already.
+# Exit status 0 only if every driver call succeeded.
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$HERE6/../common.sh"   # BASELINE_DIR, ZKS, RESULTS, PATH
+source "$HERE6/six_common.sh"   # BASELINE_DIR, ZKS, RESULTS, SIX_*, PATH
+six_prepare_results
+six_clean_env
 EB=$BASELINE_DIR/build
 KEYS=$ZKS/data/aol.keys
 OUTD=$RESULTS
-unset RISC0_DEV_MODE
+PFX=${SIX_ZKA_PREFIX:-six_zka}
 SSB=$EB/zka-ss/release/ss
 GKB=$EB/zka-gk/release/gk
-for b in "$SSB" "$GKB"; do [[ -x $b ]] || { echo "missing $b (run six/build.sh)" >&2; exit 2; }; done
-LOG=$OUTD/six_zka_prof.log
-C=(--epoch-size 2048 --batch 8 --keys "$KEYS")
-echo "# six_zka_prof $(date -Is) host=$(hostname) load=[$(cut -d' ' -f1-3 /proc/loadavg)] executor only, not timed" > "$LOG"
+for b in "$SSB" "$GKB"; do [[ -x $b ]] || six_die "missing $b (run six/build.sh zka)"; done
+LOG=$OUTD/${PFX}_prof.log
+C=(--epoch-size "$SIX_M" --batch 8 --keys "$KEYS")
+EL=$((SIX_T - 1))
+EPOCHS=(0); (( EL > 0 )) && EPOCHS+=("$EL")
+NS=(1); (( SIX_T > 1 )) && NS+=("$SIX_T")
+NFAIL=0
+run() {  # run <csv> <bin> <args...>
+  local out=$1 bin=$2 rc; shift 2
+  echo "# $(basename "$bin") $*" >> "$LOG"
+  "$bin" "$@" "${C[@]}" >> "$out" 2>> "$LOG"; rc=$?
+  echo "# rc=$rc" >> "$LOG"
+  (( rc == 0 )) || { NFAIL=$((NFAIL + 1)); echo "FAILED prof: $(basename "$bin") $* (rc=$rc)" >&2; }
+}
+echo "# ${PFX}_prof $(date -Is) host=$(hostname) load=[$(cut -d' ' -f1-3 /proc/loadavg)] executor only, not timed; M=$SIX_M T=$SIX_T" > "$LOG"
 echo "# zka=$(git -C "$ZKA" rev-parse --short=12 HEAD) zkSketch=$(git -C "$ZKS" rev-parse --short=9 HEAD)" >> "$LOG"
-"$SSB" --header > "$OUTD/six_zka_prof_ss.csv"
-while read -r args; do
-  echo "# ss $args" >> "$LOG"
-  # shellcheck disable=SC2086
-  "$SSB" $args --capacity 1024 "${C[@]}" >> "$OUTD/six_zka_prof_ss.csv" 2>> "$LOG"; echo "# rc=$?" >> "$LOG"
-done <<'EOF'
---mode aggr --epoch-index 0 --profile
---mode aggr --epoch-index 7 --profile
---mode query --epochs 1 --query topk --limit 1 --profile
---mode query --epochs 8 --query topk --limit 1 --profile
---mode query --epochs 1 --query estimate --point-rank 1
---mode query --epochs 8 --query estimate --point-rank 1
---mode query --epochs 1 --query estimate --point-rank 1 --profile
---mode query --epochs 8 --query estimate --point-rank 1 --profile
-EOF
-"$GKB" --header > "$OUTD/six_zka_prof_gk.csv"
-for e in 0 7; do
-  echo "# gk --mode aggr --epoch-index $e --profile" >> "$LOG"
-  "$GKB" --mode aggr --epoch-index "$e" --profile "${C[@]}" >> "$OUTD/six_zka_prof_gk.csv" 2>> "$LOG"
-  echo "# rc=$?" >> "$LOG"
-done
+SSO=$OUTD/${PFX}_prof_ss.csv
+"$SSB" --header > "$SSO"
+for e in "${EPOCHS[@]}"; do run "$SSO" "$SSB" --mode aggr --epoch-index "$e" --profile --capacity 1024; done
+for n in "${NS[@]}"; do run "$SSO" "$SSB" --mode query --epochs "$n" --query topk --limit 1 --profile --capacity 1024; done
+for n in "${NS[@]}"; do run "$SSO" "$SSB" --mode query --epochs "$n" --query estimate --point-rank 1 --capacity 1024; done
+for n in "${NS[@]}"; do run "$SSO" "$SSB" --mode query --epochs "$n" --query estimate --point-rank 1 --profile --capacity 1024; done
+GKO=$OUTD/${PFX}_prof_gk.csv
+"$GKB" --header > "$GKO"
+for e in "${EPOCHS[@]}"; do run "$GKO" "$GKB" --mode aggr --epoch-index "$e" --profile; done
 echo "# end $(date -Is)" >> "$LOG"
+if (( NFAIL )); then echo "prof_exec.sh: $NFAIL failure(s); see $LOG" >&2; exit 1; fi
+echo "prof_exec.sh: ok -> $OUTD/${PFX}_prof_{ss,gk}.csv" >&2
