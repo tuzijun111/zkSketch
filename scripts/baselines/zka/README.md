@@ -860,14 +860,15 @@ top-level README, "Reproducing the zkSketch vs zk-Analytics comparison"):
 scripts/baselines/zka/six/run_all.sh check   # prerequisites; exit 1 + the fix if anything blocking is missing
 scripts/baselines/zka/six/run_all.sh build   # fetch zk-Analytics @ d4a5a9a into $BASELINE_DIR; build both sides
 scripts/baselines/zka/six/run_all.sh quick   # smoke test of the whole pipeline (N = 512 = 2 x 256), ~8 min
-scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~3 h + gate waits
+scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~3-3.5 h + gate waits
 scripts/baselines/zka/six/run_all.sh full --dry-run   # the plan and the 40 jobs, nothing run
 ```
 
 Every `quick` / `full` writes a fresh `results/six/<mode>-<YYYYmmdd-HHMMSS>/` at the
 repository root (git-ignored; `RESULTS=...` to choose; never this directory):
 `manifest.txt` (configuration, versions), `run_all.log`, `six_sketch_table.md` (the
-tables below), `six_sketch_comparison.csv`, and the raw files of the table below.
+tables of Results below and more, in a newer layout: zkA / zkS in one cell, `est`
+marks), `six_sketch_comparison.csv`, and the raw files of the table below.
 `quick` proves three zk-Analytics jobs for real (`kmv:aggr:0`, `gk:query:1:<v>`,
 `bloom:query:1:key:<k>`; `SIX_QUICK_PROVE` to change) and ESTIMATES the other 23
 planned ones from their executor cycle counts: padded cycles x the seconds per 2^20
@@ -931,7 +932,9 @@ To re-tabulate the committed reference run (this directory), write elsewhere:
 `assemble.py` refuses to overwrite the tracked `six_sketch_comparison.csv`, which the
 `6cac471` version of `assemble.py` produced (148 rows, 12 columns; `table.py` at
 `6cac471` prints the Results tables below from it). The current scripts give a
-318-row, 18-column CSV from the same inputs:
+318-row, 18-column CSV from the same inputs, with the same-day repeat run r2
+(`six_zksketch_r2_*`) as the primary zkSketch run instead of r1 (`six_zksketch_*`),
+so their zkSketch numbers differ from the Results tables by a few percent:
 
 ```bash
 python3 -I scripts/baselines/zka/six/assemble.py scripts/baselines/zka/results data/aol.keys --out /tmp/six.csv
@@ -971,6 +974,13 @@ other cores were busy on average (`other_cores_avg`; another user's light job),
 below those drivers' contention threshold of 4.
 
 ### Results
+
+These tables are run r1 (`six_zksketch_*` with the zk-Analytics rows), as `table.py`
+at `6cac471` prints them from the committed `six_sketch_comparison.csv`; they are not
+zero-knowledge on the zkSketch side (see the note at the top of this section).
+Re-tabulating with the current scripts (above) makes r2 primary, which moves the
+zkSketch numbers by a few percent (e.g. CM leaf 2.22 s instead of 2.26 s, GK 14.7 s
+instead of 14.59 s).
 
 † marks the families whose zk-Analytics side is our port. zkA = zk-Analytics side,
 zkS = zkSketch. Ratios are zkA / zkS.
@@ -1105,9 +1115,10 @@ zkS = zkSketch. Ratios are zkA / zkS.
 ### Caveats
 
 - **Zero knowledge (read this first).** RISC Zero succinct receipts are
-  zero-knowledge; zkSketch's proofs here are not (`TwoAdicFriPcs`; the `zk` feature
-  that swaps in `HidingFriPcs` was off; the later `zk` rows are pre-masking, see the
-  note at the top of this section). Turning it on costs zkSketch prove time that
+  zero-knowledge; zkSketch's proofs in the committed 2026-10-09 rows of this section
+  are not (`TwoAdicFriPcs`; the `zk` feature that swaps in `HidingFriPcs` was off; the
+  later `zk` rows are pre-masking, see the note at the top of this section). A new
+  `six/run_all.sh` run uses the zero-knowledge default build. Turning it on costs zkSketch prove time that
   these rows do not contain. In the other direction, zkSketch's state commitments
   are hiding (salted) and zk-Analytics' are unsalted SHA-256, which does not hide
   the epoch state.

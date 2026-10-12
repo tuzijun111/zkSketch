@@ -16,7 +16,7 @@ ZKS="$(cd "$HERE/../../.." && pwd)"
 BASELINE_DIR="$(realpath -m -- "${BASELINE_DIR:-$HOME/ext-baselines}")"
 ZKA="$BASELINE_DIR/zka"
 RESULTS="$(realpath -m -- "${RESULTS:-$HERE/results}")"
-export PATH="$HOME/.cargo/bin:$HOME/.risc0/bin:$PATH"
+export PATH="$HOME/.cargo/bin:${RISC0_HOME:-$HOME/.risc0}/bin:$PATH"
 
 # cyc/Cargo.toml path-deps "../.zka/...". A Cargo path cannot read $BASELINE_DIR,
 # so an untracked symlink points at the clone.

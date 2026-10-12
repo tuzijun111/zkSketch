@@ -9,14 +9,14 @@
 #                               for all six, 3 real zk-Analytics proofs, the rest ESTIMATED ("est")
 #   run_all.sh full [--dry-run] [--from-logs DIR [--zks-prefix P]]
 #                               the paper configuration: N = 16,384 = 8 x 2,048, zkSketch 7 runs,
-#                               zk-Analytics executor + 40 proofs (about 3 h plus gate waits).
+#                               zk-Analytics executor + 40 proofs (about 3-3.5 h plus gate waits).
 #                               --dry-run prints the plan and runs nothing; the GK rank values and
 #                               Bloom absent keys are then derived natively, or read from DIR's
 #                               zkSketch logs with --from-logs (the real run reads this run's logs)
 #   run_all.sh assemble DIR     re-run assemble.py + table.py on a finished results directory
 #
 # Env:
-#   BASELINE_DIR   zk-Analytics clone + its builds (default ~/ext-baselines; about 12 GB)
+#   BASELINE_DIR   zk-Analytics clone + its builds (default ~/ext-baselines; about 13 GB)
 #   RESULTS        output directory (default <repo>/results/six/<mode>-<YYYYmmdd-HHMMSS>, git-ignored);
 #                  must be new or empty
 #   SIX_CORES      zkSketch cores (default: physical cores, at most 32 = the paper configuration)
@@ -117,10 +117,12 @@ check_tools() {  # what building and running need (also used by `build`)
 
 check_run() {  # machine resources and run-time settings
   local mem_kb mem_g pc cores allowed c bad free_b free_r d
+  # MemTotal is a little below the installed RAM (a 16 / 96 GiB machine reports ~15.5 / ~94):
+  # accept 15 / 90 GiB of MemTotal for the README's 16 / 96 GiB
   mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo); mem_g=$((mem_kb / 1024 / 1024))
-  if (( mem_g >= 96 )); then ok "RAM ${mem_g} GiB (quick needs >= 16; full >= 96, its zkSketch GK run peaks at ~59 GiB)"
-  elif (( mem_g >= 16 )); then warn "RAM ${mem_g} GiB: enough for quick, not for full (its zkSketch GK run peaks at ~59 GiB under the default zero-knowledge build; >= 96 GiB, 128 recommended)"
-  else miss "RAM ${mem_g} GiB: need >= 16 GiB (one zk-Analytics proof alone peaks at ~9.2 GiB)"; fi
+  if (( mem_g >= 90 )); then ok "RAM ${mem_g} GiB MemTotal (quick needs 16 GiB installed; full 96, its zkSketch GK run peaks at ~59 GiB)"
+  elif (( mem_g >= 15 )); then warn "RAM ${mem_g} GiB MemTotal: enough for quick, not for full (its zkSketch GK run peaks at ~59 GiB under the default zero-knowledge build; 96 GiB installed, 128 recommended)"
+  else miss "RAM ${mem_g} GiB MemTotal: need 16 GiB installed (one zk-Analytics proof alone peaks at ~9.2 GiB)"; fi
   pc=$(phys_cores); cores=${SIX_CORES:-$(default_cores)}
   if (( pc >= 32 )); then ok "CPU: $pc physical cores, $(nproc) usable CPUs; zkSketch runs on SIX_CORES=$cores"
   else warn "CPU: $pc physical cores (< 32): zkSketch runs on SIX_CORES=$cores, the paper used 32; set SIX_CORES to change"; fi
@@ -145,8 +147,8 @@ print(" ".join(str(c) for c in range(n) if c not in cpus))' "$allowed" "$cores" 
   free_b=$(( $(df -Pk "$d" | awk 'NR==2{print $4}') / 1024 / 1024 ))
   free_r=$(( $(df -Pk "$ZKS" | awk 'NR==2{print $4}') / 1024 / 1024 ))
   if built_all; then ok "builds present; free disk: ${free_b} GiB under $d, ${free_r} GiB under the repo"
-  elif (( free_b >= 20 )); then ok "free disk under $d: ${free_b} GiB (the zk-Analytics builds take ~12.5 GB)"
-  else miss "free disk under $d: ${free_b} GiB; the zk-Analytics builds need ~12.5 GB (>= 20 GiB free recommended)" "set BASELINE_DIR to a larger disk"; fi
+  elif (( free_b >= 20 )); then ok "free disk under $d: ${free_b} GiB (the zk-Analytics builds take ~13 GB)"
+  else miss "free disk under $d: ${free_b} GiB; the zk-Analytics builds need ~13 GB (>= 20 GiB free recommended)" "set BASELINE_DIR to a larger disk"; fi
   (( free_r >= 3 )) || warn "free disk under $ZKS: ${free_r} GiB (zkSketch's target/ takes ~0.3 GB, a run's results and proof scratch < 1 GB; >= 3 GiB free recommended)"
   local t=${TMPDIR:-/tmp} o
   o=$(findmnt -no OPTIONS -T "$t" 2>/dev/null)
@@ -404,7 +406,7 @@ EOF
   exec > >(trap '' TERM; exec tee -i -a "$RESULTS/run_all.log") 2>&1   # tee outlives Ctrl-C / TERM; exits at EOF
   write_manifest full
   echo "full run (paper configuration) -> $RESULTS"
-  echo "  zkSketch 7 runs + zk-Analytics executor + 40 proofs; expect ~3 h of running plus gate waits (GATE_WAIT_S=$GATE_WAIT_S per timed job)"
+  echo "  zkSketch 7 runs + zk-Analytics executor + 40 proofs; expect ~3-3.5 h of running plus gate waits (GATE_WAIT_S=$GATE_WAIT_S per timed job)"
   local rc=0 plan
   # zkSketch or executor failures stop the run (fix and start again); a failed proof does not:
   # the remaining proofs still run, the table shows '-' for it, and the exit status is 1.

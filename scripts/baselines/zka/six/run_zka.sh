@@ -16,10 +16,17 @@
 #   SIX_ZKA_PREFIX  output prefix (default six_zka): <prefix>_<fam>_{exec,qexec,prove}.csv/.log,
 #                   <prefix>_jobs.csv, <prefix>_qexec_jobs.csv
 #   SIX_FAIL_FAST=1 stop at the first failed job
-# exec and qexec rewrite their CSVs; prove appends (a job list can be split over several calls).
+# exec and qexec rewrite their CSVs; prove appends (a job list can be split over several calls,
+# e.g. to retry the jobs of a plan that have no rc=0 line in <prefix>_jobs.csv yet). A proof's
+# row is appended only when its driver exits 0 having printed exactly one row; any other
+# outcome is recorded in <prefix>_jobs.csv with a non-zero rc and adds no row.
 # Exit status 0 only if every driver call succeeded (and every proof appended its row).
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case ${1:-} in
+  exec|qexec|prove) ;;
+  *) echo "usage: $0 exec | qexec <jobs...> | prove <jobs...>" >&2; exit 2 ;;
+esac
 source "$HERE6/six_common.sh"   # BASELINE_DIR, ZKA, ZKS, RESULTS, SIX_*, PATH
 six_prepare_results
 six_clean_env                   # also drops RISC0_DEV_MODE, RISC0_PROVER and the Bonsai settings
@@ -106,8 +113,10 @@ finish() {
   echo "run_zka.sh $1: ok -> $OUTD/${PFX}_*" >&2
 }
 CHILD=
+ROWTMP=
 on_signal() {
   if [[ -n $CHILD ]]; then kill -TERM "$CHILD" 2>/dev/null; wait "$CHILD" 2>/dev/null; fi
+  [[ -n $ROWTMP ]] && rm -f "$ROWTMP"
   echo "run_zka.sh: interrupted" >&2
   exit 130
 }
@@ -173,7 +182,7 @@ phase_prove() {
   if [[ ! -s $JOBS ]]; then echo "$hdr" > "$JOBS"
   elif [[ "$(head -1 "$JOBS")" != "$hdr" ]]; then six_die "$JOBS has a different header; use a fresh RESULTS directory"; fi
   echo "run_zka.sh prove: $# job(s) -> $OUTD ($(gate_settings))" >&2
-  local job out log g L1 T0 rc wall rl r0 mn start n0 n1 k=0
+  local job out log g L1 T0 rc wall rl r0 mn start nrow k=0
   for job in "$@"; do
     k=$((k + 1))
     job_args "$job"
@@ -187,22 +196,32 @@ phase_prove() {
     { provenance "run_zka.sh prove job=$job gate=$g waited_s=$GATE_WAITED_S load1_start=$GATE_L0 busy_cores_start=$GATE_BUSY"
       echo "# cmd: ${BIN[$JFAM]} ${ARGS[*]}"; } >> "$log"
     echo "== zk-Analytics prove $job [$k/$#] ($(date +%T))" >&2
-    n0=$(wc -l < "$out")
+    # The driver's CSV row goes to a temporary file first and joins $out only for a
+    # successful job: a driver that prints its row and then exits non-zero (a failed
+    # journal / accuracy check) must not leave a row for a job recorded as failed.
+    ROWTMP=$(mktemp "$OUTD/.${PFX}_${JFAM}_row.XXXXXX") || six_die "cannot create a temporary file in $OUTD"
     T0=$SECONDS
-    "$HERE6/rss_tree.sh" "$job" "${BIN[$JFAM]}" "${ARGS[@]}" >> "$out" 2>> "$log" &
+    "$HERE6/rss_tree.sh" "$job" "${BIN[$JFAM]}" "${ARGS[@]}" > "$ROWTMP" 2>> "$log" &
     CHILD=$!
     wait "$CHILD"; rc=$?
     CHILD=
     wall=$((SECONDS - T0))
-    n1=$(wc -l < "$out")
+    nrow=$(wc -l < "$ROWTMP")
+    if (( rc == 0 && nrow == 1 )); then
+      cat "$ROWTMP" >> "$out"
+    else
+      { echo "# stdout of the failed job (not added to $(basename "$out")):"; cat "$ROWTMP"; } >> "$log"
+      (( rc == 0 )) && rc=1   # no single row: record the job as failed
+    fi
+    rm -f "$ROWTMP"; ROWTMP=
     L1=$(cut -d' ' -f1 /proc/loadavg)
     rl=$(grep '^RSSTREE' "$log" | tail -1)
     r0=$(sed -n 's/.*r0vm_peak_rss_mb=\([0-9.]*\).*/\1/p' <<< "$rl")
     mn=$(sed -n 's/.*main_peak_rss_mb=\([0-9.]*\).*/\1/p' <<< "$rl")
     echo "# end job=$job $(date -Is) rc=$rc wall_s=$wall load1_end=$L1" >> "$log"
     echo "$job,$JFAM,$JOP,$JX,${JARG:--},$start,$g,$GATE_WAITED_S,$GATE_L0,$GATE_BUSY,$L1,$wall,$rc,$r0,$mn" >> "$JOBS"
-    if (( rc != 0 || n1 != n0 + 1 )); then
-      failed "prove $job (rc=$rc, $((n1 - n0)) row(s) written) -- see $log"
+    if (( rc != 0 )); then
+      failed "prove $job (rc=$rc, $nrow row(s) printed, none kept) -- see $log"
     else
       echo "done $job rc=$rc wall=${wall}s r0vm_rss=${r0}MB" >&2
     fi
@@ -214,5 +233,4 @@ case ${1:-} in
   exec) phase_exec ;;
   qexec) shift; phase_qexec "$@" ;;
   prove) shift; phase_prove "$@" ;;
-  *) echo "usage: $0 exec | qexec <jobs...> | prove <jobs...>" >&2; exit 2 ;;
 esac

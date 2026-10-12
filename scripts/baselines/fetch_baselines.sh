@@ -2,7 +2,7 @@
 # Fetch the external comparison systems at the exact revisions used in the paper.
 # They are deliberately cloned OUTSIDE this repository: both carry their own git
 # history and many GB of build artifacts (the six-sketch comparison's zk-Analytics-side
-# builds alone take ~12.5 GB), and neither is ours to redistribute.
+# builds alone take ~13 GB), and neither is ours to redistribute.
 #
 #   zk-Analytics  MIT           Zhu et al., "Zero-Knowledge Cloud Analytics", SIGCOMM '26
 #   zkStream      BSD-3-Clear   Swalens et al., Middleware '24
@@ -89,10 +89,12 @@ Build notes (no sudo required):
                 not used there.
   zk-Analytics  the other scripts in scripts/baselines/zka/ use the same toolchain plus
                   rzup install cargo-risczero 3.0.6 && rzup install cpp 2024.1.5
-                and, for their `bench_queries` / `native_baseline` builds (a234.sh,
-                compare.sh, accuracy.sh native), libclang (e.g. libclang-dev) with
-                LIBCLANG_PATH, BINDGEN_EXTRA_CLANG_ARGS=-I$(gcc -print-file-name=include)
-                and CXXFLAGS='-include cstdint'. The full pipeline (Kafka/RocksDB/
+                and, for their `bench_queries` build (a234.sh, compare.sh; it compiles
+                RocksDB through bindgen), libclang (e.g. libclang-dev) and, with
+                GCC >= 13, CXXFLAGS='-include cstdint'. Set LIBCLANG_PATH (the directory
+                of libclang.so) or BINDGEN_EXTRA_CLANG_ARGS=-I$(gcc -print-file-name=include)
+                only if bindgen cannot find libclang or stddef.h. `native_baseline`
+                (accuracy.sh native) needs none of this. The full pipeline (Kafka/RocksDB/
                 FoundationDB/Trillian/Docker) is NOT required for any experiment here.
   zkStream      ZoKrates 0.8.8 is installed above. Its drivers cap every compile with
                 `systemd-run --user --scope`, so they need a systemd user session

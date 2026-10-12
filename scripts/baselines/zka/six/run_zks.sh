@@ -18,6 +18,13 @@
 # Exit status 0 only if every run exited 0 and wrote a CSV row with status=ok.
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ALL_TAGS=(cm hll ss gk bloom bloom_absent kmv)
+TAGS=("$@")
+(( ${#TAGS[@]} )) || TAGS=("${ALL_TAGS[@]}")
+for tag in "${TAGS[@]}"; do  # before anything is created
+  known=0; for t in "${ALL_TAGS[@]}"; do [[ $tag == "$t" ]] && known=1; done
+  (( known )) || { echo "error: unknown tag '$tag' (${ALL_TAGS[*]})" >&2; exit 2; }
+done
 source "$HERE6/six_common.sh"   # BASELINE_DIR, ZKS, RESULTS, SIX_*, PATH
 six_prepare_results
 six_clean_env
@@ -52,9 +59,6 @@ FAM[gk]=gk;            KM[gk]=hot;      ENVS[gk]="EXP_GK_CAP=$SIX_GK_CAP EXP_GK_
 FAM[bloom]=bloom;      KM[bloom]=first; ENVS[bloom]="EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14"
 FAM[bloom_absent]=bloom; KM[bloom_absent]=absent; ENVS[bloom_absent]="EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14"
 FAM[kmv]=kmv;          KM[kmv]=first;   ENVS[kmv]="EXP_KMV_K=1024"
-TAGS=("$@")
-(( ${#TAGS[@]} )) || TAGS=(cm hll ss gk bloom bloom_absent kmv)
-for tag in "${TAGS[@]}"; do [[ -n ${FAM[$tag]:-} ]] || six_die "unknown tag $tag (cm hll ss gk bloom bloom_absent kmv)"; done
 
 # Ctrl-C / TERM: stop the running exp_compose (rss_tree.sh stops its process group) and exit.
 CHILD=
@@ -64,7 +68,8 @@ on_signal() {
   exit 130
 }
 trap on_signal INT TERM HUP
-trap 'rm -rf "$SP"/proofs_*; rmdir "$SP" 2>/dev/null' EXIT
+# only this call's proof dirs: another run_zks.sh may share an explicit SIX_WORK
+trap 'for t in "${TAGS[@]}"; do rm -rf "$SP/proofs_$t"; done; rmdir "$SP" 2>/dev/null' EXIT
 
 echo "run_zks.sh: ${#TAGS[@]} run(s) -> $OUTD (N=$SIX_N m=$SIX_M t=$SIX_T cores=$CORES; $(gate_settings))" >&2
 FAILED=()
@@ -94,11 +99,12 @@ for tag in "${TAGS[@]}"; do
   rl=$(grep '^RSSTREE' "$log" | tail -1)
   mrss=$(sed -n 's/.*main_peak_rss_mb=\([0-9.]*\).*/\1/p' <<< "$rl")
   drss=$(sed -n 's/.*desc_peak_rss_mb=\([0-9.]*\).*/\1/p' <<< "$rl")
-  # exp_compose prints where it wrote its CSV (the results/ dir of the checkout it was built in)
+  # exp_compose prints where it wrote its CSV (the results/ dir of the checkout it was built in);
+  # move it into $OUTD (exp_compose's results/env.json, a machine snapshot, stays there)
   src=$(sed -n 's/^results -> //p' "$log" | tail -1)
   commit=; status=; feat=$FEAT
   if [[ -n $src && -s $src ]]; then
-    [[ $src -ef $OUTD/$csvname.csv ]] || cp -f "$src" "$OUTD/$csvname.csv"
+    [[ $src -ef $OUTD/$csvname.csv ]] || mv -f "$src" "$OUTD/$csvname.csv" && src=$OUTD/$csvname.csv
     commit=$(six_csv_col "$OUTD/$csvname.csv" commit)
     status=$(six_csv_col "$OUTD/$csvname.csv" status)
     pcs=$(six_csv_col "$OUTD/$csvname.csv" pcs)
