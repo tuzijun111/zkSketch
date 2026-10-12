@@ -69,6 +69,7 @@ use crate::recursion::recursive::statement::{self, Expose, IndexPin};
 use crate::recursion::recursive::countmin_leaf::{
     DIGEST_PACKING, make_leaf_config, pack_commit_to_challenge,
 };
+use crate::sketch::bind::{self, Binding};
 use crate::sketch::countmin::{CountMinState, CountMinUpdate};
 use crate::sketch::countmin_merkle::{
     RowPlan, build_row_plan_mode, climb_merkle_path, climb_merkle_path_compress, pack_digest,
@@ -281,7 +282,7 @@ fn prove_countmin_c_merkle_leaf_impl(
     // semantics, different routing (O(m·d) group-by instead of m²·d selectors).
     // (The exposing variant forbids group_by, so expose_boundary is false here.)
     if group_by {
-        return prove_countmin_c_merkle_gb_leaf(params, initial, batch);
+        return prove_countmin_c_merkle_gb_leaf(params, initial, batch, bind::default_binding());
     }
     let h = params.height(); // = w_log2
     let cfg = Poseidon2Config::BABY_BEAR_D4_W16;
@@ -745,6 +746,80 @@ fn prove_countmin_c_merkle_leaf_impl(
 
 // ─── Optimization (ii): group-by routing + global sorted Merkle op-chain ─────
 
+/// Test-only malicious-prover plan for [`prove_countmin_c_merkle_gb_leaf`]. It
+/// rewrites the prover's NATIVE witness (the claimed per-`(record, row)`
+/// counter touches; the sorted view, the group-by and the committed final
+/// roots all follow them) and, optionally, the byte hints of the `val_sorted`
+/// base pins. The constraint system is untouched, so whatever it accepts under
+/// a plan is a soundness counterexample. Mirrors `countmin_final::CmFinalForge`.
+#[cfg(test)]
+#[derive(Default, Clone, Debug)]
+pub(crate) struct CmGbForge {
+    /// `(touch index k·d + i, claimed address, claimed value)`: overrides the
+    /// honest touch of record `k` on row `i`.
+    pub touches: Vec<(usize, u64, u32)>,
+    /// `(touch index, t)`: that touch's `val_sorted` witness becomes
+    /// `value + t·X³` (an extension element). Since `X·X³ = W`, its recovered
+    /// sort entry `combined + val·X` gains `t·W` in coordinate 0.
+    pub val_e3: Vec<(usize, Val)>,
+    /// ABLATION (Semantic/Bound): drop the `val_sorted` base pin.
+    pub skip_val_pin: bool,
+    /// `(touch index, bytes)`: forged outputs of the byte hint of that touch's
+    /// `val_sorted` base pin.
+    pub val_bytes: Vec<(usize, Vec<Challenge>)>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORGE: std::cell::RefCell<Option<CmGbForge>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The active plan, if any.
+#[cfg(test)]
+fn forge_plan() -> Option<CmGbForge> {
+    FORGE.with(|f| f.borrow().clone())
+}
+
+/// Apply the active plan's touch overrides to `u_ctr`.
+#[cfg(test)]
+fn forge_touches(u_ctr: &mut [(u64, u32)]) {
+    if let Some(plan) = forge_plan() {
+        for &(idx, a, v) in &plan.touches {
+            u_ctr[idx] = (a, v);
+        }
+    }
+}
+
+/// The `t·X³` the active plan adds to touch `idx`'s `val_sorted` witness.
+#[cfg(test)]
+fn forge_val_ext(idx: usize) -> Challenge {
+    use p3_field::BasedVectorSpace;
+    let x3 = Challenge::from_basis_coefficients_slice(&[Val::ZERO, Val::ZERO, Val::ZERO, Val::ONE])
+        .expect("X^3");
+    forge_plan()
+        .and_then(|p| p.val_e3.iter().find(|e| e.0 == idx).map(|e| x3 * Challenge::from(e.1)))
+        .unwrap_or(Challenge::ZERO)
+}
+
+/// Apply the active plan's circuit-level forgeries: the byte hints of chosen
+/// `val_sorted` base pins emit forged bytes (`val_bytes`).
+#[cfg(test)]
+fn forge_circuit(
+    mut circuit: p3_circuit::Circuit<Challenge>,
+    val_sorted_exprs: &[ExprId],
+    sigma: &[usize],
+) -> p3_circuit::Circuit<Challenge> {
+    let Some(plan) = forge_plan() else {
+        return circuit;
+    };
+    for (idx, bytes) in plan.val_bytes {
+        let r = sigma.iter().position(|&k| k == idx).expect("sorted row of the touch");
+        let wid = crate::sketch::forge_permute::wid_of(&circuit, val_sorted_exprs[r]);
+        crate::sketch::forge_permute::forge_hint(&mut circuit, wid, bytes);
+    }
+    circuit
+}
+
 /// Prove one `merkle_gb` epoch (optimization (ii)): replace the `m·t_max·d`
 /// selector-routing matrix with an `O(m·d)` group-by-counter feeding a SINGLE
 /// GLOBAL sorted Merkle op-chain.
@@ -770,16 +845,38 @@ fn prove_countmin_c_merkle_leaf_impl(
 ///    boundaries: `r % m == 0` ⇒ start from `init_root_pis[i]`; `r % m == m-1` ⇒
 ///    connect to `final_root_pis[i]`. Non-segment-ends climb too (null climb,
 ///    inc=0) for obliviousness.
+///
+/// ## Binding
+///
+/// Only the step-1 sort recovery depends on `binding`. It rebuilds each sorted
+/// entry as `combined_sorted + val_sorted·X` through ALU rows, which tie only
+/// that sum.
+///
+/// - [`Binding::Legacy`]: `val_sorted` is free. `combined_sorted` is an
+///   integer (the step-3 bits) and the segment sums are pinned by the 24-bit
+///   `op_new` check, but an extension-valued `val_sorted = v + t·X³` shifts
+///   coordinate 0 by `t·W` (`X·X³ = W = 11` in BabyBear⁴). Two same-row touches
+///   at `a ≠ b`, `a ≡ b (mod 2)`, can then both be relisted at `(a + b)/2`
+///   with `±t·X³` cancelling in `acc`, so both increments land on the midpoint.
+///   **Unsound**; kept byte-identical (same VK) for side-by-side cost runs and
+///   the PoC test.
+/// - [`Binding::Semantic`] / [`Binding::Bound`]: every `val_sorted` is pinned
+///   to the base field ([`bind::pin_base`]), as in `countmin_final`. Adds
+///   `n_ctr = m·d` base pins and a Range table.
 fn prove_countmin_c_merkle_gb_leaf(
     params: CountMinCMerkleParams,
     initial: CountMinState,
     batch: Vec<CountMinUpdate>,
+    binding: Binding,
 ) -> CountMinCMerkleProof {
     use crate::sketch::countmin_final::hash_cell_prf;
     use crate::sketch::countmin_merkle::{merkle_root_mode, merkle_siblings_mode};
-    use p3_circuit::ops::generate_permute_trace;
-    use p3_circuit_prover::batch_stark_prover::{permute_air_builders, permute_preprocessor};
+    use p3_circuit::ops::{generate_permute_trace, generate_range_trace};
+    use p3_circuit_prover::batch_stark_prover::{
+        permute_air_builders, permute_preprocessor, range_air_builders, range_preprocessor,
+    };
 
+    let bound = binding.is_bound();
     let CountMinCMerkleParams { d, w, batch: m, t_max: _, compress: _, group_by: _ } = params;
     let h = params.height(); // = w_log2
     let n_ctr = m * d;
@@ -821,6 +918,10 @@ fn prove_countmin_c_merkle_gb_leaf(
             u_ctr.push((combined, batch[k].value));
         }
     }
+    // Test-only malicious prover: claimed touches replace honest ones, and the
+    // sorted view and committed final roots follow them ([`CmGbForge`]).
+    #[cfg(test)]
+    forge_touches(&mut u_ctr);
     // Stable sort by `combined` (ties keep record order — irrelevant to the
     // running sum, which is commutative within a cell).
     let mut indexed: Vec<(usize, &(u64, u32))> = u_ctr.iter().enumerate().collect();
@@ -905,6 +1006,9 @@ fn prove_countmin_c_merkle_gb_leaf(
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
+    if bound {
+        b.enable_range(generate_range_trace::<Val, Challenge>);
+    }
 
     // Public inputs: per-row init roots, per-row final roots, batch commit.
     let init_root_pis: Vec<[ExprId; DIGEST_PACKING]> = (0..d)
@@ -1013,7 +1117,17 @@ fn prove_countmin_c_merkle_gb_leaf(
 
     // ── Sort (the ONLY PermuteAir): payload → sorted; recover (combined,val) ──
     let payload_sorted = b.add_permute(&payload, sigma_ctr.clone()).expect("add_permute (counter sort)");
+    #[cfg(test)]
+    let pin_val = bound && !forge_plan().is_some_and(|p| p.skip_val_pin);
+    #[cfg(not(test))]
+    let pin_val = bound;
     for r in 0..n_ctr {
+        // Semantic/Bound: val_sorted is base (else its X³ coefficient shifts
+        // coordinate 0 by W, see the fn docs); combined_sorted is pinned by the
+        // block-partition bits below.
+        if pin_val {
+            bind::pin_base::<Val, Challenge>(&mut b, val_sorted[r]);
+        }
         // recompose(combined_sorted, val_sorted, 0, 0) must equal the permuted
         // payload entry — binds combined_sorted/val_sorted to the sorted view.
         let recovered = b
@@ -1125,6 +1239,8 @@ fn prove_countmin_c_merkle_gb_leaf(
     }
 
     let circuit = b.build().expect("build cm c_merkle_gb leaf circuit");
+    #[cfg(test)]
+    let circuit = forge_circuit(circuit, &val_sorted, &sigma_ctr);
 
     // ─── Pack public + private values (same order as allocation) ─────────────
     let mut public_inputs: Vec<Challenge> = Vec::new();
@@ -1162,7 +1278,10 @@ fn prove_countmin_c_merkle_gb_leaf(
         private_inputs.push(Challenge::from_u64(combined_sorted_native[r]));
     }
     for r in 0..n_ctr {
-        private_inputs.push(Challenge::from_u32(val_sorted_native[r]));
+        let v = Challenge::from_u32(val_sorted_native[r]);
+        #[cfg(test)]
+        let v = v + forge_val_ext(sigma_ctr[r]);
+        private_inputs.push(v);
     }
     for r in 0..n_ctr {
         private_inputs.push(Challenge::from_u64(tag_native[r] as u64));
@@ -1210,6 +1329,10 @@ fn prove_countmin_c_merkle_gb_leaf(
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
+    if bound {
+        preprocessors.push(range_preprocessor::<Val>());
+        air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
+    }
 
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
@@ -1256,6 +1379,9 @@ fn prove_countmin_c_merkle_gb_leaf(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
+    if bound {
+        prover.register_range_table::<4>();
+    }
     let __t_p = std::time::Instant::now();
     let proof = prover.prove_all_tables(&traces, &circuit_prover_data).expect("prove cm c_merkle_gb");
     let __prove = __t_p.elapsed();
@@ -1603,6 +1729,238 @@ mod tests {
                 p_fast.final_roots[i].0, p_gb.final_roots[i].0,
                 "row {i} final root must match merkle_fast (group-by ≡ selector routing)"
             );
+        }
+    }
+
+    // ─── Soundness PoC: extension-valued val_sorted (merkle_gb) ─────────────
+    //
+    // Mirrors `countmin_final::tests::val_ext_midpoint_*`. Each forged run has
+    // a control that goes through the SAME plumbing (plan, forged hints) with
+    // the honest values and must verify, so a rejection is attributable to the
+    // forged value.
+
+    use crate::sketch::forge;
+
+    /// Where a (possibly forged) epoch ended.
+    #[derive(Debug)]
+    enum Outcome {
+        /// Proved and self-verified; the committed per-row final roots.
+        Accepted(Vec<[Val; 8]>),
+        /// The runner refused the witness (e.g. a `connect` conflict).
+        RunnerRejected(String),
+        /// Traces were produced, but proving or the self-verify failed.
+        ProofRejected(String),
+    }
+
+    impl Outcome {
+        fn accepted(&self) -> Option<Vec<[Val; 8]>> {
+            match self {
+                Outcome::Accepted(f) => Some(f.clone()),
+                _ => None,
+            }
+        }
+        fn assert_runner_conflict(&self, what: &str) {
+            match self {
+                Outcome::RunnerRejected(m) if m.contains("WitnessConflict") => {}
+                o => panic!("{what}: expected a runner WitnessConflict, got {o:?}"),
+            }
+        }
+        fn assert_verifier_rejects(&self, what: &str) {
+            match self {
+                Outcome::ProofRejected(m) if m.starts_with("self-verify cm c_merkle_gb leaf") => {}
+                o => panic!("{what}: expected a verifier rejection, got {o:?}"),
+            }
+        }
+    }
+
+    /// Prove one `merkle_gb` epoch under `binding` with the malicious `plan`
+    /// active.
+    fn run_plan(
+        params: CountMinCMerkleParams,
+        prior: &CountMinState,
+        updates: &[CountMinUpdate],
+        binding: Binding,
+        plan: CmGbForge,
+    ) -> Outcome {
+        FORGE.with(|f| *f.borrow_mut() = Some(plan));
+        let r = forge::catch_msg(|| {
+            prove_countmin_c_merkle_gb_leaf(params, prior.clone(), updates.to_vec(), binding)
+        });
+        FORGE.with(|f| *f.borrow_mut() = None);
+        match r {
+            Ok(p) => Outcome::Accepted(p.final_roots.iter().map(|c| c.0).collect()),
+            Err(m) if m.starts_with("run cm c_merkle_gb circuit") => Outcome::RunnerRejected(m),
+            Err(m) => Outcome::ProofRejected(m),
+        }
+    }
+
+    /// `prior`'s rows plus every record's touch, with `(touch index k·d + i) →
+    /// (address, value)` overrides (address `i·w + pos`).
+    fn fold_touches(
+        prior: &CountMinState,
+        updates: &[CountMinUpdate],
+        overrides: &[(usize, u64, u32)],
+    ) -> Vec<Vec<u64>> {
+        let (d, w) = (prior.params.d, prior.params.w);
+        let mut rows: Vec<Vec<u64>> =
+            prior.counters.iter().map(|r| r.iter().map(|&c| c as u64).collect()).collect();
+        for (k, u) in updates.iter().enumerate() {
+            for i in 0..d {
+                let (a, v) = overrides
+                    .iter()
+                    .find(|o| o.0 == k * d + i)
+                    .map(|o| (o.1 as usize, o.2))
+                    .unwrap_or((i * w + hash_cell_prf(i, u.key, w), u.value));
+                rows[a / w][a % w] += u64::from(v);
+            }
+        }
+        rows
+    }
+
+    /// The compress-mode per-row roots of `rows` (what a `merkle_gb` leaf
+    /// commits).
+    fn roots(rows: &[Vec<u64>]) -> Vec<[Val; 8]> {
+        rows.iter().map(|r| merkle_root_mode(r, true)).collect()
+    }
+
+    /// Count-Min point estimate of `key` (min over rows).
+    fn estimate(rows: &[Vec<u64>], key: u64) -> u64 {
+        let w = rows[0].len();
+        (0..rows.len()).map(|i| rows[i][hash_cell_prf(i, key, w)]).min().expect("d ≥ 1")
+    }
+
+    /// Extension-valued `val_sorted` (why the base pin is required). Two row-0
+    /// touches at `a ≠ b` (`a ≡ b mod 2`) are both relisted at the midpoint
+    /// `a' = (a + b)/2`, with `val_sorted = v₀ + t·X³` and `v₁ − t·X³`,
+    /// `t = (a − a')/W` (`X⁴ = W`). Each recovered entry `a' + val·X` then
+    /// equals the honest Stage-F payload `a + v₀·X` / `b + v₁·X`, and the `X³`
+    /// parts cancel in the segment sum `acc`, so `inc`/`op_new` stay base and
+    /// the committed roots are those of a plain state with both increments
+    /// moved to `a'`. `skip_pin` is the ablation (no base pin); `proof_level`
+    /// forges the pin's byte hint to `[val, 0, 0, 0]`, so only the RangeAir
+    /// lookup can reject. Returns the outcome, the honest and the claimed rows.
+    fn val_ext_midpoint(
+        binding: Binding,
+        forged: bool,
+        skip_pin: bool,
+        proof_level: bool,
+    ) -> (Outcome, Vec<Vec<u64>>, Vec<Vec<u64>>, u64) {
+        use p3_field::BasedVectorSpace;
+        let (d, w, m) = (2usize, 16usize, 2usize);
+        let params = CountMinCMerkleParams { d, w, batch: m, t_max: m, compress: true, group_by: true };
+        let k0 = 7u64;
+        let a = hash_cell_prf(0, k0, w) as u64;
+        let k1 = (8u64..)
+            .find(|&k| {
+                let b = hash_cell_prf(0, k, w) as u64;
+                a != b && a % 2 == b % 2
+            })
+            .expect("second key");
+        let b = hash_cell_prf(0, k1, w) as u64;
+        let mid = (a + b) / 2;
+        let updates = vec![
+            CountMinUpdate { key: k0, value: 3 },
+            CountMinUpdate { key: k1, value: 5 },
+        ];
+        let prior = state(d, w, |_, _| 0);
+        let x: Challenge =
+            Challenge::from_basis_coefficients_slice(&[Val::ZERO, Val::ONE, Val::ZERO, Val::ZERO])
+                .expect("X");
+        let w_ext = <Challenge as BasedVectorSpace<Val>>::as_basis_coefficients_slice(&(x * x * x * x))[0];
+        let t = (Val::from_u64(a) - Val::from_u64(mid)) * w_ext.inverse();
+        // The relisting, in-field: a' + (v₀ + t·X³)·X == a + v₀·X and
+        // a' + (v₁ − t·X³)·X == b + v₁·X.
+        let x3 = x * x * x;
+        assert_eq!(
+            Challenge::from_u64(mid) + (Challenge::from_u32(3) + x3 * Challenge::from(t)) * x,
+            Challenge::from_u64(a) + Challenge::from_u32(3) * x,
+        );
+        assert_eq!(
+            Challenge::from_u64(mid) + (Challenge::from_u32(5) - x3 * Challenge::from(t)) * x,
+            Challenge::from_u64(b) + Challenge::from_u32(5) * x,
+        );
+        // Touch indices k·d + i: record 0 row 0, record 1 row 0.
+        let (i0, i1) = (0usize, d);
+        let (touches, e3) = if forged {
+            (vec![(i0, mid, 3), (i1, mid, 5)], vec![(i0, t), (i1, -t)])
+        } else {
+            (vec![(i0, a, 3), (i1, b, 5)], vec![(i0, Val::ZERO), (i1, Val::ZERO)])
+        };
+        let val_bytes = if proof_level {
+            let bytes = |v: u32, tt: Val| -> Vec<Challenge> {
+                if forged {
+                    vec![
+                        Challenge::from_u32(v) + x3 * Challenge::from(tt),
+                        Challenge::ZERO,
+                        Challenge::ZERO,
+                        Challenge::ZERO,
+                    ]
+                } else {
+                    (0..4).map(|j| Challenge::from_u32((v >> (8 * j)) & 0xFF)).collect()
+                }
+            };
+            vec![(i0, bytes(3, t)), (i1, bytes(5, -t))]
+        } else {
+            Vec::new()
+        };
+        let plan = CmGbForge {
+            touches: touches.clone(),
+            val_e3: e3,
+            skip_val_pin: skip_pin,
+            val_bytes,
+        };
+        let honest = fold_touches(&prior, &updates, &[]);
+        let claimed = fold_touches(&prior, &updates, &touches);
+        (run_plan(params, &prior, &updates, binding, plan), honest, claimed, k0)
+    }
+
+    /// WITHOUT the base pin (Legacy, and the Semantic/Bound ablation) the
+    /// `merkle_gb` leaf ACCEPTS the midpoint relisting: the committed roots
+    /// move both increments to `a'`, so the claimed sketch under-estimates
+    /// `k0`. With the pin, the runner's byte reconstruction conflicts.
+    #[test]
+    fn c_merkle_gb_val_ext_midpoint_needs_base_pin() {
+        let cases = [
+            (Binding::Legacy, false),
+            (Binding::Semantic, true),
+            (Binding::Semantic, false),
+            (Binding::Bound, true),
+            (Binding::Bound, false),
+        ];
+        for (binding, skip_pin) in cases {
+            let what = format!("{binding:?} merkle_gb extension val_sorted (skip_pin={skip_pin})");
+            let (ctl, honest, _, _) = val_ext_midpoint(binding, false, skip_pin, false);
+            eprintln!("{what} control: {ctl:?}");
+            assert_eq!(ctl.accepted(), Some(roots(&honest)), "{what}: control");
+            let (out, honest, claimed, k0) = val_ext_midpoint(binding, true, skip_pin, false);
+            eprintln!("{what} forged: {out:?}");
+            assert_ne!(claimed, honest);
+            assert_eq!(estimate(&honest, k0), 3);
+            assert_eq!(estimate(&claimed, k0), 0, "the claimed state under-estimates k0");
+            if skip_pin || !binding.is_bound() {
+                assert_eq!(
+                    out.accepted(),
+                    Some(roots(&claimed)),
+                    "{what}: the unpinned circuit accepts the relisting (PoC)"
+                );
+            } else {
+                out.assert_runner_conflict(&what);
+            }
+        }
+    }
+
+    /// Proof level: with the pin's byte hint forged as well, the verifier
+    /// rejects on the Range lookup.
+    #[test]
+    fn c_merkle_gb_val_ext_midpoint_proof_level_rejected() {
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let what = format!("{binding:?} merkle_gb extension val_sorted (proof level)");
+            let (ctl, honest, _, _) = val_ext_midpoint(binding, false, false, true);
+            eprintln!("{what} control: {ctl:?}");
+            assert_eq!(ctl.accepted(), Some(roots(&honest)), "{what}: control");
+            let (out, _, _, _) = val_ext_midpoint(binding, true, false, true);
+            eprintln!("{what} forged: {out:?}");
+            out.assert_verifier_rejects(&what);
         }
     }
 }

@@ -58,15 +58,15 @@ use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_batch_stark::ProverData;
 use p3_circuit::ops::{
     Poseidon2Config, generate_expose_trace, generate_permute_trace, generate_poseidon2_trace,
-    generate_recompose_trace,
+    generate_range_trace, generate_recompose_trace,
 };
 use p3_circuit::{CircuitBuilder, ExprId};
 use p3_circuit_prover::{
     BatchStarkProver, CircuitProverData, ConstraintProfile, TablePacking,
     batch_stark_prover::{
         expose_air_builders, expose_preprocessor, permute_air_builders, permute_preprocessor,
-        poseidon2_air_builders_d4, poseidon2_preprocessor, recompose_air_builders,
-        recompose_preprocessor,
+        poseidon2_air_builders_d4, poseidon2_preprocessor, range_air_builders, range_preprocessor,
+        recompose_air_builders, recompose_preprocessor,
     },
     common::get_airs_and_degrees_with_prep,
 };
@@ -88,7 +88,7 @@ use crate::recursion::recursive::countmin_leaf::{
 };
 use crate::recursion::recursive::countmin_leaf_v9::CountMinLeafProofV9;
 use crate::sketch::Sketch;
-use crate::sketch::bind::Binding;
+use crate::sketch::bind::{self, Binding};
 use crate::sketch::countmin::{CountMinParams, CountMinState, CountMinUpdate};
 use crate::sketch::countmin_v9::CountMinV9;
 
@@ -322,12 +322,129 @@ fn pack_batch_to_challenge(batch: &[CountMinUpdate]) -> Vec<Challenge> {
         .collect()
 }
 
+// ─── Test-only malicious prover ──────────────────────────────────────────
+
+/// Test-only malicious-prover plan for [`prove_countmin_final_impl`]. It
+/// rewrites the prover's NATIVE witness (the claimed per-record counter
+/// touches) and commits the final state those touches imply; with
+/// `forge_sorted` it also makes the Stage-G PermuteAir emit the claimed sorted
+/// tuples (via [`crate::sketch::forge_permute`]). The constraint system is
+/// untouched, so whatever it accepts under a plan is a soundness
+/// counterexample. Mirrors `countmin_omc::CmOmcForge`.
+#[cfg(test)]
+#[derive(Default, Clone, Debug)]
+pub(crate) struct CmFinalForge {
+    /// `(touch index k·d + i, claimed address, claimed value)`: overrides the
+    /// honest touch of record `k` on row `i`.
+    pub touches: Vec<(usize, u64, u32)>,
+    /// Forge the Stage-G permute outputs to the claimed sorted tuples, in the
+    /// binding's encoding, so no runner conflict remains and only the
+    /// PermuteBus can reject.
+    pub forge_sorted: bool,
+    /// `(touch index, t)`: that touch's `val_sorted` witness becomes
+    /// `value + t·X³` (an extension element). Since `X·X³ = W`, its sort key
+    /// `comb + val·X` gains `t·W` in coordinate 0.
+    pub val_e3: Vec<(usize, Val)>,
+    /// ABLATION (Semantic/Bound): drop the `val_sorted` base pin.
+    pub skip_val_pin: bool,
+    /// `(touch index, bytes)`: forged outputs of the byte hint of that touch's
+    /// `val_sorted` base pin.
+    pub val_bytes: Vec<(usize, Vec<Challenge>)>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORGE: std::cell::RefCell<Option<CmFinalForge>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Apply the active plan's touch overrides to `u_ctr` and return the state
+/// they imply (`None` without a plan).
+#[cfg(test)]
+fn forge_touches(u_ctr: &mut [(u64, u32)], initial: &CountMinState) -> Option<CountMinState> {
+    let plan = forge_plan()?;
+    for &(idx, a, v) in &plan.touches {
+        u_ctr[idx] = (a, v);
+    }
+    let w = initial.params.w;
+    let mut s = initial.clone();
+    for &(a, v) in u_ctr.iter() {
+        let a = a as usize;
+        s.counters[a / w][a % w] = s.counters[a / w][a % w].saturating_add(v);
+    }
+    Some(s)
+}
+
+/// The active plan, if any.
+#[cfg(test)]
+fn forge_plan() -> Option<CmFinalForge> {
+    FORGE.with(|f| f.borrow().clone())
+}
+
+/// The `t·X³` the active plan adds to touch `idx`'s `val_sorted` witness.
+#[cfg(test)]
+fn forge_val_ext(idx: usize) -> Challenge {
+    use p3_field::BasedVectorSpace;
+    let x3 = Challenge::from_basis_coefficients_slice(&[Val::ZERO, Val::ZERO, Val::ZERO, Val::ONE])
+        .expect("X^3");
+    forge_plan()
+        .and_then(|p| p.val_e3.iter().find(|e| e.0 == idx).map(|e| x3 * Challenge::from(e.1)))
+        .unwrap_or(Challenge::ZERO)
+}
+
+/// Apply the active plan's circuit-level forgeries: the Stage-G permute (the
+/// circuit's only Permute op) emits the claimed sorted tuples
+/// (`forge_sorted`), and the byte hints of chosen `val_sorted` base pins emit
+/// forged bytes (`val_bytes`).
+#[cfg(test)]
+fn forge_circuit(
+    mut circuit: p3_circuit::Circuit<Challenge>,
+    bound: bool,
+    combined_sorted: &[u64],
+    val_sorted: &[u32],
+    val_sorted_exprs: &[ExprId],
+    sigma: &[usize],
+) -> p3_circuit::Circuit<Challenge> {
+    use p3_field::BasedVectorSpace;
+    let Some(plan) = forge_plan() else {
+        return circuit;
+    };
+    for (idx, bytes) in plan.val_bytes {
+        let r = sigma.iter().position(|&k| k == idx).expect("sorted row of the touch");
+        let wid = crate::sketch::forge_permute::wid_of(&circuit, val_sorted_exprs[r]);
+        crate::sketch::forge_permute::forge_hint(&mut circuit, wid, bytes);
+    }
+    if plan.forge_sorted {
+        let tuples: Vec<Challenge> = combined_sorted
+            .iter()
+            .zip(val_sorted)
+            .map(|(&c, &v)| {
+                if bound {
+                    Challenge::from_basis_coefficients_slice(&[
+                        Val::from_u64(c),
+                        Val::from_u32(v),
+                        Val::ZERO,
+                        Val::ZERO,
+                    ])
+                    .expect("4 coeffs")
+                } else {
+                    Challenge::from_u64(c * SHIFT_VAL + u64::from(v))
+                }
+            })
+            .collect();
+        crate::sketch::forge_permute::forge_permute_outputs(&mut circuit, 0, tuples);
+    }
+    circuit
+}
+
 // ─── Prover ──────────────────────────────────────────────────────────────
 
 /// Prove one count-min update epoch under the canonical Pattern-A design.
 ///
 /// Returns a [`CountMinLeafProofV9`] — chain-mergeable with the existing
 /// `merge_two_countmin_v9` whenever two leaves share `(d, w, batch)`.
+///
+/// Built under the process-wide [`bind::default_binding`] (see
+/// [`prove_countmin_final_with`]).
 ///
 /// # Panics
 ///
@@ -339,7 +456,35 @@ pub fn prove_countmin_final(
     initial_state: CountMinState,
     batch: Vec<CountMinUpdate>,
 ) -> CountMinLeafProofV9 {
-    prove_countmin_final_impl(params, initial_state, batch, Expose::None, 1)
+    prove_countmin_final_with(params, initial_state, batch, bind::default_binding())
+}
+
+/// [`prove_countmin_final`] under an explicit [`Binding`].
+///
+/// Only the Stage-G sort key depends on it (this leaf hashes the Legacy key
+/// input and uses the fork's coefficient binding under every mode):
+///
+/// - [`Binding::Legacy`]: a counter touch is ONE field element
+///   `comb·2^20 + value`, and `val_sorted` is free. That accepts any re-split
+///   `(a, v) → (a', v + (a − a')·2^20)`; on BabyBear `1920·2^20 = p − 1`, so
+///   `(a, v) → (a ± 1920, v ± 1)` even keeps the value small once
+///   `d·w > 1920`. **Unsound**; kept byte-identical (same VK) for the
+///   side-by-side cost runs and the PoC test.
+/// - [`Binding::Semantic`] / [`Binding::Bound`]: the touch is carried
+///   coordinate-wise as `comb + value·e₁` (`e₁ = (0, 1, 0, 0)`) and every
+///   `val_sorted` is pinned to the base field, as in `countmin_omc`. The pin
+///   is required: `e₁·e₃ = 11` in BabyBear⁴, so an extension-valued
+///   `val_sorted` could absorb an address shift into coordinate 0.
+///   `combined_sorted` is already an integer in `[0, d·w)` (the Stage-I
+///   selector pins each segment end, and the adjacency gate pins the rest of
+///   the segment to it). Adds `n_ctr = batch·d` base pins and a Range table.
+pub fn prove_countmin_final_with(
+    params: CountMinFinalParams,
+    initial_state: CountMinState,
+    batch: Vec<CountMinUpdate>,
+    binding: Binding,
+) -> CountMinLeafProofV9 {
+    prove_countmin_final_impl(params, initial_state, batch, Expose::None, 1, binding)
 }
 
 /// Like [`prove_countmin_final`] but additionally surfaces the `(initial, final)`
@@ -353,7 +498,7 @@ pub fn prove_countmin_final_exposed(
     initial_state: CountMinState,
     batch: Vec<CountMinUpdate>,
 ) -> CountMinLeafProofV9 {
-    prove_countmin_final_impl(params, initial_state, batch, Expose::Boundary, 1)
+    prove_countmin_final_impl(params, initial_state, batch, Expose::Boundary, 1, bind::default_binding())
 }
 
 /// Like [`prove_countmin_final_exposed`] but with the **Interval** statement
@@ -366,7 +511,7 @@ pub fn prove_countmin_final_interval(
     initial_state: CountMinState,
     batch: Vec<CountMinUpdate>,
 ) -> CountMinLeafProofV9 {
-    prove_countmin_final_impl(params, initial_state, batch, Expose::Interval, t)
+    prove_countmin_final_impl(params, initial_state, batch, Expose::Interval, t, bind::default_binding())
 }
 
 fn prove_countmin_final_impl(
@@ -375,8 +520,10 @@ fn prove_countmin_final_impl(
     batch: Vec<CountMinUpdate>,
     expose: Expose,
     t: u64,
+    binding: Binding,
 ) -> CountMinLeafProofV9 {
     let expose_boundary = expose == Expose::Boundary;
+    let bound = binding.is_bound();
     params.validate();
     assert_eq!(initial_state.params.d, params.d);
     assert_eq!(initial_state.params.w, params.w);
@@ -415,6 +562,16 @@ fn prove_countmin_final_impl(
             u_ctr_data.push((combined, u.value));
         }
     }
+    // Test-only malicious prover: claimed touches replace honest ones, and the
+    // committed final state follows them ([`CmFinalForge`]).
+    #[cfg(test)]
+    let (final_state, final_commit) = match forge_touches(&mut u_ctr_data, &initial_state) {
+        Some(s) => {
+            let c = commit_countmin(&s);
+            (s, c)
+        }
+        None => (final_state, final_commit),
+    };
     let mut indexed: Vec<(usize, &(u64, u32))> = u_ctr_data.iter().enumerate().collect();
     indexed.sort_by_key(|(_, (combined, _))| *combined);
     let sigma_ctr: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
@@ -453,6 +610,9 @@ fn prove_countmin_final_impl(
     );
     b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
     b.enable_permute(generate_permute_trace::<Val, Challenge>);
+    if bound {
+        b.enable_range(generate_range_trace::<Val, Challenge>);
+    }
     if expose.exposes() {
         b.enable_expose(generate_expose_trace::<Val, Challenge>);
     }
@@ -480,7 +640,19 @@ fn prove_countmin_final_impl(
     let one = b.alloc_const(Challenge::ONE, "one");
     let zero = b.alloc_const(Challenge::ZERO, "zero");
     let w_const = b.alloc_const(Challenge::from_u64(w as u64), "w");
-    let shift_val_const = b.alloc_const(Challenge::from_u64(SHIFT_VAL), "shift_val");
+    // Stage-G sort key: `comb·2^20 + value` (Legacy) or `comb + value·e₁`
+    // (Semantic/Bound, coordinate-wise). Only the one in use is allocated, so
+    // the Legacy circuit stays byte-identical.
+    let shift_or_e1 = if bound {
+        use p3_field::BasedVectorSpace;
+        b.alloc_const(
+            Challenge::from_basis_coefficients_slice(&[Val::ZERO, Val::ONE, Val::ZERO, Val::ZERO])
+                .expect("e1"),
+            "e1",
+        )
+    } else {
+        b.alloc_const(Challenge::from_u64(SHIFT_VAL), "shift_val")
+    };
     let two_pow_32_const = b.alloc_const(Challenge::from_u64(1u64 << 32), "2^32");
     let row_consts: Vec<ExprId> = (0..d)
         .map(|i| b.alloc_const(Challenge::from_u64(i as u64), "row_i"))
@@ -662,8 +834,12 @@ fn prove_countmin_final_impl(
             }
             let row_times_w = b.mul(row_consts[i], w_const);
             let combined_expr = b.add(row_times_w, pos_sum);
-            let combined_shifted = b.mul(combined_expr, shift_val_const);
-            let payload_expr = b.add(combined_shifted, value_w[k]);
+            let payload_expr = if bound {
+                b.mul_add(value_w[k], shift_or_e1, combined_expr)
+            } else {
+                let combined_shifted = b.mul(combined_expr, shift_or_e1);
+                b.add(combined_shifted, value_w[k])
+            };
             payload.push(payload_expr);
         }
 
@@ -679,12 +855,28 @@ fn prove_countmin_final_impl(
     }
 
     // ─── Stage G — Sort U_ctr by counter (the only PermuteAir) ───────────
+    // Legacy recovers `(combined, value)` from ONE packed field element, which
+    // is not injective (see [`prove_countmin_final_with`]). Semantic/Bound
+    // compare `combined + value·e₁` coordinate-wise, with `val_sorted` pinned
+    // to the base field (else its e₃ coefficient shifts coordinate 0, since
+    // e₁·e₃ = 11) and `combined_sorted` pinned to [0, d·w) by Stage I.
     let payload_sorted: Vec<ExprId> = b
         .add_permute(&payload, sigma_ctr.clone())
         .expect("add_permute (counter sort)");
+    #[cfg(test)]
+    let pin_val = bound && !forge_plan().is_some_and(|p| p.skip_val_pin);
+    #[cfg(not(test))]
+    let pin_val = bound;
     for r in 0..n_ctr {
-        let combined_shifted = b.mul(combined_sorted[r], shift_val_const);
-        let recovered = b.add(combined_shifted, val_sorted[r]);
+        let recovered = if bound {
+            if pin_val {
+                bind::pin_base::<Val, Challenge>(&mut b, val_sorted[r]);
+            }
+            b.mul_add(val_sorted[r], shift_or_e1, combined_sorted[r])
+        } else {
+            let combined_shifted = b.mul(combined_sorted[r], shift_or_e1);
+            b.add(combined_shifted, val_sorted[r])
+        };
         b.connect(recovered, payload_sorted[r]);
     }
 
@@ -755,6 +947,15 @@ fn prove_countmin_final_impl(
     }
 
     let circuit = b.build().expect("build countmin_final circuit");
+    #[cfg(test)]
+    let circuit = forge_circuit(
+        circuit,
+        bound,
+        &combined_sorted_native,
+        &val_sorted_native,
+        &val_sorted,
+        &sigma_ctr,
+    );
 
     // ─── Pack public + private values ────────────────────────────────────
     let initial_commit_packed = pack_commit_to_challenge(&initial_commit);
@@ -787,7 +988,10 @@ fn prove_countmin_final_impl(
         private_inputs.push(Challenge::from_u64(combined_sorted_native[r]));
     }
     for r in 0..n_ctr {
-        private_inputs.push(Challenge::from_u32(val_sorted_native[r]));
+        let v = Challenge::from_u32(val_sorted_native[r]);
+        #[cfg(test)]
+        let v = v + forge_val_ext(sigma_ctr[r]);
+        private_inputs.push(v);
     }
     for r in 0..n_ctr {
         private_inputs.push(Challenge::from_u64(tag_native[r] as u64));
@@ -852,6 +1056,10 @@ fn prove_countmin_final_impl(
     let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
     air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
     air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
+    if bound {
+        preprocessors.push(range_preprocessor::<Val>());
+        air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
+    }
     if expose.exposes() {
         preprocessors.push(expose_preprocessor::<Val>());
         air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
@@ -877,6 +1085,9 @@ fn prove_countmin_final_impl(
     prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
     prover.register_permute_table::<4>();
+    if bound {
+        prover.register_range_table::<4>();
+    }
     if expose.exposes() {
         prover.register_expose_table::<4>();
     }
@@ -1245,6 +1456,298 @@ mod tests {
             _honest.final_.0, tampered.final_.0,
             "tampering the initial state must change the proven final commitment"
         );
+    }
+
+    // ─── Soundness PoC: Stage-G packing collision ──────────────────────────
+    //
+    // Mirrors `countmin_omc::tests::stage_g_collision_*`. Each forged run has a
+    // control that goes through the SAME plumbing (plan, forged permute
+    // executor) with the honest values and must verify, so a rejection is
+    // attributable to the forged value.
+
+    use crate::sketch::forge;
+
+    /// Where a (possibly forged) epoch ended.
+    #[derive(Debug)]
+    enum Outcome {
+        /// Proved and self-verified; the committed final state.
+        Accepted([Val; 8]),
+        /// The runner refused the witness (e.g. a `connect` conflict).
+        RunnerRejected(String),
+        /// Traces were produced, but proving or the self-verify failed.
+        ProofRejected(String),
+    }
+
+    impl Outcome {
+        fn accepted(&self) -> Option<[Val; 8]> {
+            match self {
+                Outcome::Accepted(f) => Some(*f),
+                _ => None,
+            }
+        }
+        fn assert_runner_conflict(&self, what: &str) {
+            match self {
+                Outcome::RunnerRejected(m) if m.contains("WitnessConflict") => {}
+                o => panic!("{what}: expected a runner WitnessConflict, got {o:?}"),
+            }
+        }
+        fn assert_verifier_rejects(&self, what: &str) {
+            match self {
+                Outcome::ProofRejected(m) if m.starts_with("self-verify countmin_final leaf") => {}
+                o => panic!("{what}: expected a verifier rejection, got {o:?}"),
+            }
+        }
+    }
+
+    /// Prove one epoch under `binding` with the malicious `plan` active.
+    fn run_plan(
+        params: CountMinFinalParams,
+        prior: &CountMinState,
+        updates: &[CountMinUpdate],
+        binding: Binding,
+        plan: CmFinalForge,
+    ) -> Outcome {
+        FORGE.with(|f| *f.borrow_mut() = Some(plan));
+        let r = forge::catch_msg(|| {
+            prove_countmin_final_with(params, prior.clone(), updates.to_vec(), binding)
+        });
+        FORGE.with(|f| *f.borrow_mut() = None);
+        match r {
+            Ok(leaf) => Outcome::Accepted(leaf.final_.0),
+            Err(m) if m.starts_with("run countmin_final circuit") => Outcome::RunnerRejected(m),
+            Err(m) => Outcome::ProofRejected(m),
+        }
+    }
+
+    /// `prior` plus every record's touch, with `(touch index k·d + i) →
+    /// (address, value)` overrides.
+    fn fold_touches(
+        prior: &CountMinState,
+        updates: &[CountMinUpdate],
+        overrides: &[(usize, u64, u32)],
+    ) -> CountMinState {
+        let (d, w) = (prior.params.d, prior.params.w);
+        let mut s = prior.clone();
+        for (k, u) in updates.iter().enumerate() {
+            for i in 0..d {
+                let (a, v) = overrides
+                    .iter()
+                    .find(|o| o.0 == k * d + i)
+                    .map(|o| (o.1 as usize, o.2))
+                    .unwrap_or((i * w + hash_cell_prf(i, u.key, w), u.value));
+                s.counters[a / w][a % w] = s.counters[a / w][a % w].saturating_add(v);
+            }
+        }
+        s
+    }
+
+    /// Count-Min point estimate of `key` (min over rows) against `s`.
+    fn estimate(s: &CountMinState, key: u64) -> u32 {
+        (0..s.params.d)
+            .map(|i| s.counters[i][hash_cell_prf(i, key, s.params.w)])
+            .min()
+            .expect("d ≥ 1")
+    }
+
+    /// Stage-G packing collision. Legacy packs a counter touch as
+    /// `comb·2^20 + value` in ONE field element, and on BabyBear
+    /// `1920·2^20 = p − 1`, so `(a + 1920)·2^20 + (v + 1) ≡ a·2^20 + v`. With
+    /// `d·w = 2048 > 1920`, a record routed to row-0 bucket `a < 128` is
+    /// re-split in the sorted view as address `a + 1920` (row 1) with value
+    /// `v + 1`: the increment leaves the key's row-0 counter, so the claimed
+    /// sketch UNDER-estimates the key. `proof_level` also forges the Stage-G
+    /// PermuteAir outputs to the claimed sorted tuples (in the binding's
+    /// encoding), so only the PermuteBus multiset equality can reject.
+    fn stage_g_collision(
+        binding: Binding,
+        forged: bool,
+        proof_level: bool,
+    ) -> (Outcome, CountMinState, u64) {
+        let (d, w, m) = (2usize, 1024usize, 2usize);
+        let params = CountMinFinalParams { d, w, batch: m };
+        let key = (1u64..)
+            .find(|&k| hash_cell_prf(0, k, w) < 128)
+            .expect("key with row-0 bucket < 128");
+        let a = hash_cell_prf(0, key, w) as u64;
+        // The collision itself, in-field.
+        assert_eq!(
+            Val::from_u64(a + 1920) * Val::from_u64(SHIFT_VAL) + Val::from_u32(6),
+            Val::from_u64(a) * Val::from_u64(SHIFT_VAL) + Val::from_u32(5),
+        );
+        let updates = vec![
+            CountMinUpdate { key, value: 5 },
+            CountMinUpdate { key: key + 7_777, value: 1 },
+        ];
+        let prior = CountMinV9::new(&CountMinParams { d, w });
+        let touch = if forged { (0, a + 1920, 6) } else { (0, a, 5) };
+        let plan = CmFinalForge {
+            touches: vec![touch],
+            forge_sorted: proof_level,
+            ..Default::default()
+        };
+        let claimed = fold_touches(&prior, &updates, &[touch]);
+        (run_plan(params, &prior, &updates, binding, plan), claimed, key)
+    }
+
+    fn check_stage_g_collision(proof_level: bool) {
+        for binding in [Binding::Legacy, Binding::Semantic, Binding::Bound] {
+            let what = format!("{binding:?} Stage-G collision (proof_level={proof_level})");
+            let (ctl, honest, key) = stage_g_collision(binding, false, proof_level);
+            eprintln!("{what} control: {ctl:?}");
+            assert_eq!(
+                ctl.accepted(),
+                Some(commit_countmin(&honest).0),
+                "{what}: the control must verify"
+            );
+            let (out, claimed, _) = stage_g_collision(binding, true, proof_level);
+            eprintln!("{what} forged: {out:?}");
+            assert_ne!(claimed, honest);
+            assert!(estimate(&honest, key) >= 5);
+            assert!(estimate(&claimed, key) < 5, "the forged state under-estimates the key");
+            if binding.is_bound() {
+                if proof_level {
+                    out.assert_verifier_rejects(&what);
+                } else {
+                    out.assert_runner_conflict(&what);
+                }
+            } else {
+                // In-field arithmetic, independent of the fork.
+                assert_eq!(
+                    out.accepted(),
+                    Some(commit_countmin(&claimed).0),
+                    "{what}: Legacy accepts the (a + 1920, v + 1) re-split (PoC)"
+                );
+            }
+        }
+    }
+
+    /// Witness level: Semantic/Bound sort `(address, value)` coordinate-wise,
+    /// so the re-split tuple differs from the Stage-F tuple and the runner's
+    /// Stage-G `connect` conflicts. Legacy ACCEPTS.
+    #[test]
+    fn stage_g_collision_legacy_accepts_semantic_bound_reject() {
+        check_stage_g_collision(false);
+    }
+
+    /// Proof level: with the PermuteAir outputs forged too, the verifier
+    /// rejects Semantic/Bound on the PermuteBus. Legacy ACCEPTS (the forged
+    /// outputs equal the honest packed values).
+    #[test]
+    fn stage_g_collision_proof_level_legacy_accepts_semantic_bound_reject() {
+        check_stage_g_collision(true);
+    }
+
+    /// Extension-valued `val_sorted` (why the base pin is required). Two row-0
+    /// touches at `a ≠ b` (`a ≡ b mod 2`) are both relisted at the midpoint
+    /// `a' = (a + b)/2`, with `val_sorted = v₀ + t·X³` and `v₁ − t·X³`,
+    /// `t = (a − a')/W` (`X⁴ = W`). Each sort key `a' + val·X` then equals the
+    /// honest `a + v₀·X` / `b + v₁·X`, and the `X³` parts cancel in the cell
+    /// sum, so the committed state is a plain `u32` state with both increments
+    /// moved to `a'`. `skip_pin` is the ablation (no base pin); `proof_level`
+    /// forges the pin's byte hint to `[val, 0, 0, 0]`, so only the RangeAir
+    /// lookup can reject. Returns the outcome, the honest and the claimed state.
+    fn val_ext_midpoint(
+        binding: Binding,
+        forged: bool,
+        skip_pin: bool,
+        proof_level: bool,
+    ) -> (Outcome, CountMinState, CountMinState) {
+        use p3_field::BasedVectorSpace;
+        let (d, w, m) = (2usize, 16usize, 2usize);
+        let params = CountMinFinalParams { d, w, batch: m };
+        let (k0, k1) = (7u64, (8u64..).find(|&k| {
+            let (a, b) = (hash_cell_prf(0, 7, w), hash_cell_prf(0, k, w));
+            a != b && a % 2 == b % 2
+        }).expect("second key"));
+        let (a, b) = (hash_cell_prf(0, k0, w) as u64, hash_cell_prf(0, k1, w) as u64);
+        let mid = (a + b) / 2;
+        let updates = vec![
+            CountMinUpdate { key: k0, value: 3 },
+            CountMinUpdate { key: k1, value: 5 },
+        ];
+        let prior = CountMinV9::new(&CountMinParams { d, w });
+        let x: Challenge =
+            Challenge::from_basis_coefficients_slice(&[Val::ZERO, Val::ONE, Val::ZERO, Val::ZERO])
+                .expect("X");
+        let w_ext = <Challenge as BasedVectorSpace<Val>>::as_basis_coefficients_slice(&(x * x * x * x))[0];
+        let t = (Val::from_u64(a) - Val::from_u64(mid)) * w_ext.inverse();
+        // The relisting, in-field: a' + (v₀ + t·X³)·X == a + v₀·X.
+        let x3 = x * x * x;
+        assert_eq!(
+            Challenge::from_u64(mid) + (Challenge::from_u32(3) + x3 * Challenge::from(t)) * x,
+            Challenge::from_u64(a) + Challenge::from_u32(3) * x,
+        );
+        // Touch indices k·d + i: record 0 row 0, record 1 row 0.
+        let (i0, i1) = (0usize, d);
+        let (touches, e3) = if forged {
+            (vec![(i0, mid, 3), (i1, mid, 5)], vec![(i0, t), (i1, -t)])
+        } else {
+            (vec![(i0, a, 3), (i1, b, 5)], vec![(i0, Val::ZERO), (i1, Val::ZERO)])
+        };
+        let val_bytes = if proof_level {
+            let bytes = |v: u32, tt: Val| -> Vec<Challenge> {
+                if forged {
+                    vec![Challenge::from_u32(v) + x3 * Challenge::from(tt), Challenge::ZERO, Challenge::ZERO, Challenge::ZERO]
+                } else {
+                    (0..4).map(|j| Challenge::from_u32((v >> (8 * j)) & 0xFF)).collect()
+                }
+            };
+            vec![(i0, bytes(3, t)), (i1, bytes(5, -t))]
+        } else {
+            Vec::new()
+        };
+        let plan = CmFinalForge {
+            touches: touches.clone(),
+            val_e3: e3,
+            skip_val_pin: skip_pin,
+            val_bytes,
+            ..Default::default()
+        };
+        let honest = fold_touches(&prior, &updates, &[]);
+        let claimed = fold_touches(&prior, &updates, &touches);
+        (run_plan(params, &prior, &updates, binding, plan), honest, claimed)
+    }
+
+    /// Ablation: WITHOUT the base pin, the coordinate-wise sort key alone
+    /// ACCEPTS the midpoint relisting under Semantic/Bound. With it, the
+    /// runner's byte reconstruction conflicts.
+    #[test]
+    fn val_ext_midpoint_needs_base_pin() {
+        for binding in [Binding::Semantic, Binding::Bound] {
+            for skip_pin in [true, false] {
+                let what = format!("{binding:?} extension val_sorted (skip_pin={skip_pin})");
+                let (ctl, honest, _) = val_ext_midpoint(binding, false, skip_pin, false);
+                eprintln!("{what} control: {ctl:?}");
+                assert_eq!(ctl.accepted(), Some(commit_countmin(&honest).0), "{what}: control");
+                let (out, honest, claimed) = val_ext_midpoint(binding, true, skip_pin, false);
+                eprintln!("{what} forged: {out:?}");
+                assert_ne!(claimed, honest);
+                if skip_pin {
+                    assert_eq!(
+                        out.accepted(),
+                        Some(commit_countmin(&claimed).0),
+                        "{what}: the unpinned ablation accepts the relisting (PoC)"
+                    );
+                } else {
+                    out.assert_runner_conflict(&what);
+                }
+            }
+        }
+    }
+
+    /// Proof level: with the pin's byte hint forged as well, the verifier
+    /// rejects on the Range lookup.
+    #[test]
+    fn val_ext_midpoint_proof_level_rejected() {
+        for binding in [Binding::Semantic, Binding::Bound] {
+            let what = format!("{binding:?} extension val_sorted (proof level)");
+            let (ctl, honest, _) = val_ext_midpoint(binding, false, false, true);
+            eprintln!("{what} control: {ctl:?}");
+            assert_eq!(ctl.accepted(), Some(commit_countmin(&honest).0), "{what}: control");
+            let (out, _, _) = val_ext_midpoint(binding, true, false, true);
+            eprintln!("{what} forged: {out:?}");
+            out.assert_verifier_rejects(&what);
+        }
     }
 
     /// **Test 2 — proving time to merge two leaves.**

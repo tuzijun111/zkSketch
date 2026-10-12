@@ -9,7 +9,8 @@ size m, one panel per sketch family, one line per circuit variant, named as in
 the paper: Pattern A (cm, hll) one-hot / Merkle / memory-checked; Pattern B
 (ss, gk) replay / certified. A dotted whisker ending in an 'x' marks the first
 infeasible batch size (a too_large row: the padded trace exceeds the backend's
-2^27 FRI-domain cap).
+2^27 FRI-domain cap or, for the Count-Min one-hot leaf, its m*d*(d*w) selector
+cells exceed the prototype's memory guard, COUNTMIN_MAX_SEL_CELLS = 1.6e7).
 
 Output goes to latex/pics/ when that directory exists (the paper tree, which is
 not part of the public repo), else to results/.
@@ -46,7 +47,7 @@ INK2 = "#52514e"
 # the variant CLASS across panels (baseline / middle ground / deployed); labels
 # use each pattern's own paper names, combined in the shared legend.
 LBL_BASE = "one-hot / replay"
-LBL_CERT = "mem.-checked / certified"
+LBL_CERT = "certified (ours)"
 VARIANTS = {
     "cm": [
         ("cm_batch_one_hot.csv", "one_hot", LBL_BASE, C_REPL, "^"),
@@ -154,7 +155,7 @@ def main():
     handles, labels = axes[1].get_legend_handles_labels()  # hll panel has all 3
     xmark = plt.Line2D([], [], color=INK2, marker="x", markersize=4.5,
                        markeredgewidth=1.3, linestyle=(0, (1, 2)), linewidth=1.0,
-                       label="infeasible ($>2^{27}$ FRI domain)")
+                       label="infeasible ($>2^{27}$ FRI domain; CM one-hot: selector guard)")
     fig.legend(
         handles + [xmark], labels + [xmark.get_label()],
         loc="upper center", ncol=4, frameon=False,
