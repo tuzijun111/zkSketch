@@ -2,7 +2,7 @@
 #
 # A fresh `git clone` of this project + `cargo build` works WITHOUT this file:
 # `Cargo.toml` already pins the four Plonky3-recursion crates to a specific
-# commit of the public fork https://github.com/July620/Plonky3_RangeAir.
+# commit of the public fork https://github.com/tuzijun111/Plonky3_RangeAir.
 #
 # Copy this file to `.cargo/config.toml` only if you want one of the options
 # below. `.cargo/config.toml` is gitignored, so any local absolute paths you
@@ -26,13 +26,13 @@ git-fetch-with-cli = true
 # iteration without a push round-trip) by pointing Cargo at a LOCAL clone of the
 # fork. Uncomment the block below and set the path.
 #
-#   1. git clone https://github.com/July620/Plonky3_RangeAir /path/to/Plonky3_RangeAir
+#   1. git clone https://github.com/tuzijun111/Plonky3_RangeAir /path/to/Plonky3_RangeAir
 #   2. Replace `/path/to/Plonky3_RangeAir` below with the absolute path to that clone.
 #   3. cargo build --release  -> now compiles the four crates from your local path.
 #
 # Leave this commented out unless you are actively iterating on the fork; an
 # override pointing at a non-existent path will make `cargo build` fail.
-#[patch."https://github.com/July620/Plonky3_RangeAir"]
+#[patch."https://github.com/tuzijun111/Plonky3_RangeAir"]
 #p3-recursion             = { path = "/path/to/Plonky3_RangeAir/recursion" }
 #p3-circuit               = { path = "/path/to/Plonky3_RangeAir/circuit" }
 #p3-circuit-prover        = { path = "/path/to/Plonky3_RangeAir/circuit-prover" }
@@ -41,7 +41,7 @@ git-fetch-with-cli = true
 # ---------------------------------------------------------------------------
 # Option 3 (zero-knowledge LogUp masks, until Cargo.toml pins the published
 # forks): build against local clones of the `zk-logup-mask` branches of the
-# Plonky3 core fork (based on Plonky3 56952503) and of July620/Plonky3_RangeAir
+# Plonky3 core fork (based on Plonky3 56952503) and of tuzijun111/Plonky3_RangeAir
 # (based on fbcc78f). Patch EVERY core crate in Cargo.lock: a partial core
 # patch duplicates the p3-air / p3-field types (`cargo tree -d` must list no
 # p3-* crate). Do not combine with Option 2. A build with this block rewrites
@@ -74,7 +74,7 @@ git-fetch-with-cli = true
 #p3-uni-stark        = { path = "/path/to/pl3-core-zkmask/uni-stark" }
 #p3-util             = { path = "/path/to/pl3-core-zkmask/util" }
 #
-#[patch."https://github.com/July620/Plonky3_RangeAir"]
+#[patch."https://github.com/tuzijun111/Plonky3_RangeAir"]
 #p3-recursion             = { path = "/path/to/pl3-rangeair-zkmask/recursion" }
 #p3-circuit               = { path = "/path/to/pl3-rangeair-zkmask/circuit" }
 #p3-circuit-prover        = { path = "/path/to/pl3-rangeair-zkmask/circuit-prover" }

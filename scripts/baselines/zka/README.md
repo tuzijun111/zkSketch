@@ -45,7 +45,7 @@ they sit in, so a worktree measures its own sources.
 | `kmv/run_exec.sh` | no (`PROVE=1`: yes) | `zka_kmv_exec.csv` (`PROVE=1`: `zka_kmv_prove.csv`) + `.log` | OUR KMV / bottom-k guests (†) in their architecture: per-epoch aggregation and query-time bottom-k union, plus the `kmv_query_words` sensitivity (see "Bloom filter and KMV guests") |
 | `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 | `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
-| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~8 min, `full` ~3 h plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †) at 8 x 2,048 AOL records: update proving per epoch, query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
+| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~8 min, `full` ~3-3.5 h plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †) at 8 x 2,048 AOL records: update proving per epoch, query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -878,7 +878,7 @@ says ESTIMATED. Across the 40 proofs of the measured run, this model (k = 30.06 
 padded cycles (2^20 and up: -5.0% .. +9.3%, 28 proofs; 2^19: -4.3% .. -2.3%, 7 proofs)
 and underestimated proofs of <= 2^18 cycles by 19-37% (fixed overhead; 5 proofs).
 
-What `full` runs, step by step, from the repository root (the relative paths below
+What `build` and `full` run, step by step (the first two commands are `build`), from the repository root (the relative paths below
 assume it; each script also runs on its own; defaults = this configuration; `RESULTS`
 must be the same fresh directory for all steps):
 
@@ -947,8 +947,9 @@ python3 -I scripts/baselines/zka/six/table.py /tmp/six.csv --raw scripts/baselin
   a private scratch directory whose `zka/` is a symlink to `~/ext-baselines/zka`;
   `run_zks.sh` was invoked twice (`cm`, then the other six tags). The scripts ran
   from that scratch directory with the same logic; only their path variables differ
-  from the tracked copies of that day. Absolute paths in the committed logs were
-  rewritten to `$BASELINE_DIR` and `$ZKS`.
+  from the tracked copies of that day. Absolute paths in the committed `six_*` logs
+  were rewritten to `$BASELINE_DIR` and `$ZKS` (the later `quick_*` / `zk2_*` /
+  `tiny_*` logs keep theirs).
 - Wall time: zkSketch, 7 runs, 586 s of running plus 423 s of gate waits;
   zk-Analytics, 40 proofs, 8,703 s (2 h 25 min) of running plus 4,219 s (1 h 10 min)
   of gate waits; the executor phase took about a minute.

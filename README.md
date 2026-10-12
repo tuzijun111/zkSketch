@@ -652,7 +652,9 @@ job at a time. zkSketch runs its default build, which is zero-knowledge
 (`pcs=hiding`, `logup_mask=on` in its CSV rows); RISC Zero's succinct receipts are
 zero-knowledge too.
 
-**Machine.** Linux x86_64 with glibc >= 2.34 (Ubuntu 22.04+, Debian 12+); at least
+**Machine.** Linux x86_64 with glibc >= 2.34 and the libstdc++ of GCC >= 12 (Ubuntu 22.04+,
+Debian 12+, Fedora 37+; NOT RHEL / Rocky / Alma 9 or Amazon Linux 2023, whose GCC 11
+libstdc++ cannot run RISC Zero's compiler; `check` tests this); at least
 16 GiB RAM for `quick`, and for `full` at least 96 GiB (128 GiB recommended: its
 zkSketch GK run peaks at 59 GiB; `check` accepts 15 / 90 GiB of `MemTotal`, which is
 what 16 / 96 GiB machines report); about 30 GB of free disk (zk-Analytics builds
@@ -669,7 +671,7 @@ prints the fix for anything missing):
 # 1. System packages (the only step that needs sudo; numactl is optional).
 sudo apt-get update
 sudo apt-get install -y build-essential git curl ca-certificates python3 procps util-linux numactl
-#    (dnf-based systems: sudo dnf install -y gcc gcc-c++ make git curl ca-certificates python3 procps-ng util-linux numactl)
+#    (Fedora 37+: sudo dnf install -y gcc gcc-c++ make git curl ca-certificates python3 procps-ng util-linux numactl)
 # 2. Rust via rustup (distro rustc packages are too old), pinned to the reference
 #    toolchain 1.97.1. Any stable >= 1.90 builds (1.99.0 is tested too); with rustup
 #    already installed, `rustup toolchain install 1.97.1 --profile minimal && rustup default 1.97.1`.
@@ -680,10 +682,15 @@ curl -L https://risczero.com/install | bash
 export PATH="$HOME/.risc0/bin:$PATH"
 rzup install rust 1.97.0    # guest toolchain
 rzup install r0vm 3.0.6     # prover; the drivers link risc0-zkvm 3.0.6 and accept r0vm 3.0.x only
-rzup default rust 1.97.0    # the guests build with rzup's DEFAULT rust. `install` makes what it installs the
-rzup default r0vm 3.0.6     # default, so these two are no-ops on a fresh install; they matter when 1.97.0 / 3.0.6
-                            # were already installed but another version is the default (install then refuses)
+rzup default rust 1.97.0    # the guests build with rzup's DEFAULT rust. rzup 0.5.0's `install` already makes
+rzup default r0vm 3.0.6     # the version the default (also when it was installed before); these two lines are a
+                            # safeguard for other rzup versions
 ```
+
+Tested with rzup 0.5.0 (the installer fetches the latest rzup; `check` reads its
+`settings.toml`). The machine needs outbound HTTPS to github.com, crates.io /
+static.crates.io, sh.rustup.rs / static.rust-lang.org and risczero.com. Of
+`build-essential`, only a C compiler (`cc`) is actually used.
 
 Not needed here: clang / libclang, cmake, protoc, OpenSSL headers, numpy, GNU time,
 Docker, the rzup `cpp` toolchain, the plonky2 nightly. Without sudo, steps 2 and 3
@@ -707,7 +714,15 @@ scripts/baselines/zka/six/run_all.sh full     # the paper configuration
 ```
 
 `run_all.sh assemble <results dir>` re-runs only the tables of a finished run;
-`run_all.sh` alone prints the usage.
+`run_all.sh` alone prints the usage. Build in the clone's final location: `exp_compose`
+records the repository path at compile time, so after moving or renaming the clone run
+`run_all.sh build` again.
+
+What success looks like: `check` ends with `check: ok`; `build` prints about 20 Rust
+compiler warnings for the zkSketch library, which are harmless, and ends with every
+step `ok`; `quick` exits with status 0 and its last line is `quick: OK in ...`, with
+the speedup tables just above it. With `GATE_WAIT_S=0` (the `quick` default) the
+`gate failed for <job>: ... -- running anyway` lines are expected, not errors.
 
 | step | what it does | time | peak RAM | disk |
 |---|---|---|---|---|
@@ -731,7 +746,7 @@ tables at the end.
   faster. The console summary at the end of a run shows the update-side and
   query-proving tables.
 - `six_sketch_comparison.csv`: one row per (family, system, operation);
-  `provenance` says measured, derived or ESTIMATED, and `detail` says how.
+  `provenance` says measured, sampled, derived or ESTIMATED, and `detail` says how.
 - `manifest.txt` (configuration, commits, tool versions, per-step times),
   `run_all.log` (the console), and the raw files: zkSketch
   `six_zksketch_<tag>.csv/.log` and `six_zksketch_runs.csv`; zk-Analytics
@@ -783,7 +798,8 @@ Notes:
   stops `quick` at once; in `full` the remaining zkSketch runs still execute, then
   `full` stops before the zk-Analytics side. A failed zk-Analytics proof stops
   `quick`, while `full` carries on with the other proofs, shows `-` for the failed one
-  and exits 1.
+  and exits 1. A failed zk-Analytics executor step (`run_zka.sh exec`) stops `full`
+  before any proof; fix it and start `full` again.
 - To finish a `full` run whose zk-Analytics proofs failed or were interrupted, without
   starting over: prove the jobs of its `zka_plan.txt` that have no `rc=0` line in its
   `six_zka_jobs.csv` yet (`run_zka.sh prove` takes any number of jobs and appends to
@@ -809,7 +825,8 @@ Notes:
   from the repository root: `rm -rf ~/ext-baselines/build/{cyc-t1,hll,zka-ss,zka-gk,zka-bloom,zka-kmv} target`
   (with `BASELINE_DIR` set, use that instead of `~/ext-baselines`).
 - If cargo fails to fetch the pinned Plonky3 forks (`failed to authenticate`), retry
-  with `CARGO_NET_GIT_FETCH_WITH_CLI=true` (see "Prerequisites & build").
+  with `CARGO_NET_GIT_FETCH_WITH_CLI=true scripts/baselines/zka/six/run_all.sh build`
+  (see "Prerequisites & build").
 - zkSketch's worker is pinned with `numactl --physcpubind --membind` (else `taskset`).
   In a Docker container `--membind` needs `--cap-add SYS_NICE`; inside a cpuset, CPUs
   0 .. SIX_CORES-1 must be allowed (`run_all.sh check` tests the latter).
@@ -821,13 +838,13 @@ Notes:
   batch, against 215 s, 19.4 GiB and 14.7 s per batch for the non-ZK reference run
   (`six_zksketch_r2_gk`). The other five sketches have not been run at this shape on
   the zero-knowledge build, and `full` as a whole has not been run on it yet. At 2
-  batches of 2,048 with the hiding PCS but before the LogUp masks (`zk2_zksketch_*` in
-  `scripts/baselines/zka/results`; the masks added 16-18% end to end for CM and HLL)
-  they took 30-117 s and peaked at 3.5-13.4 GiB each (Bloom the largest), far below
-  GK; the 30-40 min
-  estimate for zkSketch's 7 runs is extrapolated from those runs and GK's. To see
-  each sketch's time and memory at the full batch size on a new machine, a few
-  minutes per sketch, before starting `full`:
+  batches of 2,048 on the zero-knowledge build (2026-10-12, same machine) the 7 runs
+  took 14.7 min in all: GK 371 s and 58 GiB, Bloom 126 s and 15 GiB per run (two
+  runs), CM / HLL / SS / KMV 38-95 s and 5-8 GiB each; the 30-40 min estimate for
+  `full`'s 7 zkSketch runs is extrapolated from those runs and GK's full-shape run.
+  This probe needs as much RAM as `full` (GK peaks about the same at 2 and 8 batches).
+  To see each sketch's time and memory at the full batch size on a new machine
+  (~15 min here) before starting `full`:
   `RESULTS=$PWD/results/six/m2048t2 SIX_M=2048 SIX_T=2 GATE_WAIT_S=0 scripts/baselines/zka/six/run_zks.sh`
   (the 7 zkSketch runs at 2 batches of 2,048; `wall_s` and `desc_peak_rss_mb` in
   that directory's `six_zksketch_runs.csv`).

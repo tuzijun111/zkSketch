@@ -4,7 +4,7 @@
 #               a directory that holds git-tracked files, such as the committed reference
 #               results in scripts/baselines/zka/results (override: SIX_ALLOW_TRACKED=1).
 #   SIX_M       records per epoch / batch       (default 2048)
-#   SIX_T       epochs / batches                (default 8)
+#   SIX_T       epochs / batches                (default 8, or SIX_N / SIX_M when only SIX_N is set)
 #   SIX_N       records in all = SIX_M x SIX_T  (default 16384)
 #   SIX_QNS     query points n of the zk-Analytics side (default: powers of two <= T)
 #   SIX_GK_CAP  zkSketch GK capacity            (default 2048)
@@ -18,6 +18,11 @@ six_die() { echo "error: $*" >&2; exit 2; }
 six_is_uint() { [[ $1 =~ ^[0-9]+$ ]]; }
 
 SIX_M=${SIX_M:-2048}
+if [[ -z ${SIX_T:-} && -n ${SIX_N:-} ]]; then  # older calls set SIX_N (and SIX_M) only
+  six_is_uint "$SIX_N" && six_is_uint "$SIX_M" && (( SIX_M > 0 && SIX_N % SIX_M == 0 )) ||
+    six_die "SIX_N=$SIX_N must be a positive multiple of SIX_M=$SIX_M"
+  SIX_T=$((SIX_N / SIX_M))
+fi
 SIX_T=${SIX_T:-8}
 if ! six_is_uint "$SIX_M" || ! six_is_uint "$SIX_T" || (( SIX_M == 0 || SIX_T == 0 )); then
   six_die "SIX_M=$SIX_M / SIX_T=$SIX_T must be positive integers"

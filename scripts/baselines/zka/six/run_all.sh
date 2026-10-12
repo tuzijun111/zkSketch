@@ -72,7 +72,7 @@ check_tools() {  # what building and running need (also used by `build`)
   else miss "platform: $os $arch (RISC Zero's rzup ships Linux x86_64 toolchains; this harness reads /proc)"; fi
   g=$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+$')
   if [[ -n $g ]] && ver_ge "$g" 2.34; then ok "glibc $g (>= 2.34 for the RISC Zero guest toolchain)"
-  else miss "glibc ${g:-?}: the RISC Zero rust 1.97.0 toolchain needs glibc >= 2.34 and libstdc++ of GCC >= 12 (Ubuntu 22.04+, Debian 12+)"; fi
+  else miss "glibc ${g:-?}: the RISC Zero rust 1.97.0 toolchain needs glibc >= 2.34 and libstdc++ of GCC >= 12 (Ubuntu 22.04+, Debian 12+, Fedora 37+)"; fi
   if (( BASH_VERSINFO[0] >= 4 )); then ok "bash $BASH_VERSION"; else miss "bash >= 4 (have $BASH_VERSION)"; fi
   for t in git curl awk sed grep cut sort md5sum stat realpath nproc hostname date find mktemp; do
     command -v "$t" >/dev/null || miss "command '$t'" "$APT"
@@ -99,7 +99,7 @@ check_tools() {  # what building and running need (also used by `build`)
   if [[ -z $rzup ]]; then miss "rzup (RISC Zero toolchain manager)" "$RZUP_INSTALL"
   else ok "rzup $("$rzup" --version 2>/dev/null | awk '{print $NF}') ($rzup)"; fi
   # risc0-build compiles the guests with rzup's DEFAULT rust version (settings.toml), not
-  # merely an installed one; `rzup install` sets the default only when it installs.
+  # merely an installed one (rzup 0.5.0's `install` also sets the default; other versions may not).
   local rzdef
   rzdef=$(awk -F'"' '/^\[/{s=($0 ~ /^\[default_versions\]/)} s && /^[[:space:]]*rust[[:space:]]*=/{print $2}' "$RZ_HOME/settings.toml" 2>/dev/null)
   if ! compgen -G "$RZ_HOME/toolchains/v1.97.0-rust-*" >/dev/null; then
@@ -107,6 +107,15 @@ check_tools() {  # what building and running need (also used by `build`)
   elif [[ $rzdef == 1.97.0 ]]; then ok "RISC Zero rust toolchain 1.97.0, the rzup default (guest builds)"
   elif [[ -z $rzdef ]]; then warn "RISC Zero rust toolchain 1.97.0 installed, but no rzup default rust version in $RZ_HOME/settings.toml; fix: rzup default rust 1.97.0"
   else miss "rzup's default rust toolchain is $rzdef, not 1.97.0 (risc0-build compiles the guests with the default)" "rzup default rust 1.97.0"; fi
+  # glibc alone is not enough: the RISC Zero rustc also links libstdc++ of GCC >= 12
+  # (GLIBCXX_3.4.30) and libz.so.1, which e.g. RHEL/Rocky/Alma 9 and Amazon Linux 2023 lack.
+  # Running it is the only reliable test.
+  local rzrustc
+  rzrustc=$(compgen -G "$RZ_HOME/toolchains/v1.97.0-rust-*/bin/rustc" | head -1)
+  if [[ -n $rzrustc ]]; then
+    if "$rzrustc" --version >/dev/null 2>&1; then ok "RISC Zero rustc runs: $("$rzrustc" --version 2>/dev/null)"
+    else miss "RISC Zero rustc 1.97.0 does not run here: $("$rzrustc" --version 2>&1 | head -1) (it needs libstdc++ of GCC >= 12 (GLIBCXX_3.4.30) and libz.so.1: Ubuntu 22.04+, Debian 12+, Fedora 37+; not RHEL/Rocky/Alma 9 or Amazon Linux 2023)"; fi
+  fi
   local r0 r0v
   r0=$(command -v r0vm 2>/dev/null || true)
   [[ -n $r0 ]] || r0=$(compgen -G "$RZ_HOME/extensions/v3.0.6-cargo-risczero-*/r0vm" | head -1)
@@ -300,7 +309,7 @@ summary() {  # summary <mode> <rc>
   echo "results:  $RESULTS"
   echo "  manifest.txt                 run configuration and versions"
   echo "  six_sketch_table.md          all tables (markdown)"
-  echo "  six_sketch_comparison.csv    one row per (family, system, operation); provenance says measured / derived / ESTIMATED"
+  echo "  six_sketch_comparison.csv    one row per (family, system, operation); provenance says measured / sampled / derived / ESTIMATED"
   echo "  six_zksketch_*.csv/.log      zkSketch runs;  six_zka_*.csv/.log  zk-Analytics executor, profile and proofs"
   if (( rc == 0 )); then echo "$mode: OK in $(hms $SECONDS)"; else echo "$mode: FAILED (rc=$rc) after $(hms $SECONDS); see the logs above"; fi
 }

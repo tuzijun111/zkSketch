@@ -40,7 +40,7 @@ b_ss()    { source "$Z/spacesaving/common_ss.sh"; build_ss --bin ss; }
 b_gk()    { source "$Z/gk/common_gk.sh"; build_gk; }
 b_bloom() { source "$Z/bloom/bloom_common.sh"; build_fam; }
 b_kmv()   { source "$Z/kmv/kmv_common.sh"; build_fam; }
-b_zks()   { cd "$ZKS" && cargo build --release --locked --example exp_compose; }
+b_zks()   { cd "$ZKS" && CARGO_TARGET_DIR="$ZKS/target" cargo build --release --locked --example exp_compose; }
 
 if [[ $WHAT != zks ]]; then
   if [[ ! -d $ZKA/.git ]]; then
