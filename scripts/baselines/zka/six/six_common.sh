@@ -10,9 +10,15 @@
 #   SIX_GK_CAP  zkSketch GK capacity            (default 2048)
 #   SIX_CORES   zkSketch EXP_COMPOSE_CORES      (default: physical cores, at most 32)
 #   SIX_ZKA_ROOTS  root variants of the zk-Analytics aggregation proofs, a comma list of
-#               designed | noroot | legacy (default designed,noroot): the variants
+#               designed | noroot | legacy (default noroot, the headline): the variants
 #               `run_zka.sh exec` executes (and `jobs.py --roots` plans). ../README.md,
 #               "Root variants of the zk-Analytics aggregation proofs", says what they are.
+#   SIX_ZKA_CM_REF  1 (default) or 0. 1: their shipped CM aggregation (variant designed, their
+#               aggr_cm unchanged, incl. its per-row Merkle roots) is also run, as a REFERENCE,
+#               unless SIX_ZKA_ROOTS already has designed or legacy (both are that same guest):
+#               `run_zka.sh exec` then also executes designed, for all six families (executor
+#               only, cheap: it gives the reference's cycle counts and the root-work table), and
+#               `jobs.py --cm-ref 1` plans cm:aggr:<e>:designed at the proved epochs.
 # The defaults are the paper configuration.
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${RESULTS:=$(cd "$HERE6/../../../.." && pwd)/results/six/manual}"
@@ -40,13 +46,19 @@ if [[ -z ${SIX_QNS:-} ]]; then
 fi
 [[ $SIX_QNS =~ ^[0-9]+(,[0-9]+)*$ ]] || six_die "SIX_QNS=$SIX_QNS must be a comma list of n in 1..$SIX_T"
 for q in ${SIX_QNS//,/ }; do (( q >= 1 && q <= SIX_T )) || six_die "SIX_QNS=$SIX_QNS: n=$q outside 1..$SIX_T"; done
-SIX_ZKA_ROOTS=${SIX_ZKA_ROOTS:-designed,noroot}
+SIX_ZKA_ROOTS=${SIX_ZKA_ROOTS:-noroot}
 six_roots_ok() {  # six_roots_ok <list>: a comma list of distinct designed|noroot|legacy
   local v seen=,
   [[ $1 =~ ^(designed|noroot|legacy)(,(designed|noroot|legacy))*$ ]] || return 1
   for v in ${1//,/ }; do [[ $seen == *,$v,* ]] && return 1; seen+="$v,"; done
 }
 six_roots_ok "$SIX_ZKA_ROOTS" || six_die "SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS must be a comma list of distinct designed, noroot, legacy"
+SIX_ZKA_CM_REF=${SIX_ZKA_CM_REF:-1}
+[[ $SIX_ZKA_CM_REF == [01] ]] || six_die "SIX_ZKA_CM_REF=$SIX_ZKA_CM_REF must be 0 or 1"
+# six_cm_ref_on: their shipped CM runs as a reference next to SIX_ZKA_ROOTS (see above)
+six_cm_ref_on() { [[ $SIX_ZKA_CM_REF == 1 && ,$SIX_ZKA_ROOTS, != *,designed,* && ,$SIX_ZKA_ROOTS, != *,legacy,* ]]; }
+SIX_ZKA_EXEC_ROOTS=$SIX_ZKA_ROOTS   # the variants `run_zka.sh exec` executes
+if six_cm_ref_on; then SIX_ZKA_EXEC_ROOTS+=,designed; fi
 
 six_phys_cores() {  # distinct (socket, core) pairs
   local n

@@ -2,18 +2,22 @@
 """Plan the zk-Analytics prove jobs of the six-sketch comparison (run with python3 -I).
 
 Usage:
-  jobs.py --keys <aol.keys> --m M --t T [--aggr 0,7] [--qns 1,2,4,8] [--roots designed,noroot]
+  jobs.py --keys <aol.keys> --m M --t T [--aggr 0,7] [--qns 1,2,4,8] [--roots noroot] [--cm-ref 1]
           [--logs DIR [--prefix six_zksketch]] [--select SEL,...] [--lines]
 
 A job is `<fam>:aggr:<epoch>:<variant>` or `<fam>:query:<n>[:<arg>]` (the argument syntax
 of `run_zka.sh prove`; there an aggregation job without a variant means legacy). The plan
 lists, in this order: the aggregation jobs of every family (cm hll ss gk bloom kmv; per
 family each epoch of --aggr, per epoch each root variant of --roots), then the queries of
-cm, hll, gk, bloom (inserted key), bloom (absent key), kmv and ss at every n in --qns.
+cm, hll, gk, bloom (inserted key), bloom (absent key), kmv and ss at every n in --qns, then
+(--cm-ref 1) their shipped CM aggregation as a REFERENCE, `cm:aggr:<e>:designed` at each
+epoch of --aggr, unless --roots already has designed or legacy (both are their unchanged
+aggr_cm). The reference comes last, so a run stopped early still has the headline.
 Query proofs do not depend on the root variant (query guests read no root), so each query
-is planned once. Defaults: --aggr 0,T-1, --qns = the powers of two <= T and --roots
-designed,noroot, i.e. 2 x 6 x 2 = 24 aggregation + 28 query = 52 jobs at T = 8 (40 with
---roots legacy, the plan of the committed 2026-10-09 run).
+is planned once. Defaults: --aggr 0,T-1, --qns = the powers of two <= T, --roots noroot
+(the headline) and --cm-ref 1, i.e. 2 x 6 = 12 aggregation + 28 query + 2 CM reference = 42
+jobs at T = 8 (40 with --cm-ref 0; 52 with --roots designed,noroot, the reference then being
+the designed CM jobs; 40 with --roots legacy, the plan of the committed 2026-10-09 run).
 
 Two query arguments must equal what zkSketch probed at n, so both sides answer the
 same query:
@@ -30,9 +34,9 @@ The inserted Bloom key needs no argument: `first` is the first record of batch n
 both sides.
 
 --select keeps only the jobs equal to a selector or starting with '<selector>:', e.g.
-`cm:aggr:0:noroot,kmv:aggr:0,gk:query:1,bloom:query:1:key` (`kmv:aggr:0` selects every
-variant of that epoch); a selector that matches no job is reported on stderr, and no match
-at all is an error. Output: one line, jobs separated by spaces (--lines: one job per line).
+`cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key` (`cm:aggr:0` selects
+every planned variant of that epoch, the CM reference included); a selector that matches no
+job is reported on stderr, and no match at all is an error. Output: one line, jobs separated by spaces (--lines: one job per line).
 """
 import argparse
 import collections
@@ -103,7 +107,8 @@ def main():
     ap.add_argument('--t', type=int, default=8)
     ap.add_argument('--aggr')
     ap.add_argument('--qns')
-    ap.add_argument('--roots', default='designed,noroot')
+    ap.add_argument('--roots', default='noroot')
+    ap.add_argument('--cm-ref', choices=['0', '1'], default='1')
     ap.add_argument('--logs')
     ap.add_argument('--prefix', default='six_zksketch')
     ap.add_argument('--select', default='')
@@ -135,13 +140,16 @@ def main():
     jobs += [f'gk:query:{n}:{args[n][0]}' for n in qns]
     jobs += [f'bloom:query:{n}:first' for n in qns] + [f'bloom:query:{n}:key:{args[n][1]}' for n in qns]
     jobs += [f'kmv:query:{n}' for n in qns] + [f'ss:query:{n}' for n in qns]
+    if a.cm_ref == '1' and 'designed' not in roots and 'legacy' not in roots:
+        jobs += [f'cm:aggr:{e}:designed' for e in aggr]   # their shipped CM, the reference
     sel = [s for s in a.select.split(',') if s]
     if sel:
         def hit(j, s):
             return j == s or j.startswith(s + ':')
         for s in sel:
             if not any(hit(j, s) for j in jobs):
-                print(f'jobs.py: --select {s} matches no planned job (roots {",".join(roots)})', file=sys.stderr)
+                print(f'jobs.py: --select {s} matches no planned job (roots {",".join(roots)}, '
+                      f'cm-ref {a.cm_ref})', file=sys.stderr)
         jobs = [j for j in jobs if any(hit(j, s) for s in sel)]
         if not jobs:
             sys.exit(f'--select {a.select}: no job matches')

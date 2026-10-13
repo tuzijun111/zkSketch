@@ -4,7 +4,9 @@
 # (paper configuration, the defaults: 8 epochs x 2,048 records).
 #
 #   run_zka.sh exec             executor only: aggregation epochs 0..T-1 of every family, once per
-#                               root variant of SIX_ZKA_ROOTS (default designed,noroot)
+#                               root variant of SIX_ZKA_ROOTS (default noroot), plus designed when
+#                               their shipped CM runs as a reference (SIX_ZKA_CM_REF=1, the default;
+#                               six_common.sh): designed is then executed for all six families
 #                               (Bloom/KMV: their --mode exec pipeline per variant, incl. the query
 #                               executes at SIX_QNS; the query rows, which no root reaches, are kept
 #                               once and checked identical across the variants)
@@ -17,9 +19,9 @@
 #                               guests of the committed 2026-10-09 run, the drivers' default).
 #                               Query proofs take no variant (query guests read no root).
 #                               (gk query arg = rank value; bloom query arg = first|key:<u32>)
-#                               `jobs.py` prints the job list (52 jobs at the defaults).
+#                               `jobs.py` prints the job list (42 jobs at the defaults).
 # ProverOpts::succinct(), CPU r0vm. Every proof is wrapped by rss_tree.sh (r0vm peak RSS).
-# Env: RESULTS, SIX_M, SIX_T, SIX_QNS, SIX_ZKA_ROOTS (six_common.sh); GATE_* (gate.sh);
+# Env: RESULTS, SIX_M, SIX_T, SIX_QNS, SIX_ZKA_ROOTS, SIX_ZKA_CM_REF (six_common.sh); GATE_* (gate.sh);
 #   SIX_ZKA_PREFIX  output prefix (default six_zka): <prefix>_<fam>_{exec,qexec,prove}.csv/.log,
 #                   <prefix>_jobs.csv, <prefix>_qexec_jobs.csv. Rows of every variant share a
 #                   family's CSV; its root_variant / root_construction columns tell them apart.
@@ -205,8 +207,8 @@ PY
 
 phase_exec() {
   local log=$OUTD/${PFX}_exec.log
-  provenance "run_zka.sh exec (root variants $SIX_ZKA_ROOTS)" >> "$log"
-  local fam e v out rc first files=() roots=(${SIX_ZKA_ROOTS//,/ })
+  provenance "run_zka.sh exec (root variants $SIX_ZKA_EXEC_ROOTS)" >> "$log"
+  local fam e v out rc first files=() roots=(${SIX_ZKA_EXEC_ROOTS//,/ })
   for fam in cm hll ss gk; do
     out=$OUTD/${PFX}_${fam}_exec.csv
     csv_fresh "$out" "$fam"
@@ -243,7 +245,7 @@ phase_exec() {
       rm -f "$ROWTMP"; ROWTMP=
     done
   done
-  exec_py check "$T" "$SIX_ZKA_ROOTS" "${files[@]}" 2>&1 | tee -a "$log" >&2
+  exec_py check "$T" "$SIX_ZKA_EXEC_ROOTS" "${files[@]}" 2>&1 | tee -a "$log" >&2
   (( PIPESTATUS[0] == 0 )) || failed "exec: the root variants disagree (VARIANT CHECK FAILED lines above)"
   finish exec
 }

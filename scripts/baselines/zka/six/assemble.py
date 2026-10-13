@@ -45,7 +45,8 @@ Root variants (zk-Analytics aggregation proofs; ../README.md, "Root variants of 
 zk-Analytics aggregation proofs"): every zk-Analytics update row (update_*, accept_*) carries
 the `variant` of its aggregation guest (designed / noroot / legacy / a sensitivity variant)
 and its `root_construction`, both read from the driver rows' root_variant / root_construction
-columns. Driver rows without those columns (the committed 2026-10-09 set) are `legacy`:
+columns. A `run_all.sh` run proves noroot (the headline) and, as a reference, their shipped
+CM (variant designed); the CM designed update / accept rows say so in `note`. Driver rows without those columns (the committed 2026-10-09 set) are `legacy`:
 CM cm_rows+cm+heap (their shipped roots), SS samples64, GK pertuple, HLL / Bloom / KMV none.
 Query proofs do not depend on the variant (query guests read no root): query rows say `-`, as
 do all zkSketch rows. Checked here: an aggregation job's variant equals its proved row's; per
@@ -312,6 +313,14 @@ def attach_jobs(prefix_, kind='prove', jobs_name=None):
 
 
 ZKA_NAME = {'cm': 'zk-Analytics', **{f: 'zk-Analytics arch. (port †)' for f in FAMS if f != 'cm'}}
+# their shipped CM aggregation (variant designed = aggr_cm unchanged): reported as a reference
+CM_REF_NOTE = ('reference, not the headline: their shipped CM aggregation (aggr_cm unchanged), incl. the per-row '
+               'Merkle roots (row_roots, cm_root, heap_root) that no query guest or verifier reads')
+
+
+def ref_note(f, var):
+    return CM_REF_NOTE if (f, var) == ('cm', 'designed') else ''
+
 prove = attach_jobs(ZKA)
 for f in FAMS:
     for r in prove[f]:
@@ -348,7 +357,7 @@ if A.plan:
                 src = qex_by_job.get(job)
             if src is None:
                 sys.exit(f'--plan: no executor row for {job} (run run_zka.sh exec / qexec first; exec runs the '
-                         f'root variants of SIX_ZKA_ROOTS)')
+                         f'root variants of SIX_ZKA_ROOTS, plus designed with SIX_ZKA_CM_REF=1)')
             e = dict(src)
             e['prove_s'] = str(k * int(e['padded_cycles']) / 2 ** 20)
             e['verify_ms'] = str(mv)
@@ -435,7 +444,7 @@ for f in FAMS:
             emit(family=f, system=sysname, run='main', operation=f'update_epoch{e}', prove_s=num(r['prove_s']),
                  verify_ms=num(r['verify_ms']), proof_bytes=int(r['receipt_bytes']),
                  peak_rss_mb=num(r['_job']['r0vm_peak_rss_mb']), rss_scope='' if r['_est'] else 'r0vm process of this proof',
-                 answer='-', exact='-', provenance=prov(r),
+                 answer='-', exact='-', provenance=prov(r), note=ref_note(f, var),
                  detail=f"aggregation guest on epoch {e} ({M} records); {r['segments']} segments; {r['user_cycles']} "
                         f"user cycles; {gate_of(r)}", **vk)
         anyest = any(r['_est'] for r in aggr)
@@ -452,14 +461,15 @@ for f in FAMS:
         emit(family=f, system=sysname, run='main', operation='update_per_epoch', prove_s=mp, verify_ms=mv,
              proof_bytes=round(mb), peak_rss_mb=rss, rss_scope=rscope,
              answer='-', exact='-', provenance='sampled (incl. ESTIMATED epochs)' if anyest else 'sampled',
+             note=ref_note(f, var),
              detail=f"mean of {'proved/ESTIMATED' if anyest else 'proved'} epochs "
                     f"{and_join(r['epoch_index'] for r in aggr)}; {exd}", **vk)
         emit(family=f, system=sysname, run='main', operation='update_per_epoch_amortized', prove_s=mp,
              answer='-', exact='-', provenance='sampled (incl. ESTIMATED epochs)' if anyest else 'sampled',
-             detail='no composition on this side: equals update_per_epoch', **vk)
+             note=ref_note(f, var), detail='no composition on this side: equals update_per_epoch', **vk)
         emit(family=f, system=sysname, run='main', operation=f'update_stream_{T}_epochs', prove_s=T * mp,
              peak_rss_mb=rss, rss_scope=rscope, answer='-', exact='-',
-             provenance='derived (incl. ESTIMATED epochs)' if anyest else 'derived',
+             provenance='derived (incl. ESTIMATED epochs)' if anyest else 'derived', note=ref_note(f, var),
              detail=f'{T} x sampled per-epoch prove time; {T} receipts are kept (no composition)', **vk)
     qrows = {}
     for r in [r for r in prove[f] if r['_job']['op'] == 'query']:
@@ -494,7 +504,7 @@ for f in FAMS:
                 est = aest or (r is not None and r['_est'])
                 emit(family=f, system=sysname, run='main', operation=f'accept_n{n}{suf}', n=n,
                      verify_ms=n * mv + v, proof_bytes=round(n * mb + b), answer='', exact='',
-                     provenance='derived (incl. ESTIMATED receipts)' if est else 'derived',
+                     provenance='derived (incl. ESTIMATED receipts)' if est else 'derived', note=ref_note(f, var),
                      detail=f'verifier work to accept the answer, best-of-5 per receipt: {n} aggregation receipts '
                             f'(sampled mean {mv:.3f} ms, {mb:.0f} B each) + 1 query receipt ({how})',
                      variant=var, root_construction=con)

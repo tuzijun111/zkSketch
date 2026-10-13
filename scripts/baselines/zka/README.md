@@ -45,7 +45,7 @@ they sit in, so a worktree measures its own sources.
 | `kmv/run_exec.sh` | no (`PROVE=1`: yes) | `zka_kmv_exec.csv` (`PROVE=1`: `zka_kmv_prove.csv`) + `.log` | OUR KMV / bottom-k guests (†) in their architecture: per-epoch aggregation and query-time bottom-k union, plus the `kmv_query_words` sensitivity (see "Bloom filter and KMV guests") |
 | `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 | `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
-| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~10-11 min, `full` ~4.5 h (estimate) plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †) at 8 x 2,048 AOL records: update proving per epoch (zk-Analytics `designed` and `noroot` side by side), query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
+| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~9-11 min, `full` ~3 h 15 min (estimate) plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †) at 8 x 2,048 AOL records: update proving per epoch (zk-Analytics `noroot`, the headline; their shipped CM as a reference), query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -839,9 +839,9 @@ plain textbook per-record code in their per-epoch pipeline with query-time merge
   segments). **Proved: aggregation epochs 0 and 7 only (2 samples per family;
   "sampled" below = their mean)**, and the query guest at n = 1, 2, 4, 8.
   Every proved journal is asserted equal to the native output. A `six/run_all.sh`
-  run executes and proves the aggregation epochs once per root variant, `designed`
-  and `noroot` (next subsection); the committed 2026-10-09 run is the `legacy`
-  variant.
+  run proves the aggregation epochs as `noroot` (the headline) and their shipped CM
+  (`designed`) as a reference (next subsection); the committed 2026-10-09 run is the
+  `legacy` variant.
 - **zkSketch side.** `examples/exp_compose`, release build of this commit,
   `EXP_COMPOSE_MODE=forest EXP_COMPOSE_EXEC=procs EXP_COMPOSE_MACHINES=1
   EXP_COMPOSE_CORES=32 EXP_COMPOSE_N=16384 EXP_COMPOSE_BATCHES=2048
@@ -862,26 +862,44 @@ plain textbook per-record code in their per-epoch pipeline with query-time merge
 
 ### Root variants of the zk-Analytics aggregation proofs (designed / noroot / legacy)
 
-**In plain words.** Besides updating the sketch, every zk-Analytics aggregation proof
-also builds a Merkle tree over the sketch's buckets and outputs its root: a short hash
-that would let someone check one bucket without the whole state. zk-Analytics does this
-in every summary type it ships (samples, histogram, Count-Min), but nothing uses it: the
-next epoch and every query guest read the flat SHA-256 commitment of the state, and no
-verifier reads the root. zkSketch commits to its state too, but publishes no such
-per-bucket root. The root is not free: for Count-Min it is about half of every
-aggregation proof at 2,048 records per epoch (11.2M of 22.5M cycles, 24 segments vs 12).
-So the comparison reports zk-Analytics twice, side by side:
+**In plain words.** Besides updating the sketch, every zk-Analytics aggregation proof,
+as their code ships, also builds a Merkle tree over the sketch's buckets and outputs its
+root: a short hash that would let someone check one bucket without the whole state.
+zk-Analytics' code does this in every summary type it ships (samples, histogram,
+Count-Min), but that root is not part of their protocol, and nothing uses it:
 
-- **`designed`** = zk-Analytics as designed, root included (their CM guest unchanged;
-  the † ports build their samples-pattern root with 64 buckets);
-- **`noroot`** = the same guests with only the root work removed: the apples-to-apples
-  comparison with zkSketch, **the headline**.
+- **The paper.** In Section 5.2 (Algorithm 2) an epoch publishes the per-source
+  hash-chain boundaries, the epoch hash-chain values and one commitment to the whole
+  epoch state; in Section 5.3 (Algorithm 3) the query proof opens that one commitment
+  for each epoch it reads. Per-bucket roots appear nowhere; the paper's only Merkle
+  mention (Section 4) says hash chains are used instead of Merkle trees because
+  membership proofs are not needed.
+- **The code.** The roots go into the aggregation journal and into the `out_commit`
+  the host stores in its database; no query guest, verifier or other code reads them,
+  and their per-bucket inclusion-proof helpers (`samples_merkle_proof_for_bucket`,
+  `samples_merkle_root_from_leaf_and_siblings`) are never called. The next epoch and
+  every query guest read the flat SHA-256 commitment of the state.
+
+zkSketch commits to its state too, but publishes no such per-bucket root. The root is
+not free: for Count-Min it is about half of every aggregation proof at 2,048 records per
+epoch (11.2M of 22.5M cycles, 24 segments vs 12). So:
+
+- **`noroot`** = their guests with only the root work removed (for CM, their own code
+  minus only the Merkle lines): **the default and the headline**, for all six sketches;
+- **`designed`** = the guests with the root: for CM their shipped guest unchanged, which
+  is proved as a **reference** only (`zkA shipped CM`, its own table), so the numbers can
+  be related to zk-Analytics' published ones, which include that cost; for the † ports
+  their samples-pattern root with 64 buckets, an option (`SIX_ZKA_ROOTS=designed,noroot`)
+  that is not in the default plan or headline tables.
 
 Both variants hold the same state, produce the same `state_commit` and epoch link, and
 give the same query answers (checked on every run); query proofs read no root, so they
-are proved once and hold for both. The committed 2026-10-09 results in this directory
-are the `legacy` variant (CM their shipped roots, SS samples pattern with 64 buckets, GK
-a per-tuple root, HLL / Bloom / KMV none) and are labelled so wherever they are read.
+are proved once and hold for both. One more paper-vs-code difference, which favours
+zk-Analytics slightly and which we keep: the paper's state commitment is hiding (fresh
+randomness r_t per epoch), but their code commits with unsalted SHA-256. The committed
+2026-10-09 results in this directory are the `legacy` variant (CM their shipped roots,
+SS samples pattern with 64 buckets, GK a per-tuple root, HLL / Bloom / KMV none) and are
+labelled so wherever they are read.
 
 **In detail.** Each of zk-Analytics' summary types builds, inside every epoch's
 aggregation proof, a per-type Merkle root over its state IN ADDITION to the flat SHA-256
@@ -894,13 +912,14 @@ database; no query guest or verifier reads them. For CM the root work is about 1
 cycles per epoch whatever the number of records (below). The committed 2026-10-09 ports
 were inconsistent about it (SpaceSaving: samples pattern, 64 buckets; GK: per-tuple root;
 HLL / Bloom / KMV: none). Every aggregation driver now takes `--root`, and the comparison
-reports two consistent variants:
+uses two consistent variants (`noroot` the default and headline; `designed` for the CM
+reference and as an option):
 
 | `--root` | meaning | CM | HLL, SS, GK, Bloom, KMV (†) |
 |---|---|---|---|
-| `designed` | zk-Analytics as designed | their `aggr_cm`, unchanged (same ELF) | the cheapest of their root constructions applied uniformly: their samples pattern with 64 buckets (cells -> 64 buckets, leaf = SHA-256(tag \|\| the bucket's cells in canonical order), folded by their pub `samples_buckets_root_from_leaves`; the number of leaves is `next_pow2_ge(max bucket + 1)`, 64 in every run here) |
-| `noroot` | apples-to-apples with zkSketch, which commits its state but publishes no per-bucket root | `aggr_cm_noroot` (`cm_noroot/`): their `process_cm_aggr_with_state` cut byte for byte from the clone by `cm_noroot/gen_upstream.sh` (which `six/build.sh` runs with `--check`), with only lines 1262-1274 (row_roots, cm_root, heap_root) replaced by zeros; chain verification, flattening, table and heap update, `state_commit`, epoch link and journal type unchanged | the same guest as `designed`, root field zero |
-| `legacy` (default) | the guests of the committed 2026-10-09 reference rows | `aggr_cm` | `hll_aggr`, `aggr_ss`, `aggr_gk`, `bloom_aggr`, `kmv_aggr`: SS samples-pattern 64 buckets, GK per-tuple root, HLL / Bloom / KMV none |
+| `designed` | zk-Analytics as their code ships it, root included (CM: the reference; ports: an option) | their `aggr_cm`, unchanged (same ELF) | the cheapest of their root constructions applied uniformly: their samples pattern with 64 buckets (cells -> 64 buckets, leaf = SHA-256(tag \|\| the bucket's cells in canonical order), folded by their pub `samples_buckets_root_from_leaves`; the number of leaves is `next_pow2_ge(max bucket + 1)`, 64 in every run here) |
+| `noroot` | the default and the headline: zk-Analytics' protocol without the root its code adds (zkSketch commits its state but publishes no per-bucket root either) | `aggr_cm_noroot` (`cm_noroot/`): their `process_cm_aggr_with_state` cut byte for byte from the clone by `cm_noroot/gen_upstream.sh` (which `six/build.sh` runs with `--check`), with only lines 1262-1274 (row_roots, cm_root, heap_root) replaced by zeros; chain verification, flattening, table and heap update, `state_commit`, epoch link and journal type unchanged | the same guest as `designed`, root field zero |
+| `legacy` (the drivers' default `--root`) | the guests of the committed 2026-10-09 reference rows | `aggr_cm` | `hll_aggr`, `aggr_ss`, `aggr_gk`, `bloom_aggr`, `kmv_aggr`: SS samples-pattern 64 buckets, GK per-tuple root, HLL / Bloom / KMV none |
 | sensitivity | | `twin` (validation only, below) | SS `buckets1024`, `perkey`; GK `pertuple` |
 
 The designed / noroot guests of the ports read the variant before their input and commit
@@ -985,32 +1004,57 @@ not proved at toy size; at 30.1-33.7 s per 2^20-cycle segment it would take abou
 minutes. Succinct receipts are the same size whatever the variant (the journal differs by
 the root field); peak RSS follows the largest segment (2^20: ~9.35 GB, 2^19: ~4.7 GB).
 
-**How the comparison runs them.** `SIX_ZKA_ROOTS` (default `designed,noroot`; any comma
-list of `designed`, `noroot`, `legacy`) selects the variants:
+**How the comparison runs them.** Two knobs (environment; `run_all.sh`, `run_zka.sh` and
+`six_common.sh` read them, `jobs.py` takes them as `--roots` / `--cm-ref`):
 
-- `six/run_zka.sh exec` executes every aggregation epoch once per variant. Bloom and KMV
-  run their `--mode exec` pipeline once per variant; the query rows are kept once, after a
-  check that they are identical under every variant (all columns but `exec_s`). Then, per
-  family and epoch, it checks that all variants give one `state_commit`, with
-  `journal_eq_native` and `variants_agree` true; otherwise it exits 1.
-- `jobs.py --roots` plans every proved aggregation epoch once per variant, as
-  `<fam>:aggr:<epoch>:<variant>`. A job without the suffix means `legacy`, the drivers'
-  default and the form of the committed run's jobs. Queries are planned once, so `full`
-  proves 2 epochs x 6 families x 2 variants = 24 aggregation jobs + 28 query jobs = 52
-  (40 with `SIX_ZKA_ROOTS=legacy`). `run_zka.sh prove` passes the variant to the driver as
-  `--root`, and it also accepts the sensitivity variants (`ss:aggr:<e>:buckets1024`,
-  `ss:aggr:<e>:perkey`, `gk:aggr:<e>:pertuple`) by hand. `six_zka_jobs.csv` stores an
-  aggregation job's variant in its `arg` column (`-` = legacy).
+- `SIX_ZKA_ROOTS` (default `noroot`; any comma list of `designed`, `noroot`, `legacy`):
+  the variants executed and proved for all six families.
+- `SIX_ZKA_CM_REF` (default `1`): also prove their shipped CM aggregation
+  (`cm:aggr:<e>:designed`) at the proved epochs, as the reference. It is skipped when
+  `SIX_ZKA_ROOTS` already has `designed` or `legacy` (both are their unchanged `aggr_cm`).
+  `0` turns it off.
+
+What the scripts do with them:
+
+- `six/run_zka.sh exec` executes every aggregation epoch once per variant of
+  `SIX_ZKA_ROOTS`, plus `designed` for all six families when the CM reference is on
+  (executor only, about a minute at this configuration: it gives the reference's cycle
+  counts, `quick`'s estimate of it, and the root-work table). Bloom and KMV run their
+  `--mode exec` pipeline once per variant; the query rows are kept once, after a check
+  that they are identical under every variant (all columns but `exec_s`). Then, per family
+  and epoch, it checks that all variants give one `state_commit`, with `journal_eq_native`
+  and `variants_agree` true; otherwise it exits 1.
+- `jobs.py --roots R --cm-ref C` plans every proved aggregation epoch once per variant of
+  R, as `<fam>:aggr:<epoch>:<variant>`, then the 28 queries (planned once), then, with
+  C = 1, the CM reference `cm:aggr:<e>:designed` (last, so a run stopped early still has
+  the headline). A job without the suffix means `legacy`, the drivers' default and the
+  form of the committed run's jobs. `full` thus proves 2 epochs x 6 families = 12
+  `noroot` aggregation jobs + 28 query jobs + 2 reference jobs = **42** at the defaults;
+  40 with `SIX_ZKA_CM_REF=0`; 52 with `SIX_ZKA_ROOTS=designed,noroot` (the earlier default:
+  24 aggregation jobs, the CM `designed` ones being the reference); 40 with
+  `SIX_ZKA_ROOTS=legacy` (the committed run's plan). `run_zka.sh prove` passes the variant
+  to the driver as `--root`, and it also accepts the sensitivity variants
+  (`ss:aggr:<e>:buckets1024`, `ss:aggr:<e>:perkey`, `gk:aggr:<e>:pertuple`) by hand.
+  `six_zka_jobs.csv` stores an aggregation job's variant in its `arg` column (`-` =
+  legacy).
 - `assemble.py` writes one zk-Analytics update row per family x variant x operation. Two
   columns are appended, `variant` and `root_construction`; query rows and zkSketch rows say
-  `-`. It also checks that each proved row is the variant its job asked for, and that every
-  executor and proved row of an epoch has the same `state_commit`.
-- `table.py` puts `zkA designed`, `zkA noroot` and zkSketch side by side, with a ratio
-  against each variant. The first table, "Update proofs side by side", has for each sketch
+  `-`; the CM `designed` rows say in `note` that they are the reference. It also checks that
+  each proved row is the variant its job asked for, and that every executor and proved row
+  of an epoch has the same `state_commit`.
+- `table.py` puts `zkA` (= `noroot`, the headline) and zkSketch side by side, with the
+  ratio zkA / zkS. The first table, "Update proofs side by side", has for each sketch
   proving time (one epoch and the whole stream), verification time, proof size and peak
-  memory. The last table lists each variant's root construction, its executor cycles at
-  epoch 0, and the root work (designed - noroot). Query tables have one zkA column and say
-  that it holds for every variant.
+  memory. Right after it, a separate table "Reference, not the headline: zk-Analytics'
+  shipped Count-Min aggregation" gives the same metrics for their shipped CM (`zkA
+  shipped CM (reference)`), next to the headline and zkSketch, with its ratio to zkS and
+  the root work it carries (designed - noroot user cycles at epoch 0). With several
+  variants in the run (e.g. `SIX_ZKA_ROOTS=designed,noroot`) every update-side and accept
+  table shows one zkA column per variant (`zkA designed`, `zkA noroot`), with a ratio
+  against each, and the reference table is printed as well. The last table lists each
+  executed variant's root construction, its executor cycles at epoch 0, and the root work
+  (designed - noroot). Query tables have one zkA column and say that it holds for every
+  variant.
 
 ### Running
 
@@ -1020,24 +1064,27 @@ top-level README, "Reproducing the zkSketch vs zk-Analytics comparison"):
 ```bash
 scripts/baselines/zka/six/run_all.sh check   # prerequisites; exit 1 + the fix if anything blocking is missing
 scripts/baselines/zka/six/run_all.sh build   # fetch zk-Analytics @ d4a5a9a into $BASELINE_DIR; build both sides
-scripts/baselines/zka/six/run_all.sh quick   # smoke test of the whole pipeline (N = 512 = 2 x 256), ~10-11 min
-scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~4.5 h (estimate) + gate waits
-scripts/baselines/zka/six/run_all.sh full --dry-run   # the plan and the 52 jobs, nothing run
+scripts/baselines/zka/six/run_all.sh quick   # smoke test of the whole pipeline (N = 512 = 2 x 256), ~9-11 min
+scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~3 h 15 min (estimate) + gate waits
+scripts/baselines/zka/six/run_all.sh full --dry-run   # the plan and the 42 jobs, nothing run
+SIX_ZKA_ROOTS=designed,noroot scripts/baselines/zka/six/run_all.sh full   # the earlier two-variant plan, 52 jobs
 ```
 
 Every `quick` / `full` writes a fresh `results/six/<mode>-<YYYYmmdd-HHMMSS>/` at the
 repository root (git-ignored; `RESULTS=...` to choose; never this directory):
 `manifest.txt` (configuration, versions), `run_all.log`, `six_sketch_table.md` (the
-tables of Results below and more, in a newer layout: zkA designed / zkA noroot / zkS
-side by side, zkA / zkS in one cell for queries, `est` marks), `six_sketch_comparison.csv`,
-and the raw files of the table below. `quick` executes both root variants and proves five
-zk-Analytics jobs for real (`cm:aggr:0:noroot`, `kmv:aggr:0:designed`,
-`kmv:aggr:0:noroot`, `gk:query:1:<v>`, `bloom:query:1:key:<k>`; `SIX_QUICK_PROVE` to
-change, as `jobs.py --select` selectors, default
-`cm:aggr:0:noroot,kmv:aggr:0,gk:query:1,bloom:query:1:key`). It ESTIMATES the other 33 of
-its 38 planned jobs, each variant from its own executor cycle counts: padded cycles x the
-seconds per 2^20 padded cycles measured over this run's proofs (CM `designed` at 256 records
-is 14 segments, about 7 min if proved; it is estimated). Those cells say `est`;
+tables of Results below and more, in a newer layout: zkA (noroot) / zkS side by side, a
+separate reference table for their shipped CM, zkA / zkS in one cell for queries, `est`
+marks), `six_sketch_comparison.csv`, and the raw files of the table below. `quick`
+executes `noroot` and `designed` (the latter for the CM reference and the root-work
+table) and proves four zk-Analytics jobs for real, all `noroot` or queries
+(`cm:aggr:0:noroot`, `kmv:aggr:0:noroot`, `gk:query:1:<v>`, `bloom:query:1:key:<k>`;
+`SIX_QUICK_PROVE` to change, as `jobs.py --select` selectors, default
+`cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key`). Of its 28 planned
+jobs (12 `noroot` aggregation, 14 queries, 2 CM reference) it ESTIMATES the 24 it does not
+prove, each variant from its own executor cycle counts: padded cycles x the seconds per 2^20 padded
+cycles measured over this run's proofs (the CM reference at 256 records is 14 segments,
+about 7 min if proved; it is estimated). Those cells say `est`;
 `provenance` says ESTIMATED. Across the 40 proofs of the measured run, this model
 (k = 30.06 s per 2^20) gave between 5% below and 9% above the measured time for proofs
 of >= 2^19 padded cycles (2^20 and up: -5.0% .. +9.3%, 28 proofs; 2^19: -4.3% .. -2.3%, 7 proofs)
@@ -1053,46 +1100,60 @@ scripts/baselines/fetch_baselines.sh zka    # zk-Analytics only (no argument: al
 scripts/baselines/zka/six/build.sh          # both sides, not timed; exits 1 if any build fails
 scripts/baselines/zka/six/run_zks.sh        # zkSketch, 7 timed runs: cm hll ss gk bloom bloom_absent kmv
 scripts/baselines/zka/six/run_zka.sh exec   # zk-Analytics executor: all 8 aggregation epochs of every family,
-                                            # once per root variant (SIX_ZKA_ROOTS, default designed,noroot)
+                                            # noroot (SIX_ZKA_ROOTS, default noroot) + designed (SIX_ZKA_CM_REF=1)
 scripts/baselines/zka/six/prof_exec.sh      # executor only: SS / GK guest phase profile (legacy profiling twins)
-# the 52 zk-Analytics jobs (--roots designed,noroot is the default); the GK rank values and Bloom
+# the 42 zk-Analytics jobs (--roots noroot --cm-ref 1 are the defaults); the GK rank values and Bloom
 # absent keys are read from this run's zkSketch logs (QLOG_KEY lines) and cross-checked
 # against a native re-derivation:
-JOBS=$(python3 -I scripts/baselines/zka/six/jobs.py --keys data/aol.keys --logs "$RESULTS" --roots designed,noroot)
+JOBS=$(python3 -I scripts/baselines/zka/six/jobs.py --keys data/aol.keys --logs "$RESULTS" --roots noroot --cm-ref 1)
 scripts/baselines/zka/six/run_zka.sh prove $JOBS   # timed, one at a time
 python3 -I scripts/baselines/zka/six/assemble.py "$RESULTS" data/aol.keys --zka six_zka --zks six_zksketch \
   --out "$RESULTS/six_sketch_comparison.csv"
 python3 -I scripts/baselines/zka/six/table.py "$RESULTS/six_sketch_comparison.csv" > "$RESULTS/six_sketch_table.md"
 ```
 
-For this configuration `jobs.py` prints these 52 jobs:
+For this configuration `jobs.py` prints these 42 jobs:
 
 ```
-cm:aggr:0:designed cm:aggr:0:noroot cm:aggr:7:designed cm:aggr:7:noroot
-hll:aggr:0:designed hll:aggr:0:noroot hll:aggr:7:designed hll:aggr:7:noroot
-ss:aggr:0:designed ss:aggr:0:noroot ss:aggr:7:designed ss:aggr:7:noroot
-gk:aggr:0:designed gk:aggr:0:noroot gk:aggr:7:designed gk:aggr:7:noroot
-bloom:aggr:0:designed bloom:aggr:0:noroot bloom:aggr:7:designed bloom:aggr:7:noroot
-kmv:aggr:0:designed kmv:aggr:0:noroot kmv:aggr:7:designed kmv:aggr:7:noroot
+cm:aggr:0:noroot cm:aggr:7:noroot hll:aggr:0:noroot hll:aggr:7:noroot
+ss:aggr:0:noroot ss:aggr:7:noroot gk:aggr:0:noroot gk:aggr:7:noroot
+bloom:aggr:0:noroot bloom:aggr:7:noroot kmv:aggr:0:noroot kmv:aggr:7:noroot
 cm:query:1 cm:query:2 cm:query:4 cm:query:8 hll:query:1 hll:query:2 hll:query:4 hll:query:8
 gk:query:1:1810625 gk:query:2:1810625 gk:query:4:1810625 gk:query:8:985491
 bloom:query:1:first bloom:query:2:first bloom:query:4:first bloom:query:8:first
 bloom:query:1:key:4010659695 bloom:query:2:key:3455829011 bloom:query:4:key:2391383811 bloom:query:8:key:1608305708
 kmv:query:1 kmv:query:2 kmv:query:4 kmv:query:8 ss:query:1 ss:query:2 ss:query:4 ss:query:8
+cm:aggr:0:designed cm:aggr:7:designed
 ```
 
-With `--roots legacy` it prints the 40 jobs of the measured run (12 aggregation jobs
+The last two are the CM reference (their shipped `aggr_cm`). With `--cm-ref 0` it prints
+the first 40. With `--roots designed,noroot` it prints the 52 jobs of the earlier default:
+each aggregation epoch once `designed` and once `noroot` (`cm:aggr:0:designed
+cm:aggr:0:noroot cm:aggr:7:designed cm:aggr:7:noroot hll:aggr:0:designed ...`), then the
+same 28 queries, and no separate reference (the CM `designed` jobs are it). With `--roots
+legacy` it prints the 40 jobs of the measured run (12 aggregation jobs
 `<fam>:aggr:<0|7>:legacy`, the run wrote them without the suffix, which means the same, and
-the same 28 queries). Proving time of the 52 jobs, estimated from the executor's padded
-cycles at ~30 s per 2^20 (not measured): the 12 `designed` aggregation proofs cost what the
-12 legacy ones of the measured run cost, within 2 segments in all (176 vs 174 segments of
-2^20; CM is the same ELF); the 12 `noroot` ones add 147 segments, about 75 min; so the 52
-proofs take about 3 h 40 min against the measured 2 h 25 min for 40.
+the same 28 queries).
+
+Proving time, ESTIMATED from the executor's segment counts at ~30 s per segment of 2^20
+cycles (30.07 s per 2^20 padded cycles over the 12 aggregation proofs of the measured run),
+not measured: the 12 `noroot` aggregation proofs are 150 segments (147 x 2^20 padded
+cycles), about 74 min; the 2 CM reference proofs are 48 segments, about 24 min (the same
+ELF took 712 and 713 s in the measured run); the 28 queries took 58 min in the measured
+run. So the default 42 proofs take about 2 h 35 min, 40 with `SIX_ZKA_CM_REF=0` about
+2 h 10 min, and the 52 of `SIX_ZKA_ROOTS=designed,noroot` about 3 h 40 min (its 12
+`designed` aggregation proofs are 176 segments, ~88 min, within 2 segments of the 12
+legacy ones of the measured run, 174; CM is the same ELF), against the measured 2 h 25 min
+for the 40 legacy proofs. With zkSketch's 7 runs (~30-40 min on the zero-knowledge build)
+and the executor, `full` runs about 3 h 15 min at the defaults (2 h 50 min without the
+reference, 4 h 15 min with `designed,noroot`), plus the gate waits.
 
 Knobs (environment): `BASELINE_DIR`, `RESULTS`, `SIX_CORES` (zkSketch cores;
 default: physical cores, at most 32); `SIX_ZKA_ROOTS` (zk-Analytics aggregation variants
-executed and proved, default `designed,noroot`; `run_all.sh` and `run_zka.sh exec` read it,
-`jobs.py` takes `--roots`); `GATE_WAIT_S` (default 1800; `quick` 0),
+executed and proved, default `noroot`; `run_all.sh` and `run_zka.sh exec` read it,
+`jobs.py` takes `--roots`); `SIX_ZKA_CM_REF` (default `1`: their shipped CM proved as the
+reference and `designed` executed for all six; `0` off; `jobs.py` takes `--cm-ref`);
+`SIX_QUICK_PROVE` (the jobs `quick` proves, above); `GATE_WAIT_S` (default 1800; `quick` 0),
 `GATE_MAX_LOAD` (default CPUs / 8; 2 below 16 CPUs), `GATE_MAX_BUSY` (default 4);
 `EXP_VERIFY_REPEATS` (default 5). The run shape `SIX_M`, `SIX_T` (records per epoch,
 epochs; `N = M x T`), `SIX_GK_CAP` and `SIX_QNS` (query points) applies only to the
@@ -1175,7 +1236,7 @@ instead of 14.59 s).
 CM with their shipped per-counter Merkle roots, SS with the samples-pattern root (64
 buckets), GK with a per-tuple root, HLL / Bloom / KMV with no root. They are neither
 `designed` (every family with a root) nor `noroot` (no family with a root, the
-apples-to-apples headline), which a `six/run_all.sh` run reports instead. The largest
+headline of a `six/run_all.sh` run, which shows their shipped CM as a reference). The largest
 difference is CM: its `noroot` aggregation guest needs 12 segments per epoch instead of
 24 (executor), so roughly half the per-epoch prove time below; for the five ports the
 root costs 0-1 segment of 11-15.

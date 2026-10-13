@@ -19,12 +19,15 @@ are ESTIMATED zk-Analytics prove times (not proved in that run; see the CSV's pr
 KB / MB = 10^3 / 10^6 bytes; GB (memory) = 2^30 bytes.
 
 Root variants of the zk-Analytics aggregation proofs (the CSV's `variant` column; a CSV
-without it is the legacy variant): with one variant the tables show `zkA`; with several (a
-new run: designed and noroot) every update-side and accept table shows one zkA column per
-variant (`zkA designed`, `zkA noroot`) next to zkSketch, with a ratio against each. Query
-proofs do not depend on the variant. The first table, "Update proofs side by side", puts
-proving time, verification time, proof size and peak memory of the update proofs together;
-the last one lists each variant's root construction and executor cycles.
+without it is the legacy variant): with one variant the tables show `zkA`; with several
+(e.g. SIX_ZKA_ROOTS=designed,noroot) every update-side and accept table shows one zkA column
+per variant (`zkA designed`, `zkA noroot`) next to zkSketch, with a ratio against each. A
+default `run_all.sh` run has one column variant, noroot (the headline), plus their shipped
+CM (variant designed, CM only) as a REFERENCE: it gets its own table right after the first
+one and is not a column anywhere else. Query proofs do not depend on the variant. The first
+table, "Update proofs side by side", puts proving time, verification time, proof size and
+peak memory of the update proofs together; the last one lists each executed variant's root
+construction and executor cycles.
 The committed 2026-10-09 set is the `legacy` variant (CM their shipped roots, SS samples
 pattern with 64 buckets, GK per-tuple root, HLL / Bloom / KMV none). For it the tables of
 the previous version are printed unchanged; added are the variant note at the top, the
@@ -65,8 +68,13 @@ VORDER = {v: i for i, v in enumerate(['designed', 'noroot', 'legacy', 'buckets10
 # root construction of the legacy guests (a CSV without the variant columns)
 LEGACY_ROOT = {'cm': 'cm_rows+cm+heap', 'hll': 'none', 'ss': 'samples64', 'gk': 'pertuple', 'bloom': 'none',
                'kmv': 'none'}
-VNOTE = {'designed': 'with the per-bucket Merkle root zk-Analytics builds in every aggregation proof',
-         'noroot': 'the same guests without that root, apples-to-apples with zkSketch (the headline)',
+VNOTE = {'designed': ('their aggregation guests with a per-bucket Merkle root in every proof (CM: their guest '
+                      'unchanged; the ports: their samples pattern, 64 buckets), which no query guest or verifier '
+                      'reads'),
+         'noroot': ("their aggregation guests without the per-bucket Merkle root, the headline: that root is not "
+                    "part of zk-Analytics' protocol (paper sections 5.2 and 5.3: an epoch publishes its hash-chain "
+                    "values and one commitment to the whole state, which the query proof opens) and nothing in "
+                    "their code reads it; zkSketch publishes none either"),
          'legacy': 'the guests of the committed 2026-10-09 run'}
 
 
@@ -83,9 +91,18 @@ def vsort(vs):
     return sorted(vs, key=lambda x: (VORDER.get(x, 99), x))
 
 
-ZV = vsort({var_of(r) for r in rows if zka_row(r) and r['operation'] == 'update_per_epoch'}) \
+# zk-Analytics variants with update rows, per family
+VF = {fam: {var_of(r) for r in rows if zka_row(r) and r['family'] == fam and r['operation'] == 'update_per_epoch'}
+      for fam in FAMS}
+# their shipped CM proved as a reference only (designed for CM alone, next to another variant):
+# its own table, not a column
+CMREF_ONLY = 'designed' in VF['cm'] and not any('designed' in VF[x] for x in FAMS if x != 'cm') \
+    and bool(set().union(*VF.values()) - {'designed'})
+ZV = vsort(set().union(*VF.values()) - ({'designed'} if CMREF_ONLY else set())) \
     or vsort({var_of(r) for r in rows if zka_row(r) and var_of(r) != '-'}) or ['legacy']
 MULTI = len(ZV) > 1
+# the reference table: their shipped CM next to the noroot headline
+REF_SHOW = 'designed' in VF['cm'] and 'noroot' in ZV
 
 
 def zl(var):  # column label of a zk-Analytics variant
@@ -203,6 +220,64 @@ if not LEGACY:
               f'of an estimated receipt are the mean of the measured ones; ratios built on an estimate are marked '
               f'too._\n')
 
+# ------------------------------------------------------------------ raw executor / profile CSVs (zk-Analytics side)
+RD = A.raw or os.path.dirname(os.path.abspath(A.csv))
+ZP = A.zka
+
+
+def rd(name):
+    p = os.path.join(RD, name)
+    return list(csv.DictReader(open(p))) if os.path.exists(p) else []
+
+
+def raw_var(r):
+    """The root variant of a driver CSV row (no root_variant column: the legacy guests)."""
+    x = r.get('root_variant')
+    return 'legacy' if x in (None, '', '-') else x
+
+
+def exec_e0(fam, var):
+    """The executor row of aggregation epoch 0 under root variant var, or None."""
+    for r in rd(f'{ZP}_{fam}_exec.csv'):
+        if (r.get('step') or r.get('mode')) == 'aggr' and r['epoch_index'] == '0' and raw_var(r) == var:
+            return r
+    return None
+
+
+def phase_split(fam, var):
+    """(user cycles, read, chain, source) of aggregation epoch 0 under root variant var, or None.
+    HLL / Bloom / KMV: the profiling marks of that variant's guest. SS / GK: the legacy profiling
+    twins (prof_exec.sh); for another variant, their read and chain cycles (the same code in
+    every variant) over that variant's executor user cycles."""
+    if fam in ('hll', 'bloom', 'kmv'):
+        r = exec_e0(fam, var)
+        if r is not None and '=' in r.get('prof', ''):
+            ph = dict(kv.split('=') for kv in r['prof'].split(';'))
+            return int(r['user_cycles']), int(ph['read']), int(ph['chain']), 'measured (profiling marks)'
+        return None
+    sp = None
+    if fam == 'ss':
+        for r in rd(f'{ZP}_prof_ss.csv'):
+            if r['mode'] == 'aggr' and r['epoch_index'] == '0':
+                ph = {k: int(v.split('(')[0]) for k, v in (kv.split('=') for kv in r['phases'].split(';'))}
+                sp = int(r['user_cycles']), ph['read'], ph['chain'], 'measured (profiling twin aggr_ss_prof)'
+                break
+    if fam == 'gk':
+        for r in rd(f'{ZP}_prof_gk.csv'):
+            if r['mode'] == 'aggr' and r['epoch_index'] == '0':
+                ph = dict(kv.split('=') for kv in re.search(r'PHASES (.*?)(,|$)', r['result']).group(1).split())
+                sp = int(r['user_cycles']), int(ph['input_read']), int(ph['chain_verify']), \
+                    'measured (profiling twin aggr_gk_prof)'
+                break
+    if sp is None or var == 'legacy':
+        return sp
+    ex = exec_e0(fam, var)
+    if ex is None:
+        return None
+    return int(ex['user_cycles']), sp[1], sp[2], (f'read + chain: legacy profiling twin aggr_{fam}_prof; user cycles: '
+                                                  f'this variant (executor)')
+
+
 # ------------------------------------------------------------------ root variants
 SHORT = {'cm': 'CM', 'hll': 'HLL', 'ss': 'SS', 'gk': 'GK', 'bloom': 'Bloom', 'kmv': 'KMV'}
 
@@ -213,15 +288,22 @@ def vdesc(var):
 
 
 ROOTS_TXT = '; '.join(f'{zl(var)} = {vdesc(var)}' for var in ZV)
+REF_TXT = ('' if not REF_SHOW else
+           ' Their shipped Count-Min aggregation (variant designed: their guest unchanged, with its per-row Merkle '
+           'roots) is reported only as a REFERENCE, in its own table after the first one, so the numbers can be '
+           'related to zk-Analytics\' published ones; it is not the headline.' if CMREF_ONLY else
+           ' The headline is zkA noroot. Their shipped Count-Min aggregation (zkA designed of Count-Min) also gets its '
+           'own REFERENCE table after the first one.')
 if MULTI:
     print('_**zk-Analytics root variants.** Every zk-Analytics summary type builds, inside each epoch\'s aggregation '
           'proof, a Merkle root over its buckets next to the flat SHA-256 state commitment that the epoch chain and '
-          'the query guests use; no query guest or verifier reads that root, and zkSketch publishes none. '
+          'the query guests use; no query guest or verifier reads that root, their paper\'s protocol has none '
+          '(sections 5.2 and 5.3), and zkSketch publishes none. '
           f'{ROOTS_TXT} (root constructions: cm_rows+cm+heap = their CM row roots over 3 x 1,024 counter leaves + '
           'cm_root + heap_root; samples64 / buckets64 = their samples pattern with 64 buckets; none = no root). '
-          'Query proofs read no root: they are the same for every variant._\n')
+          f'Query proofs read no root: they are the same for every variant.{REF_TXT}_\n')
 else:
-    print(f'_zk-Analytics aggregation guests (zkA): root variant {ZV[0]}, {vdesc(ZV[0])}._\n')
+    print(f'_zk-Analytics aggregation guests (zkA): root variant {ZV[0]}, {vdesc(ZV[0])}.{REF_TXT}_\n')
 
 # zkSketch sets of the side-by-side table: zkS-zk only when the CSV has its rows
 SYSZ = [('zks', 'zkS')] + ([('zk', 'zkS-zk')] if any((r['system'], r['run']) == ZK for r in rows) else [])
@@ -234,7 +316,9 @@ def root_verify(r):  # zkS root verify: best of EXP_VERIFY_REPEATS calls (QLOG_R
 ROOTV_BEST = any(v(get(fam, 'zks', OP_STREAM), 'verify_ms') is not None for fam in FAMS)
 
 # ------------------------------------------------------------------ update proofs, the four metrics
-print(f'**Update proofs side by side: proving time, verification time, proof size, peak memory** (one epoch = '
+HEAD_TXT = ('' if LEGACY or 'noroot' not in ZV else ' (headline: zkA noroot)' if MULTI else
+            ' (headline: zkA = zk-Analytics without the per-bucket Merkle root, noroot)')
+print(f'**Update proofs side by side{HEAD_TXT}: proving time, verification time, proof size, peak memory** (one epoch = '
       f'one batch of {M:,} records. zkA: one aggregation receipt per epoch, all kept and verified; "1 epoch" = the '
       f'mean of proved epochs {and_join(AE)} (sampled), "{T} epochs" = {T} x that (derived); verify = best of 5 '
       f'calls per receipt; peak RSS = the r0vm process (max over the proved epochs). zkS: "1 epoch" = the leaf '
@@ -263,6 +347,31 @@ for fam in FAMS:
             return E(r) if x is not None and acol != 'peak_rss_mb' else ''
         line([NAME[fam], mlab] + [fmt(av[var]) + est(av[var], ra[var]) for var in ZV] + [fmt(sv[who]) for who, _ in SYSZ]
              + [ratio(av[var], sv[who]) + est(av[var] if sv[who] else None, ra[var]) for who, _ in SYSZ for var in ZV])
+
+# ------------------------------------------------------------------ reference: their shipped CM
+if REF_SHOW:
+    xd, xn = exec_e0('cm', 'designed'), exec_e0('cm', 'noroot')
+    work = (f"{int(xd['user_cycles']) - int(xn['user_cycles']):,} user cycles more than noroot at epoch 0 "
+            f"({int(xd['user_cycles']):,} vs {int(xn['user_cycles']):,}; {xd['segments']} vs {xn['segments']} segments "
+            f"of 2^20, executor)" if xd and xn else 'about 11.1M user cycles per epoch (executor)')
+    print(f"\n**Reference, not the headline: zk-Analytics' shipped Count-Min aggregation** (zkA shipped = their "
+          f"`aggr_cm` unchanged, the `designed` variant. Besides the sketch update it builds per-row Merkle roots over "
+          f"the 3 x 1,024 counters plus cm_root and heap_root: {work}. No query guest or verifier reads those roots, "
+          f"and zk-Analytics' paper protocol has none (sections 5.2 and 5.3). It is reported so the numbers can be "
+          f"related to zk-Analytics' published ones, which include that cost. Metrics and conventions as in the table "
+          f"above; ratios are zkA / zkS)\n")
+    table(['metric', 'zkA shipped CM (reference)', 'zkA noroot (headline)', 'zkS', 'reference / zkS',
+           'headline / zkS'])
+    for mlab, aop, acol, amul, sop, scol, fmt in METRICS:
+        rr, rh = get('cm', 'zka', aop, 'designed'), get('cm', 'zka', aop, 'noroot')
+        xr, xh = (None if v(r, acol) is None else amul * v(r, acol) for r in (rr, rh))
+        rz = get('cm', 'zks', sop)
+        xz = root_verify(rz) if scol == 'root_verify' else v(rz, scol)
+
+        def est(x, r):
+            return E(r) if x is not None and acol != 'peak_rss_mb' else ''
+        line([mlab, fmt(xr) + est(xr, rr), fmt(xh) + est(xh, rh), fmt(xz),
+              ratio(xr, xz) + est(xr if xz else None, rr), ratio(xh, xz) + est(xh if xz else None, rh)])
 
 zk_txt = ' / zkS-zk worker' if HAS_ZK else ''
 print(f'\n**Update side.** One epoch = one batch of {M:,} records. Ratios are zkA / zkS. zkA prove per epoch is the '
@@ -438,64 +547,6 @@ if HAS_R1:
         q2 = sum(v(get(fam, 'zks', f'query_n{n}{suf}'), 'prove_s') or 0 for n in NALL)
         line([NAME[fam], f'{fs(s1)} / {fs(s2)}', f'{fs(l1)} / {fs(l2)}', f'{fs(q1)} / {fs(q2)}'])
 
-# ------------------------------------------------------------------ framework share (zk-Analytics side)
-RD = A.raw or os.path.dirname(os.path.abspath(A.csv))
-ZP = A.zka
-
-
-def rd(name):
-    p = os.path.join(RD, name)
-    return list(csv.DictReader(open(p))) if os.path.exists(p) else []
-
-
-def raw_var(r):
-    """The root variant of a driver CSV row (no root_variant column: the legacy guests)."""
-    x = r.get('root_variant')
-    return 'legacy' if x in (None, '', '-') else x
-
-
-def exec_e0(fam, var):
-    """The executor row of aggregation epoch 0 under root variant var, or None."""
-    for r in rd(f'{ZP}_{fam}_exec.csv'):
-        if (r.get('step') or r.get('mode')) == 'aggr' and r['epoch_index'] == '0' and raw_var(r) == var:
-            return r
-    return None
-
-
-def phase_split(fam, var):
-    """(user cycles, read, chain, source) of aggregation epoch 0 under root variant var, or None.
-    HLL / Bloom / KMV: the profiling marks of that variant's guest. SS / GK: the legacy profiling
-    twins (prof_exec.sh); for another variant, their read and chain cycles (the same code in
-    every variant) over that variant's executor user cycles."""
-    if fam in ('hll', 'bloom', 'kmv'):
-        r = exec_e0(fam, var)
-        if r is not None and '=' in r.get('prof', ''):
-            ph = dict(kv.split('=') for kv in r['prof'].split(';'))
-            return int(r['user_cycles']), int(ph['read']), int(ph['chain']), 'measured (profiling marks)'
-        return None
-    sp = None
-    if fam == 'ss':
-        for r in rd(f'{ZP}_prof_ss.csv'):
-            if r['mode'] == 'aggr' and r['epoch_index'] == '0':
-                ph = {k: int(v.split('(')[0]) for k, v in (kv.split('=') for kv in r['phases'].split(';'))}
-                sp = int(r['user_cycles']), ph['read'], ph['chain'], 'measured (profiling twin aggr_ss_prof)'
-                break
-    if fam == 'gk':
-        for r in rd(f'{ZP}_prof_gk.csv'):
-            if r['mode'] == 'aggr' and r['epoch_index'] == '0':
-                ph = dict(kv.split('=') for kv in re.search(r'PHASES (.*?)(,|$)', r['result']).group(1).split())
-                sp = int(r['user_cycles']), int(ph['input_read']), int(ph['chain_verify']), \
-                    'measured (profiling twin aggr_gk_prof)'
-                break
-    if sp is None or var == 'legacy':
-        return sp
-    ex = exec_e0(fam, var)
-    if ex is None:
-        return None
-    return int(ex['user_cycles']), sp[1], sp[2], (f'read + chain: legacy profiling twin aggr_{fam}_prof; user cycles: '
-                                                  f'this variant (executor)')
-
-
 print(f'\n**zk-Analytics aggregation guest, epoch 0 ({M:,} records): their ingest vs the rest** (user cycles; '
       'MODELED column = proved per-epoch time x the non-ingest share of user cycles, ignoring paging and segment '
       'rounding; it is NOT a measurement)\n')
@@ -531,7 +582,9 @@ print(f'\n**zk-Analytics aggregation guests per root variant** (executor, aggreg
       'user cycles (segments of at most 2^20 cycles); root = what the variant proves besides the state '
       'commitment: cm_rows+cm+heap = their CM row roots over 3 x 1,024 counter leaves + cm_root + heap_root, '
       'samples64 / buckets64 = their samples pattern with 64 buckets, pertuple = one leaf per GK tuple, none = no '
-      'root' + ('; root work = designed - noroot, the cost of the root nothing reads' if WORK else '') + ')\n')
+      'root' + ('; root work = designed - noroot, the cost of the root nothing reads' if WORK else '')
+      + ('; designed is executed for every family but proved only for Count-Min, as the reference'
+         if CMREF_ONLY and 'designed' in VX else '') + ')\n')
 table(['sketch'] + [x for var in VX for x in (f'{var}: root', f'{var}: user cycles (segments)')]
       + (['root work (cycles)', 'share of designed'] if WORK else []))
 for fam in FAMS:
