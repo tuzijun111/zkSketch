@@ -1,0 +1,8 @@
+[package]
+name = "aggr_gk_root"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+risc0-zkvm = { version = "3", default-features = false }
+gk-zka-core = { path = "../../core", default-features = false, features = ["root"] }

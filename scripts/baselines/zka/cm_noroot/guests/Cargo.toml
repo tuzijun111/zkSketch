@@ -1,0 +1,9 @@
+# Guest workspace. Built by risc0-build (../methods/build.rs) with --locked when
+# RISC0_BUILD_LOCKED=1; Cargo.lock here was derived from ../../hll/guests/Cargo.lock,
+# itself derived from zk-Analytics' own lock (d4a5a9a), so the guests link the same
+# risc0-zkvm (3.0.5) and crate versions as their aggr_cm. Only the members' entries differ.
+# No [profile] section: like the clone's root workspace, guests build with cargo's
+# default release profile (risc0-build passes --release).
+[workspace]
+resolver = "2"
+members = ["aggr_cm_noroot", "aggr_cm_twin"]

@@ -624,6 +624,37 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "root")]
+    fn root_variants_agree_except_root() {
+        let (outs, _) = epochs(&lcg_keys(3 * 1024, 5_000), 1024, 8);
+        for (inp, st) in &outs {
+            let (_, legacy) = process_bloom_aggr_with_state(inp);
+            let (sd, d) = process_bloom_aggr_root(inp, BloomRoot::Buckets64);
+            let (sn, n) = process_bloom_aggr_root(inp, BloomRoot::None);
+            assert_eq!(&sd, st);
+            assert_eq!(&sn, st);
+            assert_eq!(d.without_root(), legacy);
+            assert_eq!(n.without_root(), legacy);
+            assert_eq!(n.buckets_root, [0u8; 32]);
+            assert_ne!(d.buckets_root, [0u8; 32]);
+            // independent recomputation: 64 leaves over 224-byte groups, their fold
+            let leaves: Vec<[u8; 32]> = (0..64)
+                .map(|j| {
+                    let mut sha = <rust_crypto::Sha256 as rust_crypto::Digest>::new();
+                    rust_crypto::Digest::update(&mut sha, b"ZKA_PORT_BLOOM_BUCKET_V1");
+                    rust_crypto::Digest::update(&mut sha, &st.bits[224 * j..224 * (j + 1)]);
+                    rust_crypto::Digest::finalize(sha).into()
+                })
+                .collect();
+            assert_eq!(d.buckets_root, aggregator_core::samples_buckets_root_from_leaves(&leaves));
+            // the root binds every group: flipping the last bit changes it
+            let mut b2 = st.bits.clone();
+            b2[BLOOM_BYTES - 1] ^= 0x80;
+            assert_ne!(bloom_buckets_root(&b2), d.buckets_root);
+        }
+    }
+
+    #[test]
     fn low_support_is_suppressed() {
         let q = run_bloom_query(&query_input(&[1, 2, 3], 3, 1)).suppress_if_low_support();
         assert!(q.suppressed);
@@ -677,3 +708,11 @@ mod tests {
         assert_eq!(ww.len(), to_vec(&q).unwrap().len());
     }
 }
+
+// The six-sketch root variants (root.rs), compiled only with the `root` feature: the
+// bloom aggr_root guest and the host driver enable it; the legacy guests build this crate
+// without it, i.e. exactly as before the variants were added (same code, same cycles).
+#[cfg(feature = "root")]
+mod root;
+#[cfg(feature = "root")]
+pub use root::*;

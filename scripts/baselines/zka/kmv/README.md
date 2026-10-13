@@ -245,6 +245,7 @@ proved journal was asserted equal to the native output:
 |---|---|
 | `core/` | `zka-kmv-core` (no_std): hash, bottom-k insert, merge, estimator, epoch type, aggregation, query; `upstream_verbatim.rs`; unit tests (per-epoch state = reference bottom-k, merge = union, insertion order, merge edges, exact branch, estimator integer arithmetic and saturation, tamper / reorder / forged batch, suppression, serde packing, words variant = same input and answer) |
 | `methods/`, `guests/aggr`, `guests/query` | risc0 methods crate and the guests `kmv_aggr`, `kmv_query`, `kmv_query_words` (`guests/query/src/bin`) |
-| `host/` | driver `kmv` (modes `exec`, `aggr`, `query`; `--words`, `--prove`, `--gate`, `--arm-tag`) |
+| `guests/aggr_root` | guest `kmv_aggr_root`: the six-sketch root variants (`../README.md`, "Six-sketch comparison", "Root variants"); `kmv_aggr` with the root variant read before the input (designed = 64-bucket samples-pattern root, noroot = none) |
+| `host/` | driver `kmv` (modes `exec`, `aggr`, `query`; `--words`, `--prove`, `--gate`, `--arm-tag`, `--root legacy\|designed\|noroot` for `aggr`/`exec`, default `legacy` = `kmv_aggr`) |
 | `run_exec.sh`, `kmv_common.sh` | runner (executor or `PROVE=1`) and its build / log / prove-gate helpers |
 | `gen_upstream.sh` | regenerates / checks the verbatim copies |

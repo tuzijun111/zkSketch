@@ -198,8 +198,9 @@ built_all() { local b; for b in "${ZKA_BINS[@]}" "$ZKS_BIN"; do [[ -x $b ]] || r
 # time even when cargo had nothing to recompile).
 stale_builds() {
   local z=$ZKS/scripts/baselines/zka i src bin
-  local -a pairs=("$z/cyc" "${ZKA_BINS[0]}" "$z/hll" "${ZKA_BINS[1]}" "$z/spacesaving" "${ZKA_BINS[2]}"
-                  "$z/gk" "${ZKA_BINS[3]}" "$z/bloom" "${ZKA_BINS[4]}" "$z/kmv" "${ZKA_BINS[5]}")
+  local -a pairs=("$z/cyc" "${ZKA_BINS[0]}" "$z/cm_noroot" "${ZKA_BINS[0]}" "$z/hll" "${ZKA_BINS[1]}"
+                  "$z/spacesaving" "${ZKA_BINS[2]}" "$z/gk" "${ZKA_BINS[3]}" "$z/bloom" "${ZKA_BINS[4]}"
+                  "$z/kmv" "${ZKA_BINS[5]}")
   for ((i = 0; i < ${#pairs[@]}; i += 2)); do
     src=${pairs[i]}; bin=${pairs[i + 1]}
     [[ -x $bin ]] || continue

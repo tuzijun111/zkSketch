@@ -49,6 +49,25 @@
 //   shipped --mode query --family cm        --epochs N --query estimate|topk [--limit 10]
 //   common: [--keys PATH] [--epoch-size 16384] [--batch 8] [--prove]
 //           [--key-id aol|const]   (const: histogram only, see key_id_mode())
+//   cm aggr only: [--root legacy|designed|noroot|twin]   (default legacy)
+//
+// --root (six-sketch comparison, ../../README.md "Six-sketch comparison"): which Merkle
+// root(s) the CM aggregation journal carries. Their aggr_cm builds, besides the flat
+// SHA-256 state_commit every query guest reads, row_roots (one SHA-256 leaf per counter)
+// + cm_root + heap_root, which nothing reads.
+//   legacy, designed  their aggr_cm, unchanged (the same guest: the committed 2026-10-09
+//                     reference rows are `legacy`; `designed` = zk-Analytics as designed)
+//   noroot            aggr_cm_noroot (../../cm_noroot): their process_cm_aggr_with_state
+//                     with only the Merkle block replaced by zeros. journal_eq_native
+//                     checks the journal against THEIR native output with the three root
+//                     fields zeroed (and against the noroot copy run natively).
+//   twin              VALIDATION ONLY, never proved: aggr_cm_twin, an unedited copy of their
+//                     code compiled in ../../cm_noroot; same journal as aggr_cm, and outside
+//                     the Merkle work the same cost (../../cm_noroot/core/src/lib.rs, "twin").
+// Query guests read no root, so --root is refused with --mode query.
+// CM aggregation rows also carry variants_agree (their aggregation and the noroot copy, run
+// natively on the same input, agree on everything but the three root fields, which are zero
+// in the copy) and state_commit (hex); `-` elsewhere.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -69,6 +88,7 @@ use querier_core::{
     HistogramQueryOutput, HistogramQueryResult, SamplesQuery, SamplesQueryInput,
     SamplesQueryOutput, SamplesQueryResult,
 };
+use zka_cm_noroot_methods::{AGGR_CM_NOROOT_ELF, AGGR_CM_NOROOT_ID, AGGR_CM_TWIN_ELF};
 use querier_methods::{
     QUERIER_GUEST_CM_ELF, QUERIER_GUEST_CM_ID, QUERIER_GUEST_HISTOGRAM_ELF,
     QUERIER_GUEST_HISTOGRAM_ID, QUERIER_GUEST_SAMPLES_ELF, QUERIER_GUEST_SAMPLES_ID,
@@ -82,7 +102,7 @@ const HIST_VALUE_MASK: u32 = 0x001F_FFFF;
 // Strict: an unknown flag or an unparsable value is an error, never a silent default.
 const VALUE_FLAGS: &[&str] = &[
     "--mode", "--family", "--query", "--epochs", "--epoch-index", "--limit", "--keys",
-    "--epoch-size", "--batch", "--key-id",
+    "--epoch-size", "--batch", "--key-id", "--root",
 ];
 const BOOL_FLAGS: &[&str] = &["--prove", "--header"];
 
@@ -359,13 +379,48 @@ fn join<T: std::fmt::Display>(v: &[T]) -> String {
     v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(";")
 }
 
-const HEADER: &str = "system,arm,mode,guest,family,query,topk_slots,histogram_slots,epochs,epoch_index,epoch_records,records,batch,value_enc,limit,distinct_keys,per_key_entries,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,journal_bytes,state_commits,journal_eq_native,result,exact,prove_s,verify_ms,receipt_bytes,s_per_segment,key_id";
+const HEADER: &str = "system,arm,mode,guest,family,query,topk_slots,histogram_slots,epochs,epoch_index,epoch_records,records,batch,value_enc,limit,distinct_keys,per_key_entries,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,journal_bytes,state_commits,journal_eq_native,result,exact,prove_s,verify_ms,receipt_bytes,s_per_segment,key_id,root_variant,root_construction,variants_agree,state_commit";
+
+/// CM aggregation root variant (--root); see the header comment.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CmRoot {
+    Legacy,
+    Designed,
+    NoRoot,
+    Twin,
+}
+impl CmRoot {
+    fn parse() -> Option<CmRoot> {
+        arg_str("--root").map(|v| match v.as_str() {
+            "legacy" => CmRoot::Legacy,
+            "designed" => CmRoot::Designed,
+            "noroot" => CmRoot::NoRoot,
+            "twin" => CmRoot::Twin,
+            o => die(&format!("--root {o}: expected legacy|designed|noroot|twin")),
+        })
+    }
+    fn name(self) -> &'static str {
+        match self {
+            CmRoot::Legacy => "legacy",
+            CmRoot::Designed => "designed",
+            CmRoot::NoRoot => "noroot",
+            CmRoot::Twin => "twin",
+        }
+    }
+    /// What the journal's root fields hold.
+    fn construction(self) -> &'static str {
+        match self {
+            CmRoot::NoRoot => "none",
+            _ => "cm_rows+cm+heap",
+        }
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 fn emit(
     mode: &str, guest: &str, fam: Family, query: &str, epochs: usize, epoch_index: String, m: usize,
     records: usize, cbs: usize, limit: String, distinct: usize, per_key_entries: usize, x: &Exec,
-    state_commits: usize, eq: bool, result: String, exact: String, p: Option<Proved>,
+    state_commits: usize, eq: bool, result: String, exact: String, p: Option<Proved>, root: (&str, &str, &str, &str),
 ) {
     let (ps, vm, rb, sps) = match p {
         Some(p) => (
@@ -377,12 +432,15 @@ fn emit(
         None => ("NaN".into(), "NaN".into(), "0".into(), "NaN".into()),
     };
     println!(
-        "zka,shipped,{mode},{guest},{},{query},{},{},{epochs},{epoch_index},{m},{records},{cbs},{},{limit},{distinct},{per_key_entries},{},{},{},{},{},{:.3},{},{state_commits},{eq},{result},{exact},{ps},{vm},{rb},{sps},{}",
+        "zka,shipped,{mode},{guest},{},{query},{},{},{epochs},{epoch_index},{m},{records},{cbs},{},{limit},{distinct},{per_key_entries},{},{},{},{},{},{:.3},{},{state_commits},{eq},{result},{exact},{ps},{vm},{rb},{sps},{},{},{},{},{}",
         fam.name(), CM_TOPK_SLOTS, HISTOGRAM_SLOTS, fam.value_enc(), x.input_bytes, x.user_cycles,
-        x.padded_cycles, x.segments, x.max_po2, x.exec_s, x.journal_bytes, key_id_mode(),
+        x.padded_cycles, x.segments, x.max_po2, x.exec_s, x.journal_bytes, key_id_mode(), root.0, root.1, root.2, root.3,
     );
 }
 
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
 fn main() {
     validate_args();
     if flag("--header") {
@@ -408,6 +466,14 @@ fn main() {
     if key_id_mode() == "const" && fam != Family::Histogram {
         die("--key-id const is only meaningful for --family histogram");
     }
+    let root = CmRoot::parse();
+    if root.is_some() && (fam != Family::Cm || mode != "aggr") {
+        die("--root applies to --mode aggr --family cm only (query guests read no root)");
+    }
+    let root = root.unwrap_or(CmRoot::Legacy);
+    if root == CmRoot::Twin && do_prove {
+        die("--root twin is a validation guest and is never proved");
+    }
     let keys = load_keys(&keys_path);
 
     match mode.as_str() {
@@ -423,8 +489,11 @@ fn main() {
             // The aggregation guest commits only commitments; equality with their
             // native output is the correctness check. The "result" column records
             // the epoch-state size the query side will later have to re-hash.
+            let mut root_cols = ("legacy", "-", "-".to_string(), "-".to_string());
             let (guest, x, eq, entries, result, proved) = match &outs[idx] {
                 EpochOut::S(inp, es) => {
+                    root_cols.1 = "samples_buckets";
+                    root_cols.3 = hex(&samples_epoch_state_commit(es));
                     let x = execute!(inp, AGGR_SAMPLES_ELF);
                     let (_, native) = process_samples_aggr_with_state(inp);
                     let got: aggregator_core::SamplesAggrOutput = x.session.journal.decode().unwrap();
@@ -432,6 +501,8 @@ fn main() {
                     ("aggr_samples", x, got == native, es.per_key.len(), format!("state_entries={}", es.per_key.len()), p)
                 }
                 EpochOut::H(inp, st) => {
+                    root_cols.1 = "hist_per_key";
+                    root_cols.3 = hex(&histogram_epoch_state_commit(st));
                     let x = execute!(inp, AGGR_HISTOGRAM_ELF);
                     let (_, native) = process_histogram_aggr_with_state(inp);
                     let got: aggregator_core::HistogramAggrOutput = x.session.journal.decode().unwrap();
@@ -440,19 +511,50 @@ fn main() {
                     ("aggr_histogram", x, got == native, e, format!("state_entries={e}"), p)
                 }
                 EpochOut::C(inp, es) => {
-                    let x = execute!(inp, AGGR_CM_ELF);
-                    let (_, native) = process_cm_aggr_with_state(inp);
-                    let got: aggregator_core::CmAggrOutput = x.session.journal.decode().unwrap();
-                    let p = do_prove.then(|| prove!(inp, AGGR_CM_ELF, AGGR_CM_ID, &native, aggregator_core::CmAggrOutput));
+                    let (_, shipped_native) = process_cm_aggr_with_state(inp);
+                    let agree = zka_cm_noroot_core::noroot::process_cm_aggr(inp) == zka_cm_noroot_core::zero_roots(&shipped_native)
+                        && shipped_native.cm_root != [0u8; 32];
+                    if !agree {
+                        eprintln!("shipped: WARNING the noroot copy disagrees with their aggregation outside the root fields");
+                    }
+                    root_cols = (root.name(), root.construction(), agree.to_string(), hex(&shipped_native.state_commit));
                     let occ = es.heap_occ.iter().filter(|&&o| o != 0).count();
-                    ("aggr_cm", x, got == native, occ, format!("heap_occupied={occ}"), p)
+                    match root {
+                        CmRoot::Legacy | CmRoot::Designed => {
+                            let x = execute!(inp, AGGR_CM_ELF);
+                            let native = shipped_native;
+                            let got: aggregator_core::CmAggrOutput = x.session.journal.decode().unwrap();
+                            let p = do_prove.then(|| prove!(inp, AGGR_CM_ELF, AGGR_CM_ID, &native, aggregator_core::CmAggrOutput));
+                            ("aggr_cm", x, got == native, occ, format!("heap_occupied={occ}"), p)
+                        }
+                        CmRoot::NoRoot => {
+                            // Expected journal: THEIR native output with the three root fields
+                            // zeroed; the noroot copy run natively must agree with it.
+                            let native = zka_cm_noroot_core::zero_roots(&shipped_native);
+                            let copy_eq = zka_cm_noroot_core::noroot::process_cm_aggr(inp) == native;
+                            let x = execute!(inp, AGGR_CM_NOROOT_ELF);
+                            let got: aggregator_core::CmAggrOutput = x.session.journal.decode().unwrap();
+                            let p = do_prove.then(|| prove!(inp, AGGR_CM_NOROOT_ELF, AGGR_CM_NOROOT_ID, &native, aggregator_core::CmAggrOutput));
+                            ("aggr_cm_noroot", x, got == native && copy_eq, occ, format!("heap_occupied={occ}"), p)
+                        }
+                        CmRoot::Twin => {
+                            let native = shipped_native;
+                            let copy_eq = zka_cm_noroot_core::twin::process_cm_aggr(inp) == native;
+                            let x = execute!(inp, AGGR_CM_TWIN_ELF);
+                            let got: aggregator_core::CmAggrOutput = x.session.journal.decode().unwrap();
+                            ("aggr_cm_twin", x, got == native && copy_eq, occ, format!("heap_occupied={occ}"), None)
+                        }
+                    }
                 }
             };
             if !eq {
                 eprintln!("shipped: WARNING aggregation journal != native output");
             }
             emit("aggr", guest, fam, "-", 1, idx.to_string(), m, m, cbs, "-".into(), distinct, entries, &x, 1, eq,
-                result, format!("distinct={distinct}"), proved);
+                result, format!("distinct={distinct}"), proved, (root_cols.0, root_cols.1, &root_cols.2, &root_cols.3));
+            if (!eq || root_cols.2 == "false") && fam == Family::Cm {
+                std::process::exit(1); // the row is printed, the caller sees the failure
+            }
         }
         "query" => {
             let n = arg_usize("--epochs", 1);
@@ -489,7 +591,7 @@ fn main() {
                     emit("query", "querier_samples", fam, "sum_topk", n, "-".into(), m, n * m, cbs, limit.to_string(),
                         distinct, entries, &x, got.state_commits.len(), got == native,
                         format!("top={}{}", join(&items), if got.suppressed { " SUPPRESSED" } else { "" }),
-                        format!("top={}", join(&ex)), p);
+                        format!("top={}", join(&ex)), p, ("-", "-", "-", "-"));
                 }
                 Family::Histogram => {
                     let states: Vec<HistogramEpochState> =
@@ -514,7 +616,7 @@ fn main() {
                     emit("query", "querier_histogram", fam, "p90", n, "-".into(), m, n * m, cbs, "-".into(),
                         distinct, entries, &x, got.state_commits.len(), got == native,
                         format!("p90_value={p90}{}", if got.suppressed { " SUPPRESSED" } else { "" }),
-                        format!("p90={ex} bin={b} [{}..{})", 1u64 << b, 1u64 << (b + 1)), p);
+                        format!("p90={ex} bin={b} [{}..{})", 1u64 << b, 1u64 << (b + 1)), p, ("-", "-", "-", "-"));
                 }
                 Family::Cm => {
                     let q = arg_str("--query").unwrap_or_else(|| die("cm needs --query estimate|topk"));
@@ -550,7 +652,7 @@ fn main() {
                     emit("query", "querier_cm", fam, qname, n, "-".into(), m, n * m, cbs,
                         if qname == "topk" { limit.to_string() } else { "-".into() },
                         distinct, occ, &x, got.state_commits.len(), got == native,
-                        format!("{res}{}", if got.suppressed { " SUPPRESSED" } else { "" }), exact, p);
+                        format!("{res}{}", if got.suppressed { " SUPPRESSED" } else { "" }), exact, p, ("-", "-", "-", "-"));
                 }
             }
         }

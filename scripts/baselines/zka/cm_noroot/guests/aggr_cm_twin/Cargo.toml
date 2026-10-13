@@ -1,0 +1,9 @@
+[package]
+name = "aggr_cm_twin"
+version = "0.1.0"
+edition = "2021"
+
+# Same risc0-zkvm feature set as their aggr_cm guest (aggregator/methods/guest_cm/Cargo.toml).
+[dependencies]
+risc0-zkvm = { version = "3", default-features = false }
+zka-cm-noroot-core = { path = "../../core", default-features = false }

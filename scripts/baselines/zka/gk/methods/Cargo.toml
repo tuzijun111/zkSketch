@@ -6,7 +6,7 @@ build = "build.rs"
 
 # Same layout as zk-Analytics' aggregator/methods and querier/methods.
 [package.metadata.risc0]
-methods = ["../guests/aggr", "../guests/query", "../guests/prof"]
+methods = ["../guests/aggr", "../guests/query", "../guests/prof", "../guests/aggr_root"]
 
 [build-dependencies]
 risc0-build = "3"

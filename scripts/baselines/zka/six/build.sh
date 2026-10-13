@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Six-sketch comparison: build everything both sides need (not timed).
-#   zk-Analytics side: their CM driver at CM_TOPK_SLOTS=1 (cyc/ shipped) and our
-#   HLL, SS, GK, Bloom and KMV ports (†), each --locked into $BASELINE_DIR/build/...
+#   zk-Analytics side: their CM driver at CM_TOPK_SLOTS=1 (cyc/ shipped, which also embeds
+#   the CM noroot guest of ../cm_noroot, after `cm_noroot/gen_upstream.sh --check` confirms
+#   its verbatim copy still matches the clone) and our HLL, SS, GK, Bloom and KMV ports (†),
+#   each --locked into $BASELINE_DIR/build/... Every aggregation guest of the root variants
+#   (designed / noroot, see ../README.md "Six-sketch comparison") must exist afterwards.
 #   zkSketch side: exp_compose (release, --locked) in this checkout's target/.
 # Usage: build.sh [all|zka|zks]   (default all). Needs the zk-Analytics clone first:
 #   scripts/baselines/fetch_baselines.sh zka
@@ -34,7 +37,7 @@ step() {
     FAIL+=("$name(rc=$rc)")
   fi
 }
-b_cyc()   { source "$Z/common.sh"; build_cyc 1 --bin shipped; }
+b_cyc()   { source "$Z/common.sh"; BASELINE_DIR="$BASELINE_DIR" "$Z/cm_noroot/gen_upstream.sh" --check && build_cyc 1 --bin shipped; }
 b_hll()   { source "$Z/hll/hll_common.sh"; build_hll; }
 b_ss()    { source "$Z/spacesaving/common_ss.sh"; build_ss --bin ss; }
 b_gk()    { source "$Z/gk/common_gk.sh"; build_gk; }
@@ -59,6 +62,15 @@ if [[ $WHAT != zks ]]; then
   for b in "$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-ss/release/ss" "$EB/zka-gk/release/gk" \
            "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv"; do
     [[ -x $b ]] || FAIL+=("missing:$b")
+  done
+  # The guests of the root variants (the drivers embed them; a missing file means the
+  # build did not produce them). <target>/riscv-guest/<methods crate>/<guest>/...
+  elf() { echo "$EB/$1/riscv-guest/$2/$3/riscv32im-risc0-zkvm-elf/release/$3"; }
+  for g in "cyc-t1 aggregator-methods aggr_cm" "cyc-t1 zka-cm-noroot-methods aggr_cm_noroot" \
+           "hll zka-hll-methods hll_aggr_root" "zka-ss ss-methods aggr_ss_rootvar" "zka-gk gk-methods aggr_gk_root" \
+           "zka-bloom zka-bloom-methods bloom_aggr_root" "zka-kmv zka-kmv-methods kmv_aggr_root"; do
+    read -r t mc gn <<< "$g"
+    [[ -s $(elf "$t" "$mc" "$gn") ]] || FAIL+=("missing-guest:$(elf "$t" "$mc" "$gn")")
   done
 fi
 if [[ $WHAT != zka ]]; then

@@ -1,11 +1,11 @@
 #![no_main]
 #![no_std]
 
-// SENSITIVITY twin of aggr_ss: the same ss-core aggregation, with the Merkle-root
+// ROOT-VARIANT twin of aggr_ss: the same ss-core aggregation, with the Merkle-root
 // construction chosen at run time (an SsRoot read before the input). Journal =
-// (root, the aggr_ss journal). Used only for the root-variant rows of
-// ../../../README.md; aggr_ss (SsRoot::HEADLINE, the samples-style 64-bucket root)
-// is the measured guest.
+// (root, the aggr_ss journal). The six-sketch designed (Buckets64) and noroot (None)
+// rows and the buckets1024/perkey sensitivity rows (../../../README.md); aggr_ss
+// (SsRoot::HEADLINE compiled in) is the guest of the committed `legacy` rows.
 
 extern crate alloc;
 

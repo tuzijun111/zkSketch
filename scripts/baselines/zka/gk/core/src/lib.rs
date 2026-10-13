@@ -1460,6 +1460,71 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "root")]
+    fn root_variants_agree_except_root() {
+        use rust_crypto::Digest as _;
+        // two chained epochs of pseudo-random values, batches of 8, as the host builds them
+        let mut seed = 7u64;
+        let (mut tip, mut seq, mut prev, mut tips) = ([0u8; 32], 0u64, [0u8; 32], Vec::new());
+        for (e, m) in [(0usize, 700usize), (1, 3000)] {
+            let evs: Vec<Event> = (0..m)
+                .map(|i| Event { ts: (e * 10_000 + i) as u32, key_id: Event::make_key_id(0, i as u64), value: lcg(&mut seed) & 0x1F_FFFF })
+                .collect();
+            let mut batches = Vec::new();
+            for b in evs.chunks(8) {
+                let p = if seq == 0 { [0u8; 32] } else { tip };
+                let h = batch_chain_hash(p, b);
+                batches.push(BatchInput { source_id: 0, source_batch_seq: seq, events: b.to_vec(), sent_batch_hash: h });
+                tip = h;
+                seq += 1;
+            }
+            let inp = GkAggrInput { prev_chain_hash: prev, batches, prev_source_chain_tips: tips.clone() };
+            let (st, legacy) = process_gk_aggr_with_state(&inp);
+            let blank = |o: &GkAggrOutput| GkAggrOutput { tuples_root: [0u8; 32], ..o.clone() };
+            for r in [GkRoot::Buckets64, GkRoot::None, GkRoot::PerTuple] {
+                let (s2, o) = process_gk_aggr_root(&inp, r);
+                assert_eq!(s2, st);
+                assert_eq!(blank(&o), blank(&legacy));
+                match r {
+                    GkRoot::None => assert_eq!(o.tuples_root, [0u8; 32]),
+                    GkRoot::PerTuple => assert_eq!(o.tuples_root, legacy.tuples_root),
+                    GkRoot::Buckets64 => {
+                        // independent recomputation: tuple i -> bucket i*64/n, 64 leaves
+                        let n = st.tuples.len();
+                        assert!(n >= 64);
+                        let leaves: Vec<[u8; 32]> = (0..64)
+                            .map(|j| {
+                                let mut sha = Sha256::new();
+                                sha.update(b"ZKA_PORT_GK_BUCKET_V1");
+                                for (i, t) in st.tuples.iter().enumerate() {
+                                    if i * 64 / n == j {
+                                        sha.update(t.v.to_be_bytes());
+                                        sha.update(t.g.to_be_bytes());
+                                        sha.update(t.delta.to_be_bytes());
+                                    }
+                                }
+                                sha.finalize().into()
+                            })
+                            .collect();
+                        assert_eq!(o.tuples_root, aggregator_core::samples_buckets_root_from_leaves(&leaves));
+                    }
+                }
+            }
+            prev = legacy.epoch_chain_link.final_chain_hash;
+            tips = legacy.final_source_chain_tips.clone();
+        }
+        // small summaries: fewer than 64 tuples still give a well-defined root
+        for n in [1usize, 2, 5, 33] {
+            let st = build(&(0..n as u32).collect::<Vec<_>>());
+            assert!(st.tuples.len() <= n);
+            let r = gk_buckets_root(&st.tuples);
+            let mut st2 = st.clone();
+            st2.tuples[0].g += 1;
+            assert_ne!(gk_buckets_root(&st2.tuples), r);
+        }
+    }
+
+    #[test]
     fn commit_changes_with_state() {
         let a = build(&[5, 1, 9]);
         let mut b = a.clone();
@@ -1468,3 +1533,11 @@ mod tests {
         assert_ne!(gk_tuples_root(&a.tuples), gk_tuples_root(&b.tuples));
     }
 }
+
+// The six-sketch root variants (root.rs), compiled only with the `root` feature: the
+// gk aggr_root guest and the host driver enable it; the legacy guests build this crate
+// without it, i.e. exactly as before the variants were added (same code, same cycles).
+#[cfg(feature = "root")]
+mod root;
+#[cfg(feature = "root")]
+pub use root::*;

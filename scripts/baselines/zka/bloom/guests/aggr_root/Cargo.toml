@@ -1,0 +1,9 @@
+[package]
+name = "bloom_aggr_root"
+version = "0.1.0"
+edition = "2021"
+
+# Same risc0-zkvm feature set as their aggregation guests (aggregator/methods/guest_cm).
+[dependencies]
+risc0-zkvm = { version = "3", default-features = false }
+zka-bloom-core = { path = "../../core", default-features = false, features = ["root"] }

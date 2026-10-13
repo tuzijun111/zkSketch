@@ -1,0 +1,19 @@
+[package]
+name = "zka-cm-noroot-core"
+version = "0.1.0"
+edition = "2021"
+
+# Same dependency specs as zk-Analytics' aggregator-core (aggregator/core/Cargo.toml @ d4a5a9a),
+# so the guest resolves the same crate versions from a lock derived from their Cargo.lock.
+# Their types (CmAggrInput, CmAggrOutput, CmState, EpochChainLink, CM_*) come from
+# aggregator-core by path; CM_TOPK_SLOTS is therefore their build-time knob, as for aggr_cm.
+[dependencies]
+aggregator-core = { path = "../../.zka/aggregator/core", default-features = false }
+zkvm-common = { path = "../../.zka/zkvm-common", default-features = false }
+rust_crypto = { package = "sha2", version = "0.10", default-features = false }
+hashbrown = { version = "0.14", default-features = false, features = ["ahash", "inline-more", "alloc"] }
+risc0-zkvm = { version = "3", default-features = false }
+
+[features]
+default = ["std"]
+std = ["zkvm-common/std", "aggregator-core/std"]

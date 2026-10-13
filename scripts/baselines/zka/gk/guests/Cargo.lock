@@ -19,6 +19,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aggr_gk_root"
+version = "0.1.0"
+dependencies = [
+ "gk-zka-core",
+ "risc0-zkvm",
+]
+
+[[package]]
 name = "aggregator-core"
 version = "0.1.0"
 dependencies = [

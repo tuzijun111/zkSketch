@@ -635,6 +635,8 @@ dependencies = [
  "rand 0.8.8",
  "risc0-zkvm",
  "sha2",
+ "zka-cm-noroot-core",
+ "zka-cm-noroot-methods",
  "zkvm-common",
 ]
 
@@ -3786,6 +3788,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
+]
+
+[[package]]
+name = "zka-cm-noroot-core"
+version = "0.1.0"
+dependencies = [
+ "aggregator-core",
+ "hashbrown 0.14.5",
+ "risc0-zkvm",
+ "sha2",
+ "zkvm-common",
+]
+
+[[package]]
+name = "zka-cm-noroot-methods"
+version = "0.1.0"
+dependencies = [
+ "risc0-build",
+ "risc0-zkvm",
 ]
 
 [[package]]

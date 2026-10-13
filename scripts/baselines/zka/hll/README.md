@@ -219,6 +219,7 @@ equal to the native output.
 |---|---|
 | `core/` | `zka-hll-core` (no_std): the HLL epoch type, aggregation, query, estimator; `upstream_verbatim.rs`; unit tests (tamper, reorder, forged batch, suppression, serde packing, both estimator branches) |
 | `methods/`, `guests/aggr`, `guests/query` | risc0 methods crate and the guests (`hll_aggr`, `hll_query`, `hll_query_words`) |
-| `host/` | driver `hll` (`--mode aggr` / `--mode query [--words]`, `--prove`) |
+| `guests/aggr_root` | guest `hll_aggr_root`: the six-sketch root variants (`../README.md`, "Six-sketch comparison", "Root variants"); `hll_aggr` with the root variant read before the input (designed = 64-bucket samples-pattern root, noroot = none) |
+| `host/` | driver `hll` (`--mode aggr [--root legacy\|designed\|noroot]` / `--mode query [--words]`, `--prove`; `legacy`, the default, is `hll_aggr`) |
 | `run_exec.sh`, `prove_anchor.sh`, `hll_common.sh`, `rss_child.sh` | runners |
 | `gen_upstream.sh`, `seed_spread.py` | provenance check and accuracy cross-check |

@@ -223,6 +223,11 @@ CARGO_TARGET_DIR=~/ext-baselines/build/zka-gk cargo test --release --locked -p g
   - `DD_EPOCHS="1 16 63"` sets the extra aggregation epochs.
   - `KEYS`, `OUT` and `MAX_LOAD` override their defaults.
 - **Driver.** Its usage is in the header comment of `host/src/main.rs`.
+  `--mode aggr --root legacy|designed|noroot|pertuple` selects the six-sketch root variants (`../README.md`, "Six-sketch comparison", "Root variants"):
+  `legacy` (the default) is `aggr_gk` with its per-tuple root, the guest of every row in this
+  README; the others run `guests/aggr_root` (`aggr_gk_root`), which reads the variant before
+  the input (designed = 64-bucket samples-pattern root, noroot = none, pertuple = the
+  per-tuple root again, as a sensitivity row).
   The driver refuses to run when `RISC0_DEV_MODE` is set.
 - **The driver signals nothing.** Peak RSS comes from reading `/proc/*/status`
   VmHWM of the driver's own descendant processes. `../rss_watch.sh` is not used:

@@ -700,6 +700,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kmv_aggr_root"
+version = "0.1.0"
+dependencies = [
+ "risc0-zkvm",
+ "zka-kmv-core",
+]
+
+[[package]]
 name = "kmv_query"
 version = "0.1.0"
 dependencies = [

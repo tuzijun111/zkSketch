@@ -1,0 +1,18 @@
+[package]
+name = "zka-cm-noroot-methods"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+# Mirrors zk-Analytics' aggregator/methods crate. aggr_cm_noroot is the measured noroot
+# guest; aggr_cm_twin is the validation twin of their aggr_cm (never reported).
+# Built through ../../cyc (path dependency of the `shipped` driver), so it gets the same
+# CM_TOPK_SLOTS as their guests in that build.
+[package.metadata.risc0]
+methods = ["../guests/aggr_cm_noroot", "../guests/aggr_cm_twin"]
+
+[build-dependencies]
+risc0-build = "3"
+
+[dependencies]
+risc0-zkvm = "3"

@@ -20,7 +20,23 @@
 // Modes:
 //   --mode aggr  [--epoch-index i]        execute aggr_gk on epoch i (earlier epochs
 //                                         are aggregated natively only for the chain tips)
-//        [--profile]                      execute the PROFILING guest instead (phase split)
+//        [--root legacy|designed|noroot|pertuple]
+//                                         which Merkle root the journal carries (six-sketch
+//                                         comparison, ../../README.md "Six-sketch comparison";
+//                                         ../core/src/lib.rs "Root variants"):
+//                                           legacy    (default) aggr_gk, per-tuple root: the
+//                                                     guest of the committed 2026-10-09 rows
+//                                           designed  aggr_gk_root, 64-bucket samples-pattern root
+//                                           noroot    aggr_gk_root, root field zero
+//                                           pertuple  aggr_gk_root, the legacy per-tuple root
+//                                                     (sensitivity)
+//                                         Query guests read no root (--root is refused with
+//                                         --mode query). Aggregation rows also check
+//                                         variants_agree (every variant run natively gives the
+//                                         same state, state commitment, epoch link, n_events
+//                                         and source tips) and print state_commit.
+//        [--profile]                      execute the PROFILING guest instead (phase split;
+//                                         legacy only)
 //        [--prove]                        also prove it (ProverOpts::succinct(), their tier)
 //   --mode query --epochs n --query rank|p50|p90|p99 [--rank-value v]
 //                                         aggregate epochs 0..n natively, execute querier_gk
@@ -50,11 +66,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gk_methods::{AGGR_GK_ELF, AGGR_GK_ID, AGGR_GK_PROF_ELF, QUERIER_GK_ELF, QUERIER_GK_ID};
+use gk_methods::{
+    AGGR_GK_ELF, AGGR_GK_ID, AGGR_GK_PROF_ELF, AGGR_GK_ROOT_ELF, AGGR_GK_ROOT_ID, QUERIER_GK_ELF, QUERIER_GK_ID,
+};
 use gk_zka_core::{
-    batch_chain_hash, gk_epoch_state_commit, process_gk_aggr_with_state, run_gk_query, BatchInput,
-    EpochChainLink, GkAggrInput, GkAggrOutput, GkEpochState, GkQuery, GkQueryInput, GkQueryOutput,
-    GkQueryResult, GkUnion, GK_COMPRESS_EVERY, GK_EPS_DEN,
+    batch_chain_hash, gk_epoch_state_commit, process_gk_aggr_root, process_gk_aggr_with_state, run_gk_query,
+    BatchInput, EpochChainLink, GkAggrInput, GkAggrOutput, GkEpochState, GkQuery, GkQueryInput, GkQueryOutput,
+    GkQueryResult, GkRoot, GkUnion, GK_COMPRESS_EVERY, GK_EPS_DEN,
 };
 use risc0_zkvm::{default_executor, default_prover, ExecutorEnv, ProverOpts, SessionInfo};
 use zkvm_common::Event;
@@ -68,7 +86,7 @@ const S_PER_SEG_HI: f64 = 30.79;
 
 // ------------------------------------------------------------------ arguments
 const VALUE_FLAGS: &[&str] =
-    &["--mode", "--query", "--epochs", "--epoch-index", "--keys", "--epoch-size", "--batch", "--rank-value"];
+    &["--mode", "--query", "--epochs", "--epoch-index", "--keys", "--epoch-size", "--batch", "--rank-value", "--root"];
 const BOOL_FLAGS: &[&str] = &["--prove", "--header", "--profile"];
 
 fn validate_args() {
@@ -396,7 +414,34 @@ fn prove<T: serde::Serialize, J: serde::de::DeserializeOwned + PartialEq + std::
 }
 
 // ------------------------------------------------------------------ output
-const HEADER: &str = "system,arm,mode,guest,family,query,eps,compress_every,epochs,epoch_index,epoch_records,records,batch,value_enc,state_tuples,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,journal_bytes,state_commits,journal_eq_native,result,exact,abs_err,cert_err,eps_n,abs_err_le_eps_n,cert_err_le_eps_n,exact_in_cert,cert_over_eps_n,min_kept,q_named,q_sweep_1001,q_ok,prove_s,verify_ms,receipt_bytes,s_per_segment,proved_segments,proved_total_cycles,proved_user_cycles,r0vm_peak_rss_mb,contention,MODELED_prove_s,MODELED_prove_s_lo,MODELED_prove_s_hi,model";
+const HEADER: &str = "system,arm,mode,guest,family,query,eps,compress_every,epochs,epoch_index,epoch_records,records,batch,value_enc,state_tuples,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,journal_bytes,state_commits,journal_eq_native,result,exact,abs_err,cert_err,eps_n,abs_err_le_eps_n,cert_err_le_eps_n,exact_in_cert,cert_over_eps_n,min_kept,q_named,q_sweep_1001,q_ok,prove_s,verify_ms,receipt_bytes,s_per_segment,proved_segments,proved_total_cycles,proved_user_cycles,r0vm_peak_rss_mb,contention,MODELED_prove_s,MODELED_prove_s_lo,MODELED_prove_s_hi,model,root_variant,root_construction,variants_agree,state_commit";
+
+/// Root variant columns of a row: (root_variant, root_construction, variants_agree, state_commit).
+struct RootCols {
+    variant: &'static str,
+    construction: &'static str,
+    agree: String,
+    state_commit: String,
+}
+impl RootCols {
+    fn query() -> Self {
+        RootCols { variant: "-", construction: "-", agree: "-".into(), state_commit: "-".into() }
+    }
+}
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// --root: (name, None = legacy aggr_gk | Some(variant of the aggr_gk_root guest)).
+fn parse_root() -> (&'static str, Option<GkRoot>) {
+    match arg_str("--root").as_deref() {
+        None | Some("legacy") => ("legacy", None),
+        Some("designed") => ("designed", Some(GkRoot::Buckets64)),
+        Some("noroot") => ("noroot", Some(GkRoot::None)),
+        Some("pertuple") => ("pertuple", Some(GkRoot::PerTuple)),
+        Some(o) => die(&format!("--root {o}: expected legacy|designed|noroot|pertuple")),
+    }
+}
 
 struct Acc {
     abs_err: u64,
@@ -473,7 +518,7 @@ fn q_checks(states: &[GkEpochState], epoch_vals: &[&[u32]], named: bool) -> QChe
 fn emit(
     arm: &str, mode: &str, guest: &str, query: &str, epochs: usize, epoch_index: String, m: usize, records: usize,
     cbs: usize, tuples: usize, x: &Exec, state_commits: usize, eq: bool, result: String, exact: String, acc: &Acc,
-    qc: &QChecks, p: Option<Proved>,
+    qc: &QChecks, p: Option<Proved>, rc: &RootCols,
 ) {
     let contention = p.as_ref().map_or_else(|| "-".to_string(), |p| p.contention.csv());
     let arm = match &p {
@@ -495,11 +540,12 @@ fn emit(
     };
     let seg = x.segments as f64;
     println!(
-        "zka,{arm},{mode},{guest},gk,{query},1/{GK_EPS_DEN},{GK_COMPRESS_EVERY},{epochs},{epoch_index},{m},{records},{cbs},key&0x1FFFFF,{tuples},{},{},{},{},{},{:.3},{},{state_commits},{eq},{result},{exact},{},{},{:.2},{},{},{},{:.4},{},{},{},{},{ps},{vm},{rb},{sps},{pseg},{ptot},{pusr},{rss},{contention},{:.1},{:.1},{:.1},MODELED=segments*{S_PER_SEG} s/seg (CM-guest CPU anchors; not measured)",
+        "zka,{arm},{mode},{guest},gk,{query},1/{GK_EPS_DEN},{GK_COMPRESS_EVERY},{epochs},{epoch_index},{m},{records},{cbs},key&0x1FFFFF,{tuples},{},{},{},{},{},{:.3},{},{state_commits},{eq},{result},{exact},{},{},{:.2},{},{},{},{:.4},{},{},{},{},{ps},{vm},{rb},{sps},{pseg},{ptot},{pusr},{rss},{contention},{:.1},{:.1},{:.1},MODELED=segments*{S_PER_SEG} s/seg (CM-guest CPU anchors; not measured),{},{},{},{}",
         x.input_bytes, x.user_cycles, x.padded_cycles, x.segments, x.max_po2, x.exec_s, x.journal_bytes,
         acc.abs_err, acc.cert_err, acc.eps_n, acc.abs_err as f64 <= acc.eps_n, acc.cert_err as f64 <= acc.eps_n,
         acc.exact_in_cert, acc.cert_err as f64 / acc.eps_n, qc.min_kept, qc.named, qc.sweep, qc.ok,
-        seg * S_PER_SEG, seg * S_PER_SEG_LO, seg * S_PER_SEG_HI,
+        seg * S_PER_SEG, seg * S_PER_SEG_LO, seg * S_PER_SEG_HI, rc.variant, rc.construction, rc.agree,
+        rc.state_commit,
     );
 }
 
@@ -540,6 +586,10 @@ fn main() {
     if m == 0 || cbs == 0 {
         die("--epoch-size and --batch must be > 0");
     }
+    let (root_name, root) = parse_root();
+    if arg_str("--root").is_some() && mode != "aggr" {
+        die("--root applies to --mode aggr only (query guests read no root)");
+    }
     let keys = load_keys(&keys_path);
 
     match mode.as_str() {
@@ -552,6 +602,9 @@ fn main() {
             if profile && do_prove {
                 die("--profile and --prove are exclusive (the profiling guest is never proved)");
             }
+            if profile && root.is_some() {
+                die("--profile runs the legacy profiling guest (aggr_gk_prof); it takes no --root");
+            }
             let idx = arg_u64("--epoch-index", 0) as usize;
             if (idx + 1) * m > keys.len() {
                 die(&format!("epoch {idx} needs {} keys, {keys_path} has {}", (idx + 1) * m, keys.len()));
@@ -559,6 +612,30 @@ fn main() {
             let (outs, _links) = aggregate(&keys, idx + 1, m, cbs);
             let (inp, st) = &outs[idx];
             let (_, native) = process_gk_aggr_with_state(inp);
+            // Every variant run natively on the same input: same state and journal except the root.
+            let blank = |o: &GkAggrOutput| GkAggrOutput { tuples_root: [0u8; 32], ..o.clone() };
+            let variants: Vec<(GkRoot, GkEpochState, GkAggrOutput)> = [GkRoot::Buckets64, GkRoot::None, GkRoot::PerTuple]
+                .into_iter()
+                .map(|r| {
+                    let (s2, o) = process_gk_aggr_root(inp, r);
+                    (r, s2, o)
+                })
+                .collect();
+            let agree = variants.iter().all(|(r, s2, o)| {
+                s2 == st
+                    && blank(o) == blank(&native)
+                    && match r {
+                        GkRoot::None => o.tuples_root == [0u8; 32],
+                        GkRoot::PerTuple => o.tuples_root == native.tuples_root,
+                        GkRoot::Buckets64 => o.tuples_root != [0u8; 32],
+                    }
+            });
+            let rc = RootCols {
+                variant: root_name,
+                construction: root.map_or("pertuple", |r| r.construction()),
+                agree: agree.to_string(),
+                state_commit: hex(&native.state_commit),
+            };
             let vals: Vec<u32> = keys[idx * m..(idx + 1) * m].iter().map(|&k| k & VALUE_MASK).collect();
             let (acc, distinct_vals, max_gd) = epoch_accuracy(st, &vals);
             let qc = q_checks(core::slice::from_ref(st), &[&vals[..]], true);
@@ -576,7 +653,7 @@ fn main() {
                     x.user_cycles.saturating_sub(ph[0..7].iter().sum::<u64>() + ph[8] + ph[9]), ph[7]
                 );
                 emit("profile", "aggr", "aggr_gk_prof", "-", 1, idx.to_string(), m, m, cbs, st.tuples.len(), &x, 1, eq,
-                    result, exact, &acc, &qc, None);
+                    result, exact, &acc, &qc, None, &rc);
                 if !eq {
                     eprintln!("gk: WARNING profiling journal != native output");
                 }
@@ -588,19 +665,42 @@ fn main() {
                 }
                 return;
             }
-            let x = execute(inp, AGGR_GK_ELF);
-            let got: GkAggrOutput = x.session.journal.decode().unwrap();
-            let eq = got == native;
+            let (guest, x, eq, proved) = match root {
+                None => {
+                    let x = execute(inp, AGGR_GK_ELF);
+                    let got: GkAggrOutput = x.session.journal.decode().unwrap();
+                    let eq = got == native;
+                    let proved =
+                        if do_prove && eq && checks_ok && agree { Some(prove(inp, AGGR_GK_ELF, AGGR_GK_ID, &native)) } else { None };
+                    ("aggr_gk", x, eq, proved)
+                }
+                Some(r) => {
+                    let o = variants.iter().find(|v| v.0 == r).map(|v| v.2.clone()).unwrap();
+                    let expect: (GkRoot, GkAggrOutput) = (r, o);
+                    // The guest reads the GkRoot, then the input: a tuple serializes as the two in sequence.
+                    let x = execute(&(r, inp), AGGR_GK_ROOT_ELF);
+                    let got: (GkRoot, GkAggrOutput) = x.session.journal.decode().unwrap();
+                    let eq = got == expect;
+                    let proved = if do_prove && eq && checks_ok && agree {
+                        Some(prove(&(r, inp), AGGR_GK_ROOT_ELF, AGGR_GK_ROOT_ID, &expect))
+                    } else {
+                        None
+                    };
+                    ("aggr_gk_root", x, eq, proved)
+                }
+            };
             if !eq {
                 eprintln!("gk: WARNING aggregation journal != native output");
+            }
+            if !agree {
+                eprintln!("gk: WARNING root variants disagree outside the root field");
             }
             if !checks_ok {
                 eprintln!("gk: WARNING accuracy check failed (min_kept/q_ok/rank columns)");
             }
-            let proved = if do_prove && eq && checks_ok { Some(prove(inp, AGGR_GK_ELF, AGGR_GK_ID, &native)) } else { None };
-            emit(if proved.is_some() { "proved" } else { "exec" }, "aggr", "aggr_gk", "-", 1, idx.to_string(), m, m,
-                cbs, st.tuples.len(), &x, 1, eq, result_base, exact, &acc, &qc, proved);
-            if !eq || !checks_ok {
+            emit(if proved.is_some() { "proved" } else { "exec" }, "aggr", guest, "-", 1, idx.to_string(), m, m,
+                cbs, st.tuples.len(), &x, 1, eq, result_base, exact, &acc, &qc, proved, &rc);
+            if !eq || !checks_ok || !agree {
                 std::process::exit(1);
             }
         }
@@ -666,7 +766,7 @@ fn main() {
             let proved =
                 if do_prove && eq && checks_ok { Some(prove(&input, QUERIER_GK_ELF, QUERIER_GK_ID, &native)) } else { None };
             emit(if proved.is_some() { "proved" } else { "exec" }, "query", "querier_gk", &qname, n, "-".into(), m,
-                n * m, cbs, tuples, &x, got.state_commits.len(), eq, result, exact, &acc, &qc, proved);
+                n * m, cbs, tuples, &x, got.state_commits.len(), eq, result, exact, &acc, &qc, proved, &RootCols::query());
             if !eq {
                 eprintln!("gk: WARNING query journal != native output");
             }

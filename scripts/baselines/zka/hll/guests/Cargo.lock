@@ -666,6 +666,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hll_aggr_root"
+version = "0.1.0"
+dependencies = [
+ "risc0-zkvm",
+ "zka-hll-core",
+]
+
+[[package]]
 name = "hll_query"
 version = "0.1.0"
 dependencies = [

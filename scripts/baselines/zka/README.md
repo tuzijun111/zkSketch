@@ -59,6 +59,12 @@ Don't run them next to another job of yours.
   guest ELF, and a shared target dir let a T=1 build relink binaries another
   script expected at T=100. Its path dependencies go through `.zka`, an
   untracked symlink to the clone that `common.sh` creates.
+- `cm_noroot/` (ours) is the noroot variant of their CM aggregation, driven by `cyc`'s
+  `shipped --family cm --root noroot` (its path dependency; built into the same
+  `cyc-t<T>`): `core/` include!s line ranges that `gen_upstream.sh` cuts from the clone
+  (`--check` re-verifies them), with one marked block replaced; `guests/` has
+  `aggr_cm_noroot` and the validation twin `aggr_cm_twin`, with a lock derived from
+  `hll/guests/Cargo.lock`. See "Root variants" under "Six-sketch comparison".
 - Other build locations: `build/ourcm`, `build/zksq`, `build/shaccel`,
   `build/zka-ss-mg`, `build/zka-gk-bm2`, `build/zka-bloom` and `build/zka-kmv`
   under `$BASELINE_DIR`;
@@ -850,6 +856,110 @@ plain textbook per-record code in their per-epoch pipeline with query-time merge
   run is in `six_zka_jobs.csv` / `six_zksketch_runs.csv`. Runs were strictly
   sequential. Box: AMD Threadripper PRO 9975WX, 32 cores / 64 threads, 559 GiB,
   CPU only.
+
+### Root variants of the zk-Analytics aggregation proofs (designed / noroot / legacy)
+
+Each of zk-Analytics' summary types builds, inside every epoch's aggregation proof, a
+per-type Merkle root over its state IN ADDITION to the flat SHA-256 `state_commit` that
+the epoch chain and every query guest use: samples `buckets_root`
+(`samples_buckets_root_from_leaves` over `SAMPLES_HT_BUCKETS` hash buckets), histogram
+`buckets_root` (`hist_per_key_root`, one leaf per key), CM `row_roots` (one SHA-256 leaf
+per counter, 3 x 1,024, each row folded by their `MerkleTree`) + `cm_root` + `heap_root`
+(`aggregator/core/src/lib.rs`). Their host folds the roots into an `out_commit` kept in its
+database; no query guest or verifier reads them. For CM the root work is about 11.1M
+cycles per epoch whatever the number of records (below). The committed 2026-10-09 ports
+were inconsistent about it (SpaceSaving: samples pattern, 64 buckets; GK: per-tuple root;
+HLL / Bloom / KMV: none). Every aggregation driver now takes `--root`, and the comparison
+reports two consistent variants:
+
+| `--root` | meaning | CM | HLL, SS, GK, Bloom, KMV (†) |
+|---|---|---|---|
+| `designed` | zk-Analytics as designed | their `aggr_cm`, unchanged (same ELF) | the cheapest of their root constructions applied uniformly: their samples pattern with 64 buckets (cells -> 64 buckets, leaf = SHA-256(tag \|\| the bucket's cells in canonical order), folded by their pub `samples_buckets_root_from_leaves`; the number of leaves is `next_pow2_ge(max bucket + 1)`, 64 in every run here) |
+| `noroot` | apples-to-apples with zkSketch, which commits its state but publishes no per-bucket root | `aggr_cm_noroot` (`cm_noroot/`): their `process_cm_aggr_with_state` cut byte for byte from the clone by `cm_noroot/gen_upstream.sh` (which `six/build.sh` runs with `--check`), with only lines 1262-1274 (row_roots, cm_root, heap_root) replaced by zeros; chain verification, flattening, table and heap update, `state_commit`, epoch link and journal type unchanged | the same guest as `designed`, root field zero |
+| `legacy` (default) | the guests of the committed 2026-10-09 reference rows | `aggr_cm` | `hll_aggr`, `aggr_ss`, `aggr_gk`, `bloom_aggr`, `kmv_aggr`: SS samples-pattern 64 buckets, GK per-tuple root, HLL / Bloom / KMV none |
+| sensitivity | | `twin` (validation only, below) | SS `buckets1024`, `perkey`; GK `pertuple` |
+
+The designed / noroot guests of the ports read the variant before their input and commit
+it with the journal: `hll_aggr_root`, `bloom_aggr_root`, `kmv_aggr_root` (`guests/aggr_root`),
+`aggr_gk_root` (`gk/guests/aggr_root`), and SpaceSaving's existing `aggr_ss_rootvar`. HLL,
+Bloom and KMV run their legacy aggregation function itself and then the root step; GK and
+SS run the legacy steps with the root construction chosen at run time. The variant code
+of HLL / Bloom / KMV / GK lives in each core crate's `src/root.rs`, compiled only with the
+crate feature `root` (enabled by `guests/aggr_root` and the host driver), so the legacy
+guests build exactly as before: every pre-existing guest ELF of the six families is
+byte-identical to the previous build. The cell -> bucket map, per family:
+
+| family | cells | cell -> bucket (64 buckets) | leaf body, canonical order |
+|---|---|---|---|
+| SS | monitored entries (keyed) | their `samples_bucket_index` mix of the key id (FNV-1a fold, murmur3 fmix64, `& 63`): `ss_bucket_index` | entries sorted by key id: key id, count, error |
+| KMV | held 64-bit hash values (keyed) | the same mix applied to the value itself (it already is a 64-bit key hash): `kmv_bucket_index` | the bucket's values ascending, big-endian |
+| HLL | 2^14 one-byte registers (array) | fixed partition: register i -> i / 256 (64 contiguous groups of 256) | the 256 register bytes in index order |
+| Bloom | 3,584 32-bit filter words = 14,336 bytes (array) | fixed partition: byte i -> i / 224 (64 contiguous groups of 56 words, 1,792 bits) | the 224 bytes in index order |
+| GK | the n tuples of the value-ordered summary (array) | fixed partition: tuple i -> i * 64 / n | the group's tuples (v, g, delta, big-endian) in index order |
+
+Leaves are tagged `ZKA_PORT_<FAM>_BUCKET_V1` (ours; cf. their `TAG_BUCKET_LEAF`). Query
+guests read no root, so query proofs do not depend on the variant (the drivers refuse
+`--root` with `--mode query`; Bloom / KMV `--mode exec` carry the chain from the variant's
+journals and their query rows are identical across variants). Every aggregation row of all
+six drivers ends with `root_variant,root_construction,variants_agree,state_commit`
+(`-` on query rows): `variants_agree` = every variant of that family run natively on the
+same input gives the same state, `state_commit`, epoch link, `n_events` and source chain
+tips, with a zero root exactly for `noroot` (CM: their aggregation vs the noroot copy); the
+drivers exit 1 when it or `journal_eq_native` fails.
+
+**Validation (2026-10-13; executor, AOL, batches of 8; fresh-server sandbox, rustc 1.97.1,
+r0vm 3.0.6).** At 64 and 256 records per epoch, epochs 0 and 1, every family x variant
+(incl. CM `twin`, SS `buckets1024` / `perkey`, GK `pertuple`): `journal_eq_native` and
+`variants_agree` true, one `state_commit` across all variants, noroot cycles below designed.
+The query guests and the Bloom / KMV pipelines (`--mode exec`) give identical rows under
+every `--root`. All core unit tests pass (`cargo test -p <core> --features root`; each port
+has a `root_variants_agree_except_root` test that recomputes the designed root
+independently). CM `designed` is their ELF: 12,103,251 cycles at 128 records and 12,799,204
+at 256 (the numbers of the root-cost analysis), 22,540,245 at 2,048. The CM `twin` guest
+(`cm_noroot/core/src/lib.rs`, "twin"), an unedited copy of their code compiled in our crate,
+costs aggr_cm + 0.40M cycles at every size; a pprof profile (`RISC0_PPROF_OUT`) puts all of
+it inside their generic `MerkleTree` (monomorphized in our crate with different inlining)
+and none in the rest, so `noroot` costs what their aggregation costs without its Merkle
+work. Epoch 0 at 2,048 records (this configuration; segments of 2^20):
+
+| family | designed: cycles (segments) | noroot: cycles (segments) | root work | legacy: cycles (construction) |
+|---|---|---|---|---|
+| CM | 22,540,245 (24) | 11,364,064 (12) | 11,176,181 | 22,540,245 (their roots; = designed) |
+| HLL | 10,679,099 (11) | 10,383,921 (11) | 295,178 | 10,395,108 (none) |
+| SS | 14,067,446 (15) | 13,158,936 (14) | 908,510 | 14,067,391 (samples, 64 buckets, compiled in) |
+| GK | 13,207,588 (14) | 12,983,145 (14) | 224,443 | 13,407,572 (per-tuple) |
+| Bloom | 11,353,107 (12) | 11,080,766 (12) | 272,341 | 11,091,953 (none) |
+| KMV | 11,526,366 (12) | 11,108,717 (12) | 417,649 | 11,104,487 (none) |
+
+The CM, HLL, Bloom and KMV legacy numbers equal the committed `six_zka_*_exec.csv` epoch 0
+exactly; SS and GK differ from them by +832 and +1,664 cycles already in this sandbox's
+build of the unchanged sources. noroot - legacy for HLL / Bloom / KMV is -11,187 /
+-11,187 / +4,230 cycles (the root guest reads one more word and commits 32 more journal
+bytes; HLL and Bloom's chain verification compiles 15K cycles cheaper in it).
+
+Toy proofs of every new guest (2026-10-13, 64 records, epoch 0, `--prove`:
+`ProverOpts::succinct()`, CPU r0vm; one at a time on a shared box at 1-minute load ~60-75
+from other users' jobs, so the times are indicative only; peak RSS from `six/rss_tree.sh`).
+Every proved journal equals the native output:
+
+| family | variant | user cycles | padded (po2) | prove_s | verify_ms (best of 5) | receipt bytes | r0vm peak RSS MB |
+|---|---|---|---|---|---|---|---|
+| CM | noroot | 663,500 | 2^20 | 31.2 | 10.6 | 225,834 | 9,347 |
+| HLL | designed | 693,607 | 2^20 | 30.8 | 9.9 | 224,818 | 9,351 |
+| HLL | noroot | 398,429 | 2^19 | 18.0 | 9.9 | 224,818 | 4,704 |
+| SS | designed | 687,530 | 2^20 | 34.6 | 10.7 | 224,826 | 9,353 |
+| SS | noroot | 435,722 | 2^19 | 19.0 | 9.8 | 224,826 | 4,704 |
+| GK | designed | 629,480 | 2^20 | 32.5 | 10.5 | 224,818 | 9,344 |
+| GK | noroot | 405,281 | 2^19 | 19.1 | 9.8 | 224,818 | 4,701 |
+| Bloom | designed | 687,425 | 2^20 | 36.9 | 10.6 | 224,818 | 9,354 |
+| Bloom | noroot | 415,084 | 2^19 | 19.6 | 10.6 | 224,818 | 4,690 |
+| KMV | designed | 605,837 | 2^20 | 36.1 | 10.6 | 224,818 | 9,345 |
+| KMV | noroot | 374,635 | 2^19 | 19.5 | 11.0 | 224,818 | 4,684 |
+
+CM `designed` (their `aggr_cm`, 11,755,177 cycles = 13 segments of 2^20 at 64 records) was
+not proved at toy size; at 30.1-33.7 s per 2^20-cycle segment it would take about 6.5-7.5
+minutes. Succinct receipts are the same size whatever the variant (the journal differs by
+the root field); peak RSS follows the largest segment (2^20: ~9.35 GB, 2^19: ~4.7 GB).
 
 ### Running
 

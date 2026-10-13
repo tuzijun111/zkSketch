@@ -35,6 +35,17 @@
 //                under --prove.
 //   --gate TEXT  how the runner gated the prove (e.g. load1_start=..;max_load=..;waited_s=..),
 //                appended to the contention column of proved rows (gate=none if absent)
+//   --root legacy|designed|noroot   which Merkle root the aggregation journal carries
+//                (six-sketch comparison, ../../README.md "Six-sketch comparison";
+//                ../core/src/lib.rs "root variants"); --mode aggr and exec:
+//                  legacy    (default) the kmv_aggr guest, no root at all: the guest of
+//                            the committed 2026-10-09 reference rows
+//                  designed  kmv_aggr_root, 64-bucket samples-pattern root (zk-Analytics as designed)
+//                  noroot    kmv_aggr_root, root field zero (apples-to-apples with zkSketch)
+//                Query guests read no root, so query rows do not depend on it (refused with
+//                --mode query); aggregation rows also check variants_agree (the legacy,
+//                designed and noroot aggregations run natively agree on the state, state
+//                commitment, epoch link, n_events and source tips) and print state_commit.
 //   --arm-tag T  proved rows get arm proved_T (and proved_contended_T when contended)
 //                instead of proved / proved_contended: the runner passes `override` when
 //                its load gate was raised above the default, and anything else a caller
@@ -55,9 +66,9 @@
 //
 // Usage:
 //   kmv --header
-//   kmv --mode aggr  [--epoch-index 0] [common] [--prove]
+//   kmv --mode aggr  [--epoch-index 0] [--root legacy|designed|noroot] [common] [--prove]
 //   kmv --mode query --epochs N [--words] [common] [--prove]
-//   kmv --mode exec  --epochs N [--query-at 1,2,4,8] [--words] [common] [--prove]
+//   kmv --mode exec  --epochs N [--query-at 1,2,4,8] [--words] [--root ...] [common] [--prove]
 //   common: [--epoch-size 2048] [--batch 8] [--keys PATH] [--gate TEXT] [--arm-tag T]
 
 use std::collections::HashSet;
@@ -67,11 +78,15 @@ use std::time::{Duration, Instant};
 
 use risc0_zkvm::{default_executor, default_prover, ExecutorEnv, ProverOpts, SessionInfo};
 use zka_kmv_core::{
-    batch_chain_hash, kmv_epoch_state_commit, kmv_estimate, merge_bottom_k, process_kmv_aggr_with_state,
-    run_kmv_query, BatchInput, EpochChainLink, KmvAggrInput, KmvAggrOutput, KmvEpochState, KmvQuery,
-    KmvQueryInput, KmvQueryInputWords, KmvQueryOutput, KmvQueryResult, KMV_K, KMV_SEED,
+    batch_chain_hash, kmv_epoch_state_commit, kmv_estimate, merge_bottom_k, process_kmv_aggr_root,
+    process_kmv_aggr_with_state, run_kmv_query, BatchInput, EpochChainLink, KmvAggrInput, KmvAggrOutput,
+    KmvAggrRootOutput, KmvEpochState, KmvQuery, KmvQueryInput, KmvQueryInputWords, KmvQueryOutput, KmvQueryResult,
+    KmvRoot, KMV_K, KMV_SEED,
 };
-use zka_kmv_methods::{KMV_AGGR_ELF, KMV_AGGR_ID, KMV_QUERY_ELF, KMV_QUERY_ID, KMV_QUERY_WORDS_ELF, KMV_QUERY_WORDS_ID};
+use zka_kmv_methods::{
+    KMV_AGGR_ELF, KMV_AGGR_ID, KMV_AGGR_ROOT_ELF, KMV_AGGR_ROOT_ID, KMV_QUERY_ELF, KMV_QUERY_ID, KMV_QUERY_WORDS_ELF,
+    KMV_QUERY_WORDS_ID,
+};
 use zkvm_common::Event;
 
 /// MODELED prove time: segments x s/segment. Central value and envelope are the four
@@ -82,7 +97,7 @@ const S_PER_SEG_HI: f64 = 30.79;
 
 // ------------------------------------------------------------------ arguments
 const VALUE_FLAGS: &[&str] =
-    &["--mode", "--epochs", "--epoch-index", "--keys", "--epoch-size", "--batch", "--query-at", "--gate", "--arm-tag"];
+    &["--mode", "--epochs", "--epoch-index", "--keys", "--epoch-size", "--batch", "--query-at", "--gate", "--arm-tag", "--root"];
 const BOOL_FLAGS: &[&str] = &["--prove", "--header", "--words"];
 
 fn validate_args() {
@@ -498,6 +513,7 @@ const COLS: &[&str] = &[
     "prof", "prove_s", "verify_ms", "receipt_bytes", "s_per_segment", "prove_segments",
     "prove_total_cycles", "prove_user_cycles", "prove_paging_cycles", "prove_r0vm_peak_rss_mb", "contention",
     "MODELED_prove_s", "MODELED_prove_s_lo", "MODELED_prove_s_hi", "model", "image_id",
+    "root_variant", "root_construction", "variants_agree", "state_commit",
 ];
 
 /// One CSV row; `emit` checks the columns arrive in exactly the COLS order.
@@ -529,7 +545,32 @@ struct Ctx {
     gate: String,
     /// --arm-tag, appended to the arm of proved rows
     arm_tag: Option<String>,
+    /// --root: its name, and None = legacy (kmv_aggr) / Some(r) = kmv_aggr_root with r
+    root_name: &'static str,
+    root: Option<KmvRoot>,
     fails: usize,
+}
+
+/// --root: (name, None = legacy | Some(variant of the kmv_aggr_root guest)).
+fn parse_root() -> (&'static str, Option<KmvRoot>) {
+    match arg_str("--root").as_deref() {
+        None | Some("legacy") => ("legacy", None),
+        Some("designed") => ("designed", Some(KmvRoot::Buckets64)),
+        Some("noroot") => ("noroot", Some(KmvRoot::None)),
+        Some(o) => die(&format!("--root {o}: expected legacy|designed|noroot")),
+    }
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// The four root-variant columns (last in COLS).
+fn root_cols(r: &mut Row, variant: &str, construction: &str, agree: &str, state_commit: &str) {
+    r.put("root_variant", variant)
+        .put("root_construction", construction)
+        .put("variants_agree", agree)
+        .put("state_commit", state_commit);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -634,14 +675,35 @@ fn arm_of(ctx: &Ctx, p: &Option<Proved>) -> String {
     }
 }
 
-/// One aggregation guest run (execute, and prove with --prove) on a prepared epoch input.
-/// Returns the GUEST journal (the pipeline carries the chain from it).
+/// One aggregation guest run (execute, and prove with --prove) on a prepared epoch input,
+/// with the --root variant's guest. Returns the GUEST journal without its root (the
+/// pipeline carries the chain from it).
 fn aggr_step(ctx: &mut Ctx, inp: &KmvAggrInput, st: &KmvEpochState, e: usize, slice: &[u32]) -> KmvAggrOutput {
+    // Every variant run natively on the same input: same state and journal except the root.
     let (_, native) = process_kmv_aggr_with_state(inp);
-    let x = execute(inp, KMV_AGGR_ELF);
-    let got: KmvAggrOutput = x.session.journal.decode().expect("decode journal");
-    let eq = got == native && kmv_epoch_state_commit(st) == native.state_commit;
-    let p = ctx.do_prove.then(|| prove(inp, KMV_AGGR_ELF, KMV_AGGR_ID, &native));
+    let (sd, designed) = process_kmv_aggr_root(inp, KmvRoot::Buckets64);
+    let (sn, noroot) = process_kmv_aggr_root(inp, KmvRoot::None);
+    let agree = &sd == st && &sn == st && designed.without_root() == native && noroot.without_root() == native
+        && noroot.buckets_root == [0u8; 32] && designed.buckets_root != [0u8; 32];
+    let (guest, x, got, guest_eq, p, id, construction) = match ctx.root {
+        None => {
+            let x = execute(inp, KMV_AGGR_ELF);
+            let got: KmvAggrOutput = x.session.journal.decode().expect("decode journal");
+            let p = ctx.do_prove.then(|| prove(inp, KMV_AGGR_ELF, KMV_AGGR_ID, &native));
+            let eq = got == native;
+            ("kmv_aggr", x, got, eq, p, KMV_AGGR_ID, "none")
+        }
+        Some(rv) => {
+            let expect: (KmvRoot, KmvAggrRootOutput) = (rv, if rv == KmvRoot::None { noroot } else { designed });
+            // The guest reads the KmvRoot, then the input: a tuple serializes as the two in sequence.
+            let x = execute(&(rv, inp), KMV_AGGR_ROOT_ELF);
+            let got: (KmvRoot, KmvAggrRootOutput) = x.session.journal.decode().expect("decode journal");
+            let p = ctx.do_prove.then(|| prove(&(rv, inp), KMV_AGGR_ROOT_ELF, KMV_AGGR_ROOT_ID, &expect));
+            let eq = got == expect;
+            ("kmv_aggr_root", x, got.1.without_root(), eq, p, KMV_AGGR_ROOT_ID, rv.construction())
+        }
+    };
+    let eq = guest_eq && kmv_epoch_state_commit(st) == native.state_commit;
     let distinct = slice.iter().collect::<HashSet<_>>().len();
     // The aggregation journal holds commitments only; the per-epoch answer is computed
     // natively from the committed state, for the accuracy columns.
@@ -649,13 +711,16 @@ fn aggr_step(ctx: &mut Ctx, inp: &KmvAggrInput, st: &KmvEpochState, e: usize, sl
     let KmvQueryResult::Estimate { estimate, .. } = res;
     let refc = ref_check(&st.values, slice, estimate);
     let mut r = Row::new();
-    common_cols(&mut r, ctx, &arm_of(ctx, &p), "aggr", "kmv_aggr", "-", 1, e.to_string(), ctx.m, distinct, &x);
+    common_cols(&mut r, ctx, &arm_of(ctx, &p), "aggr", guest, "-", 1, e.to_string(), ctx.m, distinct, &x);
     r.put("state_commits", 1).put("journal_eq_native", eq).put("ref_check", &refc);
     let acc_ok = result_cols(&mut r, &res, distinct, "journal=commits_only;native_epoch_", st.total_count, "-");
-    tail_cols(&mut r, ctx, &x, prof(&x, &["chain", "flatten", "update", "commit"]), p, KMV_AGGR_ID);
+    let phases: &[&str] =
+        if ctx.root.is_some() { &["chain", "flatten", "update", "commit", "root"] } else { &["chain", "flatten", "update", "commit"] };
+    tail_cols(&mut r, ctx, &x, prof(&x, phases), p, id);
+    root_cols(&mut r, ctx.root_name, construction, &agree.to_string(), &hex(&native.state_commit));
     r.emit();
-    if !eq || refc != "ok" || !acc_ok {
-        eprintln!("kmv: FAIL aggr epoch {e}: journal_eq_native={eq} ref_check={refc} accuracy_ok={acc_ok}");
+    if !eq || refc != "ok" || !acc_ok || !agree {
+        eprintln!("kmv: FAIL aggr epoch {e}: journal_eq_native={eq} ref_check={refc} accuracy_ok={acc_ok} variants_agree={agree}");
         ctx.fails += 1;
     }
     got
@@ -706,6 +771,7 @@ fn query_step(ctx: &mut Ctx, states: &[KmvEpochState], links: &[EpochChainLink],
             &["links", "commits", "merge", "estimate"]
         };
         tail_cols(&mut r, ctx, &x, prof(&x, phases), p, id);
+        root_cols(&mut r, "-", "-", "-", "-");
         r.emit();
         if !eq || !(refc == "ok" || refc == "suppressed") || !acc_ok {
             eprintln!("kmv: FAIL {guest} n={n}: journal_eq_native={eq} ref_check={refc} accuracy_ok={acc_ok}");
@@ -762,7 +828,13 @@ fn main() {
             die(&format!("--arm-tag '{t}': use [a-z0-9_]+"));
         }
     }
+    let (root_name, root) = parse_root();
+    if arg_str("--root").is_some() && mode == "query" {
+        die("--root applies to --mode aggr and exec only (query guests read no root)");
+    }
     let mut ctx = Ctx {
+        root_name,
+        root,
         mode: mode.clone(),
         m,
         cbs,

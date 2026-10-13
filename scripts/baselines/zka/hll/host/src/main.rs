@@ -26,22 +26,36 @@
 //
 // Usage:
 //   hll --header
-//   hll --mode aggr  [--epoch-index 0] [--epoch-size 16384] [--batch 8] [--keys PATH] [--prove]
+//   hll --mode aggr  [--epoch-index 0] [--root legacy|designed|noroot] [--epoch-size 16384] [--batch 8]
+//                    [--keys PATH] [--prove]
 //   hll --mode query --epochs N [--words] [--epoch-size 16384] [--batch 8] [--keys PATH] [--prove]
 //   --words: run the hll_query_words guest (same computation and journal; registers sent
 //            in serde's default Vec<u8> encoding, one zkVM word each) -- sensitivity row.
+//   --root:  which Merkle root the aggregation journal carries (six-sketch comparison,
+//            ../../README.md "Six-sketch comparison"; ../core/src/lib.rs "root variants"):
+//              legacy    (default) the hll_aggr guest, no root at all: the guest of the
+//                        committed 2026-10-09 reference rows
+//              designed  hll_aggr_root, 64-bucket samples-pattern root (zk-Analytics as designed)
+//              noroot    hll_aggr_root, root field zero (apples-to-apples with zkSketch)
+//            Query guests read no root: --root is refused with --mode query.
+//   Extra checks of an aggregation row: variants_agree = the legacy, designed and noroot
+//   aggregations run natively on the same input give the same state, state commitment, epoch
+//   link, n_events and source tips (the designed journal carries a non-zero root, the noroot
+//   journal a zero one); state_commit = the journal's state commitment (hex).
 
 use std::collections::HashSet;
 use std::time::Instant;
 
 use risc0_zkvm::{default_executor, default_prover, ExecutorEnv, ProverOpts, SessionInfo};
 use zka_hll_core::{
-    batch_chain_hash, hll_epoch_state_commit, hll_estimate, hll_hash64, process_hll_aggr_with_state,
-    run_hll_query, BatchInput, EpochChainLink, HllAggrInput, HllAggrOutput, HllEpochState, HllQuery,
-    HllQueryInput, HllQueryInputWords, HllQueryOutput, HllQueryResult, HLL_M, HLL_P,
+    batch_chain_hash, hll_epoch_state_commit, hll_estimate, hll_hash64, process_hll_aggr_root,
+    process_hll_aggr_with_state, run_hll_query, BatchInput, EpochChainLink, HllAggrInput, HllAggrOutput,
+    HllAggrRootOutput, HllEpochState, HllQuery, HllQueryInput, HllQueryInputWords, HllQueryOutput, HllQueryResult,
+    HllRoot, HLL_M, HLL_P,
 };
 use zka_hll_methods::{
-    HLL_AGGR_ELF, HLL_AGGR_ID, HLL_QUERY_ELF, HLL_QUERY_ID, HLL_QUERY_WORDS_ELF, HLL_QUERY_WORDS_ID,
+    HLL_AGGR_ELF, HLL_AGGR_ID, HLL_AGGR_ROOT_ELF, HLL_AGGR_ROOT_ID, HLL_QUERY_ELF, HLL_QUERY_ID, HLL_QUERY_WORDS_ELF,
+    HLL_QUERY_WORDS_ID,
 };
 use zkvm_common::Event;
 
@@ -52,7 +66,7 @@ const S_PER_SEG_LO: f64 = 29.73;
 const S_PER_SEG_HI: f64 = 30.79;
 
 // ------------------------------------------------------------------ arguments
-const VALUE_FLAGS: &[&str] = &["--mode", "--epochs", "--epoch-index", "--keys", "--epoch-size", "--batch"];
+const VALUE_FLAGS: &[&str] = &["--mode", "--epochs", "--epoch-index", "--keys", "--epoch-size", "--batch", "--root"];
 const BOOL_FLAGS: &[&str] = &["--prove", "--header", "--words"];
 
 fn validate_args() {
@@ -295,13 +309,39 @@ fn image_id_hex(id: [u32; 8]) -> String {
     id.iter().flat_map(|w| w.to_le_bytes()).map(|b| format!("{b:02x}")).collect()
 }
 
-const HEADER: &str = "system,arm,family,mode,guest,query,hll_p,registers,epochs,epoch_index,epoch_records,records,batch,value_enc,hash,distinct_keys,input_bytes,user_cycles,padded_cycles,segments,max_po2,cycles_per_record,cycles_per_epoch,exec_s,journal_bytes,state_commits,journal_eq_native,ref_check,result,exact,rel_err,prof,prove_s,verify_ms,receipt_bytes,s_per_segment,prove_segments,prove_total_cycles,prove_paging_cycles,MODELED_prove_s,MODELED_prove_s_lo,MODELED_prove_s_hi,model,image_id";
+const HEADER: &str = "system,arm,family,mode,guest,query,hll_p,registers,epochs,epoch_index,epoch_records,records,batch,value_enc,hash,distinct_keys,input_bytes,user_cycles,padded_cycles,segments,max_po2,cycles_per_record,cycles_per_epoch,exec_s,journal_bytes,state_commits,journal_eq_native,ref_check,result,exact,rel_err,prof,prove_s,verify_ms,receipt_bytes,s_per_segment,prove_segments,prove_total_cycles,prove_paging_cycles,MODELED_prove_s,MODELED_prove_s_lo,MODELED_prove_s_hi,model,image_id,root_variant,root_construction,variants_agree,state_commit";
+
+/// Root variant columns of a row: (root_variant, root_construction, variants_agree, state_commit).
+struct RootCols {
+    variant: &'static str,
+    construction: &'static str,
+    agree: String,
+    state_commit: String,
+}
+impl RootCols {
+    fn query() -> Self {
+        RootCols { variant: "-", construction: "-", agree: "-".into(), state_commit: "-".into() }
+    }
+}
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// --root: None = legacy (the hll_aggr guest), Some(r) = the hll_aggr_root guest with r.
+fn parse_root() -> (&'static str, Option<HllRoot>) {
+    match arg_str("--root").as_deref() {
+        None | Some("legacy") => ("legacy", None),
+        Some("designed") => ("designed", Some(HllRoot::Buckets64)),
+        Some("noroot") => ("noroot", Some(HllRoot::None)),
+        Some(o) => die(&format!("--root {o}: expected legacy|designed|noroot")),
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 fn emit(
     mode: &str, guest: &str, query: &str, epochs: usize, epoch_index: String, m: usize, records: usize,
     cbs: usize, distinct: usize, x: &Exec, state_commits: usize, eq: bool, refc: &str, result: String,
-    exact: String, rel_err: f64, prof: String, p: Option<Proved>, id: [u32; 8],
+    exact: String, rel_err: f64, prof: String, p: Option<Proved>, id: [u32; 8], rc: &RootCols,
 ) {
     let (ps, vm, rb, sps, pseg, ptot, ppag) = match p {
         Some(p) => (
@@ -317,10 +357,11 @@ fn emit(
     };
     let seg = x.segments as f64;
     println!(
-        "zka-arch,hll,hll,{mode},{guest},{query},{HLL_P},{HLL_M},{epochs},{epoch_index},{m},{records},{cbs},1,fnv1a+splitmix64,{distinct},{},{},{},{},{},{:.1},{:.1},{:.3},{},{state_commits},{eq},{refc},{result},{exact},{rel_err:.6},{prof},{ps},{vm},{rb},{sps},{pseg},{ptot},{ppag},{:.1},{:.1},{:.1},MODELED=segments*{S_PER_SEG} s/seg (CM-guest CPU anchors; not measured),{}",
+        "zka-arch,hll,hll,{mode},{guest},{query},{HLL_P},{HLL_M},{epochs},{epoch_index},{m},{records},{cbs},1,fnv1a+splitmix64,{distinct},{},{},{},{},{},{:.1},{:.1},{:.3},{},{state_commits},{eq},{refc},{result},{exact},{rel_err:.6},{prof},{ps},{vm},{rb},{sps},{pseg},{ptot},{ppag},{:.1},{:.1},{:.1},MODELED=segments*{S_PER_SEG} s/seg (CM-guest CPU anchors; not measured),{},{},{},{},{}",
         x.input_bytes, x.user_cycles, x.padded_cycles, x.segments, x.max_po2,
         x.user_cycles as f64 / records as f64, x.user_cycles as f64 / epochs as f64, x.exec_s, x.journal_bytes,
         seg * S_PER_SEG, seg * S_PER_SEG_LO, seg * S_PER_SEG_HI, image_id_hex(id),
+        rc.variant, rc.construction, rc.agree, rc.state_commit,
     );
 }
 
@@ -351,6 +392,10 @@ fn main() {
     if m == 0 || cbs == 0 {
         die("--epoch-size and --batch must be > 0");
     }
+    let (root_name, root) = parse_root();
+    if arg_str("--root").is_some() && mode != "aggr" {
+        die("--root applies to --mode aggr only (query guests read no root)");
+    }
     let keys = load_keys(&keys_path);
 
     match mode.as_str() {
@@ -364,22 +409,51 @@ fn main() {
             let slice = &keys[idx * m..(idx + 1) * m];
             let distinct = slice.iter().collect::<HashSet<_>>().len();
 
-            let x = execute(inp, HLL_AGGR_ELF);
-            let (_, native) = process_hll_aggr_with_state(inp);
-            let got: HllAggrOutput = x.session.journal.decode().expect("decode journal");
-            let eq = got == native;
+            // Every variant run natively on the same input: same state and journal except the root.
+            let (_, legacy) = process_hll_aggr_with_state(inp);
+            let (sd, designed) = process_hll_aggr_root(inp, HllRoot::Buckets64);
+            let (sn, noroot) = process_hll_aggr_root(inp, HllRoot::None);
+            let agree = &sd == st && &sn == st && designed.without_root() == legacy && noroot.without_root() == legacy
+                && noroot.buckets_root == [0u8; 32] && designed.buckets_root != [0u8; 32];
+            let (guest, x, eq, p, id, construction) = match root {
+                None => {
+                    let x = execute(inp, HLL_AGGR_ELF);
+                    let got: HllAggrOutput = x.session.journal.decode().expect("decode journal");
+                    let p = do_prove.then(|| prove(inp, HLL_AGGR_ELF, HLL_AGGR_ID, &legacy));
+                    ("hll_aggr", x, got == legacy, p, HLL_AGGR_ID, "none")
+                }
+                Some(r) => {
+                    let native: (HllRoot, HllAggrRootOutput) =
+                        (r, if r == HllRoot::None { noroot.clone() } else { designed.clone() });
+                    // The guest reads the HllRoot, then the input: a tuple serializes as the two in sequence.
+                    let x = execute(&(r, inp), HLL_AGGR_ROOT_ELF);
+                    let got: (HllRoot, HllAggrRootOutput) = x.session.journal.decode().expect("decode journal");
+                    let p = do_prove.then(|| prove(&(r, inp), HLL_AGGR_ROOT_ELF, HLL_AGGR_ROOT_ID, &native));
+                    ("hll_aggr_root", x, got == native, p, HLL_AGGR_ROOT_ID, r.construction())
+                }
+            };
             // The aggregation journal holds commitments only; the per-epoch estimate is
             // computed natively from the committed state, for the accuracy column.
             let (est, res) = result_str(&hll_estimate(&st.registers));
             let refc = ref_check(&st.registers, slice, est);
-            let p = do_prove.then(|| prove(inp, HLL_AGGR_ELF, HLL_AGGR_ID, &native));
             if !eq {
                 eprintln!("hll: WARNING aggregation journal != native output");
             }
-            emit("aggr", "hll_aggr", "-", 1, idx.to_string(), m, m, cbs, distinct, &x, 1, eq, &refc,
+            if !agree {
+                eprintln!("hll: WARNING root variants disagree outside the root field");
+            }
+            let names: &[&str] = if root.is_some() {
+                &["chain", "flatten", "update", "commit", "root"]
+            } else {
+                &["chain", "flatten", "update", "commit"]
+            };
+            let rc = RootCols { variant: root_name, construction, agree: agree.to_string(), state_commit: hex(&legacy.state_commit) };
+            emit("aggr", guest, "-", 1, idx.to_string(), m, m, cbs, distinct, &x, 1, eq, &refc,
                 format!("journal=commits_only;native_epoch_{res}"), format!("distinct={distinct}"),
-                (est as f64 - distinct as f64) / distinct as f64,
-                prof(&x, &["chain", "flatten", "update", "commit"]), p, HLL_AGGR_ID);
+                (est as f64 - distinct as f64) / distinct as f64, prof(&x, names), p, id, &rc);
+            if !eq || !agree {
+                std::process::exit(1);
+            }
         }
         "query" => {
             let n = arg_usize("--epochs", 1);
@@ -419,7 +493,7 @@ fn main() {
                 got.state_commits.len(), eq, &refc,
                 format!("{res}{}", if got.suppressed { " SUPPRESSED" } else { "" }),
                 format!("distinct={distinct}"), (est as f64 - distinct as f64) / distinct as f64,
-                prof(&x, &["links", "commits", "merge", "est_pass", "est_f64"]), p, id);
+                prof(&x, &["links", "commits", "merge", "est_pass", "est_f64"]), p, id, &RootCols::query());
         }
         o => die(&format!("--mode {o}: expected aggr|query")),
     }

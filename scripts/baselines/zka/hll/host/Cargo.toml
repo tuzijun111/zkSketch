@@ -8,7 +8,7 @@ name = "hll"
 path = "src/main.rs"
 
 [dependencies]
-zka-hll-core = { path = "../core" }
+zka-hll-core = { path = "../core", features = ["root"] }
 zka-hll-methods = { path = "../methods" }
 zkvm-common = { path = "../../.zka/zkvm-common" }
 risc0-zkvm = "3"

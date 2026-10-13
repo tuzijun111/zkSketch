@@ -8,7 +8,7 @@ name = "bloom"
 path = "src/main.rs"
 
 [dependencies]
-zka-bloom-core = { path = "../core" }
+zka-bloom-core = { path = "../core", features = ["root"] }
 zka-bloom-methods = { path = "../methods" }
 zkvm-common = { path = "../../.zka/zkvm-common" }
 risc0-zkvm = "3"

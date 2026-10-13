@@ -22,15 +22,28 @@
 // Usage:
 //   ss --header
 //   ss --image-id-of PATH        (image ID of a combined guest image, e.g. aggr_ss.bin)
-//   ss --mode aggr  --capacity S [--epoch-index 0] [--root buckets64|buckets1024|perkey|none]
+//   ss --mode aggr  --capacity S [--epoch-index 0]
+//                   [--root legacy|designed|noroot|buckets1024|perkey|buckets64|none]
 //                   [--profile] [--prove]
 //   ss --mode query --capacity S --epochs N --query topk|estimate|estimate_merged
 //                   [--limit 10] [--point-rank 1] [--profile] [--prove]
 //   common: [--keys PATH] [--epoch-size 16384] [--batch 8]
 //
-// --root runs the aggr_ss_rootvar sensitivity guest with that Merkle-root
-// construction; without it the measured aggr_ss guest runs (SsRoot::HEADLINE =
-// buckets64, their samples-style root). estimate is the measured point query
+// --root (six-sketch comparison, ../../README.md "Six-sketch comparison"): which
+// Merkle root the aggregation journal carries.
+//   legacy (default)  the aggr_ss guest, SsRoot::HEADLINE = buckets64 compiled in: the
+//                     guest of the committed 2026-10-09 reference rows
+//   designed          aggr_ss_rootvar with SsRoot::Buckets64: zk-Analytics as designed,
+//                     the 64-bucket samples-pattern root that every port now builds
+//   noroot            aggr_ss_rootvar with SsRoot::None: root field zero (apples-to-apples
+//                     with zkSketch)
+//   buckets1024, perkey   aggr_ss_rootvar sensitivity rows (other root constructions)
+//   buckets64, none   older names of designed, noroot (same runs)
+// aggr_ss_rootvar reads the SsRoot before the input and commits (SsRoot, SsAggrOutput).
+// Every variant can be proved. Query guests read no root (--root is refused with
+// --mode query). Aggregation rows also check variants_agree (every root construction run
+// natively gives the same state, state commitment, epoch link, capacity, n_events and
+// source tips) and print state_commit. estimate is the measured point query
 // (their SumExactKey per-epoch scan); estimate_merged is the v1 point query
 // (full merge, then lookup), kept as a sensitivity row.
 //
@@ -417,7 +430,7 @@ fn phases(marks: &[(String, u64)]) -> String {
 }
 
 // ------------------------------------------------------------------ output
-const HEADER: &str = "system,arm,mode,guest,family,query,root,capacity,epochs,epoch_index,epoch_records,records,batch,limit,point_rank,distinct_keys,state_entries,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,r0vm_peak_rss_mb,journal_bytes,state_commits,journal_eq_native,ref_eq,invariants_ok,result,exact,accuracy,phases,prove_s,verify_ms,receipt_bytes,s_per_segment,prove_r0vm_peak_rss_mb,prove_condition,prove_other_r0vm_samples,prove_load1_mean,prove_load1_max,MODELED_prove_s,MODELED_prove_s_lo,MODELED_prove_s_hi,model,image_id";
+const HEADER: &str = "system,arm,mode,guest,family,query,root,capacity,epochs,epoch_index,epoch_records,records,batch,limit,point_rank,distinct_keys,state_entries,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,r0vm_peak_rss_mb,journal_bytes,state_commits,journal_eq_native,ref_eq,invariants_ok,result,exact,accuracy,phases,prove_s,verify_ms,receipt_bytes,s_per_segment,prove_r0vm_peak_rss_mb,prove_condition,prove_other_r0vm_samples,prove_load1_mean,prove_load1_max,MODELED_prove_s,MODELED_prove_s_lo,MODELED_prove_s_hi,model,image_id,root_variant,root_construction,variants_agree,state_commit";
 
 #[derive(Default)]
 struct Row {
@@ -425,6 +438,10 @@ struct Row {
     guest: &'static str,
     query: String,
     root: &'static str,
+    /// six-sketch root variant (legacy|designed|noroot|buckets1024|perkey), "-" for queries
+    root_variant: &'static str,
+    variants_agree: String,
+    state_commit: String,
     capacity: u32,
     epochs: usize,
     epoch_index: String,
@@ -471,24 +488,30 @@ fn emit(r: Row, x: &Exec, p: Option<Proved>) {
     let seg = x.segments as f64;
     let clean = |s: &str| s.replace(',', " ");
     println!(
-        "zka-port,ss,{},{},ss,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.1},{:.1},{:.1},MODELED=segments*{} s/seg (CM-guest CPU anchors; not measured),{}",
+        "zka-port,ss,{},{},ss,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.1},{:.1},{:.1},MODELED=segments*{} s/seg (CM-guest CPU anchors; not measured),{},{},{},{},{}",
         r.mode, r.guest, r.query, r.root, r.capacity, r.epochs, r.epoch_index, r.m, r.records, r.cbs, r.limit,
         r.point_rank, r.distinct, r.state_entries, x.input_bytes, x.user_cycles, x.padded_cycles, x.segments,
         x.max_po2, x.exec_s, fmt_opt(x.rss_mb), x.journal_bytes, r.state_commits, r.eq_native, r.ref_eq,
         r.invariants_ok, clean(&r.result), clean(&r.exact), clean(&r.accuracy), clean(&r.phases), ps, vm, rb, sps,
         prss, cond, other, lmean, lmax, seg * S_PER_SEG, seg * S_PER_SEG_LO, seg * S_PER_SEG_HI, S_PER_SEG,
-        risc0_zkvm::sha::Digest::from(r.image_id),
+        risc0_zkvm::sha::Digest::from(r.image_id), r.root_variant, r.root, r.variants_agree, r.state_commit,
     );
 }
 
-fn parse_root(v: &str) -> SsRoot {
+/// --root -> (root_variant name, None = legacy aggr_ss | Some(SsRoot of aggr_ss_rootvar)).
+fn parse_root(v: &str) -> (&'static str, Option<SsRoot>) {
     match v {
-        "buckets64" => SsRoot::Buckets64,
-        "buckets1024" => SsRoot::Buckets1024,
-        "perkey" => SsRoot::PerKey,
-        "none" => SsRoot::None,
-        o => die(&format!("--root {o}: expected buckets64|buckets1024|perkey|none")),
+        "legacy" => ("legacy", None),
+        "designed" | "buckets64" => ("designed", Some(SsRoot::Buckets64)),
+        "noroot" | "none" => ("noroot", Some(SsRoot::None)),
+        "buckets1024" => ("buckets1024", Some(SsRoot::Buckets1024)),
+        "perkey" => ("perkey", Some(SsRoot::PerKey)),
+        o => die(&format!("--root {o}: expected legacy|designed|noroot|buckets1024|perkey (or buckets64|none)")),
     }
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn fmt_items(items: &[ss_core::SsItem]) -> String {
@@ -533,6 +556,9 @@ fn main() {
     if do_prove && profile {
         die("--prove and --profile are exclusive (the profiling twin is never proved)");
     }
+    if arg_str("--root").is_some() && mode != "aggr" {
+        die("--root applies to --mode aggr only (query guests read no root)");
+    }
     let keys = load_keys(&keys_path);
 
     match mode.as_str() {
@@ -541,9 +567,9 @@ fn main() {
             if (idx + 1) * m > keys.len() {
                 die(&format!("epoch {idx} needs {} keys, {keys_path} has {}", (idx + 1) * m, keys.len()));
             }
-            let root_var = arg_str("--root").map(|v| parse_root(&v));
-            if root_var.is_some() && (do_prove || profile) {
-                die("--root runs the aggr_ss_rootvar sensitivity guest, which is never proved or profiled");
+            let (root_name, root_var) = arg_str("--root").map_or(("legacy", None), |v| parse_root(&v));
+            if root_var.is_some() && profile {
+                die("--profile runs aggr_ss_prof (the legacy headline root); it takes no --root other than legacy");
             }
             let (outs, _links) = aggregate(&keys, idx + 1, m, cbs, cap as u32);
             let (inp, st) = &outs[idx];
@@ -553,6 +579,16 @@ fn main() {
                 None => process_ss_aggr_with_state(inp).1,
                 Some(r) => process_ss_aggr_root(inp, r),
             };
+            // Every root construction run natively on the same input: same state and journal
+            // except buckets_root (zero for None, non-zero otherwise).
+            let headline = process_ss_aggr_with_state(inp);
+            let blank = |o: &SsAggrOutput| SsAggrOutput { buckets_root: [0u8; 32], ..o.clone() };
+            let agree = &headline.0 == st
+                && [SsRoot::Buckets64, SsRoot::Buckets1024, SsRoot::PerKey, SsRoot::None].iter().all(|&r| {
+                    let o = process_ss_aggr_root(inp, r);
+                    blank(&o) == blank(&headline.1) && ((r == SsRoot::None) == (o.buckets_root == [0u8; 32]))
+                })
+                && process_ss_aggr_root(inp, SsRoot::HEADLINE) == headline.1;
 
             let (guest, x, eq, ph, image_id) = if let Some(r) = root_var {
                 // The guest reads the SsRoot, then the input: a tuple serializes as the two in sequence.
@@ -569,7 +605,10 @@ fn main() {
                 let got: SsAggrOutput = x.session.journal.decode().unwrap();
                 ("aggr_ss", x, got == native, "-".into(), AGGR_SS_ID)
             };
-            let p = do_prove.then(|| prove(inp, AGGR_SS_ELF, AGGR_SS_ID, &native));
+            let p = do_prove.then(|| match root_var {
+                None => prove(inp, AGGR_SS_ELF, AGGR_SS_ID, &native),
+                Some(r) => prove(&(r, inp), AGGR_SS_ROOTVAR_ELF, AGGR_SS_ROOTVAR_ID, &(r, native.clone())),
+            });
 
             // Independent reference + SpaceSaving invariants against exact counts.
             let ref_eq = states_match_reference(slice, std::slice::from_ref(st), m, cap);
@@ -607,12 +646,18 @@ fn main() {
             if !eq {
                 eprintln!("ss: WARNING aggregation journal != native output");
             }
+            if !agree {
+                eprintln!("ss: WARNING root variants disagree outside the root field");
+            }
             emit(
                 Row {
                     mode: "aggr",
                     guest,
                     query: "-".into(),
                     root: root_var.unwrap_or(SsRoot::HEADLINE).name(),
+                    root_variant: root_name,
+                    variants_agree: agree.to_string(),
+                    state_commit: hex(&native.state_commit),
                     capacity: cap as u32,
                     epochs: 1,
                     epoch_index: idx.to_string(),
@@ -639,6 +684,9 @@ fn main() {
                 &x,
                 p,
             );
+            if !eq || !agree {
+                std::process::exit(1);
+            }
         }
         "query" => {
             let n = arg_usize("--epochs", 1);
@@ -779,6 +827,9 @@ fn main() {
                     guest,
                     query: qname.into(),
                     root: "-",
+                    root_variant: "-",
+                    variants_agree: "-".into(),
+                    state_commit: "-".into(),
                     capacity: cap as u32,
                     epochs: n,
                     epoch_index: "-".into(),

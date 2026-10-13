@@ -76,7 +76,11 @@ cd scripts/baselines/zka/spacesaving && CARGO_TARGET_DIR=~/ext-baselines/build/z
   its guest's `image_id`. The rebuild is byte-identical only from the same
   absolute source path: panic-location strings embed the path. A build from
   another path gives different md5s and image IDs but identical cycle counts.
-- Driver flags: `ss --mode aggr|query --capacity S [--epochs N] [--query topk|estimate|estimate_merged] [--limit 10] [--point-rank R] [--root buckets64|buckets1024|perkey|none] [--epoch-size 16384] [--batch 8] [--profile|--prove]`,
+- Driver flags: `ss --mode aggr|query --capacity S [--epochs N] [--query topk|estimate|estimate_merged] [--limit 10] [--point-rank R] [--root legacy|designed|noroot|buckets1024|perkey] [--epoch-size 16384] [--batch 8] [--profile|--prove]`,
+  `--root` (the six-sketch root variants (`../README.md`, "Six-sketch comparison", "Root variants")): `legacy` (the default) runs `aggr_ss`, the
+  measured guest of this README; every other value runs `aggr_ss_rootvar` with that
+  root (designed = `buckets64`, noroot = `none`; both older names are still accepted) and
+  can be proved,
   and `ss --image-id-of <guest>.bin`. Unknown flags are errors. The driver
   refuses to run if `RISC0_DEV_MODE` is set.
 - Both scripts append to their CSV and refuse to append under a different header.

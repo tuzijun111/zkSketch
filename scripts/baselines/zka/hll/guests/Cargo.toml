@@ -3,4 +3,4 @@
 # (d4a5a9a), so the guests link the same risc0-zkvm (3.0.5) and crate versions as theirs.
 [workspace]
 resolver = "2"
-members = ["aggr", "query"]
+members = ["aggr", "query", "aggr_root"]

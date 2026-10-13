@@ -19,3 +19,6 @@ libm = "0.2"
 [features]
 default = ["std"]
 std = ["serde/std", "zkvm-common/std", "aggregator-core/std", "querier-core/std"]
+# The six-sketch root variants (src/root.rs): enabled by guests/aggr_root and the host driver
+# only, so the legacy guests compile the crate exactly as before.
+root = []

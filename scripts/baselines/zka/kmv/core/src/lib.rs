@@ -660,6 +660,52 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "root")]
+    fn root_variants_agree_except_root() {
+        let (outs, _) = epochs(&lcg_keys(3 * 4096, 50_000), 4096, 8);
+        for (inp, st) in &outs {
+            let (_, legacy) = process_kmv_aggr_with_state(inp);
+            let (sd, d) = process_kmv_aggr_root(inp, KmvRoot::Buckets64);
+            let (sn, n) = process_kmv_aggr_root(inp, KmvRoot::None);
+            assert_eq!(&sd, st);
+            assert_eq!(&sn, st);
+            assert_eq!(d.without_root(), legacy);
+            assert_eq!(n.without_root(), legacy);
+            assert_eq!(n.buckets_root, [0u8; 32]);
+            assert_ne!(d.buckets_root, [0u8; 32]);
+            // independent recomputation: bucket by the mix, values ascending per bucket
+            assert_eq!(st.values.len(), KMV_K);
+            let mut by: std::collections::BTreeMap<usize, Vec<u64>> = Default::default();
+            for &v in &st.values {
+                by.entry(kmv_bucket_index(v)).or_default().push(v);
+            }
+            let nb = (by.keys().max().unwrap() + 1).next_power_of_two();
+            assert_eq!(nb, ROOT_BUCKETS);
+            let leaves: Vec<[u8; 32]> = (0..nb)
+                .map(|j| {
+                    let mut sha = <rust_crypto::Sha256 as rust_crypto::Digest>::new();
+                    rust_crypto::Digest::update(&mut sha, b"ZKA_PORT_KMV_BUCKET_V1");
+                    for v in by.get(&j).map(|x| &x[..]).unwrap_or(&[]) {
+                        rust_crypto::Digest::update(&mut sha, v.to_be_bytes());
+                    }
+                    rust_crypto::Digest::finalize(sha).into()
+                })
+                .collect();
+            assert_eq!(d.buckets_root, aggregator_core::samples_buckets_root_from_leaves(&leaves));
+            // the same bucket map as their samples_bucket_index at 64 buckets, applied to the value
+            for &v in st.values.iter().take(50) {
+                let mut x = v;
+                x ^= x >> 33;
+                x = x.wrapping_mul(0xff51afd7ed558ccd);
+                x ^= x >> 33;
+                x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+                x ^= x >> 33;
+                assert_eq!(kmv_bucket_index(v), (x % 64) as usize);
+            }
+        }
+    }
+
+    #[test]
     fn low_support_is_suppressed() {
         let q = run_kmv_query(&query_input(&[1, 2, 3], 3)).suppress_if_low_support();
         assert!(q.suppressed);
@@ -700,3 +746,11 @@ mod tests {
         assert_eq!(ww.len(), to_vec(&q).unwrap().len());
     }
 }
+
+// The six-sketch root variants (root.rs), compiled only with the `root` feature: the
+// kmv aggr_root guest and the host driver enable it; the legacy guests build this crate
+// without it, i.e. exactly as before the variants were added (same code, same cycles).
+#[cfg(feature = "root")]
+mod root;
+#[cfg(feature = "root")]
+pub use root::*;

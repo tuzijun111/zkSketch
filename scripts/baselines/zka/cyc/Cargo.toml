@@ -9,6 +9,10 @@ aggregator-core = { path = "../.zka/aggregator/core" }
 aggregator-methods = { path = "../.zka/aggregator/methods" }
 querier-core = { path = "../.zka/querier/core" }
 querier-methods = { path = "../.zka/querier/methods" }
+# The noroot variant of their CM aggregation (theirs minus the row/cm/heap Merkle roots) and
+# its validation twin, for `shipped --family cm --root noroot|twin` (../cm_noroot).
+zka-cm-noroot-core = { path = "../cm_noroot/core" }
+zka-cm-noroot-methods = { path = "../cm_noroot/methods" }
 sha2 = "0.10"
 risc0-zkvm = "3"
 rand = "0.8"

@@ -294,6 +294,7 @@ proved journal was asserted equal to the native output:
 |---|---|
 | `core/` | `zka-bloom-core` (no_std): the filter, epoch type, aggregation, query, the words input type; `upstream_verbatim.rs`; unit tests (CM-index agreement, union = OR, no false negatives, FPR vs theory, bit layout, tamper / reorder / forged batch, suppression, serde packing, words variant = same input and answer) |
 | `methods/`, `guests/aggr`, `guests/query` | risc0 methods crate and the guests `bloom_aggr`, `bloom_query`, `bloom_query_words` (`guests/query/src/bin`) |
-| `host/` | driver `bloom` (modes `exec`, `aggr`, `query`; `--words`, `--prove`, `--gate`, `--arm-tag`) |
+| `guests/aggr_root` | guest `bloom_aggr_root`: the six-sketch root variants (`../README.md`, "Six-sketch comparison", "Root variants"); `bloom_aggr` with the root variant read before the input (designed = 64-bucket samples-pattern root, noroot = none) |
+| `host/` | driver `bloom` (modes `exec`, `aggr`, `query`; `--words`, `--prove`, `--gate`, `--arm-tag`, `--root legacy\|designed\|noroot` for `aggr`/`exec`, default `legacy` = `bloom_aggr`) |
 | `run_exec.sh`, `bloom_common.sh` | runner (executor or `PROVE=1`) and its build / log / prove-gate helpers |
 | `gen_upstream.sh` | regenerates / checks the verbatim copies |

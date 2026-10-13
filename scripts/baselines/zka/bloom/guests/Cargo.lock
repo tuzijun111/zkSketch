@@ -328,6 +328,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloom_aggr_root"
+version = "0.1.0"
+dependencies = [
+ "risc0-zkvm",
+ "zka-bloom-core",
+]
+
+[[package]]
 name = "bloom_query"
 version = "0.1.0"
 dependencies = [

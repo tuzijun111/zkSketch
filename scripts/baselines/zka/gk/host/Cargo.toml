@@ -8,7 +8,7 @@ name = "gk"
 path = "src/main.rs"
 
 [dependencies]
-gk-zka-core = { path = "../core" }
+gk-zka-core = { path = "../core", features = ["root"] }
 gk-methods = { path = "../methods" }
 aggregator-core = { path = "../../.zka/aggregator/core" }
 zkvm-common = { path = "../../.zka/zkvm-common" }
