@@ -249,8 +249,9 @@ fn verify_epoch_chain_integrity(chain_links: &[EpochChainLink]) {
 //   To add the (n+1)-st observation v:
 //     if n = 0 mod floor(1/(2 eps)) then COMPRESS()
 //     INSERT(v); n = n + 1
-//   INSERT(v): find the smallest i with v_{i-1} <= v < v_i and insert (v, 1, floor(2 eps n))
-//     before t_i; if v is the new minimum or maximum seen, insert (v, 1, 0).
+//   INSERT(v): find the smallest i with v_{i-1} <= v < v_i and insert
+//     (v, 1, floor(2 eps (n+1)) - 1) before t_i (clamped at 0); if v is the new minimum or
+//     maximum seen, insert (v, 1, 0).
 //   COMPRESS(): for i from s-2 down to 1 (t_0 is kept, see below):
 //     if BAND(Delta_i, 2 eps n) <= BAND(Delta_{i+1}, 2 eps n) and
 //        g*_i + g_{i+1} + Delta_{i+1} < 2 eps n
@@ -259,7 +260,12 @@ fn verify_epoch_chain_integrity(chain_links: &[EpochChainLink]) {
 //      t_j, j > i, with a strictly larger band.)
 //   band_0 = {p};  band_a = {Delta : p - 2^a - (p mod 2^a) < Delta <= p - 2^(a-1) - (p mod 2^(a-1))},
 //   p = floor(2 eps n).
-// Delta = floor(2 eps n) uses n = observations BEFORE this one, as in the paper.
+// INSERT's Delta. The paper's floor(2 eps n), n = observations BEFORE this one, can leave
+// g + Delta = floor(2 eps n) + 1, one above floor(2 eps n): its guarantee is then
+// eps N + 1/2, not eps N (an epoch of 8,192 AOL records reached g + Delta = 322 > 321).
+// We use the common corrected form floor(2 eps (n+1)) - 1, n+1 counting the new value,
+// so g + Delta <= floor(2 eps n) always holds and every certified error is <= eps N, the
+// guarantee zkSketch's GK keeps. The cost difference is negligible.
 //
 // Minimum and maximum. The paper (section 2.1) states: "We ensure that, at all times,
 // the maximum and the minimum values are part of the summary. In other words, v_0 and
@@ -366,7 +372,8 @@ impl GkBuilder {
         // so pos == 0 is exactly "new minimum" and pos == s exactly "new maximum".
         let new_min = pos == 0;
         let new_max = pos == self.tuples.len();
-        let delta = if new_min || new_max { 0 } else { two_eps_n_floor(self.n) as u32 };
+        // floor(2 eps (n+1)) - 1 with n+1 counting this value (see the header note)
+        let delta = if new_min || new_max { 0 } else { two_eps_n_floor(self.n + 1).saturating_sub(1) as u32 };
         self.tuples.insert(pos, GkTuple { v, g: 1, delta });
     }
 
@@ -629,8 +636,8 @@ pub fn process_gk_aggr_marked<F: FnMut(Mark)>(
 //   sum_e floor(2 eps n_e) + 1 <= 2 eps N + 1 apart in (rmax - rmin), the first has
 //   rmax_U = 1 and the last rmin_U = N (each epoch keeps its min and max), so by
 //   GK's Proposition 1 the tuple minimising max(r - rmin_U, rmax_U - r) has
-//   certified error <= eps N + 1/2 (the 1/2 is the paper's INSERT slack, see the
-//   README). No recompression (Agarwal et al., one-shot merge).
+//   certified error <= eps N (INSERT uses floor(2 eps (n+1)) - 1, so each epoch's
+//   g + Delta <= floor(2 eps n_e); see the header note and the README). No recompression (Agarwal et al., one-shot merge).
 // ===========================================================================
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1007,8 +1014,9 @@ mod tests {
             assert!(lo <= exact && exact <= hi, "{name} x={x}: {exact} not in [{lo},{hi}]");
             let est = (lo + hi) / 2;
             let err = est.abs_diff(exact);
-            // midpoint half-width: provably <= eps N + 1/2 (odd sum of floors)
-            assert!((est - lo).max(hi - est) as f64 <= epsn + 0.5, "{name} x={x}: rank cert");
+            // midpoint half-width: U - L <= sum_e (floor(2 eps n_e) - 1) <= 2 eps N - 1, so
+            // ceil((U - L) / 2) <= eps N (the corrected INSERT; the paper's had a +1/2)
+            assert!((est - lo).max(hi - est) as f64 <= epsn, "{name} x={x}: rank cert");
             assert!(err as f64 <= epsn, "{name} x={x}: rank err {err} > {epsn:.2}");
             worst = worst.max(err);
         }
@@ -1035,6 +1043,8 @@ mod tests {
             assert!(t.delta as u64 <= p, "tuple {i}: delta {} > p {p}", t.delta);
             // rank-interval width g + delta - 1 <= floor(2 eps n)
             assert!((t.g + t.delta) as u64 - 1 <= p, "tuple {i}: g+delta-1 > floor(2eps n)");
+            // and the GK invariant itself, g + delta <= floor(2 eps n) (1 before any merge)
+            assert!((t.g + t.delta) as u64 <= p.max(1), "tuple {i}: g+delta > floor(2eps n)");
         }
         let mut xs: Vec<u32> = sorted.clone();
         xs.dedup();
@@ -1204,7 +1214,7 @@ mod tests {
             }
             let pos = self.t.iter().position(|x| v < x.v).unwrap_or(self.t.len());
             let extreme = pos == 0 || pos == self.t.len();
-            let d = if extreme { 0 } else { (2 * self.n / GK_EPS_DEN) as u32 };
+            let d = if extreme { 0 } else { ((2 * (self.n + 1) / GK_EPS_DEN).saturating_sub(1)) as u32 };
             self.t.insert(pos, GkTuple { v, g: 1, delta: d });
             self.n += 1;
         }
