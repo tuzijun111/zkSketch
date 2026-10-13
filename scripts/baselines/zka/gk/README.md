@@ -70,7 +70,8 @@ pseudocode in one place, to keep an invariant the paper's text states (below).
 - **Adding the (n+1)-st value.** If n = 0 mod 25, COMPRESS runs first. Then
   INSERT, then n += 1.
 - **INSERT.** Binary search for the smallest i with v < v_i, then insert
-  `(v, 1, floor(2 eps n))`, where n counts the values seen before this one. A
+  `(v, 1, floor(2 eps (n+1)) - 1)` (clamped at 0), where n counts the values seen
+  before this one, so n+1 counts the new value (see "INSERT's Delta" below). A
   new minimum (i = 0) or maximum (i = s) gets `(v, 1, 0)`.
 - **COMPRESS.** For i = s-2 down to **1**: if `BAND(Delta_i) <= BAND(Delta_{i+1})`
   and `g*_i + g_{i+1} + Delta_{i+1} < 2 eps n`, delete t_i and all its
@@ -104,17 +105,26 @@ pseudocode in one place, to keep an invariant the paper's text states (below).
   whenever p >= 1. When p = 0 (n <= 25) nothing can merge, because
   g*_i + g_{i+1} + Delta_{i+1} >= 2 > 2 eps n. The test
   `band_delta0_is_alone_in_top_band` checks both.
-- **The paper's Delta has an off-by-<1 slack.** INSERT's Delta = floor(2 eps n)
-  can leave g + Delta = floor(2 eps n) + 1 > 2 eps n. The measured epochs have
-  max g + Delta = 643 against 2 eps n = 642.5.
-  - Per-epoch rank bounds [rmin(t_k), rmax(t_{k+1}) - 1] still have width
-    g + Delta - 1 <= floor(2 eps n).
-  - The slack costs at most 1/2 in the error bounds below.
+- **INSERT's Delta (corrected form since 2026-10-13).** The paper's Delta =
+  floor(2 eps n), n counting the values before the new one, can leave
+  g + Delta = floor(2 eps n) + 1, one above floor(2 eps n). Its guarantee is then
+  eps N + 1/2, not eps N. At 8,192 AOL records per epoch this showed:
+  g + Delta = 322 > 321 and a certified error of 161 > eps N = 160.63, so the
+  driver's eps N check failed and it refused to prove. The port now uses the
+  common corrected form floor(2 eps (n+1)) - 1, which keeps g + Delta <=
+  floor(2 eps n) at all times. Every certified error is then <= eps N, the
+  guarantee zkSketch's GK keeps, and the tests assert it (`check_state`,
+  `union_rank_and_quantiles_within_eps_n`). The cost changes by about 1%
+  (fewer cycles, as the smaller Delta lets COMPRESS merge slightly more). The
+  committed 2026-10-09 rows were measured with the paper's form: their epochs
+  had max g + Delta = 643 against 2 eps n = 642.5, inside eps N only because
+  floor(2 eps n) = 642 is even.
+  - Per-epoch rank bounds [rmin(t_k), rmax(t_{k+1}) - 1] have width
+    g + Delta - 1 <= floor(2 eps n) - 1.
 - **Query-time merge.**
   - **Rank.** The union's bounds [L, U] are the sums of the per-epoch bounds, and
-    the estimate is floor((L+U)/2). Its certified error ceil((U-L)/2) is at most
-    ceil(sum_e floor(2 eps n_e) / 2) <= eps N + 1/2. On these data every
-    floor(2 eps n_e) is 642, which is even, so it is <= eps N.
+    the estimate is floor((L+U)/2). U - L <= sum_e (floor(2 eps n_e) - 1)
+    <= 2 eps N - 1, so its certified error ceil((U-L)/2) is <= eps N.
   - **Quantile.** The union summary is GK's COMBINE generalised to k summaries,
     under ONE total order of all N elements: (value, epoch index, position in
     the epoch). For a stored tuple (v, e, i) and each other epoch e':
@@ -131,11 +141,11 @@ pseudocode in one place, to keep an invariant the paper's text states (below).
       `combine_sweep_equals_bruteforce`.
   - The answer is the tuple minimising max(r - rmin_U, rmax_U - r), which is its
     certified error.
-  - **Bound.** Consecutive union tuples are at most sum_e floor(2 eps n_e) + 1
-    <= 2 eps N + 1 apart (rmax of the next minus rmin of this one). The first
+  - **Bound.** Consecutive union tuples are at most sum_e (floor(2 eps n_e) - 1)
+    + 1 <= 2 eps N apart (rmax of the next minus rmin of this one). The first
     union tuple has rmax_U = 1 and the last has rmin_U = N, because every epoch
     keeps its minimum and maximum. So GK's Proposition 1 gives a certified error
-    of at most eps N + 1/2. There is no recompression (Agarwal et al., one-shot
+    of at most eps N (eps N + 1/2 with the paper's original INSERT). There is no recompression (Agarwal et al., one-shot
     merge).
   - **Measured.** On every row and in every 1,001-phi sweep (AOL and the
     adversarial splits), the certified error is <= eps N. Worst over phi = q/1000
@@ -413,16 +423,15 @@ byte-identical with `diff` against the clone.
 - **One query per guest run (per proof), as their query guests do.** The chain
   and commitment re-verification is therefore paid again by each of the four
   queries.
-- **Sources of the GK algorithm.** The original paper's Delta = floor(2 eps n)
-  is used. Some lecture-note versions use floor(2 eps n) - 1 with n counting the
-  new value, which closes the <1 slack noted above. The difference in cost is
-  negligible. The one departure from the paper's Figure 2 (COMPRESS stops at
+- **Sources of the GK algorithm.** INSERT uses the common corrected Delta =
+  floor(2 eps (n+1)) - 1 (n+1 counting the new value), not the original paper's
+  floor(2 eps n), which leaves a slack of up to 1/2 in the error bound (see "INSERT's
+  Delta"). The difference in cost is about 1%. The one departure from the paper's Figure 2 (COMPRESS stops at
   i = 1) follows the paper's own stated invariant; see "GK as implemented".
 - **Profiling guest.** `aggr_gk_prof` is a separate ELF, and its counter reads
   are syscalls: 103.99M cycles versus 103.41M for `aggr_gk`. Only the split is
   read from it. It is never proved and never used as a cost row.
 - **Semantics versus their histogram.** Their P90 is not a rank quantile: it
   returns 2^(b-1) for the crossing log2 bin, 524,288 on these data. GK answers
-  any phi with a certified rank error of at most eps N + 1/2 (the 1/2 is the
-  paper's INSERT slack). On every measured row and 1,001-phi sweep it was at
-  most eps N. The two are not equivalent summaries.
+  any phi with a certified rank error of at most eps N (with the corrected INSERT;
+  eps N + 1/2 for the paper's original, which the committed 2026-10-09 rows used). The two are not equivalent summaries.

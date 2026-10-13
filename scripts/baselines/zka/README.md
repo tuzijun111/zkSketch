@@ -523,8 +523,9 @@ with the stored state that the guest re-hashes and merges:
   count - error <= f <= count + slack (see `spacesaving/README.md`).
 - **GK.** Every row has the exact answer inside the certified interval, and
   actual <= certified <= eps N, on the named quantiles and over 1,001 phis. The
-  provable bound is eps N + 1/2 (the paper's INSERT slack); every measured value
-  is <= eps N.
+  provable bound is eps N with the corrected INSERT the port uses since
+  2026-10-13 (eps N + 1/2 with the paper's original INSERT, which these committed
+  rows used; every measured value was <= eps N). See `gk/README.md`, "INSERT's Delta".
 
 ### Caveats
 
@@ -596,7 +597,8 @@ with the stored state that the guest re-hashes and merges:
     CM top-K, whose keys are attached outside the proof.
   - SS's merge is the specified sum-and-truncate. It is not Agarwal et al.'s
     MG merge, and its bound is looser.
-  - GK's guarantee is eps N + 1/2.
+  - GK's guarantee is eps N (since 2026-10-13; eps N + 1/2 for the committed
+    2026-10-09 rows, which used the paper's original INSERT).
   - HLL answers carry the estimator branch taken.
 - **Provenance.**
   - Each family was built, then reviewed independently.
@@ -922,7 +924,7 @@ reference and as an option):
 |---|---|---|---|
 | `designed` | zk-Analytics as their code ships it, root included (CM: the reference; ports: an option) | their `aggr_cm`, unchanged (same ELF) | the cheapest of their root constructions applied uniformly: their samples pattern with 64 buckets (cells -> 64 buckets, leaf = SHA-256(tag \|\| the bucket's cells in canonical order), folded by their pub `samples_buckets_root_from_leaves`; the number of leaves is `next_pow2_ge(max bucket + 1)`, 64 in every run here) |
 | `noroot` | the default and the headline: zk-Analytics' protocol without the root its code adds (zkSketch commits its state but publishes no per-bucket root either) | `aggr_cm_noroot` (`cm_noroot/`): their `process_cm_aggr_with_state` cut byte for byte from the clone by `cm_noroot/gen_upstream.sh` (which `six/build.sh` runs with `--check`), with only lines 1262-1274 (row_roots, cm_root, heap_root) replaced by zeros; chain verification, flattening, table and heap update, `state_commit`, epoch link and journal type unchanged | the same guest as `designed`, root field zero |
-| `legacy` (the drivers' default `--root`) | the guests of the committed 2026-10-09 reference rows | `aggr_cm` | `hll_aggr`, `aggr_ss`, `aggr_gk`, `bloom_aggr`, `kmv_aggr`: SS samples-pattern 64 buckets, GK per-tuple root, HLL / Bloom / KMV none |
+| `legacy` (the drivers' default `--root`) | the guests of the committed 2026-10-09 reference rows (GK: since 2026-10-13 with the corrected INSERT, like every GK guest, so a re-run gives about 1% fewer cycles than those rows; see `gk/README.md`, "INSERT's Delta") | `aggr_cm` | `hll_aggr`, `aggr_ss`, `aggr_gk`, `bloom_aggr`, `kmv_aggr`: SS samples-pattern 64 buckets, GK per-tuple root, HLL / Bloom / KMV none |
 | sensitivity | | `twin` (validation only, below) | SS `buckets1024`, `perkey`; GK `pertuple` |
 
 The designed / noroot guests of the ports read the variant before their input and commit
