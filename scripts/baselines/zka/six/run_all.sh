@@ -82,7 +82,7 @@ ok()   { printf 'OK      %s\n' "$*"; }
 warn() { printf 'WARN    %s\n' "$*"; NWARN=$((NWARN + 1)); }
 info() { printf 'INFO    %s\n' "$*"; }
 miss() { printf 'MISSING %s\n' "$1"; [[ -n ${2:-} ]] && printf '        fix: %s\n' "$2"; NMISS=$((NMISS + 1)); }
-APT="sudo apt-get install -y build-essential git curl ca-certificates python3 procps util-linux numactl"
+APT="sudo apt-get install -y build-essential git curl ca-certificates python3 procps util-linux diffutils numactl"
 RUSTUP="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.1 && . \"\$HOME/.cargo/env\""
 RZUP_INSTALL="curl -L https://risczero.com/install | bash && export PATH=\"\$HOME/.risc0/bin:\$PATH\""
 
@@ -95,7 +95,7 @@ check_tools() {  # what building and running need (also used by `build`)
   if [[ -n $g ]] && ver_ge "$g" 2.34; then ok "glibc $g (>= 2.34 for the RISC Zero guest toolchain)"
   else miss "glibc ${g:-?}: the RISC Zero rust 1.97.0 toolchain needs glibc >= 2.34 and libstdc++ of GCC >= 12 (Ubuntu 22.04+, Debian 12+, Fedora 37+)"; fi
   if (( BASH_VERSINFO[0] >= 4 )); then ok "bash $BASH_VERSION"; else miss "bash >= 4 (have $BASH_VERSION)"; fi
-  for t in git curl awk sed grep cut sort md5sum stat realpath nproc hostname date find mktemp; do
+  for t in git curl awk sed grep cut sort md5sum stat realpath nproc hostname date find mktemp diff; do
     command -v "$t" >/dev/null || miss "command '$t'" "$APT"
   done
   for t in pgrep ps; do command -v "$t" >/dev/null || miss "command '$t' (procps)" "$APT"; done
@@ -482,9 +482,11 @@ EOF
 cmd_assemble() {
   local d=${1:?usage: run_all.sh assemble <results dir>}
   d=$(realpath -m -- "$d")
-  [[ -f $d/manifest.txt ]] || die "$d/manifest.txt not found (not a run_all.sh results directory)"
+  [[ -d $d ]] || die "$d: no such directory"
   if [[ -n $(git -C "$d" ls-files -- . 2>/dev/null | head -1) ]]; then die "$d is git-tracked"; fi
-  if grep -qx 'mode=quick' "$d/manifest.txt"; then
+  [[ -f $d/manifest.txt ]] ||
+    echo "note: $d has no manifest.txt (made by the individual six/ scripts); assembling the files it holds" >&2
+  if [[ -f $d/manifest.txt ]] && grep -qx 'mode=quick' "$d/manifest.txt"; then
     assemble_and_table "$d" --plan "$d/zka_plan.txt" || exit 1
   else
     assemble_and_table "$d" || exit 1

@@ -189,7 +189,10 @@ equal to the native output.
   `Event` batches: about 21.5 words per record (17 per `Event`, plus per-batch fields
   including the 32-word batch hash), at about 173 cycles per word. Any summary in their
   framework pays this. We did not change it.
-- **This baseline is cheaper than a literal port.**
+- **This baseline is cheaper than a literal port.** (This describes the legacy guest
+  `hll_aggr`. The six-sketch comparison also runs `hll_aggr_root` with `--root designed`,
+  their samples-pattern root over 64 buckets, and `--root noroot`; see ../README.md,
+  "Root variants of the zk-Analytics aggregation proofs".)
   - The aggregation journal drops the per-type Merkle roots their three types compute
     (`buckets_root`, `row_roots`/`cm_root`/`heap_root`). No query guest reads those roots.
   - The state commitment hashes the register bytes in one `update`.

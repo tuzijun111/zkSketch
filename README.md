@@ -688,8 +688,8 @@ prints the fix for anything missing):
 ```bash
 # 1. System packages (the only step that needs sudo; numactl is optional).
 sudo apt-get update
-sudo apt-get install -y build-essential git curl ca-certificates python3 procps util-linux numactl
-#    (Fedora 37+: sudo dnf install -y gcc gcc-c++ make git curl ca-certificates python3 procps-ng util-linux numactl)
+sudo apt-get install -y build-essential git curl ca-certificates python3 procps util-linux diffutils numactl
+#    (Fedora 37+: sudo dnf install -y gcc gcc-c++ make git curl ca-certificates python3 procps-ng util-linux diffutils numactl)
 # 2. Rust via rustup (distro rustc packages are too old), pinned to the reference
 #    toolchain 1.97.1. Any stable >= 1.90 builds (1.99.0 is tested too); with rustup
 #    already installed, `rustup toolchain install 1.97.1 --profile minimal && rustup default 1.97.1`.
@@ -808,7 +808,7 @@ cycles, and 19-37% below for proofs of at most 2^18 (fixed overhead).
 | `SIX_QUICK_PROVE` | `cm:aggr:0:noroot,kmv:aggr:0,gk:query:1,bloom:query:1:key` | the jobs `quick` proves for real (`jobs.py --select` selectors: `kmv:aggr:0` means both variants of that epoch) |
 | `SIX_ALLOW_STALE` | unset | `1` lets `quick` / `full` use binaries older than their sources (see Notes) |
 | `TMPDIR` | `/tmp` | zkSketch's worker runs from a copy there and binds a unix socket: it must allow exec and be at most 60 characters long, else the scripts use `/tmp` |
-| `EXP_VERIFY_REPEATS` | 5 | how often each zkSketch query proof and prefix certificate is verified (logged as `QLOG_VERIFY` / `QLOG_BINDV`); the tables report the best, as for the zk-Analytics drivers' 5 calls |
+| `EXP_VERIFY_REPEATS` | 5 | how often each zkSketch root proof, query proof and prefix certificate is verified (logged as `QLOG_ROOTV` / `QLOG_VERIFY` / `QLOG_BINDV`); the tables report the best, as for the zk-Analytics drivers' best of 5 receipt verifies |
 | `RISC0_HOME` | `~/.risc0` | where rzup installed RISC Zero (rzup's own variable); the scripts put its `bin/` on `PATH` |
 
 Notes:

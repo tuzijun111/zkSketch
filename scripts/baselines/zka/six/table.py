@@ -63,7 +63,7 @@ HAS_R1 = LEGACY or any(r['run'] == 'r1' for r in rows)
 HAS_VARCOL = bool(rows) and 'variant' in rows[0]
 VORDER = {v: i for i, v in enumerate(['designed', 'noroot', 'legacy', 'buckets1024', 'perkey', 'pertuple'])}
 # root construction of the legacy guests (a CSV without the variant columns)
-LEGACY_ROOT = {'cm': 'cm_rows+cm+heap', 'hll': 'none', 'ss': 'buckets64', 'gk': 'pertuple', 'bloom': 'none',
+LEGACY_ROOT = {'cm': 'cm_rows+cm+heap', 'hll': 'none', 'ss': 'samples64', 'gk': 'pertuple', 'bloom': 'none',
                'kmv': 'none'}
 VNOTE = {'designed': 'with the per-bucket Merkle root zk-Analytics builds in every aggregation proof',
          'noroot': 'the same guests without that root, apples-to-apples with zkSketch (the headline)',
@@ -100,7 +100,7 @@ def construction(fam, var):
     for r in rows:
         if r['family'] == fam and zka_row(r) and r['operation'] == 'update_per_epoch' and var_of(r) == var:
             return r.get('root_construction') or LEGACY_ROOT[fam]
-    return LEGACY_ROOT[fam] if var == 'legacy' else '?'
+    return LEGACY_ROOT[fam] if var == 'legacy' else 'not run'
 
 
 # run shape, from the rows
@@ -111,7 +111,8 @@ MS = sorted({int(m.group(1)) for r in rows if zka_row(r)
 M = MS[-1] if MS else 2048
 AE = sorted({int(r['operation'][len('update_epoch'):]) for r in rows
              if zka_row(r) and re.fullmatch(r'update_epoch\d+', r['operation'])})
-QNS = sorted({int(r['n']) for r in rows if zka_row(r) and r['operation'].startswith('query_n')}) or [1, 2, 4, 8]
+QNS = sorted({int(r['n']) for r in rows if zka_row(r) and r['operation'].startswith('query_n')}) \
+    or [1 << i for i in range(T.bit_length()) if 1 << i <= T]  # no zkA query rows: the run's own query points
 NALL = list(range(1, T + 1))
 OTHER = [n for n in NALL if n not in QNS]
 OP_STREAM = f'update_stream_{T}_epochs'
@@ -225,6 +226,13 @@ else:
 # zkSketch sets of the side-by-side table: zkS-zk only when the CSV has its rows
 SYSZ = [('zks', 'zkS')] + ([('zk', 'zkS-zk')] if any((r['system'], r['run']) == ZK for r in rows) else [])
 
+def root_verify(r):  # zkS root verify: best of EXP_VERIFY_REPEATS calls (QLOG_ROOTV runs), else the single call
+    x = v(r, 'verify_ms')
+    return x if x is not None else v(r, 'verify_first_ms')
+
+
+ROOTV_BEST = any(v(get(fam, 'zks', OP_STREAM), 'verify_ms') is not None for fam in FAMS)
+
 # ------------------------------------------------------------------ update proofs, the four metrics
 print(f'**Update proofs side by side: proving time, verification time, proof size, peak memory** (one epoch = '
       f'one batch of {M:,} records. zkA: one aggregation receipt per epoch, all kept and verified; "1 epoch" = the '
@@ -232,13 +240,13 @@ print(f'**Update proofs side by side: proving time, verification time, proof siz
       f'calls per receipt; peak RSS = the r0vm process (max over the proved epochs). zkS: "1 epoch" = the leaf '
       f'proof alone (leafgen_seq_ms / {T}, EXCLUDING composition; its proof = the leaf-1 proof), "{T} epochs" = the '
       f'whole forest incl. its {T - 1} merge{"" if T == 2 else "s"} (measured), which ends in ONE root proof: '
-      f'"verify" is that root, single call, in both rows; peak RSS = the procs-engine worker. Ratio = zkA / zkS for '
+      f'"verify" is that root, {"best of 5 calls (as zkA)" if ROOTV_BEST else "single call"}, in both rows; peak RSS = the procs-engine worker. Ratio = zkA / zkS for '
       f'every metric: above 1, zkSketch is faster / smaller / lighter. KB = 10^3 bytes, GB = 2^30 bytes)\n')
 METRICS = [  # label, zkA op, zkA col, zkA multiplier, zkS op, zkS col, format
     ('prove, 1 epoch (s)', 'update_per_epoch', 'prove_s', 1, 'update_per_epoch', 'prove_s', fs),
     (f'prove, {T} epochs (s)', OP_STREAM, 'prove_s', 1, OP_STREAM, 'prove_s', fs),
-    ('verify, 1 epoch (ms)', 'update_per_epoch', 'verify_ms', 1, OP_STREAM, 'verify_first_ms', f),
-    (f'verify, {T} epochs (ms)', 'update_per_epoch', 'verify_ms', T, OP_STREAM, 'verify_first_ms', f),
+    ('verify, 1 epoch (ms)', 'update_per_epoch', 'verify_ms', 1, OP_STREAM, 'root_verify', f),
+    (f'verify, {T} epochs (ms)', 'update_per_epoch', 'verify_ms', T, OP_STREAM, 'root_verify', f),
     ('proof, 1 epoch (KB)', 'update_per_epoch', 'proof_bytes', 1, 'update_per_epoch', 'proof_bytes', kb),
     (f'proof, {T} epochs (KB)', 'update_per_epoch', 'proof_bytes', T, OP_STREAM, 'proof_bytes', kb),
     ('peak RSS (GB)', 'update_per_epoch', 'peak_rss_mb', 1, 'update_per_epoch', 'peak_rss_mb', gb),
@@ -249,7 +257,8 @@ for fam in FAMS:
     for mlab, aop, acol, amul, sop, scol, fmt in METRICS:
         ra = {var: get(fam, 'zka', aop, var) for var in ZV}
         av = {var: (None if v(ra[var], acol) is None else amul * v(ra[var], acol)) for var in ZV}
-        sv = {who: v(get(fam, who, sop), scol) for who, _ in SYSZ}
+        sv = {who: (root_verify(get(fam, who, sop)) if scol == 'root_verify' else v(get(fam, who, sop), scol))
+              for who, _ in SYSZ}
         def est(x, r):  # the est mark only on a value that exists; peak RSS is always that of measured proofs
             return E(r) if x is not None and acol != 'peak_rss_mb' else ''
         line([NAME[fam], mlab] + [fmt(av[var]) + est(av[var], ra[var]) for var in ZV] + [fmt(sv[who]) for who, _ in SYSZ]
@@ -291,7 +300,7 @@ for fam in FAMS:
 
 print('\n**Proof bytes, update side** (KB = 10^3 bytes): zkA keeps one receipt per epoch; zkS keeps one root.\n')
 hdr = ['sketch'] + [x for var in ZV for x in (f'{zl(var)} receipt / epoch', f'{zl(var)} {T} receipts')] + ['zkS root'] \
-    + (['zkS-zk root'] if HAS_ZK else []) + ['zkS root verify, single call (ms)'] \
+    + (['zkS-zk root'] if HAS_ZK else []) + [f'zkS root verify, {"best of 5" if ROOTV_BEST else "single call"} (ms)'] \
     + (['zkS-zk root verify (ms)'] if HAS_ZK else [])
 table(hdr)
 for fam in FAMS:
@@ -301,7 +310,7 @@ for fam in FAMS:
         ab = v(ra, 'proof_bytes')
         c += [kb(ab) + E(ra), kb(T * ab if ab else None) + E(ra)]
     sb, zb = (v(get(fam, w, OP_STREAM), 'proof_bytes') for w in ('zks', 'zk'))
-    sv, zv = (v(get(fam, w, OP_STREAM), 'verify_first_ms') for w in ('zks', 'zk'))
+    sv, zv = (root_verify(get(fam, w, OP_STREAM)) for w in ('zks', 'zk'))
     c += [kb(sb)] + ([kb(zb)] if HAS_ZK else []) + [f(sv)] + ([f(zv)] if HAS_ZK else [])
     line(c)
 
@@ -504,7 +513,8 @@ for fam in FAMS:
             ex = exec_e0(fam, var)
             uc = f"{int(ex['user_cycles']):,}" if ex else '-'
             why = ('the noroot copy of their guest has no profiling twin' if fam == 'cm' and var == 'noroot' else
-                   'their shipped guest has no profiling twin' if fam == 'cm' or LEGACY else f'no {ZP}_prof_* / exec CSV')
+                   'their shipped guest has no profiling twin' if fam == 'cm' else
+                   'no six_zka_prof_* rows in this results directory' if LEGACY else f'no {ZP}_prof_* / exec CSV')
             line([name, uc, 'not profiled', 'not profiled', '-', why, '-', '-', '-'])
             continue
         uc, rdc, ch, src = sp

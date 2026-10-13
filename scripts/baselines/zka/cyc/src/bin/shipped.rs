@@ -51,19 +51,19 @@
 //           [--key-id aol|const]   (const: histogram only, see key_id_mode())
 //   cm aggr only: [--root legacy|designed|noroot|twin]   (default legacy)
 //
-// --root (six-sketch comparison, ../../README.md "Six-sketch comparison"): which Merkle
+// --root (six-sketch comparison, ../README.md "Six-sketch comparison"): which Merkle
 // root(s) the CM aggregation journal carries. Their aggr_cm builds, besides the flat
 // SHA-256 state_commit every query guest reads, row_roots (one SHA-256 leaf per counter)
 // + cm_root + heap_root, which nothing reads.
 //   legacy, designed  their aggr_cm, unchanged (the same guest: the committed 2026-10-09
 //                     reference rows are `legacy`; `designed` = zk-Analytics as designed)
-//   noroot            aggr_cm_noroot (../../cm_noroot): their process_cm_aggr_with_state
+//   noroot            aggr_cm_noroot (../cm_noroot): their process_cm_aggr_with_state
 //                     with only the Merkle block replaced by zeros. journal_eq_native
 //                     checks the journal against THEIR native output with the three root
 //                     fields zeroed (and against the noroot copy run natively).
 //   twin              VALIDATION ONLY, never proved: aggr_cm_twin, an unedited copy of their
-//                     code compiled in ../../cm_noroot; same journal as aggr_cm, and outside
-//                     the Merkle work the same cost (../../cm_noroot/core/src/lib.rs, "twin").
+//                     code compiled in ../cm_noroot; same journal as aggr_cm, and outside
+//                     the Merkle work the same cost (../cm_noroot/core/src/lib.rs, "twin").
 // Query guests read no root, so --root is refused with --mode query.
 // CM aggregation rows also carry variants_agree (their aggregation and the noroot copy, run
 // natively on the same input, agree on everything but the three root fields, which are zero

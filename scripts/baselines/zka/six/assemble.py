@@ -46,7 +46,7 @@ zk-Analytics aggregation proofs"): every zk-Analytics update row (update_*, acce
 the `variant` of its aggregation guest (designed / noroot / legacy / a sensitivity variant)
 and its `root_construction`, both read from the driver rows' root_variant / root_construction
 columns. Driver rows without those columns (the committed 2026-10-09 set) are `legacy`:
-CM cm_rows+cm+heap (their shipped roots), SS buckets64, GK pertuple, HLL / Bloom / KMV none.
+CM cm_rows+cm+heap (their shipped roots), SS samples64, GK pertuple, HLL / Bloom / KMV none.
 Query proofs do not depend on the variant (query guests read no root): query rows say `-`, as
 do all zkSketch rows. Checked here: an aggregation job's variant equals its proved row's; per
 (family, epoch) every executor and proved aggregation row of every variant has the same
@@ -269,7 +269,7 @@ def zka_exact(f, r, n):
 
 # Root variants of the zk-Analytics aggregation guests. Driver rows without a root_variant
 # column come from the committed 2026-10-09 guests: `legacy`, with these root constructions.
-LEGACY_ROOT = {'cm': 'cm_rows+cm+heap', 'hll': 'none', 'ss': 'buckets64', 'gk': 'pertuple', 'bloom': 'none',
+LEGACY_ROOT = {'cm': 'cm_rows+cm+heap', 'hll': 'none', 'ss': 'samples64', 'gk': 'pertuple', 'bloom': 'none',
                'kmv': 'none'}
 VORDER = {v: i for i, v in enumerate(['designed', 'noroot', 'legacy', 'buckets1024', 'perkey', 'pertuple'])}
 
@@ -625,13 +625,21 @@ for pfx, sysname, run, full in ZKS_SETS:
                      prove_s=float(row['total_time_ms']) / t / 1000, answer='-', exact='-', provenance='derived',
                      detail=f"INCLUDING composition: total_time_ms/t = {row['total_time_ms']}/{t} ({t} leaves + "
                             f"{row['merges_local']} merges, 1 machine x {row['cores']} cores)")
+                # root verify: newer logs carry QLOG_ROOTV (best of EXP_VERIFY_REPEATS calls = the CSV's
+                # verify_ms, plus the first call); older ones only the CSV's single call
+                rv = re.search(r'QLOG_ROOTV,repeats=(\d+),first_ms=([\d.]+),best_ms=([\d.]+)', log)
+                if rv and abs(float(rv.group(3)) - float(row['verify_ms'])) > 0.002:
+                    sys.exit(f'{pfx}_{tag}: QLOG_ROOTV best_ms != the CSV verify_ms')
+                root_v = dict(verify_ms=float(rv.group(3)), verify_first_ms=float(rv.group(2))) if rv \
+                    else dict(verify_first_ms=float(row['verify_ms']))
                 emit(family=f, system=sysname, run=run, operation=f'update_stream_{t}_epochs',
-                     prove_s=float(row['total_time_ms']) / 1000, verify_first_ms=float(row['verify_ms']),
+                     prove_s=float(row['total_time_ms']) / 1000, **root_v,
                      proof_bytes=int(row['proof_bytes']), peak_rss_mb=worker_rss,
                      rss_scope='procs-engine worker (RSSTREE sampler)', answer='-', exact='-', provenance='measured',
                      detail=f"forest, 1 machine x {row['cores']} cores: {t} leaves + {row['merges_local']} merges (merge_ms "
-                            f"{row['merge_ms']}, local_fold_ms {row['local_fold_ms']}); one O(1) root (single verify "
-                            f"verify_first_ms, proof_bytes); {gate}")
+                            f"{row['merge_ms']}, local_fold_ms {row['local_fold_ms']}); one O(1) root ("
+                            f"{f'verify_ms = best of {rv.group(1)} calls, verify_first_ms = the first' if rv else 'single verify verify_first_ms'}"
+                            f", proof_bytes); {gate}")
             for n in NS:
                 if n not in q:
                     continue

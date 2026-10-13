@@ -430,6 +430,12 @@ fn phases(marks: &[(String, u64)]) -> String {
 }
 
 // ------------------------------------------------------------------ output
+/// The `root_construction` label: SS's `buckets64` (its own `root` column keeps that name) is the
+/// samples pattern with 64 buckets, which the other ports call `samples64`.
+fn construction_label(root: &str) -> &str {
+    if root == "buckets64" { "samples64" } else { root }
+}
+
 const HEADER: &str = "system,arm,mode,guest,family,query,root,capacity,epochs,epoch_index,epoch_records,records,batch,limit,point_rank,distinct_keys,state_entries,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,r0vm_peak_rss_mb,journal_bytes,state_commits,journal_eq_native,ref_eq,invariants_ok,result,exact,accuracy,phases,prove_s,verify_ms,receipt_bytes,s_per_segment,prove_r0vm_peak_rss_mb,prove_condition,prove_other_r0vm_samples,prove_load1_mean,prove_load1_max,MODELED_prove_s,MODELED_prove_s_lo,MODELED_prove_s_hi,model,image_id,root_variant,root_construction,variants_agree,state_commit";
 
 #[derive(Default)]
@@ -494,7 +500,7 @@ fn emit(r: Row, x: &Exec, p: Option<Proved>) {
         x.max_po2, x.exec_s, fmt_opt(x.rss_mb), x.journal_bytes, r.state_commits, r.eq_native, r.ref_eq,
         r.invariants_ok, clean(&r.result), clean(&r.exact), clean(&r.accuracy), clean(&r.phases), ps, vm, rb, sps,
         prss, cond, other, lmean, lmax, seg * S_PER_SEG, seg * S_PER_SEG_LO, seg * S_PER_SEG_HI, S_PER_SEG,
-        risc0_zkvm::sha::Digest::from(r.image_id), r.root_variant, r.root, r.variants_agree, r.state_commit,
+        risc0_zkvm::sha::Digest::from(r.image_id), r.root_variant, construction_label(r.root), r.variants_agree, r.state_commit,
     );
 }
 

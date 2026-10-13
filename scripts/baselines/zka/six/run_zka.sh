@@ -114,15 +114,16 @@ job_args() {
     query) (( JX >= 1 && JX <= T )) || return 1
            ARGS=(--mode query --epochs "$JX" "${COMMON[@]}")
            case $JFAM in
-             cm) ARGS+=(--query estimate) ;;
-             ss) ARGS+=(--query topk --limit 1) ;;
+             cm) [[ -z $JARG ]] || return 1; ARGS+=(--query estimate) ;;
+             hll|kmv) [[ -z $JARG ]] || return 1 ;;
+             ss) [[ -z $JARG ]] || return 1; ARGS+=(--query topk --limit 1) ;;
              gk) [[ -n $JARG ]] || return 1; ARGS+=(--query rank --rank-value "$JARG") ;;
              bloom) ARGS+=(--probe "${JARG:-first}") ;;
            esac ;;
     *) return 1 ;;
   esac
 }
-check_jobs() { local j; for j in "$@"; do job_args "$j" || six_die "bad job '$j' (fam:aggr:<epoch 0..$((T-1))>[:designed|noroot|legacy] | fam:query:<n 1..$T>[:arg]; gk needs a rank value)"; done; }
+check_jobs() { local j; for j in "$@"; do job_args "$j" || six_die "bad job '$j' (fam:aggr:<epoch 0..$((T-1))>[:designed|noroot|legacy; ss also buckets1024|perkey, gk also pertuple] | fam:query:<n 1..$T>, no variant; gk:query:<n>:<rank value>, bloom:query:<n>[:first|key:<k>])"; done; }
 
 NFAIL=0
 failed() {  # failed <what>

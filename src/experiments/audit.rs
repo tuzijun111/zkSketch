@@ -286,13 +286,35 @@ pub(crate) fn audit_root_bytes(
         || vk_pin_values(&proof),
         || derive_dist_root_vk(pp.family, &pp.shape, pp.m, stream_mode, t, machines, pp.commit_mode),
     )?;
-    let v0 = Instant::now();
-    if layout == Expose::Interval {
-        verify_bound_stark_proof_against_log(&proof, &expected_root_vk, log, &tree);
-    } else {
-        verify_bound_stark_proof_pinned(&proof, &expected_root_vk);
+    timed_root_verify(|| {
+        if layout == Expose::Interval {
+            verify_bound_stark_proof_against_log(&proof, &expected_root_vk, log, &tree);
+        } else {
+            verify_bound_stark_proof_pinned(&proof, &expected_root_vk);
+        }
+    })
+}
+
+/// Times the root verify. Normally one call. Under `EXP_QUERY_LOG=1` with
+/// `EXP_VERIFY_REPEATS=r > 1` the verify runs `r` times and the best time is
+/// returned (the zk-Analytics drivers report the best of 5 receipt verifies);
+/// a `QLOG_ROOTV` line records the first (cold) and the best time.
+fn timed_root_verify(mut verify: impl FnMut()) -> Result<f64, String> {
+    let reps = super::stream_compose::qlog_verify_repeats();
+    let (mut first, mut best) = (0.0_f64, f64::INFINITY);
+    for i in 0..reps {
+        let v0 = Instant::now();
+        verify();
+        let ms = v0.elapsed().as_secs_f64() * 1000.0;
+        if i == 0 {
+            first = ms;
+        }
+        best = best.min(ms);
     }
-    Ok(v0.elapsed().as_secs_f64() * 1000.0)
+    if reps > 1 {
+        eprintln!("QLOG_ROOTV,repeats={reps},first_ms={first:.3},best_ms={best:.3}");
+    }
+    Ok(best)
 }
 
 /// Goldilocks analog of [`audit_root_bytes`].
@@ -324,13 +346,13 @@ pub(crate) fn audit_root_bytes_gl(
             derive_dist_root_vk_gl(pp.family, &pp.shape, pp.m, stream_mode, t, machines, pp.commit_mode)
         },
     )?;
-    let v0 = Instant::now();
-    if layout == Expose::Interval {
-        efg::verify_bound_stark_proof_against_log(&proof, &expected_root_vk, log, &tree);
-    } else {
-        efg::verify_bound_stark_proof_pinned(&proof, &expected_root_vk);
-    }
-    Ok(v0.elapsed().as_secs_f64() * 1000.0)
+    timed_root_verify(|| {
+        if layout == Expose::Interval {
+            efg::verify_bound_stark_proof_against_log(&proof, &expected_root_vk, log, &tree);
+        } else {
+            efg::verify_bound_stark_proof_pinned(&proof, &expected_root_vk);
+        }
+    })
 }
 
 // ─── Single-process engine (`stream_compose`): proofs arrive in memory ───────

@@ -413,7 +413,7 @@ Common to all three families:
 | update (plain Rust) | textbook HLL, Flajolet et al. 2007 | Metwally et al., unit weight, Stream-Summary buckets (O(1) per record) | Greenwald-Khanna SIGMOD'01 INSERT / band COMPRESS; t_0 (the minimum) always kept, per the paper's section 2.1 invariant |
 | hash / value | their FNV-1a `key_to_u64` (`aggregator/core/src/lib.rs:342`) + the seeded splitmix64 finaliser of their `cm_bucket_index` (`:1055-1063`, without `% CM_COLS`), CM row-0 seed `0x6d0f27bd` | the same mix without the seed, for the key-to-counter map; keys are compared in full | `value = key & 0x1FFFFF` (21 bits; the task text said 22-bit, the histogram arm's mask is the authority); `key_id` only enters the batch chain |
 | epoch state, unsalted SHA-256 commit | `total_count` + 16 KB of registers | capacity, `total_count`, <= s `(key_id, count, error)` sorted by key | `total_count` + tuples `(v, g, Delta)` |
-| per-type Merkle root in the aggregation journal (no query reads it) | **none** (dropped; cheaper than a literal port) | their samples pattern: 64 hash buckets (their benchmark `SAMPLES_HT_BUCKETS=64`), folded by their `samples_buckets_root_from_leaves` | their `hist_per_key_root` pattern over tuples, their `MerkleTree` |
+| per-type Merkle root in the aggregation journal (no query reads it) | legacy guest `hll_aggr`: **none** (dropped; cheaper than a literal port). The six-sketch comparison also runs `designed` (their samples pattern, 64 buckets) and `noroot`: see "Root variants of the zk-Analytics aggregation proofs" | their samples pattern: 64 hash buckets (their benchmark `SAMPLES_HT_BUCKETS=64`), folded by their `samples_buckets_root_from_leaves` | their `hist_per_key_root` pattern over tuples, their `MerkleTree` |
 | query-time merge | elementwise max of registers | top-k: sum equal keys, keep the top s (sum-and-truncate, as specified; not Agarwal's MG merge). Point: their `SumExactKey` scan, no merge | one-shot k-way GK COMBINE under one total order (value, epoch, position), summed rank bounds, no recompression |
 | queries | cardinality: HLL estimator with small-range (linear counting) correction, f64 in the guest (`libm`) | top-10 `(key, count, error)` (**keys in the journal**, unlike their CM `Topk` / samples `SumTopk`); point frequency of the rank-1 and rank-100 keys | rank(2^20); p50, p90, p99 (answer + certified bounds + N) |
 
@@ -958,7 +958,7 @@ work. Epoch 0 at 2,048 records (this configuration; segments of 2^20):
 The CM, HLL, Bloom and KMV legacy numbers equal the committed `six_zka_*_exec.csv` epoch 0
 exactly; SS and GK differ from them by +832 and +1,664 cycles already in this sandbox's
 build of the unchanged sources. noroot - legacy for HLL / Bloom / KMV is -11,187 /
--11,187 / +4,230 cycles (the root guest reads one more word and commits 32 more journal
+-11,187 / +4,230 cycles (the root guest reads one more word and commits 132 more journal
 bytes; HLL and Bloom's chain verification compiles 15K cycles cheaper in it).
 
 Toy proofs of every new guest (2026-10-13, 64 records, epoch 0, `--prove`:
@@ -1118,7 +1118,7 @@ To re-tabulate the committed reference run (this directory), write elsewhere:
 so their zkSketch numbers differ from the Results tables by a few percent. The
 zk-Analytics rows are labelled with the root variant `legacy` in the two columns added
 for the root variants (`variant`, `root_construction`: CM `cm_rows+cm+heap`, SS
-`buckets64`, GK `pertuple`, HLL / Bloom / KMV `none`; query and zkSketch rows `-`).
+`samples64`, GK `pertuple`, HLL / Bloom / KMV `none`; query and zkSketch rows `-`).
 Without those two columns the CSV is byte-identical to the one of the scripts before
 the root variants. `table.py` prints the earlier tables unchanged, adding a legacy note
 at the top, the "Update proofs side by side" table and the root-variant table at the end:
