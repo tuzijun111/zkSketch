@@ -658,11 +658,13 @@ Merkle tree over the sketch's buckets and outputs its root. That root is not par
 zk-Analytics' protocol: in the paper (Section 5.2, Algorithm 2, and Section 5.3) each
 epoch publishes the source hash-chain boundaries, its epoch hash-chain values and one
 commitment to the whole epoch state, and the query proof opens that one commitment; the
-paper never mentions per-bucket roots (its only Merkle mention, in Section 4, says hash
-chains are used instead because membership proofs are not needed). In their code the
+paper never mentions per-bucket roots (its only Merkle mention, in Section 4, says the
+data sources commit their logs with hash chains instead of Merkle trees because membership
+proofs are not required at that stage). In their code the
 roots go into the proof's journal and into an `out_commit` the host stores in its
 database, and nothing reads them: no query guest, no verifier, no other code (their
-per-bucket inclusion-proof helpers are never called). zkSketch commits to its state too
+per-bucket inclusion-proof helpers are never called, and a per-key Merkle-proof query mode
+exists only as a TODO in their querier). zkSketch commits to its state too
 and publishes no such root. So for all six sketches the comparison proves **`zkA
 noroot`**: their aggregation guests with only the root work removed (for Count-Min, their
 own code minus only the Merkle lines). It holds the same state and gives the same answers
@@ -671,8 +673,11 @@ guest, roots included, is still proved, as a **reference** only (`zkA shipped CM
 own small table, never the headline), so the numbers can be related to zk-Analytics'
 published ones, which include that cost: at 2,048 records per epoch its roots take 11.2M
 of its 22.5M cycles (24 segments of 2^20 cycles instead of 12). Query proofs read no
-root, so they are proved once. The knobs: `SIX_ZKA_CM_REF=0` drops the Count-Min
-reference; `SIX_ZKA_ROOTS=designed,noroot` gives the earlier two-variant plan (every
+root, so they are proved once. Their code also commits to each epoch state with unsalted
+SHA-256 where the paper uses a hiding commitment; we keep the code as is, which favours
+zk-Analytics slightly. The knobs: `SIX_ZKA_CM_REF=0` drops the Count-Min
+reference; `SIX_ZKA_ROOTS=designed,noroot` (`designed` is a historical name: as their code
+ships, root included, not as their paper designs it) gives the earlier two-variant plan (every
 aggregation proof also as `designed`: their Count-Min guest unchanged, the five ports with
 their samples-pattern root over 64 buckets). The reference numbers committed on
 2026-10-09 are a third, mixed variant, `legacy` (details:
@@ -748,8 +753,8 @@ records the repository path at compile time, so after moving or renaming the clo
 What success looks like: `check` ends with `check: ok`; `build` prints about 20 Rust
 compiler warnings for the zkSketch library, which are harmless, and ends with every
 step `ok`; `quick` exits with status 0 and its last line is `quick: OK in ...`, with
-the summary tables just above it (the update proofs side by side, the Count-Min
-reference, then query proving). With `GATE_WAIT_S=0` (the `quick` default) the `gate failed for <job>: ...
+the summary tables above it (the update proofs side by side, the Count-Min reference,
+then query proving), followed by the list of result files. With `GATE_WAIT_S=0` (the `quick` default) the `gate failed for <job>: ...
 -- running anyway` lines are expected, not errors.
 
 | step | what it does | time | peak RAM | disk |
@@ -773,7 +778,8 @@ tables at the end.
   shipped Count-Min (`zkA shipped CM (reference)` next to the headline and zkS, with its
   ratio to zkS); update proving (per epoch, and for the whole stream including
   zkSketch's merges); proof bytes on the update side; query proving at each n (query
-  proofs are the same for every variant); the verifier's work and bytes to accept one
+  proofs are the same for every variant); in `full`, zkSketch's query proving at the n
+  zk-Analytics does not prove (n = 3, 5, 6, 7); the verifier's work and bytes to accept one
   answer at each n (n aggregation receipts + 1 query receipt); peak RSS while proving a
   query; the answers next to the exact ones; the zk-Analytics guest profile; and each
   executed variant's root construction and executor cycles (root work = designed -

@@ -24,7 +24,7 @@
 # its hash-chain values and ONE commitment to the whole state, which the query proof opens:
 # paper sections 5.2 and 5.3), and nothing in their code reads it. `noroot` = their guests
 # without that root: the DEFAULT and the headline, for all six. Their shipped CM (`designed`:
-# aggr_cm unchanged; its roots cost ~11.1M cycles per epoch) is proved as a REFERENCE only
+# aggr_cm unchanged; its roots cost ~11.1-11.2M cycles per epoch) is proved as a REFERENCE only
 # (SIX_ZKA_CM_REF), to relate to their published numbers. `designed` for the five ports (their
 # samples pattern, 64 buckets) is an option (SIX_ZKA_ROOTS). Query proofs read no root and are
 # proved once.

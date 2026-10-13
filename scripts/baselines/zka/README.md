@@ -872,13 +872,15 @@ Count-Min), but that root is not part of their protocol, and nothing uses it:
   hash-chain boundaries, the epoch hash-chain values and one commitment to the whole
   epoch state; in Section 5.3 (Algorithm 3) the query proof opens that one commitment
   for each epoch it reads. Per-bucket roots appear nowhere; the paper's only Merkle
-  mention (Section 4) says hash chains are used instead of Merkle trees because
-  membership proofs are not needed.
+  mention (Section 4) says the data sources commit their logs with hash chains instead
+  of Merkle trees because membership proofs are not required at that stage.
 - **The code.** The roots go into the aggregation journal and into the `out_commit`
   the host stores in its database; no query guest, verifier or other code reads them,
   and their per-bucket inclusion-proof helpers (`samples_merkle_proof_for_bucket`,
-  `samples_merkle_root_from_leaf_and_siblings`) are never called. The next epoch and
-  every query guest read the flat SHA-256 commitment of the state.
+  `samples_merkle_root_from_leaf_and_siblings`) are never called. A per-key
+  Merkle-proof query mode exists only as a TODO comment in their querier
+  (`querier/core/src/lib.rs`, `EpochData`); no implemented path uses the roots. The next
+  epoch and every query guest read the flat SHA-256 commitment of the state.
 
 zkSketch commits to its state too, but publishes no such per-bucket root. The root is
 not free: for Count-Min it is about half of every aggregation proof at 2,048 records per
@@ -886,7 +888,8 @@ epoch (11.2M of 22.5M cycles, 24 segments vs 12). So:
 
 - **`noroot`** = their guests with only the root work removed (for CM, their own code
   minus only the Merkle lines): **the default and the headline**, for all six sketches;
-- **`designed`** = the guests with the root: for CM their shipped guest unchanged, which
+- **`designed`** (a historical name: as their code ships, root included, not as their
+  paper designs it) = the guests with the root: for CM their shipped guest unchanged, which
   is proved as a **reference** only (`zkA shipped CM`, its own table), so the numbers can
   be related to zk-Analytics' published ones, which include that cost; for the † ports
   their samples-pattern root with 64 buckets, an option (`SIX_ZKA_ROOTS=designed,noroot`)
@@ -908,8 +911,8 @@ aggregation proof, a per-type Merkle root over its state IN ADDITION to the flat
 `buckets_root` (`hist_per_key_root`, one leaf per key), CM `row_roots` (one SHA-256 leaf
 per counter, 3 x 1,024, each row folded by their `MerkleTree`) + `cm_root` + `heap_root`
 (`aggregator/core/src/lib.rs`). Their host folds the roots into an `out_commit` kept in its
-database; no query guest or verifier reads them. For CM the root work is about 11.1M
-cycles per epoch whatever the number of records (below). The committed 2026-10-09 ports
+database; no query guest or verifier reads them. For CM the root work is about 11.1-11.2M
+cycles per epoch whatever the number of records (11.2M at 2,048 records; below). The committed 2026-10-09 ports
 were inconsistent about it (SpaceSaving: samples pattern, 64 buckets; GK: per-tuple root;
 HLL / Bloom / KMV: none). Every aggregation driver now takes `--root`, and the comparison
 uses two consistent variants (`noroot` the default and headline; `designed` for the CM
@@ -1142,8 +1145,8 @@ cycles), about 74 min; the 2 CM reference proofs are 48 segments, about 24 min (
 ELF took 712 and 713 s in the measured run); the 28 queries took 58 min in the measured
 run. So the default 42 proofs take about 2 h 35 min, 40 with `SIX_ZKA_CM_REF=0` about
 2 h 10 min, and the 52 of `SIX_ZKA_ROOTS=designed,noroot` about 3 h 40 min (its 12
-`designed` aggregation proofs are 176 segments, ~88 min, within 2 segments of the 12
-legacy ones of the measured run, 174; CM is the same ELF), against the measured 2 h 25 min
+`designed` aggregation proofs are 176 segments, ~88 min; the 12 legacy proofs of the
+measured run were also 176 segments, 174 x 2^20 padded cycles; CM is the same ELF), against the measured 2 h 25 min
 for the 40 legacy proofs. With zkSketch's 7 runs (~30-40 min on the zero-knowledge build)
 and the executor, `full` runs about 3 h 15 min at the defaults (2 h 50 min without the
 reference, 4 h 15 min with `designed,noroot`), plus the gate waits.
