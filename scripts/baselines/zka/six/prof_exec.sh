@@ -6,6 +6,9 @@
 # T-1, queries at n = 1 and T (paper configuration: 2,048 records, epochs 0/7, n = 1/8).
 #   -> <prefix>_prof_ss.csv, <prefix>_prof_gk.csv, <prefix>_prof.log   (prefix: SIX_ZKA_PREFIX, default six_zka)
 # HLL, Bloom and KMV carry the same phase profile in their <prefix>_*_exec.csv rows already.
+# The SS / GK profiling twins are the LEGACY aggregation guests (the drivers take --profile only
+# without --root); table.py applies their read / chain cycles to the other root variants'
+# executor user cycles (the read and chain code is the same in every variant).
 # Exit status 0 only if every driver call succeeded.
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

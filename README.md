@@ -652,6 +652,24 @@ job at a time. zkSketch runs its default build, which is zero-knowledge
 (`pcs=hiding`, `logup_mask=on` in its CSV rows); RISC Zero's succinct receipts are
 zero-knowledge too.
 
+**Two zk-Analytics variants.** Every zk-Analytics aggregation proof also builds a
+Merkle tree over the sketch's buckets and outputs its root, a short hash that would let
+someone check one bucket without the whole state. zk-Analytics does this in every summary
+type it ships, but nothing reads the root: the next epoch and the query proofs use the
+flat SHA-256 commitment of the state, and no verifier checks the root. zkSketch commits
+to its state too but publishes no such root. For Count-Min the root is about half of
+each aggregation proof (12 of 24 segments of 2^20 cycles at 2,048 records). So every
+update-side number is reported twice, next to zkSketch's: **`zkA designed`** (as
+zk-Analytics designed it, root included: their Count-Min guest unchanged, the five ports
+building their samples-pattern root with 64 buckets) and **`zkA noroot`** (the same guests
+with only the root work removed: the apples-to-apples comparison, and the headline).
+Both variants hold the same state and give the same answers (the scripts check this on
+every run). Query proofs read no root, so they are proved once and hold for both.
+`SIX_ZKA_ROOTS` selects the variants; the reference numbers committed on 2026-10-09 are
+a third, mixed variant, `legacy` (details:
+[`scripts/baselines/zka/README.md`](scripts/baselines/zka/README.md), "Root variants of
+the zk-Analytics aggregation proofs").
+
 **Machine.** Linux x86_64 with glibc >= 2.34 and the libstdc++ of GCC >= 12 (Ubuntu 22.04+,
 Debian 12+, Fedora 37+; NOT RHEL / Rocky / Alma 9 or Amazon Linux 2023, whose GCC 11
 libstdc++ cannot run RISC Zero's compiler; `check` tests this); at least
@@ -721,36 +739,46 @@ records the repository path at compile time, so after moving or renaming the clo
 What success looks like: `check` ends with `check: ok`; `build` prints about 20 Rust
 compiler warnings for the zkSketch library, which are harmless, and ends with every
 step `ok`; `quick` exits with status 0 and its last line is `quick: OK in ...`, with
-the speedup tables just above it. With `GATE_WAIT_S=0` (the `quick` default) the
-`gate failed for <job>: ... -- running anyway` lines are expected, not errors.
+the summary tables just above it (the update proofs side by side, then query
+proving). With `GATE_WAIT_S=0` (the `quick` default) the `gate failed for <job>: ...
+-- running anyway` lines are expected, not errors.
 
 | step | what it does | time | peak RAM | disk |
 |---|---|---|---|---|
 | `check` | tools and versions, RAM, cores, disk, dataset, builds | seconds | - | - |
-| `build` | clones zk-Analytics (5 MB); builds the 6 zk-Analytics-side drivers (their CM; our † ports) and zkSketch's `exp_compose` | about 7-8 min on the 32-core reference machine, including the first-time download of crates, the pinned forks and zk-Analytics (a cold build with an empty cargo cache took 7 min 16 s: the six zk-Analytics-side drivers 5 min 10 s, `exp_compose` 2 min 5 s); much faster when nothing changed | 1.8 GB for `exp_compose` (zk-Analytics side not measured) | ~13 GB under `$BASELINE_DIR/build`, ~0.3 GB in `target/` |
-| `quick` | zkSketch: 7 runs at N = 512 (2 batches of 256). zk-Analytics: executor for all six, 3 real proofs (`kmv:aggr:0`, `gk:query:1:<v>`, `bloom:query:1:key:<k>`), the other 23 planned jobs ESTIMATED | about 8 min here (zkSketch 6.5-7 min, zk-Analytics executor 5 s, the 3 proofs 1 min) | ~9.2 GiB (one r0vm proof; zkSketch runs up to 8.5 GiB) | < 1 MB |
-| `full` | zkSketch: 7 runs at N = 16,384 (8 batches of 2,048). zk-Analytics: executor, then 40 proofs (aggregation epochs 0 and 7 of every family; queries at n = 1, 2, 4, 8; Bloom with an inserted and an absent key) | about 3-3.5 h of running: in the reference run zkSketch's 7 runs took ~10 min (non-ZK build; the default ZK build is slower: GK alone took 14 min here, and the 7 runs are estimated at 30-40 min, see Notes), the zk-Analytics executor ~1 min and the 40 proofs 2 h 25 min; plus the quiet-machine waits (1 h 17 min there; see Notes) | zkSketch GK run 59 GiB (ZK build; see Notes); r0vm ~9.2 GiB per proof; one job at a time | < 100 MB |
+| `build` | clones zk-Analytics (5 MB); builds the 6 zk-Analytics-side drivers (their CM, which also embeds the CM `noroot` guest; our † ports, each with its `designed` / `noroot` guest) and zkSketch's `exp_compose` | about 7-8 min on the 32-core reference machine, including the first-time download of crates, the pinned forks and zk-Analytics (a cold build with an empty cargo cache took 7 min 16 s: the six zk-Analytics-side drivers 5 min 10 s, `exp_compose` 2 min 5 s); much faster when nothing changed | 1.8 GB for `exp_compose` (zk-Analytics side not measured) | ~13 GB under `$BASELINE_DIR/build`, ~0.3 GB in `target/` |
+| `quick` | zkSketch: 7 runs at N = 512 (2 batches of 256). zk-Analytics: executor for all six under both variants, 5 real proofs (`cm:aggr:0:noroot`, `kmv:aggr:0:designed`, `kmv:aggr:0:noroot`, `gk:query:1:<v>`, `bloom:query:1:key:<k>`), the other 33 of 38 planned jobs ESTIMATED | about 10-11 min here (zkSketch 6.5-7 min, zk-Analytics executor ~10 s, the 5 proofs ~3.5 min) | ~9.2 GiB (one r0vm proof; zkSketch runs up to 8.5 GiB) | < 1 MB |
+| `full` | zkSketch: 7 runs at N = 16,384 (8 batches of 2,048). zk-Analytics: executor under both variants, then 52 proofs (aggregation epochs 0 and 7 of every family, once `designed` and once `noroot`: 24; queries at n = 1, 2, 4, 8, Bloom with an inserted and an absent key: 28) | about 4.5 h of running (an estimate): zkSketch's 7 runs ~30-40 min (the reference run's non-ZK build took ~10 min; the default ZK build is slower, GK alone took 14 min here, see Notes), the zk-Analytics executor ~2 min, and the 52 proofs about 3 h 40 min (the reference run's 40 proofs, which had one aggregation variant, took 2 h 25 min; the 12 `noroot` aggregation proofs add 147 segments of 2^20 cycles x ~30 s, about 75 min, estimated from the executor); plus the quiet-machine waits (1 h 17 min for 47 jobs in the reference run, so about 1.5 h for 59; see Notes) | zkSketch GK run 59 GiB (ZK build; see Notes); r0vm ~9.2 GiB per proof; one job at a time | < 100 MB |
 
-`full --dry-run` prints the plan, including the 40 zk-Analytics jobs, and runs
+`full --dry-run` prints the plan, including the 52 zk-Analytics jobs, and runs
 nothing. Times are for the 32-core machine above.
 
 **Outputs.** Every `quick` / `full` writes a fresh, git-ignored directory
-`results/six/<mode>-<YYYYmmdd-HHMMSS>/`; the run prints its path and the speedup
+`results/six/<mode>-<YYYYmmdd-HHMMSS>/`; the run prints its path and the summary
 tables at the end.
 
-- `six_sketch_table.md`: all tables, in this order: update proving (per epoch, and
-  for the whole stream including zkSketch's merges), proof bytes on the update side,
-  query proving at each n, the verifier's work and bytes to accept one answer at each
-  n, peak RSS, the answers next to the exact ones, and the zk-Analytics guest
-  profile. `ratio` = zk-Analytics time / zkSketch time, so above 1 means zkSketch is
-  faster. The console summary at the end of a run shows the update-side and
-  query-proving tables.
-- `six_sketch_comparison.csv`: one row per (family, system, operation);
-  `provenance` says measured, sampled, derived or ESTIMATED, and `detail` says how.
+- `six_sketch_table.md`: all tables, with `zkA designed`, `zkA noroot` and zkSketch
+  (`zkS`) side by side on the update side and a ratio against each zk-Analytics
+  variant, in this order: the update proofs side by side (per sketch: proving time for
+  one epoch and for the whole stream, verification time, proof size and peak memory),
+  update proving (per epoch, and for the whole stream including zkSketch's merges),
+  proof bytes on the update side, query proving at each n (one zk-Analytics column:
+  query proofs are the same for both variants), the verifier's work and bytes to accept
+  one answer at each n (n aggregation receipts of each variant + 1 query receipt), peak
+  RSS while proving a query, the answers next to the exact ones, the zk-Analytics guest
+  profile, and each variant's root construction and executor cycles (root work =
+  designed - noroot). Ratios are zk-Analytics / zkSketch, so above 1 means zkSketch is
+  faster, smaller or lighter. The console summary at the end of a run shows the
+  side-by-side and query-proving tables.
+- `six_sketch_comparison.csv`: one row per (family, system, root variant,
+  operation); `variant` and `root_construction` name the zk-Analytics variant of the
+  update and accept rows (`-` on query and zkSketch rows); `provenance` says measured,
+  sampled, derived or ESTIMATED, and `detail` says how.
 - `manifest.txt` (configuration, commits, tool versions, per-step times),
   `run_all.log` (the console), and the raw files: zkSketch
   `six_zksketch_<tag>.csv/.log` and `six_zksketch_runs.csv`; zk-Analytics
-  `six_zka_<family>_exec.csv` + `six_zka_exec.log` (executor),
+  `six_zka_<family>_exec.csv` + `six_zka_exec.log` (executor; the rows of both
+  variants, told apart by their `root_variant` column),
   `six_zka_<family>_prove.csv/.log` (proved families only) + `six_zka_jobs.csv`,
   `six_zka_prof_{ss,gk}.csv` + `six_zka_prof.log` (guest profile), `zka_plan.txt`,
   and in `quick` also `six_zka_<family>_qexec.csv`, `six_zka_qexec.log`,
@@ -762,10 +790,10 @@ tables at the end.
 
 `quick` checks the pipeline end to end; it is not a measurement. With 2 batches of
 256 records its costs and ratios differ from `full`, and its `est` cells are the
-executor's padded cycle count x the seconds per 2^20 padded cycles of that run's 3
-proofs. Over the 40 proofs of the reference run this model gave between 5% below and
-9% above the measured time for proofs of at least 2^19 padded cycles, and 19-37% below
-for proofs of at most 2^18 (fixed overhead).
+executor's padded cycle count of that job's variant x the seconds per 2^20 padded
+cycles of that run's 5 proofs. Over the 40 proofs of the reference run this model gave
+between 5% below and 9% above the measured time for proofs of at least 2^19 padded
+cycles, and 19-37% below for proofs of at most 2^18 (fixed overhead).
 
 **Knobs** (environment variables):
 
@@ -776,7 +804,8 @@ for proofs of at most 2^18 (fixed overhead).
 | `SIX_CORES` | physical cores, at most 32 | cores of zkSketch's prover process, pinned to CPUs 0 .. SIX_CORES-1 |
 | `GATE_WAIT_S` | `quick` 0, `full` 1800 | seconds each timed job waits for a quiet machine; then it runs anyway and its row records the load |
 | `GATE_MAX_LOAD`, `GATE_MAX_BUSY` | CPUs / 8 (2 below 16 CPUs), 4 | "quiet": 1-minute load <= `GATE_MAX_LOAD`, fewer than `GATE_MAX_BUSY` busy cores, and no `r0vm`, `exp_compose`, `cargo` or `rustc` of any user |
-| `SIX_QUICK_PROVE` | `kmv:aggr:0,gk:query:1,bloom:query:1:key` | the jobs `quick` proves for real |
+| `SIX_ZKA_ROOTS` | `designed,noroot` | the zk-Analytics aggregation variants executed and proved (any comma list of `designed`, `noroot`, `legacy`); `full` proves 12 aggregation jobs per variant + the 28 queries |
+| `SIX_QUICK_PROVE` | `cm:aggr:0:noroot,kmv:aggr:0,gk:query:1,bloom:query:1:key` | the jobs `quick` proves for real (`jobs.py --select` selectors: `kmv:aggr:0` means both variants of that epoch) |
 | `SIX_ALLOW_STALE` | unset | `1` lets `quick` / `full` use binaries older than their sources (see Notes) |
 | `TMPDIR` | `/tmp` | zkSketch's worker runs from a copy there and binds a unix socket: it must allow exec and be at most 60 characters long, else the scripts use `/tmp` |
 | `EXP_VERIFY_REPEATS` | 5 | how often each zkSketch query proof and prefix certificate is verified (logged as `QLOG_VERIFY` / `QLOG_BINDV`); the tables report the best, as for the zk-Analytics drivers' 5 calls |
@@ -785,10 +814,10 @@ for proofs of at most 2^18 (fixed overhead).
 Notes:
 
 - Use an otherwise idle machine: all times are wall-clock. With the default gate,
-  `full` lets the load settle before each of its 47 timed jobs (30-180 s each on a
-  quiet machine, about 1 h 17 min in all in the reference run; up to 30 min per job on a
-  busy one). On an otherwise idle machine that wait is the previous job's own load
-  decaying out of the 1-minute average. `GATE_WAIT_S=0` never waits; that is why `quick`
+  `full` lets the load settle before each of its 59 timed jobs (7 zkSketch runs + 52
+  proofs; 30-180 s each on a quiet machine, about 1 h 17 min in all for the reference
+  run's 47; up to 30 min per job on a busy one). On an otherwise idle machine that
+  wait is the previous job's own load decaying out of the 1-minute average. `GATE_WAIT_S=0` never waits; that is why `quick`
   rows often record `gate=busy:load1=...` even on an idle machine.
 - `full` takes hours: start it so that it survives a closed terminal, e.g. inside
   `tmux` / `screen`, or `nohup scripts/baselines/zka/six/run_all.sh full > full.out 2>&1 &`
@@ -830,7 +859,9 @@ Notes:
 - zkSketch's worker is pinned with `numactl --physcpubind --membind` (else `taskset`).
   In a Docker container `--membind` needs `--cap-add SYS_NICE`; inside a cpuset, CPUs
   0 .. SIX_CORES-1 must be allowed (`run_all.sh check` tests the latter).
-- The reference numbers in `scripts/baselines/zka/README.md` (2026-10-09) were
+- The reference numbers in `scripts/baselines/zka/README.md` (2026-10-09) are the
+  `legacy` zk-Analytics variant (CM with its roots, SS with a samples-pattern root, GK with a
+  per-tuple root, HLL / Bloom / KMV without), neither `designed` nor `noroot`; they were
   measured before zkSketch's default build became zero-knowledge; `full` measures
   the zero-knowledge build, which costs zkSketch more. At this shape it is much
   heavier for GK: one GK run of the default build here (2026-10-12, on a shared,

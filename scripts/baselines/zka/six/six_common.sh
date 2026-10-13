@@ -9,6 +9,10 @@
 #   SIX_QNS     query points n of the zk-Analytics side (default: powers of two <= T)
 #   SIX_GK_CAP  zkSketch GK capacity            (default 2048)
 #   SIX_CORES   zkSketch EXP_COMPOSE_CORES      (default: physical cores, at most 32)
+#   SIX_ZKA_ROOTS  root variants of the zk-Analytics aggregation proofs, a comma list of
+#               designed | noroot | legacy (default designed,noroot): the variants
+#               `run_zka.sh exec` executes (and `jobs.py --roots` plans). ../README.md,
+#               "Root variants of the zk-Analytics aggregation proofs", says what they are.
 # The defaults are the paper configuration.
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${RESULTS:=$(cd "$HERE6/../../../.." && pwd)/results/six/manual}"
@@ -36,6 +40,13 @@ if [[ -z ${SIX_QNS:-} ]]; then
 fi
 [[ $SIX_QNS =~ ^[0-9]+(,[0-9]+)*$ ]] || six_die "SIX_QNS=$SIX_QNS must be a comma list of n in 1..$SIX_T"
 for q in ${SIX_QNS//,/ }; do (( q >= 1 && q <= SIX_T )) || six_die "SIX_QNS=$SIX_QNS: n=$q outside 1..$SIX_T"; done
+SIX_ZKA_ROOTS=${SIX_ZKA_ROOTS:-designed,noroot}
+six_roots_ok() {  # six_roots_ok <list>: a comma list of distinct designed|noroot|legacy
+  local v seen=,
+  [[ $1 =~ ^(designed|noroot|legacy)(,(designed|noroot|legacy))*$ ]] || return 1
+  for v in ${1//,/ }; do [[ $seen == *,$v,* ]] && return 1; seen+="$v,"; done
+}
+six_roots_ok "$SIX_ZKA_ROOTS" || six_die "SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS must be a comma list of distinct designed, noroot, legacy"
 
 six_phys_cores() {  # distinct (socket, core) pairs
   local n

@@ -4,16 +4,24 @@
 #
 #   run_all.sh check            check the prerequisites; exit 1 if something blocking is missing
 #   run_all.sh build            fetch zk-Analytics @ d4a5a9a into $BASELINE_DIR, build both sides
-#   run_all.sh quick            smoke test of the whole pipeline at tiny scale (about 8 min on 32 cores):
-#                               zkSketch 7 runs at N = 512 (2 batches of 256), zk-Analytics executor
-#                               for all six, 3 real zk-Analytics proofs, the rest ESTIMATED ("est")
+#   run_all.sh quick            smoke test of the whole pipeline at tiny scale (about 10-11 min on 32
+#                               cores): zkSketch 7 runs at N = 512 (2 batches of 256), zk-Analytics
+#                               executor for all six under every root variant, 5 real zk-Analytics
+#                               proofs (SIX_QUICK_PROVE), the rest ESTIMATED ("est")
 #   run_all.sh full [--dry-run] [--from-logs DIR [--zks-prefix P]]
 #                               the paper configuration: N = 16,384 = 8 x 2,048, zkSketch 7 runs,
-#                               zk-Analytics executor + 40 proofs (about 3-3.5 h plus gate waits).
-#                               --dry-run prints the plan and runs nothing; the GK rank values and
-#                               Bloom absent keys are then derived natively, or read from DIR's
-#                               zkSketch logs with --from-logs (the real run reads this run's logs)
+#                               zk-Analytics executor + 52 proofs (aggregation epochs 0 and 7 of every
+#                               family under each root variant + 28 queries; about 4.5 h plus gate waits,
+#                               an estimate). --dry-run prints the plan and runs nothing; the GK rank
+#                               values and Bloom absent keys are then derived natively, or read from
+#                               DIR's zkSketch logs with --from-logs (the real run reads this run's logs)
 #   run_all.sh assemble DIR     re-run assemble.py + table.py on a finished results directory
+#
+# zk-Analytics root variants: every zk-Analytics summary type builds, inside each epoch's
+# aggregation proof, a Merkle root over its buckets that no query or verifier reads; zkSketch
+# publishes no such root. `designed` = with that root (their CM guest unchanged; the ports with
+# their samples pattern, 64 buckets), `noroot` = the same guests without it (apples-to-apples
+# with zkSketch, the headline). Query proofs read no root and are proved once.
 #
 # Env:
 #   BASELINE_DIR   zk-Analytics clone + its builds (default ~/ext-baselines; about 13 GB)
@@ -22,7 +30,12 @@
 #   SIX_CORES      zkSketch cores (default: physical cores, at most 32 = the paper configuration)
 #   GATE_WAIT_S    seconds to wait for a quiet box before each timed job (quick 0, full 1800)
 #   GATE_MAX_LOAD, GATE_MAX_BUSY  the quiet thresholds (gate.sh; defaults CPUs/8 (2 below 16 CPUs) and 4)
-#   SIX_QUICK_PROVE  quick: the jobs proved for real (default kmv:aggr:0,gk:query:1,bloom:query:1:key)
+#   SIX_ZKA_ROOTS  zk-Analytics aggregation variants executed and proved, a comma list of
+#                  designed | noroot | legacy (default designed,noroot; legacy = the guests of the
+#                  committed 2026-10-09 run: full then plans 52 jobs per two variants, 40 per one)
+#   SIX_QUICK_PROVE  quick: the jobs proved for real, as jobs.py --select selectors
+#                  (default cm:aggr:0:noroot,kmv:aggr:0,gk:query:1,bloom:query:1:key: CM noroot,
+#                  KMV designed and noroot at epoch 0, the GK query and the Bloom absent-key query at n = 1)
 #   SIX_ALLOW_STALE=1  let quick/full use binaries older than their sources (refused by default;
 #                  `run_all.sh build` refreshes them)
 # quick and full use fixed run shapes: SIX_M, SIX_T, SIX_N, SIX_GK_CAP and SIX_QNS are ignored
@@ -42,6 +55,14 @@ ZKA_BINS=("$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-ss/release
           "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv")
 ZKS_BIN=$ZKS/target/release/examples/exp_compose
 TAGS=(cm hll ss gk bloom bloom_absent kmv)
+QUICK_PROVE_DEFAULT=cm:aggr:0:noroot,kmv:aggr:0,gk:query:1,bloom:query:1:key
+# the CSV columns of drivers built with the root variants (`--root`; 4e98711 and later)
+ROOT_COLS=root_variant,root_construction,variants_agree,state_commit
+roots_ok() {  # roots_ok <list>: a comma list of distinct designed|noroot|legacy
+  local v seen=,
+  [[ $1 =~ ^(designed|noroot|legacy)(,(designed|noroot|legacy))*$ ]] || return 1
+  for v in ${1//,/ }; do [[ $seen == *,$v,* ]] && return 1; seen+="$v,"; done
+}
 
 die() { echo "error: $*" >&2; exit 2; }
 hms() { printf '%dh%02dm%02ds' $(($1 / 3600)) $(($1 % 3600 / 60)) $(($1 % 60)); }
@@ -183,6 +204,12 @@ check_repo() {
   for b in "${ZKA_BINS[@]}"; do [[ -x $b ]] && nb=$((nb + 1)); done
   if (( nb == ${#ZKA_BINS[@]} )); then ok "zk-Analytics side built (6 drivers under $EB)"
   else info "zk-Analytics side: $nb of 6 drivers built under $EB -- run_all.sh build"; fi
+  for b in $(no_root_bins); do warn "$b was built before the root variants (no --root) -- run_all.sh build (quick/full refuse it)"; done
+  if roots_ok "${SIX_ZKA_ROOTS:-designed,noroot}"; then
+    local roots=${SIX_ZKA_ROOTS:-designed,noroot} nr
+    nr=$(tr ',' '\n' <<< "$roots" | wc -l)
+    info "zk-Analytics aggregation root variants: SIX_ZKA_ROOTS=$roots (full proves $((12 * nr)) aggregation + 28 query = $((12 * nr + 28)) jobs)"
+  else miss "SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS: a comma list of distinct designed, noroot, legacy" "unset SIX_ZKA_ROOTS (default designed,noroot)"; fi
   if [[ -x $ZKS_BIN ]]; then ok "zkSketch exp_compose built ($ZKS_BIN)"; else info "zkSketch exp_compose not built yet -- run_all.sh build"; fi
   for b in $(stale_builds); do warn "$b is older than its sources -- run_all.sh build refreshes it (quick/full refuse stale builds)"; done
   local v dropped=()
@@ -192,6 +219,13 @@ check_repo() {
   info "load now: $(cut -d' ' -f1-3 /proc/loadavg); the quiet-box gate waits up to GATE_WAIT_S per timed job (quick 0 s, full 1800 s)"
 }
 built_all() { local b; for b in "${ZKA_BINS[@]}" "$ZKS_BIN"; do [[ -x $b ]] || return 1; done; }
+no_root_bins() {  # built drivers whose CSV header lacks the root-variant columns (built before --root)
+  local b
+  for b in "${ZKA_BINS[@]}"; do
+    [[ -x $b ]] || continue
+    [[ $("$b" --header 2>/dev/null) == *,"$ROOT_COLS" ]] || echo "$b"
+  done
+}
 # Built binaries older than their sources (e.g. a BASELINE_DIR built from an older checkout:
 # the GK driver gained query proving on 2026-10-09), i.e. sources changed since the last
 # `run_all.sh build`, which refreshes them (build.sh sets each binary's mtime to the build
@@ -255,6 +289,7 @@ write_manifest() {  # write_manifest <mode>
     echo "mode=$1"
     echo "started=$(date -Is)"
     echo "N=$SIX_N M=$SIX_M T=$SIX_T gk_cap=$SIX_GK_CAP query_points=$SIX_QNS aggr_epochs=0,$((SIX_T - 1)) cores=$SIX_CORES"
+    echo "zka_roots=$SIX_ZKA_ROOTS (aggregation root variants executed and planned)"
     local ncpu; ncpu=$(grep -c '^cpu[0-9]' /proc/stat)   # gate.sh's default GATE_MAX_LOAD
     echo "verify_repeats=${EXP_VERIFY_REPEATS:-5} gate: GATE_WAIT_S=${GATE_WAIT_S:-1800} GATE_MAX_LOAD=${GATE_MAX_LOAD:-$(( ncpu >= 16 ? ncpu / 8 : 2 ))} GATE_MAX_BUSY=${GATE_MAX_BUSY:-4}"
     echo "zksketch=$(git -C "$ZKS" rev-parse HEAD 2>/dev/null) changed_files=$(git -C "$ZKS" status --porcelain 2>/dev/null | wc -l) checkout=$ZKS"
@@ -285,10 +320,13 @@ preflight_built() {
   if [[ -n $stale && ${SIX_ALLOW_STALE:-0} != 1 ]]; then
     die "built from older sources (run: $0 build; or SIX_ALLOW_STALE=1 to use them anyway): $(echo $stale)"
   fi
+  stale=$(no_root_bins)
+  [[ -z $stale ]] || die "built before the root variants (no --root; run: $0 build): $(echo $stale)"
 }
 
 jobs_py() {  # jobs_py [jobs.py options...]: the job plan of this run shape
-  python3 -I "$HERE6/jobs.py" --keys "$KEYS" --m "$SIX_M" --t "$SIX_T" --qns "$SIX_QNS" --aggr "0,$((SIX_T - 1))" "$@"
+  python3 -I "$HERE6/jobs.py" --keys "$KEYS" --m "$SIX_M" --t "$SIX_T" --qns "$SIX_QNS" --aggr "0,$((SIX_T - 1))" \
+    --roots "$SIX_ZKA_ROOTS" "$@"
 }
 
 assemble_and_table() {  # assemble_and_table <dir> [--plan FILE]
@@ -303,14 +341,14 @@ summary() {  # summary <mode> <rc>
   echo "finished=$(date -Is) rc=$rc" >> "$RESULTS/manifest.txt"
   echo
   if [[ -s $RESULTS/six_sketch_table.md ]]; then
-    echo "=== speedup summary (full tables: $RESULTS/six_sketch_table.md)"
-    awk '/^\*\*Update side/{p=1} /^\*\*Proof bytes/{p=0} p' "$RESULTS/six_sketch_table.md"
+    echo "=== summary (full tables: $RESULTS/six_sketch_table.md)"
+    awk '/^\*\*Update proofs side by side/{p=1} /^\*\*Update side/{p=0} p' "$RESULTS/six_sketch_table.md"
     awk '/^\*\*Query proving time/{p=1} /^\*\*zkSketch query proving at the other n|^\*\*Verifier work/{p=0} p' "$RESULTS/six_sketch_table.md"
   fi
   echo "results:  $RESULTS"
   echo "  manifest.txt                 run configuration and versions"
   echo "  six_sketch_table.md          all tables (markdown)"
-  echo "  six_sketch_comparison.csv    one row per (family, system, operation); provenance says measured / sampled / derived / ESTIMATED"
+  echo "  six_sketch_comparison.csv    one row per (family, system, root variant, operation); provenance says measured / sampled / derived / ESTIMATED"
   echo "  six_zksketch_*.csv/.log      zkSketch runs;  six_zka_*.csv/.log  zk-Analytics executor, profile and proofs"
   if (( rc == 0 )); then echo "$mode: OK in $(hms $SECONDS)"; else echo "$mode: FAILED (rc=$rc) after $(hms $SECONDS); see the logs above"; fi
 }
@@ -329,6 +367,8 @@ load_shape() {  # load_shape <mode>: export the run shape for the child scripts
     export GATE_WAIT_S=${GATE_WAIT_S:-1800}
   fi
   export SIX_CORES=${SIX_CORES:-$(default_cores)}
+  export SIX_ZKA_ROOTS=${SIX_ZKA_ROOTS:-designed,noroot}
+  roots_ok "$SIX_ZKA_ROOTS" || die "SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS must be a comma list of distinct designed, noroot, legacy"
   export SIX_ZKS_PREFIX=six_zksketch SIX_ZKA_PREFIX=six_zka
   unset SIX_WORK
 }
@@ -336,18 +376,19 @@ load_shape() {  # load_shape <mode>: export the run shape for the child scripts
 cmd_quick() {
   load_shape quick
   export SIX_FAIL_FAST=1
-  local sel=${SIX_QUICK_PROVE:-kmv:aggr:0,gk:query:1,bloom:query:1:key}
+  local sel=${SIX_QUICK_PROVE:-$QUICK_PROVE_DEFAULT}
   preflight_built
   new_results quick
   exec > >(trap '' TERM; exec tee -i -a "$RESULTS/run_all.log") 2>&1   # tee outlives Ctrl-C / TERM; exits at EOF
   write_manifest quick
   echo "quick smoke test -> $RESULTS"
-  echo "  zkSketch: 7 runs, N=$SIX_N (t=$SIX_T batches of m=$SIX_M), $SIX_CORES cores; zk-Analytics: executor for all six,"
-  echo "  proofs: ${sel//,/ } (the other planned jobs are ESTIMATED from padded cycles); GATE_WAIT_S=$GATE_WAIT_S"
+  echo "  zkSketch: 7 runs, N=$SIX_N (t=$SIX_T batches of m=$SIX_M), $SIX_CORES cores; zk-Analytics: executor for all six"
+  echo "  under root variants $SIX_ZKA_ROOTS, proofs: ${sel//,/ } (the other planned jobs are ESTIMATED from padded"
+  echo "  cycles); GATE_WAIT_S=$GATE_WAIT_S"
   local rc=0 plan
   step "zkSketch: run_zks.sh (7 runs)" "$HERE6/run_zks.sh" || rc=1
   if (( rc == 0 )); then
-    step "zk-Analytics executor: run_zka.sh exec" "$HERE6/run_zka.sh" exec || rc=1
+    step "zk-Analytics executor: run_zka.sh exec (root variants $SIX_ZKA_ROOTS)" "$HERE6/run_zka.sh" exec || rc=1
   fi
   if (( rc == 0 )); then
     jobs_py --logs "$RESULTS" --prefix six_zksketch --lines > "$RESULTS/zka_plan.txt" || rc=1
@@ -400,9 +441,13 @@ full run plan (dry run; nothing is executed)
   RESULTS=${RESULTS:-$ZKS/results/six/full-<YYYYmmdd-HHMMSS>}  BASELINE_DIR=$BASELINE_DIR
   shape: N=$SIX_N = T=$SIX_T x M=$SIX_M, GK cap $SIX_GK_CAP, zkSketch cores $SIX_CORES, gate wait <= ${GATE_WAIT_S}s per timed job
   1. zkSketch, 7 timed runs:   SIX_M=$SIX_M SIX_T=$SIX_T SIX_GK_CAP=$SIX_GK_CAP SIX_CORES=$SIX_CORES $HERE6/run_zks.sh ${TAGS[*]}
-  2. zk-Analytics executor:    $HERE6/run_zka.sh exec      (aggregation epochs 0..$((SIX_T - 1)); Bloom/KMV pipelines with queries at n = $SIX_QNS)
+  2. zk-Analytics executor:    SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS $HERE6/run_zka.sh exec
+                               (aggregation epochs 0..$((SIX_T - 1)) under each root variant; Bloom/KMV pipelines
+                               with queries at n = $SIX_QNS, the query rows once)
   3. SS/GK guest profile:      $HERE6/prof_exec.sh          (executor only)
   4. zk-Analytics, $(wc -l <<< "$jobs") timed proofs: $HERE6/run_zka.sh prove <jobs>
+     $(grep -c ':aggr:' <<< "$jobs") aggregation proofs (epochs 0 and $((SIX_T - 1)) x 6 families x root variants $SIX_ZKA_ROOTS)
+     + $(grep -c ':query:' <<< "$jobs") query proofs (variant-independent: query guests read no root)
      GK rank values / Bloom absent keys: $src
   5. python3 -I $HERE6/assemble.py \$RESULTS $KEYS --zka six_zka --zks six_zksketch --out \$RESULTS/six_sketch_comparison.csv
      python3 -I $HERE6/table.py \$RESULTS/six_sketch_comparison.csv > \$RESULTS/six_sketch_table.md
@@ -416,12 +461,13 @@ EOF
   exec > >(trap '' TERM; exec tee -i -a "$RESULTS/run_all.log") 2>&1   # tee outlives Ctrl-C / TERM; exits at EOF
   write_manifest full
   echo "full run (paper configuration) -> $RESULTS"
-  echo "  zkSketch 7 runs + zk-Analytics executor + 40 proofs; expect ~3-3.5 h of running plus gate waits (GATE_WAIT_S=$GATE_WAIT_S per timed job)"
+  echo "  zkSketch 7 runs + zk-Analytics executor (root variants $SIX_ZKA_ROOTS) + the planned proofs (52 at the"
+  echo "  default variants: expect ~4.5 h of running, an estimate, plus gate waits; GATE_WAIT_S=$GATE_WAIT_S per timed job)"
   local rc=0 plan
   # zkSketch or executor failures stop the run (fix and start again); a failed proof does not:
   # the remaining proofs still run, the table shows '-' for it, and the exit status is 1.
   step "zkSketch: run_zks.sh (7 runs)" "$HERE6/run_zks.sh" || { summary full 1; return 1; }
-  step "zk-Analytics executor: run_zka.sh exec" "$HERE6/run_zka.sh" exec || { summary full 1; return 1; }
+  step "zk-Analytics executor: run_zka.sh exec (root variants $SIX_ZKA_ROOTS)" "$HERE6/run_zka.sh" exec || { summary full 1; return 1; }
   jobs_py --logs "$RESULTS" --prefix six_zksketch --lines > "$RESULTS/zka_plan.txt" \
     || { echo "cannot plan the zk-Analytics jobs (see above)"; summary full 1; return 1; }
   echo "zk-Analytics plan: $(wc -l < "$RESULTS/zka_plan.txt") jobs ($RESULTS/zka_plan.txt), GK rank values and Bloom absent keys from this run's zkSketch logs"

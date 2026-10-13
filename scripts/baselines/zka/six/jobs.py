@@ -2,14 +2,18 @@
 """Plan the zk-Analytics prove jobs of the six-sketch comparison (run with python3 -I).
 
 Usage:
-  jobs.py --keys <aol.keys> --m M --t T [--aggr 0,7] [--qns 1,2,4,8]
+  jobs.py --keys <aol.keys> --m M --t T [--aggr 0,7] [--qns 1,2,4,8] [--roots designed,noroot]
           [--logs DIR [--prefix six_zksketch]] [--select SEL,...] [--lines]
 
-A job is `<fam>:aggr:<epoch>` or `<fam>:query:<n>[:<arg>]` (the argument syntax of
-`run_zka.sh prove`). The plan lists, in this order: the aggregation epochs of every
-family (cm hll ss gk bloom kmv), then the queries of cm, hll, gk, bloom (inserted key),
-bloom (absent key), kmv and ss at every n in --qns. Defaults: --aggr 0,T-1 and --qns =
-the powers of two <= T, i.e. 40 jobs at T = 8.
+A job is `<fam>:aggr:<epoch>:<variant>` or `<fam>:query:<n>[:<arg>]` (the argument syntax
+of `run_zka.sh prove`; there an aggregation job without a variant means legacy). The plan
+lists, in this order: the aggregation jobs of every family (cm hll ss gk bloom kmv; per
+family each epoch of --aggr, per epoch each root variant of --roots), then the queries of
+cm, hll, gk, bloom (inserted key), bloom (absent key), kmv and ss at every n in --qns.
+Query proofs do not depend on the root variant (query guests read no root), so each query
+is planned once. Defaults: --aggr 0,T-1, --qns = the powers of two <= T and --roots
+designed,noroot, i.e. 2 x 6 x 2 = 24 aggregation + 28 query = 52 jobs at T = 8 (40 with
+--roots legacy, the plan of the committed 2026-10-09 run).
 
 Two query arguments must equal what zkSketch probed at n, so both sides answer the
 same query:
@@ -26,8 +30,9 @@ The inserted Bloom key needs no argument: `first` is the first record of batch n
 both sides.
 
 --select keeps only the jobs equal to a selector or starting with '<selector>:', e.g.
-`kmv:aggr:0,gk:query:1,bloom:query:1:key`. Output: one line, jobs separated by spaces
-(--lines: one job per line).
+`cm:aggr:0:noroot,kmv:aggr:0,gk:query:1,bloom:query:1:key` (`kmv:aggr:0` selects every
+variant of that epoch); a selector that matches no job is reported on stderr, and no match
+at all is an error. Output: one line, jobs separated by spaces (--lines: one job per line).
 """
 import argparse
 import collections
@@ -37,6 +42,7 @@ import struct
 import sys
 
 FAMS = ['cm', 'hll', 'ss', 'gk', 'bloom', 'kmv']
+ROOTS = ['designed', 'noroot', 'legacy']
 PAD = 0xFFFFFFFF
 MASK64 = (1 << 64) - 1
 
@@ -97,6 +103,7 @@ def main():
     ap.add_argument('--t', type=int, default=8)
     ap.add_argument('--aggr')
     ap.add_argument('--qns')
+    ap.add_argument('--roots', default='designed,noroot')
     ap.add_argument('--logs')
     ap.add_argument('--prefix', default='six_zksketch')
     ap.add_argument('--select', default='')
@@ -105,8 +112,11 @@ def main():
     t = a.t
     aggr = ints(a.aggr) if a.aggr else sorted({0, t - 1})
     qns = ints(a.qns) if a.qns else [1 << i for i in range(t.bit_length()) if (1 << i) <= t]
+    roots = [v for v in a.roots.split(',') if v]
     if t < 1 or not qns or any(not 1 <= n <= t for n in qns) or any(not 0 <= e < t for e in aggr):
         sys.exit(f'bad plan: t={t} aggr={aggr} qns={qns}')
+    if not roots or any(v not in ROOTS for v in roots) or len(set(roots)) != len(roots):
+        sys.exit(f'bad --roots {a.roots}: a comma list of distinct {", ".join(ROOTS)}')
     if a.logs:
         args = from_logs(a.logs, a.prefix, qns)
         if a.keys:
@@ -120,14 +130,19 @@ def main():
         args = derive(a.keys, a.m, qns)
     else:
         sys.exit('need --logs and/or --keys')
-    jobs = [f'{f}:aggr:{e}' for f in FAMS for e in aggr]
+    jobs = [f'{f}:aggr:{e}:{v}' for f in FAMS for e in aggr for v in roots]
     jobs += [f'cm:query:{n}' for n in qns] + [f'hll:query:{n}' for n in qns]
     jobs += [f'gk:query:{n}:{args[n][0]}' for n in qns]
     jobs += [f'bloom:query:{n}:first' for n in qns] + [f'bloom:query:{n}:key:{args[n][1]}' for n in qns]
     jobs += [f'kmv:query:{n}' for n in qns] + [f'ss:query:{n}' for n in qns]
     sel = [s for s in a.select.split(',') if s]
     if sel:
-        jobs = [j for j in jobs if any(j == s or j.startswith(s + ':') for s in sel)]
+        def hit(j, s):
+            return j == s or j.startswith(s + ':')
+        for s in sel:
+            if not any(hit(j, s) for j in jobs):
+                print(f'jobs.py: --select {s} matches no planned job (roots {",".join(roots)})', file=sys.stderr)
+        jobs = [j for j in jobs if any(hit(j, s) for s in sel)]
         if not jobs:
             sys.exit(f'--select {a.select}: no job matches')
     print(('\n' if a.lines else ' ').join(jobs))

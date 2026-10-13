@@ -3,23 +3,34 @@
 # Bloom, KMV in their per-epoch architecture), AOL, SIX_T epochs x SIX_M records, batches of 8
 # (paper configuration, the defaults: 8 epochs x 2,048 records).
 #
-#   run_zka.sh exec             executor only: aggregation epochs 0..T-1 of every family
-#                               (Bloom/KMV: their --mode exec pipeline incl. query executes at SIX_QNS)
+#   run_zka.sh exec             executor only: aggregation epochs 0..T-1 of every family, once per
+#                               root variant of SIX_ZKA_ROOTS (default designed,noroot)
+#                               (Bloom/KMV: their --mode exec pipeline per variant, incl. the query
+#                               executes at SIX_QNS; the query rows, which no root reaches, are kept
+#                               once and checked identical across the variants)
 #   run_zka.sh qexec <jobs...>  executor only, no proof, for the given query jobs: the cycle counts
 #                               `assemble.py --plan` uses to ESTIMATE jobs that were not proved
 #   run_zka.sh prove <jobs...>  proved jobs, sequential, each behind the quiet-box gate.
-#                               job = <fam>:aggr:<epoch> | <fam>:query:<n>[:<arg>]
+#                               job = <fam>:aggr:<epoch>[:<variant>] | <fam>:query:<n>[:<arg>]
+#                               variant = designed | noroot | legacy (also ss: buckets1024, perkey;
+#                               gk: pertuple), passed to the driver as --root; omitted = legacy (the
+#                               guests of the committed 2026-10-09 run, the drivers' default).
+#                               Query proofs take no variant (query guests read no root).
 #                               (gk query arg = rank value; bloom query arg = first|key:<u32>)
-#                               `jobs.py` prints the job list (40 jobs at the defaults).
+#                               `jobs.py` prints the job list (52 jobs at the defaults).
 # ProverOpts::succinct(), CPU r0vm. Every proof is wrapped by rss_tree.sh (r0vm peak RSS).
-# Env: RESULTS, SIX_M, SIX_T, SIX_QNS (six_common.sh); GATE_* (gate.sh);
+# Env: RESULTS, SIX_M, SIX_T, SIX_QNS, SIX_ZKA_ROOTS (six_common.sh); GATE_* (gate.sh);
 #   SIX_ZKA_PREFIX  output prefix (default six_zka): <prefix>_<fam>_{exec,qexec,prove}.csv/.log,
-#                   <prefix>_jobs.csv, <prefix>_qexec_jobs.csv
+#                   <prefix>_jobs.csv, <prefix>_qexec_jobs.csv. Rows of every variant share a
+#                   family's CSV; its root_variant / root_construction columns tell them apart.
 #   SIX_FAIL_FAST=1 stop at the first failed job
 # exec and qexec rewrite their CSVs; prove appends (a job list can be split over several calls,
 # e.g. to retry the jobs of a plan that have no rc=0 line in <prefix>_jobs.csv yet). A proof's
 # row is appended only when its driver exits 0 having printed exactly one row; any other
-# outcome is recorded in <prefix>_jobs.csv with a non-zero rc and adds no row.
+# outcome is recorded in <prefix>_jobs.csv with a non-zero rc and adds no row. The jobs file's
+# `arg` column holds an aggregation job's variant ('-' = none given = legacy).
+# exec also checks, per family, that every variant gives the same state_commit for each epoch
+# (the drivers check journal_eq_native and variants_agree themselves and exit 1 otherwise).
 # Exit status 0 only if every driver call succeeded (and every proof appended its row).
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,14 +92,25 @@ common() {
   esac
 }
 
+# root_ok <fam> <variant>: a --root value the family's aggregation driver can prove
+root_ok() {
+  case $2 in
+    designed|noroot|legacy) return 0 ;;
+    buckets1024|perkey) [[ $1 == ss ]] ;;
+    pertuple) [[ $1 == gk ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 # job_args <job> -> JFAM JOP JX JARG ARGS (driver args without --prove); 1 on a bad job
+# (an aggregation job's JARG is its root variant, empty = legacy)
 job_args() {
   IFS=: read -r JFAM JOP JX JARG <<< "$1"
   [[ -n ${BIN[$JFAM]:-} ]] && six_is_uint "$JX" || return 1
   common "$JFAM"
   case $JOP in
-    aggr)  (( JX < T )) || return 1
-           ARGS=(--mode aggr --epoch-index "$JX" "${COMMON[@]}") ;;
+    aggr)  (( JX < T )) && root_ok "$JFAM" "${JARG:-legacy}" || return 1
+           ARGS=(--mode aggr --epoch-index "$JX" --root "${JARG:-legacy}" "${COMMON[@]}") ;;
     query) (( JX >= 1 && JX <= T )) || return 1
            ARGS=(--mode query --epochs "$JX" "${COMMON[@]}")
            case $JFAM in
@@ -100,7 +122,7 @@ job_args() {
     *) return 1 ;;
   esac
 }
-check_jobs() { local j; for j in "$@"; do job_args "$j" || six_die "bad job '$j' (fam:aggr:<epoch 0..$((T-1))> | fam:query:<n 1..$T>[:arg]; gk needs a rank value)"; done; }
+check_jobs() { local j; for j in "$@"; do job_args "$j" || six_die "bad job '$j' (fam:aggr:<epoch 0..$((T-1))>[:designed|noroot|legacy] | fam:query:<n 1..$T>[:arg]; gk needs a rank value)"; done; }
 
 NFAIL=0
 failed() {  # failed <what>
@@ -122,31 +144,106 @@ on_signal() {
 }
 trap on_signal INT TERM HUP
 
+# exec_py merge <out> <tmp> <variant> | check <T> <roots> <csv...>: the cross-variant steps of
+# phase_exec. merge: append the aggregation rows of a Bloom / KMV pipeline (<tmp>, no header) to
+# <out>, after checking that its query rows equal those already in <out> (all columns but exec_s).
+# check: per CSV and epoch 0..T-1, exactly one aggregation row per variant, one state_commit for
+# all of them, journal_eq_native and variants_agree true.
+exec_py() {
+  python3 -I - "$@" <<'PY'
+import collections, csv, sys
+mode = sys.argv[1]
+if mode == 'merge':
+    out, tmp, var = sys.argv[2:5]
+    h = next(csv.reader(open(out)))
+    st, ex = h.index('step'), h.index('exec_s')
+    def queries(lines):
+        rows = [r for r in csv.reader(lines) if r]
+        return [[c for i, c in enumerate(r) if i != ex] for r in rows if r[st] == 'query']
+    head, *old = open(out).read().splitlines()
+    new = [line for line in open(tmp).read().splitlines() if line != head]
+    if queries(old) != queries(new):
+        sys.exit(f'{out}: the query rows of --root {var} differ from the first variant\'s '
+                 f'(no query guest reads a root, so they must be identical)')
+    with open(out, 'a') as fo:
+        for line in new:
+            r = next(csv.reader([line]), [])
+            if r and r[st] != 'query':
+                fo.write(line + '\n')
+    sys.exit(0)
+t, roots, files = int(sys.argv[2]), sys.argv[3].split(','), sys.argv[4:]
+bad = []
+for p in files:
+    rows = [r for r in csv.DictReader(open(p)) if (r.get('step') or r.get('mode')) == 'aggr']
+    by = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in rows:
+        by[r['epoch_index']][r['root_variant']].append(r)
+    for e in range(t):
+        got = by.pop(str(e), {})
+        for v in roots:
+            if len(got.get(v, [])) != 1:
+                bad.append(f'{p}: epoch {e} --root {v}: {len(got.get(v, []))} rows (expected 1)')
+        commits = {r['state_commit'] for rs in got.values() for r in rs}
+        if len(commits) > 1:
+            bad.append(f'{p}: epoch {e}: {len(commits)} different state_commit values across {sorted(got)}')
+        for v, rs in got.items():
+            for r in rs:
+                if (r['journal_eq_native'], r['variants_agree']) != ('true', 'true'):
+                    bad.append(f'{p}: epoch {e} --root {v}: journal_eq_native={r["journal_eq_native"]} '
+                               f'variants_agree={r["variants_agree"]}')
+    if by:
+        bad.append(f'{p}: unexpected epochs {sorted(by)}')
+    if not any(b.startswith(p + ':') for b in bad):
+        print(f'exec variants ok: {p.rsplit("/", 1)[-1]}: epochs 0..{t - 1} x {",".join(roots)}, '
+              f'one state_commit per epoch', file=sys.stderr)
+for b in bad:
+    print('VARIANT CHECK FAILED ' + b, file=sys.stderr)
+sys.exit(1 if bad else 0)
+PY
+}
+
 phase_exec() {
   local log=$OUTD/${PFX}_exec.log
-  provenance "run_zka.sh exec" >> "$log"
-  local fam e out rc
+  provenance "run_zka.sh exec (root variants $SIX_ZKA_ROOTS)" >> "$log"
+  local fam e v out rc first files=() roots=(${SIX_ZKA_ROOTS//,/ })
   for fam in cm hll ss gk; do
     out=$OUTD/${PFX}_${fam}_exec.csv
     csv_fresh "$out" "$fam"
+    files+=("$out")
     common "$fam"
-    for ((e = 0; e < T; e++)); do
-      echo "# exec $fam aggr epoch $e $(date -Is) load1=$(cut -d' ' -f1 /proc/loadavg)" >> "$log"
-      "${BIN[$fam]}" --mode aggr --epoch-index "$e" "${COMMON[@]}" >> "$out" 2>> "$log"; rc=$?
-      echo "# rc=$rc" >> "$log"
-      (( rc == 0 )) || failed "exec $fam aggr epoch $e (rc=$rc)"
+    for v in "${roots[@]}"; do
+      for ((e = 0; e < T; e++)); do
+        echo "# exec $fam aggr epoch $e --root $v $(date -Is) load1=$(cut -d' ' -f1 /proc/loadavg)" >> "$log"
+        "${BIN[$fam]}" --mode aggr --epoch-index "$e" --root "$v" "${COMMON[@]}" >> "$out" 2>> "$log"; rc=$?
+        echo "# rc=$rc" >> "$log"
+        (( rc == 0 )) || failed "exec $fam aggr epoch $e --root $v (rc=$rc)"
+      done
     done
   done
   for fam in bloom kmv; do
     out=$OUTD/${PFX}_${fam}_exec.csv
     csv_fresh "$out" "$fam"
+    files+=("$out")
     common "$fam"
     local extra=(); [[ $fam == bloom ]] && extra=(--probe "first,absent")
-    echo "# exec $fam pipeline $(date -Is) load1=$(cut -d' ' -f1 /proc/loadavg)" >> "$log"
-    "${BIN[$fam]}" --mode exec --epochs "$T" --query-at "$QNS" "${extra[@]}" "${COMMON[@]}" >> "$out" 2>> "$log"; rc=$?
-    echo "# rc=$rc" >> "$log"
-    (( rc == 0 )) || failed "exec $fam pipeline (rc=$rc)"
+    first=1
+    for v in "${roots[@]}"; do
+      ROWTMP=$(mktemp "$OUTD/.${PFX}_${fam}_exec.XXXXXX") || six_die "cannot create a temporary file in $OUTD"
+      echo "# exec $fam pipeline --root $v $(date -Is) load1=$(cut -d' ' -f1 /proc/loadavg)" >> "$log"
+      "${BIN[$fam]}" --mode exec --epochs "$T" --query-at "$QNS" "${extra[@]}" --root "$v" "${COMMON[@]}" > "$ROWTMP" 2>> "$log"; rc=$?
+      echo "# rc=$rc" >> "$log"
+      if (( rc != 0 )); then
+        failed "exec $fam pipeline --root $v (rc=$rc)"
+      elif (( first )); then
+        cat "$ROWTMP" >> "$out"; first=0
+      else
+        exec_py merge "$out" "$ROWTMP" "$v" 2>> "$log" || failed "exec $fam pipeline --root $v: its query rows differ from the first variant's (see $log)"
+      fi
+      rm -f "$ROWTMP"; ROWTMP=
+    done
   done
+  exec_py check "$T" "$SIX_ZKA_ROOTS" "${files[@]}" 2>&1 | tee -a "$log" >&2
+  (( PIPESTATUS[0] == 0 )) || failed "exec: the root variants disagree (VARIANT CHECK FAILED lines above)"
   finish exec
 }
 

@@ -11,10 +11,10 @@ Usage:
       zkSketch prefix PFX with full instrumentation, its rows labelled run=<label>.
       --plan FILE: the planned zk-Analytics jobs, one per line. A planned job without a proof
       is ESTIMATED: prove_s = padded_cycles / 2^20 x k, where padded_cycles comes from the
-      executor (<zka>_<fam>_exec.csv for aggregation epochs, <zka>_<fam>_qexec.csv for
-      queries) and k = the seconds per 2^20 padded cycles measured over THIS run's proofs;
-      verify_ms and proof_bytes = the mean of this run's measured receipts; no RSS. Such rows
-      say ESTIMATED in `provenance`.
+      executor (<zka>_<fam>_exec.csv for aggregation epochs, the row of the job's root
+      variant; <zka>_<fam>_qexec.csv for queries) and k = the seconds per 2^20 padded cycles
+      measured over THIS run's proofs (all variants); verify_ms and proof_bytes = the mean of
+      this run's measured receipts; no RSS. Such rows say ESTIMATED in `provenance`.
   --out defaults to <results dir>/six_sketch_comparison.csv. A git-tracked output (the
   committed scripts/baselines/zka/results/six_sketch_comparison.csv, which the 6cac471
   version of this script produced) is refused: pass --out to write elsewhere.
@@ -40,6 +40,19 @@ Inputs (all in <results dir>):
 Records per epoch M and epochs T are read from the zkSketch CSV (m, t) and checked against
 the zk-Analytics executor (epoch_records). Exact answers are recomputed here from the same
 M x T AOL records.
+
+Root variants (zk-Analytics aggregation proofs; ../README.md, "Root variants of the
+zk-Analytics aggregation proofs"): every zk-Analytics update row (update_*, accept_*) carries
+the `variant` of its aggregation guest (designed / noroot / legacy / a sensitivity variant)
+and its `root_construction`, both read from the driver rows' root_variant / root_construction
+columns. Driver rows without those columns (the committed 2026-10-09 set) are `legacy`:
+CM cm_rows+cm+heap (their shipped roots), SS buckets64, GK pertuple, HLL / Bloom / KMV none.
+Query proofs do not depend on the variant (query guests read no root): query rows say `-`, as
+do all zkSketch rows. Checked here: an aggregation job's variant equals its proved row's; per
+(family, epoch) every executor and proved aggregation row of every variant has the same
+state_commit, with journal_eq_native and variants_agree true. The CSV's first 18 columns are
+those of the previous version; `variant` and `root_construction` are appended (for the
+committed set, dropping the two gives the previous output byte for byte).
 
 Verify protocol (both sides): `verify_ms` = the best of 5 in-process verify calls of the same
 proof (zk-Analytics: their drivers' loop; zkSketch: EXP_VERIFY_REPEATS=5). Deserialisation is
@@ -178,13 +191,15 @@ def rank_le(n, v):
 
 OUT = []
 COLS = ['family', 'system', 'run', 'operation', 'n', 'prove_s', 'verify_ms', 'verify_first_ms', 'verify_median_ms',
-        'decode_ms', 'proof_bytes', 'peak_rss_mb', 'rss_scope', 'answer', 'exact', 'provenance', 'note', 'detail']
+        'decode_ms', 'proof_bytes', 'peak_rss_mb', 'rss_scope', 'answer', 'exact', 'provenance', 'note', 'detail',
+        'variant', 'root_construction']
 
 
 def emit(**kw):
     def fmt(v, d):
         return '' if v is None else (f'{v:.{d}f}' if isinstance(v, float) else str(v))
     r = {c: '' for c in COLS}
+    r['variant'] = r['root_construction'] = '-'
     for k, v in kw.items():
         if k in ('prove_s',):
             r[k] = fmt(v, 6)
@@ -252,6 +267,26 @@ def zka_exact(f, r, n):
     raise ValueError(f)
 
 
+# Root variants of the zk-Analytics aggregation guests. Driver rows without a root_variant
+# column come from the committed 2026-10-09 guests: `legacy`, with these root constructions.
+LEGACY_ROOT = {'cm': 'cm_rows+cm+heap', 'hll': 'none', 'ss': 'buckets64', 'gk': 'pertuple', 'bloom': 'none',
+               'kmv': 'none'}
+VORDER = {v: i for i, v in enumerate(['designed', 'noroot', 'legacy', 'buckets1024', 'perkey', 'pertuple'])}
+
+
+def row_variant(f, r):
+    """(variant, root construction) of a zk-Analytics aggregation row of a driver CSV."""
+    v = r.get('root_variant')
+    if v in (None, '', '-'):
+        return 'legacy', LEGACY_ROOT[f]
+    return v, r.get('root_construction') or '-'
+
+
+def job_variant(j):
+    """The root variant of an aggregation job line (its arg; none given = legacy)."""
+    return j['arg'] if j.get('arg') not in (None, '', '-') else 'legacy'
+
+
 def attach_jobs(prefix_, kind='prove', jobs_name=None):
     """{fam: rows of <prefix>_<fam>_<kind>.csv}, each with its job line as row['_job']."""
     jobs = rows(jobs_name or f'{prefix_}_jobs.csv')
@@ -269,6 +304,9 @@ def attach_jobs(prefix_, kind='prove', jobs_name=None):
             n_or_e = row['epoch_index'] if j['op'] == 'aggr' else row['epochs']
             if mode != j['op'] or n_or_e != j['n_or_epoch']:
                 sys.exit(f'{prefix_} {f}: row/job mismatch {mode},{n_or_e} vs {j["op"]},{j["n_or_epoch"]}')
+            if j['op'] == 'aggr' and row_variant(f, row)[0] != job_variant(j):
+                sys.exit(f'{prefix_} {f}: job {j["job"]} is root variant {job_variant(j)} but its row says '
+                         f'{row_variant(f, row)[0]}')
             row['_job'] = j
     return out
 
@@ -302,12 +340,15 @@ if A.plan:
             parts = job.split(':', 3)
             f, op, x = parts[0], parts[1], parts[2]
             if op == 'aggr':
-                src = [r for r in rows(f'{ZKA}_{f}_exec.csv') if step_of(r) == 'aggr' and r['epoch_index'] == x]
+                var = parts[3] if len(parts) > 3 else 'legacy'
+                src = [r for r in rows(f'{ZKA}_{f}_exec.csv') if step_of(r) == 'aggr' and r['epoch_index'] == x
+                       and row_variant(f, r)[0] == var]
                 src = src[0] if src else None
             else:
                 src = qex_by_job.get(job)
             if src is None:
-                sys.exit(f'--plan: no executor row for {job} (run run_zka.sh exec / qexec first)')
+                sys.exit(f'--plan: no executor row for {job} (run run_zka.sh exec / qexec first; exec runs the '
+                         f'root variants of SIX_ZKA_ROOTS)')
             e = dict(src)
             e['prove_s'] = str(k * int(e['padded_cycles']) / 2 ** 20)
             e['verify_ms'] = str(mv)
@@ -347,24 +388,56 @@ def gate_of(r):
             f"busy_cores_start={r['_job']['busy_cores_start']}")
 
 
+def check_variants():
+    """Per (family, epoch): one state_commit across every executor and proved aggregation row of
+    every root variant, each with journal_eq_native and variants_agree true. Rows without the
+    columns (the committed 2026-10-09 set) are skipped."""
+    commits = collections.defaultdict(set)
+    seen = collections.defaultdict(set)
+    for f in FAMS:
+        src = [('exec', r) for r in rows(f'{ZKA}_{f}_exec.csv')] + [('prove', r) for r in prove[f] if not r['_est']]
+        for kind, r in src:
+            if step_of(r) != 'aggr' or r.get('state_commit') in (None, '', '-'):
+                continue
+            v = row_variant(f, r)[0]
+            if (r.get('journal_eq_native'), r.get('variants_agree')) != ('true', 'true'):
+                sys.exit(f'{ZKA} {f} {kind} epoch {r["epoch_index"]} --root {v}: journal_eq_native='
+                         f'{r.get("journal_eq_native")} variants_agree={r.get("variants_agree")}')
+            commits[(f, r['epoch_index'])].add(r['state_commit'])
+            seen[f].add(v)
+    bad = sorted(k for k, c in commits.items() if len(c) > 1)
+    if bad:
+        sys.exit('root variants disagree on state_commit at (family, epoch) ' + ', '.join(f'({f}, {e})' for f, e in bad))
+    if commits:
+        print('root variants: one state_commit per (family, epoch) over ' + '; '.join(
+            f'{f} {"/".join(sorted(seen[f], key=lambda v: VORDER.get(v, 99)))}' for f in FAMS if seen[f])
+            + f' ({len(commits)} epochs)', file=sys.stderr)
+
+
+check_variants()
 zka_aggr_mean, zka_query_mean = {}, {}
 for f in FAMS:
     sysname = ZKA_NAME[f]
-    ex = [r for r in rows(f'{ZKA}_{f}_exec.csv') if step_of(r) == 'aggr']
-    segs = [int(r['segments']) for r in ex]
-    cyc = [int(r['user_cycles']) for r in ex]
-    aggr = [r for r in prove[f] if r['_job']['op'] == 'aggr']
-    if not aggr:
+    ex_all = [r for r in rows(f'{ZKA}_{f}_exec.csv') if step_of(r) == 'aggr']
+    aggr_all = [r for r in prove[f] if r['_job']['op'] == 'aggr']
+    if not aggr_all:
         print(f'{f}: no proved aggregation rows; update and accept rows skipped', file=sys.stderr)
-    for r in aggr:
-        e = r['epoch_index']
-        emit(family=f, system=sysname, run='main', operation=f'update_epoch{e}', prove_s=num(r['prove_s']),
-             verify_ms=num(r['verify_ms']), proof_bytes=int(r['receipt_bytes']),
-             peak_rss_mb=num(r['_job']['r0vm_peak_rss_mb']), rss_scope='' if r['_est'] else 'r0vm process of this proof',
-             answer='-', exact='-', provenance=prov(r),
-             detail=f"aggregation guest on epoch {e} ({M} records); {r['segments']} segments; {r['user_cycles']} "
-                    f"user cycles; {gate_of(r)}")
-    if aggr:
+    variants = sorted({row_variant(f, r)[0] for r in aggr_all}, key=lambda v: VORDER.get(v, 99))
+    for var in variants:
+        aggr = [r for r in aggr_all if row_variant(f, r)[0] == var]
+        con = row_variant(f, aggr[0])[1]
+        vk = dict(variant=var, root_construction=con)
+        ex = [r for r in ex_all if row_variant(f, r)[0] == var]
+        segs = [int(r['segments']) for r in ex]
+        cyc = [int(r['user_cycles']) for r in ex]
+        for r in aggr:
+            e = r['epoch_index']
+            emit(family=f, system=sysname, run='main', operation=f'update_epoch{e}', prove_s=num(r['prove_s']),
+                 verify_ms=num(r['verify_ms']), proof_bytes=int(r['receipt_bytes']),
+                 peak_rss_mb=num(r['_job']['r0vm_peak_rss_mb']), rss_scope='' if r['_est'] else 'r0vm process of this proof',
+                 answer='-', exact='-', provenance=prov(r),
+                 detail=f"aggregation guest on epoch {e} ({M} records); {r['segments']} segments; {r['user_cycles']} "
+                        f"user cycles; {gate_of(r)}", **vk)
         anyest = any(r['_est'] for r in aggr)
         ps = [num(r['prove_s']) for r in aggr]
         vs = [num(r['verify_ms']) for r in aggr]
@@ -373,21 +446,21 @@ for f in FAMS:
         rss = max(rs) if rs else None
         rscope = (f"r0vm process (max of the {len(rs)} {'measured ' if anyest else ''}proofs)" if rs else '')
         mp, mv, mb = sum(ps) / len(ps), sum(vs) / len(vs), sum(bs) / len(bs)
-        zka_aggr_mean[f] = (mp, mv, mb)
+        zka_aggr_mean[(f, var)] = (mp, mv, mb, anyest)
         exd = (f'executor over all {T} epochs: {min(segs)}-{max(segs)} segments, {min(cyc)}-{max(cyc)} user cycles'
                if ex else 'no executor rows')
         emit(family=f, system=sysname, run='main', operation='update_per_epoch', prove_s=mp, verify_ms=mv,
              proof_bytes=round(mb), peak_rss_mb=rss, rss_scope=rscope,
              answer='-', exact='-', provenance='sampled (incl. ESTIMATED epochs)' if anyest else 'sampled',
              detail=f"mean of {'proved/ESTIMATED' if anyest else 'proved'} epochs "
-                    f"{and_join(r['epoch_index'] for r in aggr)}; {exd}")
+                    f"{and_join(r['epoch_index'] for r in aggr)}; {exd}", **vk)
         emit(family=f, system=sysname, run='main', operation='update_per_epoch_amortized', prove_s=mp,
              answer='-', exact='-', provenance='sampled (incl. ESTIMATED epochs)' if anyest else 'sampled',
-             detail='no composition on this side: equals update_per_epoch')
+             detail='no composition on this side: equals update_per_epoch', **vk)
         emit(family=f, system=sysname, run='main', operation=f'update_stream_{T}_epochs', prove_s=T * mp,
              peak_rss_mb=rss, rss_scope=rscope, answer='-', exact='-',
              provenance='derived (incl. ESTIMATED epochs)' if anyest else 'derived',
-             detail=f'{T} x sampled per-epoch prove time; {T} receipts are kept (no composition)')
+             detail=f'{T} x sampled per-epoch prove time; {T} receipts are kept (no composition)', **vk)
     qrows = {}
     for r in [r for r in prove[f] if r['_job']['op'] == 'query']:
         n = int(r['epochs'])
@@ -399,30 +472,32 @@ for f in FAMS:
              answer=zka_answer(f, r), exact=exact, provenance=prov(r), note=note_for(f, sysname),
              detail=f"query guest over {n} epoch states; {probe}; {r['segments']} segments; {r['user_cycles']} user "
                     f"cycles; {gate_of(r)}")
-    if not qrows or f not in zka_aggr_mean:
+    if not qrows or not variants:
         continue
-    mp, mv, mb = zka_aggr_mean[f]
-    aest = any(r['_est'] for r in aggr)
     sufs = sorted({s for (_, s) in qrows})
     qv = [num(r['verify_ms']) for r in qrows.values()]
     qb = [int(r['receipt_bytes']) for r in qrows.values()]
     zka_query_mean[f] = (sum(qv) / len(qv), sum(qb) / len(qb))
-    for suf in sufs:
-        for n in NS:
-            r = qrows.get((n, suf))
-            if r:
-                v, b, how = num(r['verify_ms']), int(r['receipt_bytes']), \
-                    'query receipt ESTIMATED' if r['_est'] else 'query receipt measured'
-            else:
-                v, b = zka_query_mean[f]
-                how = (f'query receipt at n={n} not proved: mean of the {len(qv)} measured query receipts '
-                       f'({v:.3f} ms, {b:.0f} B)')
-            est = aest or (r is not None and r['_est'])
-            emit(family=f, system=sysname, run='main', operation=f'accept_n{n}{suf}', n=n,
-                 verify_ms=n * mv + v, proof_bytes=round(n * mb + b), answer='', exact='',
-                 provenance='derived (incl. ESTIMATED receipts)' if est else 'derived',
-                 detail=f'verifier work to accept the answer, best-of-5 per receipt: {n} aggregation receipts '
-                        f'(sampled mean {mv:.3f} ms, {mb:.0f} B each) + 1 query receipt ({how})')
+    for var in variants:
+        mp, mv, mb, aest = zka_aggr_mean[(f, var)]
+        con = row_variant(f, next(r for r in aggr_all if row_variant(f, r)[0] == var))[1]
+        for suf in sufs:
+            for n in NS:
+                r = qrows.get((n, suf))
+                if r:
+                    v, b, how = num(r['verify_ms']), int(r['receipt_bytes']), \
+                        'query receipt ESTIMATED' if r['_est'] else 'query receipt measured'
+                else:
+                    v, b = zka_query_mean[f]
+                    how = (f'query receipt at n={n} not proved: mean of the {len(qv)} measured query receipts '
+                           f'({v:.3f} ms, {b:.0f} B)')
+                est = aest or (r is not None and r['_est'])
+                emit(family=f, system=sysname, run='main', operation=f'accept_n{n}{suf}', n=n,
+                     verify_ms=n * mv + v, proof_bytes=round(n * mb + b), answer='', exact='',
+                     provenance='derived (incl. ESTIMATED receipts)' if est else 'derived',
+                     detail=f'verifier work to accept the answer, best-of-5 per receipt: {n} aggregation receipts '
+                            f'(sampled mean {mv:.3f} ms, {mb:.0f} B each) + 1 query receipt ({how})',
+                     variant=var, root_construction=con)
 for f in FAMS:
     sysname = ZKA_NAME[f]
     # verify-protocol re-proofs
@@ -431,8 +506,10 @@ for f in FAMS:
             continue
         mn, first, med, dec, times = r['_vt']
         j = r['_job']
+        vk = {}
         if j['op'] == 'aggr':
             op, ans, ex = f"verify_protocol_update_epoch{r['epoch_index']}", '-', '-'
+            vk = dict(zip(('variant', 'root_construction'), row_variant(f, r)))
         else:
             n = int(r['epochs'])
             exact, probe, suf = zka_exact(f, r, n)
@@ -443,7 +520,7 @@ for f in FAMS:
              rss_scope='r0vm process of this proof', answer=ans, exact=ex, provenance='measured (re-proof)',
              detail=f"re-proof for the verify protocol: all 5 in-process verify calls {';'.join(f'{x:.3f}' for x in times)} ms; "
                     f"decode = bincode deserialisation of the receipt; gate={j['gate']} load1_start={j['load1_start']} "
-                    f"busy_cores_start={j['busy_cores_start']}")
+                    f"busy_cores_start={j['busy_cores_start']}", **vk)
 
 
 # ------------------------------------------------------------------ zkSketch side
@@ -602,9 +679,12 @@ if A.zks:
 order = {f: i for i, f in enumerate(FAMS)}
 sys_order = {'zk-Analytics': 0, 'zk-Analytics arch. (port †)': 0, 'zkSketch': 1, 'zkSketch (zk feature)': 2}
 run_order = {'main': 0, 'vt': 1, 'r2': 0, 'zk': 0, 'r1': 3}
+# Rows of one variant stay together (update rows first, then accept rows per variant); with a
+# single variant (the committed set: legacy update / accept rows, '-' query rows) this is the
+# previous order.
 OUT.sort(key=lambda r: (order[r['family']], sys_order[r['system']], run_order.get(r['run'], 0),
-                        r['operation'].split('_')[0] != 'update', r['operation'].split('_')[0],
-                        int(r['n'] or 0), r['operation']))
+                        r['operation'].split('_')[0] != 'update', VORDER.get(r['variant'], 99),
+                        r['operation'].split('_')[0], int(r['n'] or 0), r['operation']))
 w = csv.DictWriter(open(OUT_PATH, 'w', newline=''), fieldnames=COLS)
 w.writeheader()
 w.writerows(OUT)

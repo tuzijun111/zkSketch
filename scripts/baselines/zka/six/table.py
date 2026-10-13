@@ -17,6 +17,18 @@ A new run (`run_all.sh`): zkS = that run's zkSketch build (the line above the ta
 which; the default build is zero-knowledge: pcs=hiding, logup_mask=on). Cells marked `est`
 are ESTIMATED zk-Analytics prove times (not proved in that run; see the CSV's provenance).
 KB / MB = 10^3 / 10^6 bytes; GB (memory) = 2^30 bytes.
+
+Root variants of the zk-Analytics aggregation proofs (the CSV's `variant` column; a CSV
+without it is the legacy variant): with one variant the tables show `zkA`; with several (a
+new run: designed and noroot) every update-side and accept table shows one zkA column per
+variant (`zkA designed`, `zkA noroot`) next to zkSketch, with a ratio against each. Query
+proofs do not depend on the variant. The first table, "Update proofs side by side", puts
+proving time, verification time, proof size and peak memory of the update proofs together;
+the last one lists each variant's root construction and executor cycles.
+The committed 2026-10-09 set is the `legacy` variant (CM their shipped roots, SS samples
+pattern with 64 buckets, GK per-tuple root, HLL / Bloom / KMV none). For it the tables of
+the previous version are printed unchanged; added are the variant note at the top, the
+"Update proofs side by side" table and the root-variant table at the end.
 """
 import argparse
 import csv
@@ -48,10 +60,47 @@ ZK = ('zkSketch (zk feature)', 'zk')
 HAS_ZK = LEGACY or any((r['system'], r['run']) == ZK for r in rows)
 HAS_VT = LEGACY or any(r['run'] == 'vt' for r in rows)
 HAS_R1 = LEGACY or any(r['run'] == 'r1' for r in rows)
+HAS_VARCOL = bool(rows) and 'variant' in rows[0]
+VORDER = {v: i for i, v in enumerate(['designed', 'noroot', 'legacy', 'buckets1024', 'perkey', 'pertuple'])}
+# root construction of the legacy guests (a CSV without the variant columns)
+LEGACY_ROOT = {'cm': 'cm_rows+cm+heap', 'hll': 'none', 'ss': 'buckets64', 'gk': 'pertuple', 'bloom': 'none',
+               'kmv': 'none'}
+VNOTE = {'designed': 'with the per-bucket Merkle root zk-Analytics builds in every aggregation proof',
+         'noroot': 'the same guests without that root, apples-to-apples with zkSketch (the headline)',
+         'legacy': 'the guests of the committed 2026-10-09 run'}
+
+
+def var_of(r):
+    """A row's root variant ('-' = none: query rows and zkSketch rows)."""
+    return (r.get('variant') or '-') if HAS_VARCOL else 'legacy'
 
 
 def zka_row(r):
     return r['system'].startswith('zk-Analytics') and r['run'] == 'main'
+
+
+def vsort(vs):
+    return sorted(vs, key=lambda x: (VORDER.get(x, 99), x))
+
+
+ZV = vsort({var_of(r) for r in rows if zka_row(r) and r['operation'] == 'update_per_epoch'}) \
+    or vsort({var_of(r) for r in rows if zka_row(r) and var_of(r) != '-'}) or ['legacy']
+MULTI = len(ZV) > 1
+
+
+def zl(var):  # column label of a zk-Analytics variant
+    return f'zkA {var}' if MULTI else 'zkA'
+
+
+def rl(var, zks_label):  # label of a ratio column
+    return f'{var} / {zks_label}' if MULTI else 'ratio'
+
+
+def construction(fam, var):
+    for r in rows:
+        if r['family'] == fam and zka_row(r) and r['operation'] == 'update_per_epoch' and var_of(r) == var:
+            return r.get('root_construction') or LEGACY_ROOT[fam]
+    return LEGACY_ROOT[fam] if var == 'legacy' else '?'
 
 
 # run shape, from the rows
@@ -73,9 +122,13 @@ def and_join(xs):
     return 'none' if not xs else xs[0] if len(xs) == 1 else ', '.join(xs[:-1]) + ' and ' + xs[-1]
 
 
-def get(fam, who, op):
+def get(fam, who, op, var=None):
+    """The row of (family, side, operation); var = the zk-Analytics root variant of an update /
+    accept row (None: any, for the variant-independent query rows and zkSketch)."""
     for r in rows:
         if r['family'] != fam or r['operation'] != op:
+            continue
+        if var is not None and var_of(r) != var:
             continue
         if who == 'zka' and r['system'].startswith('zk-Analytics') and r['run'] == 'main':
             return r
@@ -149,50 +202,113 @@ if not LEGACY:
               f'of an estimated receipt are the mean of the measured ones; ratios built on an estimate are marked '
               f'too._\n')
 
+# ------------------------------------------------------------------ root variants
+SHORT = {'cm': 'CM', 'hll': 'HLL', 'ss': 'SS', 'gk': 'GK', 'bloom': 'Bloom', 'kmv': 'KMV'}
+
+
+def vdesc(var):
+    return (f'{VNOTE.get(var, "a sensitivity variant")}; root: '
+            + ', '.join(f'{SHORT[fam]} {construction(fam, var)}' for fam in FAMS))
+
+
+ROOTS_TXT = '; '.join(f'{zl(var)} = {vdesc(var)}' for var in ZV)
+if MULTI:
+    print('_**zk-Analytics root variants.** Every zk-Analytics summary type builds, inside each epoch\'s aggregation '
+          'proof, a Merkle root over its buckets next to the flat SHA-256 state commitment that the epoch chain and '
+          'the query guests use; no query guest or verifier reads that root, and zkSketch publishes none. '
+          f'{ROOTS_TXT} (root constructions: cm_rows+cm+heap = their CM row roots over 3 x 1,024 counter leaves + '
+          'cm_root + heap_root; samples64 / buckets64 = their samples pattern with 64 buckets; none = no root). '
+          'Query proofs read no root: they are the same for every variant._\n')
+else:
+    print(f'_zk-Analytics aggregation guests (zkA): root variant {ZV[0]}, {vdesc(ZV[0])}._\n')
+
+# zkSketch sets of the side-by-side table: zkS-zk only when the CSV has its rows
+SYSZ = [('zks', 'zkS')] + ([('zk', 'zkS-zk')] if any((r['system'], r['run']) == ZK for r in rows) else [])
+
+# ------------------------------------------------------------------ update proofs, the four metrics
+print(f'**Update proofs side by side: proving time, verification time, proof size, peak memory** (one epoch = '
+      f'one batch of {M:,} records. zkA: one aggregation receipt per epoch, all kept and verified; "1 epoch" = the '
+      f'mean of proved epochs {and_join(AE)} (sampled), "{T} epochs" = {T} x that (derived); verify = best of 5 '
+      f'calls per receipt; peak RSS = the r0vm process (max over the proved epochs). zkS: "1 epoch" = the leaf '
+      f'proof alone (leafgen_seq_ms / {T}, EXCLUDING composition; its proof = the leaf-1 proof), "{T} epochs" = the '
+      f'whole forest incl. its {T - 1} merge{"" if T == 2 else "s"} (measured), which ends in ONE root proof: '
+      f'"verify" is that root, single call, in both rows; peak RSS = the procs-engine worker. Ratio = zkA / zkS for '
+      f'every metric: above 1, zkSketch is faster / smaller / lighter. KB = 10^3 bytes, GB = 2^30 bytes)\n')
+METRICS = [  # label, zkA op, zkA col, zkA multiplier, zkS op, zkS col, format
+    ('prove, 1 epoch (s)', 'update_per_epoch', 'prove_s', 1, 'update_per_epoch', 'prove_s', fs),
+    (f'prove, {T} epochs (s)', OP_STREAM, 'prove_s', 1, OP_STREAM, 'prove_s', fs),
+    ('verify, 1 epoch (ms)', 'update_per_epoch', 'verify_ms', 1, OP_STREAM, 'verify_first_ms', f),
+    (f'verify, {T} epochs (ms)', 'update_per_epoch', 'verify_ms', T, OP_STREAM, 'verify_first_ms', f),
+    ('proof, 1 epoch (KB)', 'update_per_epoch', 'proof_bytes', 1, 'update_per_epoch', 'proof_bytes', kb),
+    (f'proof, {T} epochs (KB)', 'update_per_epoch', 'proof_bytes', T, OP_STREAM, 'proof_bytes', kb),
+    ('peak RSS (GB)', 'update_per_epoch', 'peak_rss_mb', 1, 'update_per_epoch', 'peak_rss_mb', gb),
+]
+table(['sketch', 'metric'] + [zl(var) for var in ZV] + [lab for _, lab in SYSZ]
+      + [f'{zl(var)} / {lab}' for _, lab in SYSZ for var in ZV])
+for fam in FAMS:
+    for mlab, aop, acol, amul, sop, scol, fmt in METRICS:
+        ra = {var: get(fam, 'zka', aop, var) for var in ZV}
+        av = {var: (None if v(ra[var], acol) is None else amul * v(ra[var], acol)) for var in ZV}
+        sv = {who: v(get(fam, who, sop), scol) for who, _ in SYSZ}
+        def est(x, r):  # the est mark only on a value that exists; peak RSS is always that of measured proofs
+            return E(r) if x is not None and acol != 'peak_rss_mb' else ''
+        line([NAME[fam], mlab] + [fmt(av[var]) + est(av[var], ra[var]) for var in ZV] + [fmt(sv[who]) for who, _ in SYSZ]
+             + [ratio(av[var], sv[who]) + est(av[var] if sv[who] else None, ra[var]) for who, _ in SYSZ for var in ZV])
+
 zk_txt = ' / zkS-zk worker' if HAS_ZK else ''
-print(f'**Update side.** One epoch = one batch of {M:,} records. Ratios are zkA / zkS. zkA prove per epoch is the '
+print(f'\n**Update side.** One epoch = one batch of {M:,} records. Ratios are zkA / zkS. zkA prove per epoch is the '
       f'mean of proved epochs {and_join(AE)} (sampled); zkA {T} epochs = {T} x that mean (derived). zkS "{T} batches" is '
       f'measured and includes the {T - 1} forest merge{"" if T == 2 else "s"}; "leaf alone" is leafgen_seq_ms / {T} and '
       f'EXCLUDES composition.\n')
-hdr = ['sketch', f'zkA {T} epochs (s)', f'zkS {T} batches incl. merges (s)', 'ratio']
+hdr = ['sketch'] + [f'{zl(var)} {T} epochs (s)' for var in ZV] + [f'zkS {T} batches incl. merges (s)'] \
+    + [rl(var, 'zkS') for var in ZV]
 if HAS_ZK:
-    hdr += [f'zkS-zk {T} batches (s)', 'ratio']
-hdr += ['zkA / epoch (s)', 'zkS leaf alone (s)', 'ratio']
+    hdr += [f'zkS-zk {T} batches (s)'] + [rl(var, 'zkS-zk') for var in ZV]
+hdr += [f'{zl(var)} / epoch (s)' for var in ZV] + ['zkS leaf alone (s)'] + [rl(var, 'zkS') for var in ZV]
 if HAS_ZK:
-    hdr += ['zkS-zk leaf alone (s)', 'ratio']
-hdr += [f'peak RSS GB: zkA r0vm / zkS worker{zk_txt}']
+    hdr += ['zkS-zk leaf alone (s)'] + [rl(var, 'zkS-zk') for var in ZV]
+hdr += ['peak RSS GB: ' + ' / '.join([f'{zl(var)} r0vm' for var in ZV]) + f' / zkS worker{zk_txt}']
 table(hdr)
 for fam in FAMS:
-    ra8, rb8, rz8 = (get(fam, w, OP_STREAM) for w in ('zka', 'zks', 'zk'))
-    ra1, rb1, rz1 = (get(fam, w, 'update_per_epoch') for w in ('zka', 'zks', 'zk'))
-    a8, b8, z8 = (v(x, 'prove_s') for x in (ra8, rb8, rz8))
-    a1, b1, z1 = (v(x, 'prove_s') for x in (ra1, rb1, rz1))
-    ra, rb, rz = (v(x, 'peak_rss_mb') for x in (ra1, rb1, rz1))
-    c = [NAME[fam], f(a8, 0) + E(ra8), fs(b8), ratio(a8, b8) + E(ra8)]
+    ra8 = {var: get(fam, 'zka', OP_STREAM, var) for var in ZV}
+    ra1 = {var: get(fam, 'zka', 'update_per_epoch', var) for var in ZV}
+    rb8, rz8 = (get(fam, w, OP_STREAM) for w in ('zks', 'zk'))
+    rb1, rz1 = (get(fam, w, 'update_per_epoch') for w in ('zks', 'zk'))
+    a8 = {var: v(ra8[var], 'prove_s') for var in ZV}
+    a1 = {var: v(ra1[var], 'prove_s') for var in ZV}
+    b8, z8 = (v(x, 'prove_s') for x in (rb8, rz8))
+    b1, z1 = (v(x, 'prove_s') for x in (rb1, rz1))
+    rb, rz = (v(x, 'peak_rss_mb') for x in (rb1, rz1))
+    c = [NAME[fam]] + [f(a8[var], 0) + E(ra8[var]) for var in ZV] + [fs(b8)] \
+        + [ratio(a8[var], b8) + E(ra8[var]) for var in ZV]
     if HAS_ZK:
-        c += [fs(z8), ratio(a8, z8) + E(ra8)]
-    c += [fs(a1) + E(ra1), fs(b1), ratio(a1, b1) + E(ra1)]
+        c += [fs(z8)] + [ratio(a8[var], z8) + E(ra8[var]) for var in ZV]
+    c += [fs(a1[var]) + E(ra1[var]) for var in ZV] + [fs(b1)] + [ratio(a1[var], b1) + E(ra1[var]) for var in ZV]
     if HAS_ZK:
-        c += [fs(z1), ratio(a1, z1) + E(ra1)]
-    c += [f'{gb(ra)} / {gb(rb)}' + (f' / {gb(rz)}' if HAS_ZK else '')]
+        c += [fs(z1)] + [ratio(a1[var], z1) + E(ra1[var]) for var in ZV]
+    c += [' / '.join([gb(v(ra1[var], 'peak_rss_mb')) for var in ZV] + [gb(rb)] + ([gb(rz)] if HAS_ZK else []))]
     line(c)
 
 print('\n**Proof bytes, update side** (KB = 10^3 bytes): zkA keeps one receipt per epoch; zkS keeps one root.\n')
-hdr = ['sketch', 'zkA receipt / epoch', f'zkA {T} receipts', 'zkS root'] + (['zkS-zk root'] if HAS_ZK else []) \
-    + ['zkS root verify, single call (ms)'] + (['zkS-zk root verify (ms)'] if HAS_ZK else [])
+hdr = ['sketch'] + [x for var in ZV for x in (f'{zl(var)} receipt / epoch', f'{zl(var)} {T} receipts')] + ['zkS root'] \
+    + (['zkS-zk root'] if HAS_ZK else []) + ['zkS root verify, single call (ms)'] \
+    + (['zkS-zk root verify (ms)'] if HAS_ZK else [])
 table(hdr)
 for fam in FAMS:
-    ra = get(fam, 'zka', 'update_per_epoch')
-    ab = v(ra, 'proof_bytes')
+    c = [NAME[fam]]
+    for var in ZV:
+        ra = get(fam, 'zka', 'update_per_epoch', var)
+        ab = v(ra, 'proof_bytes')
+        c += [kb(ab) + E(ra), kb(T * ab if ab else None) + E(ra)]
     sb, zb = (v(get(fam, w, OP_STREAM), 'proof_bytes') for w in ('zks', 'zk'))
     sv, zv = (v(get(fam, w, OP_STREAM), 'verify_first_ms') for w in ('zks', 'zk'))
-    c = [NAME[fam], kb(ab) + E(ra), kb(T * ab if ab else None) + E(ra), kb(sb)] + ([kb(zb)] if HAS_ZK else []) \
-        + [f(sv)] + ([f(zv)] if HAS_ZK else [])
+    c += [kb(sb)] + ([kb(zb)] if HAS_ZK else []) + [f(sv)] + ([f(zv)] if HAS_ZK else [])
     line(c)
 
 nl, nh = QNS[0], QNS[-1]
+QNOTE = '; the same for every zkA root variant: query guests read no root' if ZV != ['legacy'] else ''
 print(f"\n**Query proving time** (s; the query proof alone; cells are zkA / zkS{' / zkS-zk' if HAS_ZK else ''}; "
-      f"‡ and § see notes)\n")
+      f"‡ and § see notes{QNOTE})\n")
 table(['sketch'] + [f'n={n}' for n in QNS] + [f'zkA / zkS at n={nl}', f'at n={nh}']
       + ([f'zkA / zkS-zk at n={nl}', f'at n={nh}'] if HAS_ZK else []))
 for fam in FAMS:
@@ -231,22 +347,22 @@ for who, title in WHO:
                                  ('proof_bytes', 'KB', kb, 'Bytes the verifier receives for one answer at n')):
         extra = ('best of 5 calls per proof on both sides; deserialisation excluded on both sides'
                  if col == 'verify_ms' else 'KB = 10^3 bytes')
-        print(f'\n**{what}, zkA vs {title}** ({unit}; {extra}; cells zkA / zkS; zkA = n aggregation receipts + 1 query '
-              f'receipt, derived; zkS = live forest peak(s) + 1 query proof, sum of measured parts; **bold** = the '
-              f'smaller side)\n')
+        print(f'\n**{what}, zkA vs {title}** ({unit}; {extra}; cells {" / ".join(zl(var) for var in ZV)} / zkS; zkA = '
+              f'n aggregation receipts + 1 query receipt, derived; zkS = live forest peak(s) + 1 query proof, sum of '
+              f'measured parts; **bold** = the smaller side)\n')
         table(['sketch'] + [f'n={n} ({PEAKS[n]} peak{"s" if PEAKS[n] > 1 else ""})' for n in NALL])
         for fam in FAMS:
             for suf in sufs(fam):
                 cells = []
                 for n in NALL:
-                    ra = get(fam, 'zka', f'accept_n{n}{suf}')
-                    a, b = v(ra, col), v(get(fam, who, f'accept_n{n}{suf}'), col)
-                    if a is None or b is None:
+                    ra = [get(fam, 'zka', f'accept_n{n}{suf}', var) for var in ZV]
+                    xs = [v(r, col) for r in ra] + [v(get(fam, who, f'accept_n{n}{suf}'), col)]
+                    if any(x is None for x in xs):
                         cells.append('-')
-                    elif a < b:
-                        cells.append(f'**{fmt(a)}**{E(ra)} / {fmt(b)}')
-                    else:
-                        cells.append(f'{fmt(a)}{E(ra)} / **{fmt(b)}**')
+                        continue
+                    lo = max(i for i, x in enumerate(xs) if x == min(xs))  # a tie goes to zkS
+                    cells.append(' / '.join((f'**{fmt(x)}**' if i == lo else fmt(x)) + (E(ra[i]) if i < len(ra) else '')
+                                            for i, x in enumerate(xs)))
                 line([label(fam, suf)] + cells)
 
 if HAS_VT:
@@ -276,7 +392,7 @@ if HAS_VT:
 
 print('\n**Peak RSS while proving one query** (GB = 2^30 bytes; zkA: the r0vm process of that proof; zkS: the '
       'coordinator process, VmHWM reset when the query starts, so the value is that query alone plus what the '
-      'process already held)\n')
+      f'process already held{QNOTE})\n')
 table(['sketch'] + [f'zkA n={n}' for n in QNS] + [f'zkS n=1 / n={T} (max over n=1..{T})']
       + ([f'zkS-zk n=1 / n={T} (max)'] if HAS_ZK else []))
 for fam in FAMS:
@@ -323,25 +439,52 @@ def rd(name):
     return list(csv.DictReader(open(p))) if os.path.exists(p) else []
 
 
-def phase_split(fam):
-    """(user cycles, read, chain, update-or-sketch work) of aggregation epoch 0, or None."""
+def raw_var(r):
+    """The root variant of a driver CSV row (no root_variant column: the legacy guests)."""
+    x = r.get('root_variant')
+    return 'legacy' if x in (None, '', '-') else x
+
+
+def exec_e0(fam, var):
+    """The executor row of aggregation epoch 0 under root variant var, or None."""
+    for r in rd(f'{ZP}_{fam}_exec.csv'):
+        if (r.get('step') or r.get('mode')) == 'aggr' and r['epoch_index'] == '0' and raw_var(r) == var:
+            return r
+    return None
+
+
+def phase_split(fam, var):
+    """(user cycles, read, chain, source) of aggregation epoch 0 under root variant var, or None.
+    HLL / Bloom / KMV: the profiling marks of that variant's guest. SS / GK: the legacy profiling
+    twins (prof_exec.sh); for another variant, their read and chain cycles (the same code in
+    every variant) over that variant's executor user cycles."""
     if fam in ('hll', 'bloom', 'kmv'):
-        for r in rd(f'{ZP}_{fam}_exec.csv'):
-            if (r.get('step') or r.get('mode')) == 'aggr' and r['epoch_index'] == '0':
-                ph = dict(kv.split('=') for kv in r['prof'].split(';'))
-                return int(r['user_cycles']), int(ph['read']), int(ph['chain']), 'measured (profiling marks)'
+        r = exec_e0(fam, var)
+        if r is not None and '=' in r.get('prof', ''):
+            ph = dict(kv.split('=') for kv in r['prof'].split(';'))
+            return int(r['user_cycles']), int(ph['read']), int(ph['chain']), 'measured (profiling marks)'
+        return None
+    sp = None
     if fam == 'ss':
         for r in rd(f'{ZP}_prof_ss.csv'):
             if r['mode'] == 'aggr' and r['epoch_index'] == '0':
                 ph = {k: int(v.split('(')[0]) for k, v in (kv.split('=') for kv in r['phases'].split(';'))}
-                return int(r['user_cycles']), ph['read'], ph['chain'], 'measured (profiling twin aggr_ss_prof)'
+                sp = int(r['user_cycles']), ph['read'], ph['chain'], 'measured (profiling twin aggr_ss_prof)'
+                break
     if fam == 'gk':
         for r in rd(f'{ZP}_prof_gk.csv'):
             if r['mode'] == 'aggr' and r['epoch_index'] == '0':
                 ph = dict(kv.split('=') for kv in re.search(r'PHASES (.*?)(,|$)', r['result']).group(1).split())
-                return int(r['user_cycles']), int(ph['input_read']), int(ph['chain_verify']), \
+                sp = int(r['user_cycles']), int(ph['input_read']), int(ph['chain_verify']), \
                     'measured (profiling twin aggr_gk_prof)'
-    return None
+                break
+    if sp is None or var == 'legacy':
+        return sp
+    ex = exec_e0(fam, var)
+    if ex is None:
+        return None
+    return int(ex['user_cycles']), sp[1], sp[2], (f'read + chain: legacy profiling twin aggr_{fam}_prof; user cycles: '
+                                                  f'this variant (executor)')
 
 
 print(f'\n**zk-Analytics aggregation guest, epoch 0 ({M:,} records): their ingest vs the rest** (user cycles; '
@@ -350,19 +493,47 @@ print(f'\n**zk-Analytics aggregation guest, epoch 0 ({M:,} records): their inges
 table(['sketch', 'user cycles', 'Event read', 'batch-chain check', 'read + chain share', 'source',
        'MODELED non-ingest prove / epoch (s)', 'vs zkS leaf alone', 'vs zkS amortized'])
 for fam in FAMS:
-    sp = phase_split(fam)
-    ra1 = get(fam, 'zka', 'update_per_epoch')
-    a1 = v(ra1, 'prove_s')
-    b1 = v(get(fam, 'zks', 'update_per_epoch'), 'prove_s')
-    bam = v(get(fam, 'zks', 'update_per_epoch_amortized'), 'prove_s')
-    if sp is None:
-        ex = [r for r in rd(f'{ZP}_{fam}_exec.csv') if (r.get('step') or r.get('mode')) == 'aggr' and r['epoch_index'] == '0']
-        uc = f"{int(ex[0]['user_cycles']):,}" if ex else '-'
-        line([NAME[fam], uc, 'not profiled', 'not profiled', '-', 'their shipped guest has no profiling twin'
-              if fam == 'cm' or LEGACY else f'no {ZP}_prof_* / exec CSV', '-', '-', '-'])
-        continue
-    uc, rdc, ch, src = sp
-    share = (rdc + ch) / uc
-    mod = a1 * (1 - share) if a1 else None
-    line([NAME[fam], f'{uc:,}', f'{rdc:,}', f'{ch:,}', f'{100 * share:.1f}%', src, fs(mod) + E(ra1),
-          ratio(mod, b1) + E(ra1), ratio(mod, bam) + E(ra1)])
+    for var in ZV:
+        name = NAME[fam] + (f' ({var})' if MULTI else '')
+        sp = phase_split(fam, var)
+        ra1 = get(fam, 'zka', 'update_per_epoch', var)
+        a1 = v(ra1, 'prove_s')
+        b1 = v(get(fam, 'zks', 'update_per_epoch'), 'prove_s')
+        bam = v(get(fam, 'zks', 'update_per_epoch_amortized'), 'prove_s')
+        if sp is None:
+            ex = exec_e0(fam, var)
+            uc = f"{int(ex['user_cycles']):,}" if ex else '-'
+            why = ('the noroot copy of their guest has no profiling twin' if fam == 'cm' and var == 'noroot' else
+                   'their shipped guest has no profiling twin' if fam == 'cm' or LEGACY else f'no {ZP}_prof_* / exec CSV')
+            line([name, uc, 'not profiled', 'not profiled', '-', why, '-', '-', '-'])
+            continue
+        uc, rdc, ch, src = sp
+        share = (rdc + ch) / uc
+        mod = a1 * (1 - share) if a1 else None
+        line([name, f'{uc:,}', f'{rdc:,}', f'{ch:,}', f'{100 * share:.1f}%', src, fs(mod) + E(ra1),
+              ratio(mod, b1) + E(ra1), ratio(mod, bam) + E(ra1)])
+
+# ------------------------------------------------------------------ root variants (executor)
+VX = vsort({raw_var(r) for fam in FAMS for r in rd(f'{ZP}_{fam}_exec.csv')
+            if (r.get('step') or r.get('mode')) == 'aggr'} | set(ZV))
+WORK = 'designed' in VX and 'noroot' in VX
+print(f'\n**zk-Analytics aggregation guests per root variant** (executor, aggregation epoch 0 ({M:,} records): '
+      'user cycles (segments of at most 2^20 cycles); root = what the variant proves besides the state '
+      'commitment: cm_rows+cm+heap = their CM row roots over 3 x 1,024 counter leaves + cm_root + heap_root, '
+      'samples64 / buckets64 = their samples pattern with 64 buckets, pertuple = one leaf per GK tuple, none = no '
+      'root' + ('; root work = designed - noroot, the cost of the root nothing reads' if WORK else '') + ')\n')
+table(['sketch'] + [x for var in VX for x in (f'{var}: root', f'{var}: user cycles (segments)')]
+      + (['root work (cycles)', 'share of designed'] if WORK else []))
+for fam in FAMS:
+    c, uc = [NAME[fam]], {}
+    for var in VX:
+        ex = exec_e0(fam, var)
+        con = (ex.get('root_construction') if ex and ex.get('root_construction') not in (None, '', '-') else
+               LEGACY_ROOT[fam] if var == 'legacy' else '-')
+        if ex is not None:
+            uc[var] = int(ex['user_cycles'])
+        c += [con if ex else '-', f"{uc[var]:,} ({ex['segments']})" if ex else '-']
+    if WORK:
+        d, n0 = uc.get('designed'), uc.get('noroot')
+        c += ['-', '-'] if d is None or n0 is None else [f'{d - n0:,}', f'{100 * (d - n0) / d:.1f}%']
+    line(c)
