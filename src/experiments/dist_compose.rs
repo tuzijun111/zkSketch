@@ -123,8 +123,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::Val;
 use crate::recursion::recursive::config::ConfigWithFriParams;
 use crate::recursion::recursive::expose_forest::{
-    leaf_vk, prove_hiding_merge, prove_hiding_merge_proofs, read_exposed_boundary_proof,
-    root_vk_deriver, ForestCascade,
+    forest_retain_prep, leaf_vk, prove_hiding_merge_proofs, read_exposed_boundary_proof,
+    root_vk_deriver, ForestCascade, PeakProof,
 };
 use crate::recursion::recursive::root_vk::{ForestShape, RootVk};
 use crate::recursion::recursive::statement::{
@@ -201,6 +201,7 @@ use crate::sketch::ss_final_full_gl::{
 
 use super::audit::{self, PublicParams};
 use super::families::cm_empty;
+use super::metrics::trim_heap;
 use super::prover_commit::ProverCommit;
 use super::stream_compose::{
     bloom_keys_of, cm_updates_of, gk_vals_of, hll_keys_of, kmv_advance_records, kmv_records_of,
@@ -1305,8 +1306,56 @@ const ENV_CORES: &str = "ZKS_COMPOSE_CORES";
 fn qlog_phase(after: &str) {
     if super::stream_compose::qlog_on() {
         let (hwm, rss) = super::stream_compose::qlog_mem_mb();
-        eprintln!("QLOG_PHASE,after={after},coord_hwm_mb={hwm:.1},coord_rss_mb={rss:.1}");
+        // Wall-clock instant, to align the phase with an external RSS sampler.
+        let unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        eprintln!(
+            "QLOG_PHASE,after={after},coord_hwm_mb={hwm:.1},coord_rss_mb={rss:.1},unix_ms={unix_ms}"
+        );
     }
+}
+
+/// `EXP_EXIT_BEFORE_AUDIT` (M0 harness switch, default on): wind the workers
+/// down (`Exit`, collect `Done`, reap the processes) BEFORE the auditor runs,
+/// so the auditor's VK derivation never overlaps an idle worker's resident
+/// memory; the auditor then derives the root / leaf VK through the run's
+/// query auditor when there is one ([`audit::audit_root_bytes_with`]: same
+/// VK, no second no-op leaf). `0`: the pre-M0 order (audit, then `Exit`;
+/// a fresh no-op leaf for the audit's VK).
+pub(crate) fn exit_before_audit() -> bool {
+    !std::env::var("EXP_EXIT_BEFORE_AUDIT").is_ok_and(|v| v.trim() == "0")
+}
+
+/// Send every machine `Exit`, collect each `Done` (returns the largest
+/// reported peak RSS) and reap the processes (`ChildGuard`'s drop waits for
+/// each one), then remove the socket.
+fn wind_down_workers(
+    worker_tx: &mut [UnixStream],
+    rx: &mpsc::Receiver<Event>,
+    machines_eff: usize,
+    children: &mut Vec<ChildGuard>,
+    sock_path: &Path,
+) -> Result<f64, String> {
+    let mut peak_rss_mb = 0.0f64;
+    for (i, s) in worker_tx.iter_mut().enumerate() {
+        send_msg(s, &ToWorker::Exit).map_err(|e| format!("exit worker {i}: {e}"))?;
+    }
+    let mut done = machines_eff;
+    while done > 0 {
+        match next_event(rx)? {
+            Event::Worker(_, FromWorker::Done { peak_rss_mb: r }, ..) => {
+                peak_rss_mb = peak_rss_mb.max(r);
+                done -= 1;
+            }
+            Event::Gone(_) => done -= 1, // reader ended after Done
+            _ => {}
+        }
+    }
+    children.clear();
+    let _ = std::fs::remove_file(sock_path);
+    Ok(peak_rss_mb)
 }
 
 /// Peak (high-water) RSS of this process, in MB — `VmHWM`, not the current
@@ -1430,18 +1479,25 @@ fn worker_session(s: &mut UnixStream) {
     // Build the leaf circuit ONCE; every epoch below reuses it.
     let mut leaf = FamLeafCircuit::build(family, &shape, m, commit.mode());
 
-    // Forest: the online Bentley–Saxe cascade, folded as we go.
+    // Forest: the online Bentley–Saxe cascade, folded as we go (bare peaks
+    // and the merge cache unless `EXP_FOREST_RETAIN_PREP=1` /
+    // `EXP_MERGE_CACHE=0`).
     let mut forest = ForestCascade::new(first_index);
     // Peaks already shipped to the coordinator (`(lo, hi)`).
     let mut shipped: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+    // Chain prefix and slice root: bare proofs unless `EXP_FOREST_RETAIN_PREP=1`
+    // (a later merge, the wire and the query certificates read only the proof).
+    let retain_prep = forest_retain_prep();
     // Chain: the running left-leaning prefix proof.
-    let mut chain_acc: Option<RecursionOutput<ConfigWithFriParams>> = None;
-    let mut root: Option<RecursionOutput<ConfigWithFriParams>> = None;
+    let mut chain_acc: Option<PeakProof> = None;
+    let mut root: Option<PeakProof> = None;
 
     for (i, batch) in batches.iter().enumerate() {
         let (output, prove_ms, verify_ms) =
             state.prove_leaf(&mut leaf, first_index + i as u64, batch, LeafOpen::Real(&commit));
         state.advance(&shape, batch);
+        // Release the leaf proof's freed working memory (`EXP_MALLOC_TRIM`).
+        trim_heap();
         // The final commitment this leaf's proof EXPOSES (the value a query
         // at this version must open), reported before its `LeafDone`.
         let final_commit = read_exposed_boundary_proof(&output.0).1 .0;
@@ -1457,12 +1513,14 @@ fn worker_session(s: &mut UnixStream) {
                 // Sequential fold into the running prefix. The fold waits on
                 // the previous prefix proof (the chain's inherent bottleneck)
                 // — timed as this step's composition, not shipped anywhere.
+                // No merge cache here: the prefix's VK changes with its depth,
+                // so no two chain merges share a circuit.
                 let t0 = Instant::now();
                 chain_acc = Some(match chain_acc.take() {
-                    None => output, // Π_{[1,1]}
+                    None => PeakProof::keep(output, retain_prep), // Π_{[1,1]}
                     Some(acc) => {
                         cascade_merges = 1;
-                        prove_hiding_merge(&acc, &output)
+                        PeakProof::keep(prove_hiding_merge_proofs(acc.proof(), &output.0), retain_prep)
                     }
                 });
                 cascade_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -1478,10 +1536,14 @@ fn worker_session(s: &mut UnixStream) {
                 None
             }
         };
+        if cascade_merges > 0 {
+            // Outside the cascade timing (`EXP_MALLOC_TRIM`).
+            trim_heap();
+        }
         // A query fires after this leaf: ship what certifies it (outside
         // the cascade timing; peaks are immutable, so each goes once).
-        let ser = |p: &RecursionOutput<ConfigWithFriParams>| {
-            postcard::to_allocvec(&p.0).expect("serialize context proof")
+        let ser = |p: &BatchStarkProof<ConfigWithFriParams>| {
+            postcard::to_allocvec(p).expect("serialize context proof")
         };
         let context = checkpoints.contains(&(i as u32)).then(|| match mode {
             StreamMode::Forest => forest
@@ -1496,7 +1558,7 @@ fn worker_session(s: &mut UnixStream) {
             StreamMode::Chain => vec![WireInterval {
                 lo: first_index,
                 hi: first_index + i as u64,
-                proof: Some(ser(chain_acc.as_ref().expect("chain prefix"))),
+                proof: Some(ser(chain_acc.as_ref().expect("chain prefix").proof())),
             }],
             // per_batch: the leaf proofs themselves are the certificate.
             StreamMode::PerBatch => Vec::new(),
@@ -1528,11 +1590,24 @@ fn worker_session(s: &mut UnixStream) {
         }
         StreamMode::Forest => {
             // Finalize surviving peaks left-to-right into the slice root.
+            let cache_stats = forest.merge_cache().map(|c| (c.hits(), c.misses()));
             let t0 = Instant::now();
             let (acc, merges) = forest.finalize();
             let finalize_ms = t0.elapsed().as_secs_f64() * 1000.0;
-            let root_bytes =
-                ship_root.then(|| postcard::to_allocvec(&acc.0).expect("serialize slice root"));
+            if merges > 0 {
+                trim_heap();
+            }
+            if super::stream_compose::qlog_on() {
+                // Logging only: the slice cascade's merge-cache use (before
+                // the finalize merges) and whether peaks kept prover data.
+                eprintln!(
+                    "QLOG_WORKER,first_index={first_index},merge_cache={},retain_prep={retain_prep},trim={}",
+                    cache_stats.map_or("off".to_string(), |(h, m)| format!("hits={h};misses={m}")),
+                    super::metrics::malloc_trim_enabled()
+                );
+            }
+            let root_bytes = ship_root
+                .then(|| postcard::to_allocvec(acc.proof()).expect("serialize slice root"));
             root = Some(acc);
             send_msg(
                 s,
@@ -1552,13 +1627,18 @@ fn worker_session(s: &mut UnixStream) {
                     postcard::from_bytes(&right_proof).expect("deserialize peer root");
                 let t0 = Instant::now();
                 let left = root.take().expect("local root for merge");
-                root = Some(prove_hiding_merge_proofs(&left.0, &right));
+                root = Some(PeakProof::keep(
+                    prove_hiding_merge_proofs(left.proof(), &right),
+                    retain_prep,
+                ));
                 send_msg(s, &FromWorker::Merged { ms: t0.elapsed().as_secs_f64() * 1000.0 })
                     .expect("send Merged");
+                drop(left);
+                trim_heap();
             }
             ToWorker::FetchRoot => {
                 let r = root.as_ref().expect("local root to ship");
-                let bytes = postcard::to_allocvec(&r.0).expect("serialize root");
+                let bytes = postcard::to_allocvec(r.proof()).expect("serialize root");
                 send_msg(s, &FromWorker::Root { proof: bytes }).expect("send Root");
             }
             ToWorker::Exit => {
@@ -1617,6 +1697,7 @@ fn worker_session_gl(s: &mut UnixStream) {
         let (output, prove_ms, verify_ms) =
             state.prove_leaf(&mut leaf, first_index + i as u64, batch, LeafOpen::Real(&commit));
         state.advance(&shape, batch);
+        trim_heap(); // `EXP_MALLOC_TRIM`
 
         let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
         let proof_bytes = match mode {
@@ -1661,6 +1742,9 @@ fn worker_session_gl(s: &mut UnixStream) {
                 None
             }
         };
+        if cascade_merges > 0 {
+            trim_heap(); // outside the cascade timing (`EXP_MALLOC_TRIM`)
+        }
         send_msg(
             s,
             &FromWorker::LeafDone {
@@ -2520,6 +2604,9 @@ pub fn measure_compose_dist(
     // ship each query's prefix certificate ([`CtxCollector`]).
     let mut audit =
         if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m, commit.mode()) };
+    // The derivation's freed memory goes back to the OS before the workers
+    // start (`EXP_MALLOC_TRIM`).
+    trim_heap();
     qlog_phase("auditor_new");
     let mut ctx = CtxCollector::new(audit.is_some(), mode, machines_eff);
 
@@ -2825,14 +2912,29 @@ pub fn measure_compose_dist(
         }
     }
 
+    // ── Wind down children; collect peak RSS: before the audit by default
+    // (`EXP_EXIT_BEFORE_AUDIT`), so the auditor's VK derivation never
+    // overlaps an idle worker.
+    qlog_phase("root_received");
+    let exit_first = exit_before_audit();
+    let mut peak_rss_mb = 0.0f64;
+    if exit_first {
+        peak_rss_mb =
+            wind_down_workers(&mut worker_tx, &rx, machines_eff, &mut children, &sock_path)?;
+        qlog_phase("workers_exited");
+    }
+
     // ── AUDITOR (public parameters, the published log and the received
     // bytes only; no seed): verify against a trusted VK derived from public
     // parameters and bind the exposed statement to the log (`super::audit`).
+    // With the workers already gone, the VK is derived through the query
+    // auditor (same public parameters, same VK, no second no-op leaf).
     let pp = PublicParams { family, shape, m, commit_mode: commit.mode() };
     let layout = composition_expose();
     if layout != Expose::Interval {
         warn_boundary_layout("dist_compose auditor");
     }
+    let derived = if exit_first { audit.as_mut() } else { None };
     let (proof_bytes, verify_ms) = match &root_bytes {
         None => {
             // per_batch: the Θ(t) artifact. Every leaf proof is verified
@@ -2843,34 +2945,35 @@ pub fn measure_compose_dist(
                 .map(|p| p.as_deref().expect("per_batch leaf proof"))
                 .collect();
             let sum: u64 = bytes.iter().map(|p| p.len() as u64).sum();
-            (sum, audit::audit_leaf_bytes(&pp, &bytes, &log, layout, leaf_verify_sum)?)
+            (
+                sum,
+                audit::audit_leaf_bytes_with(&pp, &bytes, &log, layout, leaf_verify_sum, derived)?,
+            )
         }
         // The bracketing the machines composed is `dist_tree_shape(mode, t,
         // machines)`; a one-batch stream's lone leaf is audited as a leaf.
         Some(bytes) => (
             bytes.len() as u64,
-            audit::audit_root_bytes(&pp, bytes, &log, mode, t, machines, layout, leaf_verify_sum)?,
+            audit::audit_root_bytes_with(
+                &pp,
+                bytes,
+                &log,
+                mode,
+                t,
+                machines,
+                layout,
+                leaf_verify_sum,
+                derived,
+            )?,
         ),
     };
+    trim_heap();
+    qlog_phase("audit_done");
 
-    // ── Wind down children; collect peak RSS.
-    let mut peak_rss_mb = 0.0f64;
-    for (i, s) in worker_tx.iter_mut().enumerate() {
-        send_msg(s, &ToWorker::Exit).map_err(|e| format!("exit worker {i}: {e}"))?;
+    if !exit_first {
+        peak_rss_mb =
+            wind_down_workers(&mut worker_tx, &rx, machines_eff, &mut children, &sock_path)?;
     }
-    let mut done = machines_eff;
-    while done > 0 {
-        match next_event(&rx)? {
-            Event::Worker(_, FromWorker::Done { peak_rss_mb: r }, ..) => {
-                peak_rss_mb = peak_rss_mb.max(r);
-                done -= 1;
-            }
-            Event::Gone(_) => done -= 1, // reader ended after Done
-            _ => {}
-        }
-    }
-    children.clear();
-    let _ = std::fs::remove_file(&sock_path);
 
     // ── Mixed workload (non-empty query_at): prove the interleaved decode queries
     // on the coordinator — single-prover, θ(state) each — after the update
@@ -2897,6 +3000,7 @@ pub fn measure_compose_dist(
         &leaf_finals,
         audit.as_mut().map(|a| (a, &store, &log)),
     )?;
+    qlog_phase("queries_done");
 
     // ── Network models (critical path): scatter (parallel links, max) +
     // composition-path proof transfers + root delivery.
@@ -3095,6 +3199,9 @@ fn measure_compose_dist_staged(
     // ship each query's prefix certificate ([`CtxCollector`]).
     let mut audit =
         if query_at.is_empty() { None } else { QueryAudit::new(family, &shape, m, commit.mode()) };
+    // The derivation's freed memory goes back to the OS before the workers
+    // start (`EXP_MALLOC_TRIM`).
+    trim_heap();
     qlog_phase("auditor_new");
     let mut ctx = CtxCollector::new(audit.is_some(), mode, machines_eff);
 
@@ -3369,34 +3476,44 @@ fn measure_compose_dist_staged(
     // machine blocks, so the tree is the concurrent engine's
     // `dist_forest(t, machines)`; a lone leaf (unreachable in practice:
     // staging needs >= 2 slices) is audited as a leaf.
+    // Wind down first by default (`EXP_EXIT_BEFORE_AUDIT`; see the
+    // concurrent engine).
+    qlog_phase("root_received");
+    let exit_first = exit_before_audit();
+    let mut peak_rss_mb = 0.0f64;
+    if exit_first {
+        peak_rss_mb =
+            wind_down_workers(&mut worker_tx, &rx, machines_eff, &mut children, &sock_path)?;
+        qlog_phase("workers_exited");
+    }
     let pp = PublicParams { family, shape, m, commit_mode: commit.mode() };
     let layout = composition_expose();
     if layout != Expose::Interval {
         warn_boundary_layout("dist_compose (staged) auditor");
     }
+    let derived = if exit_first { audit.as_mut() } else { None };
     let (proof_bytes, verify_ms) = (
         bytes.len() as u64,
-        audit::audit_root_bytes(&pp, bytes, &log, mode, t, machines, layout, leaf_verify_sum)?,
+        audit::audit_root_bytes_with(
+            &pp,
+            bytes,
+            &log,
+            mode,
+            t,
+            machines,
+            layout,
+            leaf_verify_sum,
+            derived,
+        )?,
     );
+    trim_heap();
+    qlog_phase("audit_done");
 
-    // ── Wind down; collect peak RSS.
-    let mut peak_rss_mb = 0.0f64;
-    for (i, s) in worker_tx.iter_mut().enumerate() {
-        send_msg(s, &ToWorker::Exit).map_err(|e| format!("exit worker {i}: {e}"))?;
+    // ── Wind down (pre-M0 order); collect peak RSS.
+    if !exit_first {
+        peak_rss_mb =
+            wind_down_workers(&mut worker_tx, &rx, machines_eff, &mut children, &sock_path)?;
     }
-    let mut done = machines_eff;
-    while done > 0 {
-        match next_event(&rx)? {
-            Event::Worker(_, FromWorker::Done { peak_rss_mb: r }, ..) => {
-                peak_rss_mb = peak_rss_mb.max(r);
-                done -= 1;
-            }
-            Event::Gone(_) => done -= 1,
-            _ => {}
-        }
-    }
-    children.clear();
-    let _ = std::fs::remove_file(&sock_path);
 
     // Each query at version `t'` must open exactly leaf `t'`'s exposed final
     // (prover side); each answer is pinned to the decode VK of the run's
@@ -3417,6 +3534,7 @@ fn measure_compose_dist_staged(
         &leaf_finals,
         audit.as_mut().map(|a| (a, &store, &log)),
     )?;
+    qlog_phase("queries_done");
 
     // ── Network model (forest path only).
     let root_sz = root_bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
@@ -3811,6 +3929,14 @@ pub fn measure_compose_dist_gl(
             return Err("root boundary != native (Com(S_0), Com(S_E))".into());
         }
     }
+    // ── Wind down first by default (`EXP_EXIT_BEFORE_AUDIT`; see the
+    // BabyBear engine).
+    let exit_first = exit_before_audit();
+    let mut peak_rss_mb = 0.0f64;
+    if exit_first {
+        peak_rss_mb =
+            wind_down_workers(&mut worker_tx, &rx, machines_eff, &mut children, &sock_path)?;
+    }
     // ── AUDITOR (public inputs only; `super::audit`).
     let pp = PublicParams { family, shape, m, commit_mode: commit.mode() };
     let layout = composition_expose();
@@ -3833,25 +3959,13 @@ pub fn measure_compose_dist_gl(
             audit::audit_root_bytes_gl(&pp, bytes, &log, mode, t, machines, layout, leaf_verify_sum)?,
         ),
     };
+    trim_heap();
 
-    // ── Wind down children; collect peak RSS.
-    let mut peak_rss_mb = 0.0f64;
-    for (i, s) in worker_tx.iter_mut().enumerate() {
-        send_msg(s, &ToWorker::Exit).map_err(|e| format!("exit worker {i}: {e}"))?;
+    // ── Wind down children (pre-M0 order); collect peak RSS.
+    if !exit_first {
+        peak_rss_mb =
+            wind_down_workers(&mut worker_tx, &rx, machines_eff, &mut children, &sock_path)?;
     }
-    let mut done = machines_eff;
-    while done > 0 {
-        match next_event(&rx)? {
-            Event::Worker(_, FromWorker::Done { peak_rss_mb: r }, ..) => {
-                peak_rss_mb = peak_rss_mb.max(r);
-                done -= 1;
-            }
-            Event::Gone(_) => done -= 1, // reader ended after Done
-            _ => {}
-        }
-    }
-    children.clear();
-    let _ = std::fs::remove_file(&sock_path);
 
     // ── Mixed workload: the Goldilocks families have NO query decode provers,
     // so an empty schedule reports all-zero query metrics and a non-empty one
@@ -3936,7 +4050,7 @@ mod tests {
     use super::*;
     use crate::commitment::hiding::SaltSeed;
     use crate::recursion::recursive::expose_forest::{
-        check_leaves_against_log, verify_bound_stark_proof_against_log,
+        check_leaves_against_log, prove_hiding_merge, verify_bound_stark_proof_against_log,
         verify_bound_stark_proof_pinned, vk_pin_values,
     };
 
@@ -5402,6 +5516,57 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// M0 (`EXP_EXIT_BEFORE_AUDIT`): the trusted root and leaf VKs the
+    /// auditor derives through the run's query auditor
+    /// (`audit::audit_root_bytes_with`) are byte-identical (postcard) to the
+    /// fresh derivations the pre-M0 order uses (`derive_dist_root_vk`,
+    /// `derive_dist_leaf_vk`), for the forest and the chain; a query auditor of
+    /// other public parameters is refused. Then a real forest root (folded by
+    /// the in-process workers) passes the audit through the reused auditor.
+    #[test]
+    fn m0_query_auditor_derives_the_fresh_root_vk() {
+        if root_vk_overridden() {
+            eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
+            return;
+        }
+        let sh = shape();
+        let family = StreamFamily::CmOmc;
+        let commit = ProverCommit::hiding(SaltSeed::for_tests(7));
+        let batches: Vec<Vec<u32>> =
+            (0..4u32).map(|t| (0..4u32).map(|i| 1 + (t * 5 + i * 3) % 11).collect()).collect();
+        let m = batches[0].len();
+        let Some(mut qa) = QueryAudit::new(family, &sh, m, commit.mode()) else {
+            eprintln!("skipped: binding off under a legacy opt-in");
+            return;
+        };
+        let enc = |v: &RootVk<crate::config::Challenge>| postcard::to_allocvec(v).unwrap();
+        for (mode, t, machines) in [(StreamMode::Forest, 4, 2), (StreamMode::Chain, 3, 1)] {
+            let fresh = derive_dist_root_vk(family, &sh, m, mode, t, machines, commit.mode());
+            let reused = qa.trusted_vk(&dist_tree_shape(mode, t, machines));
+            assert_eq!(enc(&fresh), enc(&reused), "{mode:?} t={t} machines={machines}");
+        }
+        let leaf = derive_dist_leaf_vk(family, &sh, m, commit.mode());
+        assert_eq!(enc(&leaf), enc(&qa.trusted_vk(&ForestShape::Leaf)), "leaf VK");
+        let other = PublicParams { family, shape: sh, m: 2 * m, commit_mode: commit.mode() };
+        assert!(qa.for_params(&other).is_err(), "other public parameters");
+
+        // A forest(4) over 2 machines, folded by the real worker sessions,
+        // audited through the reused query auditor (and, as a control, the
+        // fresh derivation).
+        let (tasks, ranges) = inproc_tasks(family, StreamMode::Forest, 2, &batches, &commit);
+        let run = run_inproc(worker_session, tasks, &ranges, StreamMode::Forest);
+        let root = run.root.expect("forest root");
+        let log = publish_batch_log(family, &sh, m, &batches, &commit);
+        let pp = PublicParams { family, shape: sh, m, commit_mode: commit.mode() };
+        let layout = composition_expose();
+        let reused = audit::audit_root_bytes_with(
+            &pp, &root, &log, StreamMode::Forest, 4, 2, layout, -1.0, Some(&mut qa),
+        );
+        assert!(reused.is_ok(), "{reused:?}");
+        let fresh = audit::audit_root_bytes(&pp, &root, &log, StreamMode::Forest, 4, 2, layout, -1.0);
+        assert!(fresh.is_ok(), "{fresh:?}");
     }
 
     /// Transfer model: bytes·8 / (Mb/s · 1e6) · 1000 + RTT.

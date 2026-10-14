@@ -309,7 +309,7 @@ impl StreamMode {
 }
 
 /// Sketch shape — only the fields relevant to the chosen family are used.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StreamShape {
     /// Count-Min depth.
     pub d: usize,
@@ -617,6 +617,9 @@ fn prove_query_at(
     t: usize,
     commit: &ProverCommit,
 ) -> (DecodeProof, [Val; 8]) {
+    // The previous query's freed memory goes back to the OS first
+    // (`EXP_MALLOC_TRIM`; outside the query's own timing).
+    super::metrics::trim_heap();
     let mode = commit.mode();
     let id = ReleasePolicy::Identity;
     if qlog_on() {
@@ -1288,7 +1291,7 @@ pub(crate) fn measure_queries_dist(
         .num_threads(cores.max(1))
         .build()
         .expect("query pool");
-    pool.install(|| {
+    let out = pool.install(|| {
         match bind {
             Some((audit, store, log)) => {
                 let mut arts = prove_queries_only(
@@ -1318,7 +1321,9 @@ pub(crate) fn measure_queries_dist(
                 Ok(aggregate_queries(&arts, mode))
             }
         }
-    })
+    });
+    super::metrics::trim_heap(); // `EXP_MALLOC_TRIM`
+    out
 }
 
 /// Prove the `t` exposed, boundary-chained leaves for `family` at `shape`,
@@ -1806,7 +1811,11 @@ pub fn measure_compose(
                             acc
                         }
                         _ => {
-                            let mut forest = ForestCascade::new(1);
+                            // The single-process (sim) engine keeps the
+                            // pre-M0 fold: its root must stay a whole
+                            // `RecursionOutput` (`audit_root`), and every leaf
+                            // is held in memory anyway.
+                            let mut forest = ForestCascade::retaining(1);
                             let mut push_and_bind = |leaf, g: usize, forest: &mut ForestCascade| {
                                 forest.push(leaf);
                                 bind_due(&mut audit, &mut query_arts, g, || {
@@ -1815,7 +1824,7 @@ pub fn measure_compose(
                                         .into_iter()
                                         .map(|(lo, hi, p)| {
                                             let sh = ForestShape::forest((hi - lo + 1) as usize);
-                                            (lo, hi, sh, CtxProof::Proof(&p.0))
+                                            (lo, hi, sh, CtxProof::Proof(p))
                                         })
                                         .collect()
                                 }, &log)
@@ -1824,7 +1833,11 @@ pub fn measure_compose(
                             for (k, leaf) in outputs.enumerate() {
                                 bind_wall += push_and_bind(leaf, k + 2, &mut forest);
                             }
-                            forest.finalize().0
+                            forest
+                                .finalize()
+                                .0
+                                .into_output()
+                                .expect("a retaining cascade keeps the root's output")
                         }
                     };
                     let merge_ms = t0.elapsed().as_secs_f64() * 1000.0 - bind_wall;

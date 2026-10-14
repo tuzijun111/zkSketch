@@ -94,6 +94,9 @@ six_clean_env() {
   for v in $(compgen -e); do
     case $v in
       EXP_VERIFY_REPEATS) ;;
+      # M0 harness memory/time switches (default on; set to the "off" value for the
+      # pre-M0 behaviour in A/B runs): passed through and recorded in run_zks.sh logs.
+      EXP_FOREST_RETAIN_PREP|EXP_MALLOC_TRIM|EXP_EXIT_BEFORE_AUDIT|EXP_MERGE_CACHE|EXP_MERGE_CACHE_ENTRIES) ;;
       EXP_*|ZKSKETCH_*|RAYON_NUM_THREADS|BONSAI_API_URL|BONSAI_API_KEY|RISC0_PROVER|RISC0_DEV_MODE)
         dropped+=("$v"); unset "$v" ;;
     esac

@@ -73,7 +73,7 @@ type GlVal = crate::config_gl::Val;
 
 /// What the auditor knows about a stream besides the log: public parameters
 /// only.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicParams {
     pub family: StreamFamily,
     pub shape: StreamShape,
@@ -184,6 +184,8 @@ pub fn check_log_genesis_gl(pp: &PublicParams, log: &BatchLog<GlVal>) -> Result<
 /// decoded and their statements checked, which authenticates nothing, and
 /// the workers' self-verify total `self_verify_ms` is reported, exactly as
 /// before the pin existed.
+// The harness calls the `_with` form (M0); the tests keep this one.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn audit_leaf_bytes(
     pp: &PublicParams,
     bytes: &[&[u8]],
@@ -191,8 +193,27 @@ pub(crate) fn audit_leaf_bytes(
     layout: Expose,
     self_verify_ms: f64,
 ) -> Result<f64, String> {
+    audit_leaf_bytes_with(pp, bytes, log, layout, self_verify_ms, None)
+}
+
+/// [`audit_leaf_bytes`], deriving the trusted leaf VK through `derived` (the
+/// run's query auditor, [`QueryAudit::trusted_vk`]: the same no-op leaf of
+/// the same public parameters, already proved) instead of proving a fresh
+/// no-op leaf ([`derive_dist_leaf_vk`]). The VK is the same either way.
+pub(crate) fn audit_leaf_bytes_with(
+    pp: &PublicParams,
+    bytes: &[&[u8]],
+    log: &BatchLog<Val>,
+    layout: Expose,
+    self_verify_ms: f64,
+    derived: Option<&mut QueryAudit>,
+) -> Result<f64, String> {
     check_log_genesis_bb(pp, log)?;
-    let vk = resolve_trusted_vk(|| derive_dist_leaf_vk(pp.family, &pp.shape, pp.m, pp.commit_mode))?;
+    let derived = derived.map(|a| a.for_params(pp)).transpose()?;
+    let vk = resolve_trusted_vk(|| match derived {
+        Some(a) => a.trusted_vk(&ForestShape::Leaf),
+        None => derive_dist_leaf_vk(pp.family, &pp.shape, pp.m, pp.commit_mode),
+    })?;
     let proofs: Vec<Proof> = bytes
         .iter()
         .map(|b| postcard::from_bytes(b))
@@ -258,6 +279,8 @@ pub(crate) fn audit_leaf_bytes_gl(
 /// timing). Under the Boundary layout the root's `(init, final)` must equal
 /// the log's `(Com(S_0), Com(S_T))`. Panics on a rejected root (as the
 /// pre-B2 auditor did); returns the verify time in ms.
+// The harness calls the `_with` form (M0); the tests keep this one.
+#[cfg_attr(not(test), allow(dead_code))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn audit_root_bytes(
     pp: &PublicParams,
@@ -269,22 +292,55 @@ pub(crate) fn audit_root_bytes(
     layout: Expose,
     leaf_verify_ms: f64,
 ) -> Result<f64, String> {
+    audit_root_bytes_with(pp, bytes, log, stream_mode, t, machines, layout, leaf_verify_ms, None)
+}
+
+/// [`audit_root_bytes`], deriving the trusted root VK through `derived` (the
+/// run's query auditor, [`QueryAudit::trusted_vk`]: its no-op leaf and its
+/// memoised subtree derivations, which the query binding then reuses)
+/// instead of a fresh no-op leaf ([`derive_dist_root_vk`]). The VK is the
+/// same either way: both derive it from the same public parameters
+/// (`EXP_EXIT_BEFORE_AUDIT`, M0).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn audit_root_bytes_with(
+    pp: &PublicParams,
+    bytes: &[u8],
+    log: &BatchLog<Val>,
+    stream_mode: StreamMode,
+    t: usize,
+    machines: usize,
+    layout: Expose,
+    leaf_verify_ms: f64,
+    derived: Option<&mut QueryAudit>,
+) -> Result<f64, String> {
     check_log_genesis_bb(pp, log)?;
     let proof: Proof = postcard::from_bytes(bytes).map_err(|e| format!("root decode: {e}"))?;
     if t == 1 {
         // A one-batch stream: the "root" is the lone LEAF proof. The
         // aggregation verifier cannot check it (it lacks the sketch's
         // tables), so it is verified like a per_batch leaf.
-        return audit_leaf_bytes(pp, &[bytes], log, layout, leaf_verify_ms);
+        return audit_leaf_bytes_with(pp, &[bytes], log, layout, leaf_verify_ms, derived);
     }
     let st = read_exposed_statement(&proof);
     if st.init != log.init || st.final_ != log.final_ {
         return Err("root boundary != the log's (Com(S_0), Com(S_T))".into());
     }
     let tree = dist_tree_shape(stream_mode, t, machines);
+    let derived = derived.map(|a| a.for_params(pp)).transpose()?;
     let expected_root_vk = resolve_root_vk(
         || vk_pin_values(&proof),
-        || derive_dist_root_vk(pp.family, &pp.shape, pp.m, stream_mode, t, machines, pp.commit_mode),
+        || match derived {
+            Some(a) => a.trusted_vk(&tree),
+            None => derive_dist_root_vk(
+                pp.family,
+                &pp.shape,
+                pp.m,
+                stream_mode,
+                t,
+                machines,
+                pp.commit_mode,
+            ),
+        },
     )?;
     timed_root_verify(|| {
         if layout == Expose::Interval {
@@ -564,6 +620,8 @@ pub(crate) type CtxPart<'a> = (u64, u64, ForestShape, CtxProof<'a>);
 /// (`tests::auditor_source_names_no_prover_secret`) covers it.
 pub(crate) struct QueryAudit {
     pub(crate) decode_vk: DecodeVk,
+    /// The public parameters this auditor's VKs were derived for.
+    pp: PublicParams,
     prefix: PrefixAuditor,
     /// `Com(S_0)` recomputed from public parameters (the empty sketch under
     /// the public zero randomizer, [`genesis_commit_bb`]): the
@@ -652,9 +710,11 @@ impl QueryAudit {
             _ => unreachable!("Goldilocks families are rejected above"),
         };
         let noop = super::dist_compose::prove_noop_leaf(family, shape, m, commit_mode);
-        let genesis = genesis_commit_bb(&PublicParams { family, shape: *shape, m, commit_mode });
+        let pp = PublicParams { family, shape: *shape, m, commit_mode };
+        let genesis = genesis_commit_bb(&pp);
         Some(Self {
             decode_vk,
+            pp,
             prefix: PrefixAuditor::new(noop),
             genesis,
             memo: HashMap::new(),
@@ -662,6 +722,28 @@ impl QueryAudit {
             qlog_parts: HashMap::new(),
             qlog_last: None,
         })
+    }
+
+    /// This auditor, when it was built for exactly `pp` (its no-op leaf, hence
+    /// every VK it derives, is then the one `pp` fixes); an error otherwise.
+    pub(crate) fn for_params(&mut self, pp: &PublicParams) -> Result<&mut Self, String> {
+        if self.pp != *pp {
+            return Err(format!(
+                "query auditor built for {:?}, not for the audited stream's {pp:?}",
+                self.pp
+            ));
+        }
+        Ok(self)
+    }
+
+    /// The trusted VK (commitment + metadata) of a composition of `shape`
+    /// (`ForestShape::Leaf`: the leaf VK), derived from this auditor's no-op
+    /// leaf of its public parameters and memoised with the prefix VKs: the
+    /// same value as `dist_compose::derive_dist_root_vk` /
+    /// `derive_dist_leaf_vk`, without proving another no-op leaf, and the
+    /// subtree derivations are shared with the query binding.
+    pub(crate) fn trusted_vk(&mut self, shape: &ForestShape) -> RootVk<crate::config::Challenge> {
+        self.prefix.vk(shape).clone()
     }
 
     /// Fingerprint of a part's proof bytes (an in-memory proof is serialized

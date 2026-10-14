@@ -47,8 +47,9 @@ use p3_circuit_prover::{
 use p3_field::PrimeCharacteristicRing;
 use p3_recursion::pcs::MerkleCapTargets;
 use p3_recursion::{
-    BatchOnly, PcsRecursionBackend, Poseidon2Config, ProveNextLayerParams, RecursionInput,
-    RecursionOutput, Recursive, Target, VerifierCircuitResult, prove_aggregation_layer,
+    AggregationPrepCache, BatchOnly, PcsRecursionBackend, Poseidon2Config, ProveNextLayerParams,
+    RecursionInput, RecursionOutput, Recursive, Target, VerifierCircuitResult,
+    prove_aggregation_layer,
 };
 use p3_uni_stark::StarkGenericConfig;
 
@@ -58,7 +59,7 @@ use crate::recursion::recursive::backend::{Backend, make_backend};
 use crate::recursion::recursive::config::{ConfigWithFriParams, DIGEST_ELEMS, D as EXT_D};
 use crate::recursion::recursive::countmin_leaf::{make_leaf_config, pack_commit_to_challenge};
 use crate::recursion::recursive::root_vk::{
-    ForestShape, RootVk, ShapeVkDeriver, bound_proof_shape,
+    BoundProofShape, ForestShape, RootVk, ShapeVkDeriver, bound_proof_shape,
 };
 use crate::recursion::recursive::statement::{
     BatchLog, Expose, Layout, Statement, TAG_MERGE, check_leaf_statements_against_log,
@@ -332,6 +333,300 @@ pub fn prove_hiding_merge_proofs(
         None,
     )
     .expect("prove hiding merge")
+}
+
+// ─── Harness memory/time switches (M0) ───────────────────────────────────────
+//
+// Each defaults to the new behaviour; the "off" value restores the pre-M0
+// behaviour exactly (side-by-side runs). None changes a circuit, a VK or a
+// proof statement: they only decide what the PROVER keeps in memory.
+
+/// `EXP_FOREST_RETAIN_PREP=1`: the pre-M0 behaviour, where every live peak of
+/// a [`ForestCascade`] (and the procs worker's chain prefix and slice root)
+/// keeps its whole [`RecursionOutput`], i.e. the merge circuit's
+/// `Rc<CircuitProverData>` (about 1 GB per merge under ZK) next to the proof.
+/// Default (unset or anything else): keep the bare [`BatchStarkProof`] only
+/// ([`PeakProof::Bare`]); a merge reads nothing else.
+pub fn forest_retain_prep() -> bool {
+    std::env::var("EXP_FOREST_RETAIN_PREP").is_ok_and(|v| v.trim() == "1")
+}
+
+/// `EXP_MERGE_CACHE=0`: no [`MergeCache`] in [`ForestCascade::new`] (the
+/// pre-M0 behaviour: every merge rebuilds its circuit, AIRs and preprocessed
+/// commitment). Default: a cache of `EXP_MERGE_CACHE_ENTRIES` entries
+/// (default 1; `0` also disables it).
+pub fn merge_cache_from_env() -> Option<MergeCache> {
+    if std::env::var("EXP_MERGE_CACHE").is_ok_and(|v| v.trim() == "0") {
+        return None;
+    }
+    let cap = std::env::var("EXP_MERGE_CACHE_ENTRIES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(1);
+    (cap > 0).then(|| MergeCache::new(cap))
+}
+
+/// A proof kept by the prover between merges: a forest peak, the chain's
+/// running prefix, a slice root.
+///
+/// `Bare` (the default) is the proof alone, which is everything a later merge,
+/// a query certificate or the wire ever reads ([`recursion_input_from_proof`]).
+/// `Retained` is the pre-M0 [`RecursionOutput`], which also pins the producing
+/// circuit's prover data (`EXP_FOREST_RETAIN_PREP=1`).
+pub enum PeakProof {
+    Bare(BatchStarkProof<ConfigWithFriParams>),
+    Retained(RecursionOutput<ConfigWithFriParams>),
+}
+
+impl PeakProof {
+    /// Keep `output` whole (`retain_prep`) or drop its prover data now.
+    pub fn keep(output: RecursionOutput<ConfigWithFriParams>, retain_prep: bool) -> Self {
+        if retain_prep { Self::Retained(output) } else { Self::Bare(output.0) }
+    }
+
+    pub fn proof(&self) -> &BatchStarkProof<ConfigWithFriParams> {
+        match self {
+            Self::Bare(p) => p,
+            Self::Retained(o) => &o.0,
+        }
+    }
+
+    /// Whether this value still pins a circuit's prover data.
+    pub fn holds_prover_data(&self) -> bool {
+        matches!(self, Self::Retained(_))
+    }
+
+    pub fn into_proof(self) -> BatchStarkProof<ConfigWithFriParams> {
+        match self {
+            Self::Bare(p) => p,
+            Self::Retained(o) => o.0,
+        }
+    }
+
+    /// The whole [`RecursionOutput`], when it was retained.
+    pub fn into_output(self) -> Option<RecursionOutput<ConfigWithFriParams>> {
+        match self {
+            Self::Bare(_) => None,
+            Self::Retained(o) => Some(o),
+        }
+    }
+}
+
+/// One child of a cached merge, as the merge circuit sees it: its VK (baked
+/// into the merge circuit as constants), its proof shape (which fixes the
+/// verifier circuit's structure) and whether its `CommonData` had to be
+/// rebuilt (a deserialized child).
+#[derive(Clone, Debug, PartialEq)]
+struct MergeChildKey {
+    vk: Vec<Challenge>,
+    shape: BoundProofShape,
+    rebuilt_common: bool,
+}
+
+/// What a built hiding-merge circuit depends on (besides the fixed config and
+/// backend): both children's [`MergeChildKey`] and the [`MergeMode`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct MergeCacheKey {
+    left: MergeChildKey,
+    right: MergeChildKey,
+    mode: MergeMode,
+}
+
+impl MergeCacheKey {
+    fn new(
+        left: &BatchStarkProof<ConfigWithFriParams>,
+        left_rebuilt: bool,
+        right: &BatchStarkProof<ConfigWithFriParams>,
+        right_rebuilt: bool,
+        mode: MergeMode,
+    ) -> Self {
+        let child = |p: &BatchStarkProof<ConfigWithFriParams>, rebuilt_common: bool| MergeChildKey {
+            vk: vk_pin_values(p),
+            shape: bound_proof_shape(p),
+            rebuilt_common,
+        };
+        Self { left: child(left, left_rebuilt), right: child(right, right_rebuilt), mode }
+    }
+
+    /// The key of the REAL merge of `left` and `right`.
+    pub fn of(
+        left: &BatchStarkProof<ConfigWithFriParams>,
+        right: &BatchStarkProof<ConfigWithFriParams>,
+    ) -> Self {
+        let rebuilt = |p: &BatchStarkProof<ConfigWithFriParams>| {
+            p.stark_common.lookups.len() != p.proof.opened_values.instances.len()
+        };
+        Self::new(left, rebuilt(left), right, rebuilt(right), MergeMode::Real)
+    }
+}
+
+struct MergeCacheEntry {
+    key: MergeCacheKey,
+    /// Eviction rank: the merged subtree's leaf count (smaller subtrees merge
+    /// more often, so they are kept first).
+    rank: u64,
+    last_used: u64,
+    circuit: p3_circuit::Circuit<Challenge>,
+    left_result: MergeVerifierResult,
+    right_result: MergeVerifierResult,
+    /// The fork's slot: the circuit's prover data (AIRs + preprocessed
+    /// commitment) and its prover. The fork re-checks the circuit's
+    /// fingerprint (op count, witness count, every constant) against it on
+    /// every use.
+    prep: Option<AggregationPrepCache<ConfigWithFriParams>>,
+}
+
+/// **PROVER-SIDE** cache of built hiding-merge circuits (`EXP_MERGE_CACHE`).
+///
+/// A merge's circuit depends only on its children's VKs and proof shapes
+/// (plus the merge mode, the config and the backend, which are fixed), never
+/// on their data: the verifier circuit reads each child proof through public
+/// and private inputs set at run time. So every merge of a forest level after
+/// the first can reuse the level's circuit, its verifier results and the
+/// fork's [`AggregationPrepCache`] (the AIRs and the preprocessed commitment),
+/// about 1.1 s per merge. The key is [`MergeCacheKey`] (both children's VK
+/// values and [`BoundProofShape`], whether their common data was rebuilt, and
+/// the mode); the fork's circuit fingerprint is a second guard on the prep.
+///
+/// It never feeds the auditor: VKs are always derived independently from
+/// public parameters ([`root_vk_deriver`]), so a mis-keyed entry could only
+/// produce a proof that fails verification. ZK is unaffected: the cached
+/// prover's mask RNG advances from proof to proof (and `ZkRng` reseeds from
+/// the OS on clone).
+///
+/// An entry holds a merge's prover data (about 1 GB under ZK), so the cache
+/// is bounded: at most `capacity` entries, ranked by the merged subtree's
+/// leaf count. A new circuit is admitted while there is room, or in place of
+/// the largest-rank entry (the least recently used among equals) when its own
+/// rank is not larger; otherwise the merge is proved uncached. With one
+/// entry, a Bentley–Saxe cascade keeps its two-leaf merge circuit, which
+/// serves `T/2 - 1` of its `T - 1` merges.
+pub struct MergeCache {
+    capacity: usize,
+    entries: Vec<MergeCacheEntry>,
+    clock: u64,
+    hits: u64,
+    misses: u64,
+}
+
+impl MergeCache {
+    pub fn new(capacity: usize) -> Self {
+        Self { capacity, entries: Vec::new(), clock: 0, hits: 0, misses: 0 }
+    }
+
+    /// Merges that reused a cached circuit.
+    pub fn hits(&self) -> u64 {
+        self.hits
+    }
+
+    /// Merges that built their circuit.
+    pub fn misses(&self) -> u64 {
+        self.misses
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Whether the real merge of `left` and `right` would reuse a cached circuit.
+    pub fn contains(
+        &self,
+        left: &BatchStarkProof<ConfigWithFriParams>,
+        right: &BatchStarkProof<ConfigWithFriParams>,
+    ) -> bool {
+        let key = MergeCacheKey::of(left, right);
+        self.entries.iter().any(|e| e.key == key)
+    }
+
+    /// Admission of a new entry of `rank`: `None` = do not cache it;
+    /// `Some(victim)` = cache it, after evicting `victim` if any.
+    fn admission(&self, rank: u64) -> Option<Option<usize>> {
+        if self.entries.len() < self.capacity {
+            return Some(None);
+        }
+        let victim = self
+            .entries
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.rank.cmp(&b.rank).then(b.last_used.cmp(&a.last_used)))
+            .map(|(i, e)| (i, e.rank))?;
+        (rank <= victim.1).then_some(Some(victim.0))
+    }
+
+    /// [`prove_hiding_merge_proofs`] through the cache: the same circuit,
+    /// hence the same VK and statement, for the same children. `rank` is the
+    /// merged subtree's leaf count (the eviction order).
+    pub fn merge(
+        &mut self,
+        left: &BatchStarkProof<ConfigWithFriParams>,
+        right: &BatchStarkProof<ConfigWithFriParams>,
+        rank: u64,
+    ) -> RecursionOutput<ConfigWithFriParams> {
+        let config = make_leaf_config();
+        let backend = make_backend();
+        let params = agg_params();
+        let left_common = rebuilt_common_for(left);
+        let right_common = rebuilt_common_for(right);
+        let left_input =
+            recursion_input_with_common(left, left_common.as_ref().unwrap_or(&left.stark_common));
+        let right_input =
+            recursion_input_with_common(right, right_common.as_ref().unwrap_or(&right.stark_common));
+        let key = MergeCacheKey::new(
+            left,
+            left_common.is_some(),
+            right,
+            right_common.is_some(),
+            MergeMode::Real,
+        );
+        let prove = |circuit: &p3_circuit::Circuit<Challenge>,
+                     left_result: &MergeVerifierResult,
+                     right_result: &MergeVerifierResult,
+                     prep: Option<&mut Option<AggregationPrepCache<ConfigWithFriParams>>>| {
+            prove_aggregation_layer::<ConfigWithFriParams, BatchOnly, BatchOnly, Backend, EXT_D>(
+                &left_input,
+                &right_input,
+                left_result,
+                right_result,
+                circuit,
+                &config,
+                &backend,
+                &params,
+                prep,
+            )
+            .expect("prove hiding merge")
+        };
+        self.clock += 1;
+        if let Some(e) = self.entries.iter_mut().find(|e| e.key == key) {
+            self.hits += 1;
+            e.last_used = self.clock;
+            return prove(&e.circuit, &e.left_result, &e.right_result, Some(&mut e.prep));
+        }
+        self.misses += 1;
+        let (circuit, left_result, right_result) =
+            build_hiding_merge_circuit(&left_input, &right_input, &config, &backend, MergeMode::Real);
+        let Some(victim) = self.admission(rank) else {
+            return prove(&circuit, &left_result, &right_result, None);
+        };
+        if let Some(i) = victim {
+            self.entries.swap_remove(i);
+        }
+        let mut prep = None;
+        let out = prove(&circuit, &left_result, &right_result, Some(&mut prep));
+        self.entries.push(MergeCacheEntry {
+            key,
+            rank,
+            last_used: self.clock,
+            circuit,
+            left_result,
+            right_result,
+            prep,
+        });
+        out
+    }
 }
 
 /// DERIVATION ONLY: prove the **twin** of the hiding merge over `left` and
@@ -987,15 +1282,19 @@ pub fn prove_bound_forest(commits: &[CountMinCommit]) -> RecursionOutput<ConfigW
 /// `prove_countmin_leaf_v9_exposed_with_params`). Adjacent leaves must form a
 /// contiguous boundary chain; the hiding merge enforces it in-circuit. The
 /// returned root surfaces exactly `(Com(S_0), Com(S_E))`.
+///
+/// It returns the root's whole [`RecursionOutput`], so it folds through a
+/// [`ForestCascade::retaining`] cascade (the pre-M0 fold, independent of the
+/// `EXP_FOREST_RETAIN_PREP` / `EXP_MERGE_CACHE` switches).
 pub fn prove_forest_over(
     leaves: Vec<RecursionOutput<ConfigWithFriParams>>,
 ) -> RecursionOutput<ConfigWithFriParams> {
     assert!(leaves.len() >= 2, "need >= 2 leaves");
-    let mut forest = ForestCascade::new(1);
+    let mut forest = ForestCascade::retaining(1);
     for leaf in leaves {
         forest.push(leaf);
     }
-    forest.finalize().0
+    forest.finalize().0.into_output().expect("a retaining cascade keeps the root's output")
 }
 
 /// The **online** proof forest (Bentley–Saxe cascade), one leaf at a time:
@@ -1007,16 +1306,39 @@ pub fn prove_forest_over(
 /// [`PrefixAuditor`]); [`Self::finalize`] composes them left to right into
 /// the root. [`prove_forest_over`] and the distributed workers fold through
 /// this type, so the bracketing is [`ForestShape::forest`].
+///
+/// Memory (M0): by default a peak is a bare proof ([`PeakProof::Bare`]): a
+/// merge reads only its children's proofs, so the merge circuit's prover
+/// data is dropped as soon as the merge returns; `EXP_FOREST_RETAIN_PREP=1`
+/// keeps whole [`RecursionOutput`]s as before. Merges go through a
+/// [`MergeCache`] unless `EXP_MERGE_CACHE=0`. Neither changes a proof's
+/// circuit, VK or statement.
 pub struct ForestCascade {
     first_index: u64,
     /// `(size, proof)`, left to right.
-    peaks: Vec<(u64, RecursionOutput<ConfigWithFriParams>)>,
+    peaks: Vec<(u64, PeakProof)>,
+    retain_prep: bool,
+    cache: Option<MergeCache>,
 }
 
 impl ForestCascade {
-    /// An empty forest whose first leaf will be batch `first_index` (1-based).
+    /// An empty forest whose first leaf will be batch `first_index` (1-based),
+    /// under the environment's switches ([`forest_retain_prep`],
+    /// [`merge_cache_from_env`]).
     pub fn new(first_index: u64) -> Self {
-        Self { first_index, peaks: Vec::new() }
+        Self::with_options(first_index, forest_retain_prep(), merge_cache_from_env())
+    }
+
+    /// The pre-M0 cascade: whole [`RecursionOutput`] peaks, no merge cache.
+    pub fn retaining(first_index: u64) -> Self {
+        Self::with_options(first_index, true, None)
+    }
+
+    /// Explicit switches: keep each peak's prover data (`retain_prep`), and
+    /// the merge cache to prove through (`None`: every merge builds its
+    /// circuit).
+    pub fn with_options(first_index: u64, retain_prep: bool, cache: Option<MergeCache>) -> Self {
+        Self { first_index, peaks: Vec::new(), retain_prep, cache }
     }
 
     /// Number of leaves pushed so far.
@@ -1028,14 +1350,40 @@ impl ForestCascade {
         self.peaks.is_empty()
     }
 
+    /// Whether any live peak still pins a circuit's prover data (only under
+    /// `retain_prep`).
+    pub fn holds_prover_data(&self) -> bool {
+        self.peaks.iter().any(|(_, p)| p.holds_prover_data())
+    }
+
+    /// The merge cache, if any (hit / miss counters).
+    pub fn merge_cache(&self) -> Option<&MergeCache> {
+        self.cache.as_ref()
+    }
+
+    /// One merge of `left` and `right` into a subtree of `size` leaves.
+    fn merge(
+        &mut self,
+        left: &BatchStarkProof<ConfigWithFriParams>,
+        right: &BatchStarkProof<ConfigWithFriParams>,
+        size: u64,
+    ) -> RecursionOutput<ConfigWithFriParams> {
+        match &mut self.cache {
+            Some(cache) => cache.merge(left, right, size),
+            None => prove_hiding_merge_proofs(left, right),
+        }
+    }
+
     /// Append the next leaf and run the composition cascade; returns the
     /// number of merges it took.
     pub fn push(&mut self, leaf: RecursionOutput<ConfigWithFriParams>) -> u32 {
-        let mut node = (1u64, leaf);
+        let mut node = (1u64, PeakProof::keep(leaf, self.retain_prep));
         let mut merges = 0u32;
         while self.peaks.last().is_some_and(|(sz, _)| *sz == node.0) {
             let (_, left) = self.peaks.pop().unwrap();
-            node = (node.0 * 2, prove_hiding_merge(&left, &node.1));
+            let size = node.0 * 2;
+            let merged = self.merge(left.proof(), node.1.proof(), size);
+            node = (size, PeakProof::keep(merged, self.retain_prep));
             merges += 1;
         }
         self.peaks.push(node);
@@ -1044,12 +1392,12 @@ impl ForestCascade {
 
     /// The live peaks as `(lo, hi, proof)`, left to right (each a perfect
     /// tree, bracketing `ForestShape::forest(hi - lo + 1)`).
-    pub fn peaks(&self) -> Vec<(u64, u64, &RecursionOutput<ConfigWithFriParams>)> {
+    pub fn peaks(&self) -> Vec<(u64, u64, &BatchStarkProof<ConfigWithFriParams>)> {
         let mut lo = self.first_index;
         self.peaks
             .iter()
             .map(|(sz, p)| {
-                let part = (lo, lo + sz - 1, p);
+                let part = (lo, lo + sz - 1, p.proof());
                 lo += sz;
                 part
             })
@@ -1058,13 +1406,18 @@ impl ForestCascade {
 
     /// Compose the surviving peaks left to right into the root (the forest's
     /// finalization); returns it with the number of merges. A one-leaf forest
-    /// returns the lone leaf.
-    pub fn finalize(mut self) -> (RecursionOutput<ConfigWithFriParams>, u32) {
+    /// returns the lone leaf. The root is kept like a peak (bare unless
+    /// `retain_prep`).
+    pub fn finalize(mut self) -> (PeakProof, u32) {
         assert!(!self.peaks.is_empty(), "finalize an empty forest");
-        let mut acc = self.peaks.remove(0).1;
+        let peaks = std::mem::take(&mut self.peaks);
+        let mut peaks = peaks.into_iter();
+        let (mut size, mut acc) = peaks.next().expect("non-empty");
         let mut merges = 0u32;
-        for (_, r) in self.peaks {
-            acc = prove_hiding_merge(&acc, &r);
+        for (sz, r) in peaks {
+            size += sz;
+            let merged = self.merge(acc.proof(), r.proof(), size);
+            acc = PeakProof::keep(merged, self.retain_prep);
             merges += 1;
         }
         (acc, merges)
@@ -2629,5 +2982,88 @@ mod tests {
             verify_bound_proof(&root, &RootVk { commitment: c4.commitment.clone(), shape: f4.shape.clone() })
         });
         assert!(mixed.as_ref().is_err_and(|e| e.contains("root VK mismatch")));
+    }
+
+    // ─── M0 harness switches: merge cache ───────────────────────────────────
+
+    /// A toy leaf exposing the Interval statement
+    /// `(Com_k, Com_{k'}, (t, t), H)` with `H = (salt, salt + 1, …)`: its VK
+    /// depends on every exposed value (constants are in the VK), its proof
+    /// shape on none of them.
+    fn toy_interval_leaf(t: u64, init: u64, fin: u64, salt: u64) -> RecursionOutput<ConfigWithFriParams> {
+        use p3_field::BasedVectorSpace;
+        let mut v: Vec<Val> = commit(init).0.to_vec();
+        v.extend_from_slice(&commit(fin).0);
+        v.extend([Val::from_u64(t), Val::from_u64(t), Val::ZERO, Val::ZERO]);
+        v.extend((0..COMMIT_LEN as u64).map(|i| Val::from_u64(salt + i)));
+        let chals: Vec<Challenge> = v
+            .chunks(EXT_D)
+            .map(|c| Challenge::from_basis_coefficients_slice(c).expect("D coefficients"))
+            .collect();
+        prove_exposing_leaf(&chals)
+    }
+
+    /// M0 (`EXP_MERGE_CACHE`): children of the SAME proof shape but another
+    /// VK miss the cache (the key carries the VK values, not just the shape),
+    /// children of the cached VK and shape hit it, and every merge, cached or
+    /// not, natively verifies against the merge VK derived without proving
+    /// ([`hiding_merge_vk`]); the two VKs differ.
+    #[test]
+    fn m0_merge_cache_misses_same_shape_other_vk() {
+        let a1 = toy_interval_leaf(1, 0, 1, 100);
+        let a2 = toy_interval_leaf(2, 1, 2, 200);
+        let b1 = toy_interval_leaf(1, 0, 5, 300);
+        let b2 = toy_interval_leaf(2, 5, 6, 400);
+        for (a, b) in [(&a1, &b1), (&a2, &b2)] {
+            assert_eq!(bound_proof_shape(&a.0), bound_proof_shape(&b.0), "same proof shape");
+            assert_ne!(vk_pin_values(&a.0), vk_pin_values(&b.0), "different VK");
+        }
+        let vk_a = hiding_merge_vk(&a1.0, &a2.0);
+        let vk_b = hiding_merge_vk(&b1.0, &b2.0);
+        assert_ne!(vk_a, vk_b, "the merge VK bakes the children's VKs");
+        let check = |out: &RecursionOutput<ConfigWithFriParams>, vk: &[Challenge]| {
+            try_verify_bound_stark_proof_pinned(&out.0, &RootVk::commitment_only(vk.to_vec()))
+                .expect("cache merge verifies natively against the derived VK");
+        };
+
+        let mut cache = MergeCache::new(2);
+        let ma = cache.merge(&a1.0, &a2.0, 2);
+        assert_eq!((cache.hits(), cache.misses(), cache.len()), (0, 1, 1));
+        check(&ma, &vk_a);
+        assert!(cache.contains(&a1.0, &a2.0));
+        assert!(!cache.contains(&b1.0, &b2.0), "same shape, other VK: no entry");
+        let mb = cache.merge(&b1.0, &b2.0, 2);
+        assert_eq!((cache.hits(), cache.misses(), cache.len()), (0, 2, 2), "forced miss");
+        check(&mb, &vk_b);
+        let ma2 = cache.merge(&a1.0, &a2.0, 2);
+        assert_eq!((cache.hits(), cache.misses()), (1, 2), "the first entry still hits");
+        check(&ma2, &vk_a);
+        assert_eq!(bound_proof_shape(&ma2.0), bound_proof_shape(&ma.0));
+        assert_eq!(read_exposed_statement(&ma2.0), read_exposed_statement(&ma.0));
+        // ZK: the cached prover draws fresh masks for every proof.
+        #[cfg(feature = "zk")]
+        assert_ne!(
+            postcard::to_allocvec(&ma2.0).unwrap(),
+            postcard::to_allocvec(&ma.0).unwrap(),
+            "a cache hit must not replay the masks of the proof that filled the entry"
+        );
+    }
+
+    /// M0: the cache's admission keeps the smallest subtrees. With one entry,
+    /// a larger-rank circuit is proved uncached (the entry survives); an
+    /// equal-rank one replaces it. Pure bookkeeping over toy leaves.
+    #[test]
+    fn m0_merge_cache_admission_keeps_small_subtrees() {
+        let a1 = toy_interval_leaf(1, 0, 1, 100);
+        let a2 = toy_interval_leaf(2, 1, 2, 200);
+        let b1 = toy_interval_leaf(1, 0, 5, 300);
+        let b2 = toy_interval_leaf(2, 5, 6, 400);
+        let mut cache = MergeCache::new(1);
+        let _ = cache.merge(&a1.0, &a2.0, 2);
+        let _ = cache.merge(&b1.0, &b2.0, 4); // larger rank: not admitted
+        assert!(cache.contains(&a1.0, &a2.0) && !cache.contains(&b1.0, &b2.0));
+        let _ = cache.merge(&b1.0, &b2.0, 2); // equal rank: replaces the entry
+        assert!(!cache.contains(&a1.0, &a2.0) && cache.contains(&b1.0, &b2.0));
+        assert_eq!((cache.hits(), cache.misses(), cache.len()), (0, 3, 1));
     }
 }

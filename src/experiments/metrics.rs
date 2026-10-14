@@ -62,6 +62,41 @@ pub fn read_vmrss_kb() -> Option<u64> {
     None
 }
 
+/// `EXP_MALLOC_TRIM` (M0 harness switch): `0` disables [`trim_heap`] (the
+/// pre-M0 behaviour, where glibc keeps every freed heap page resident: an
+/// idle procs worker holds 2-3 GB of freed proving memory). Default on.
+pub fn malloc_trim_enabled() -> bool {
+    !std::env::var("EXP_MALLOC_TRIM").is_ok_and(|v| v.trim() == "0")
+}
+
+/// Return freed heap pages to the OS (`malloc_trim(0)`, glibc only; a no-op
+/// elsewhere and under `EXP_MALLOC_TRIM=0`). Memory only: nothing a proof
+/// contains depends on it. Returns whether it trimmed.
+pub fn trim_heap() -> bool {
+    if !malloc_trim_enabled() {
+        return false;
+    }
+    trim_heap_now()
+}
+
+/// [`trim_heap`] regardless of the switch.
+pub fn trim_heap_now() -> bool {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> i32;
+        }
+        // SAFETY: glibc's malloc_trim takes the arena locks itself and only
+        // releases free memory; it is safe to call from any thread.
+        unsafe { malloc_trim(0) };
+        true
+    }
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    {
+        false
+    }
+}
+
 struct RssSampler {
     stop: Arc<AtomicBool>,
     peak_kb: Arc<AtomicU64>,

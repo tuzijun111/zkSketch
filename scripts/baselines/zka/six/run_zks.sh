@@ -15,6 +15,10 @@
 #   SIX_WORK         scratch for per-batch proofs, deleted after each run (default $RESULTS/work)
 #   EXP_VERIFY_REPEATS  passed through (default 5): extra warm verifies, logged only (QLOG_VERIFY/QLOG_BINDV)
 #   SIX_FAIL_FAST=1  stop at the first failed run
+#   EXP_FOREST_RETAIN_PREP, EXP_MALLOC_TRIM, EXP_EXIT_BEFORE_AUDIT, EXP_MERGE_CACHE,
+#   EXP_MERGE_CACHE_ENTRIES  M0 harness switches, passed through (all other EXP_* are dropped);
+#                    unset = the new default. Pre-M0 behaviour: EXP_FOREST_RETAIN_PREP=1
+#                    EXP_MALLOC_TRIM=0 EXP_EXIT_BEFORE_AUDIT=0 EXP_MERGE_CACHE=0
 # Exit status 0 only if every run exited 0 and wrote a CSV row with status=ok.
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -85,6 +89,7 @@ for tag in "${TAGS[@]}"; do
     echo "# six-sketch zkSketch run tag=$tag $(date -Is) host=$(hostname) nproc=$(nproc) gate=$g waited_s=$GATE_WAITED_S load1_start=$GATE_L0 busy_cores_start=$GATE_BUSY"
     echo "# zkSketch HEAD=$(git -C "$WT" rev-parse --short=9 HEAD) dirty_files_outside_results=$(dirty) features=$FEAT bin_md5=$BIN_MD5"
     echo "# env: $envs (ZKSKETCH_COMMIT unset = hiding default)"
+    echo "# m0 switches: EXP_FOREST_RETAIN_PREP=${EXP_FOREST_RETAIN_PREP-unset} EXP_MALLOC_TRIM=${EXP_MALLOC_TRIM-unset} EXP_EXIT_BEFORE_AUDIT=${EXP_EXIT_BEFORE_AUDIT-unset} EXP_MERGE_CACHE=${EXP_MERGE_CACHE-unset} EXP_MERGE_CACHE_ENTRIES=${EXP_MERGE_CACHE_ENTRIES-unset} (unset = M0 default on)"
   } > "$log"
   echo "== zkSketch $tag ($(date +%T)); log $log" >&2
   T0=$SECONDS

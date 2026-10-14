@@ -303,7 +303,7 @@ fn cm_query_prefix_certified_by_live_peaks() {
         let peaks: Vec<(Proof, ForestShape)> = forest
             .peaks()
             .iter()
-            .map(|(lo, hi, p)| (copy(&p.0), ForestShape::forest((hi - lo + 1) as usize)))
+            .map(|(lo, hi, p)| (copy(p), ForestShape::forest((hi - lo + 1) as usize)))
             .collect();
         assert_eq!(peaks.len(), t.count_ones() as usize, "one peak per set bit of t'");
         assert_eq!(auditor.certify_prefix(&refs(&peaks), &log, t), Ok(state_at(t)), "peaks at t'={t}");
@@ -1532,4 +1532,127 @@ fn twin_merge_root_rejected_by_root_vk() {
     assert!(r.is_err_and(|e| e.contains("root VK mismatch")));
     let honest = prove_hiding_merge(&ls[0], &ls[1]);
     assert_eq!(new_auditor(&honest.0, &vk, &log, &shape), Ok(()), "control");
+}
+
+// ─── M0 harness switches: bare peaks and the merge cache ────────────────────
+
+/// M0 (`EXP_FOREST_RETAIN_PREP`, `EXP_MERGE_CACHE`): a cascade over 4 no-op
+/// Count-Min leaves (one shared leaf circuit, batches of `value = 0` records)
+/// with bare peaks and a one-entry merge cache holds NO prover data, by type:
+/// every peak is a `&BatchStarkProof` (`peaks()`), `holds_prover_data()` is
+/// false after every push, the cascade never keeps a reference to the leaf
+/// circuit's prover data (its `Rc` count drops back as each leaf is pushed),
+/// and the root comes back as `PeakProof::Bare`. The pre-M0 cascade
+/// (`ForestCascade::retaining`) does hold it. Both roots have the same VK,
+/// metadata and statement, and both verify against the root VK derived from
+/// public parameters and the batch log; the cached cascade's second
+/// level-1 merge (`[3, 4]`) was a cache hit.
+#[test]
+fn m0_cascade_over_noop_leaves_holds_no_prover_data() {
+    use std::rc::Rc;
+
+    use crate::recursion::recursive::expose_forest::{
+        ForestCascade, MergeCache, PeakProof, vk_pin_values,
+    };
+    use crate::recursion::recursive::root_vk::bound_proof_shape;
+    let s0 = cm::empty();
+    let noop = cm::batch(&[(7, 0), (11, 0)]);
+    let batches = vec![noop.clone(); 4];
+    let mut leaf = cm::leaf_circuit();
+    let log = cm::log(&s0, &s0, &batches);
+    let shape = ForestShape::forest(4);
+    let vk = root_vk_deriver(cm::noop()).root_vk(&shape);
+
+    let run = |mut forest: ForestCascade, leaf: &mut crate::sketch::countmin_omc::CmOmcLeafCircuit| {
+        let (outs, _) = cm::leaves_at(leaf, &s0, &batches, &[1, 2, 3, 4]);
+        let n = outs.len();
+        for (k, out) in outs.into_iter().enumerate() {
+            let prep = Rc::downgrade(&out.1);
+            forest.push(out);
+            // Handles outside the cascade: the leaf circuit's own and the
+            // outputs not pushed yet. Bare: the cascade holds none.
+            // Retaining: a lone leaf peak (t = 1, 3) holds one.
+            let held = prep.strong_count() - (1 + n - (k + 1));
+            let peaks: Vec<(u64, u64, &Proof)> = forest.peaks();
+            assert_eq!(peaks.len(), (k + 1).count_ones() as usize);
+            println!(
+                "M0 push t={} leaf_prep_handles_in_cascade={held} holds_prover_data={}",
+                k + 1,
+                forest.holds_prover_data()
+            );
+            assert_eq!(held, usize::from(forest.holds_prover_data() && (k + 1) % 2 == 1));
+        }
+        let stats = forest.merge_cache().map(|c| (c.hits(), c.misses()));
+        let held = forest.holds_prover_data();
+        let (root, merges) = forest.finalize();
+        assert_eq!(merges, 0, "t = 4 is one perfect tree");
+        (root, held, stats)
+    };
+
+    let (bare, held, stats) =
+        run(ForestCascade::with_options(1, false, Some(MergeCache::new(1))), &mut leaf);
+    assert!(!held, "bare cascade holds no prover data");
+    assert!(matches!(bare, PeakProof::Bare(_)), "bare root");
+    assert_eq!(stats, Some((1, 2)), "merge [3, 4] reused the [1, 2] circuit");
+
+    let (old, held_old, stats_old) = run(ForestCascade::retaining(1), &mut leaf);
+    assert!(held_old, "the pre-M0 cascade keeps the merge's prover data");
+    assert!(matches!(old, PeakProof::Retained(_)));
+    assert_eq!(stats_old, None);
+
+    assert_eq!(vk_pin_values(bare.proof()), vk_pin_values(old.proof()), "same root VK");
+    assert_eq!(bound_proof_shape(bare.proof()), bound_proof_shape(old.proof()));
+    assert_eq!(read_exposed_statement(bare.proof()), read_exposed_statement(old.proof()));
+    assert_eq!(new_auditor(bare.proof(), &vk, &log, &shape), Ok(()));
+    assert_eq!(new_auditor(old.proof(), &vk, &log, &shape), Ok(()));
+}
+
+/// M0 (`EXP_MERGE_CACHE`): every CACHE-HIT merge natively verifies against
+/// the VK the auditor derives from public parameters. Real Count-Min leaves
+/// (honest, different batches): `[1, 2]` fills the one-entry cache, `[3, 4]`
+/// hits it twice (two proofs with fresh masks under ZK). The hits are
+/// pinned to the derived `forest(2)` VK and metadata and STARK-verified
+/// natively, and the auditor's prefix check certifies `Com(S_4)` from
+/// `[1, 2]` + `[3, 4]` against the log; the root merged from them verifies
+/// against the derived `forest(4)` VK.
+#[test]
+fn m0_merge_cache_hits_verify_against_derived_vk() {
+    use crate::recursion::recursive::expose_forest::{MergeCache, PrefixAuditor};
+    let mut leaf = cm::leaf_circuit();
+    let bs = cm::honest_batches();
+    let s0 = cm::empty();
+    let (l, s4) = cm::leaves_at(&mut leaf, &s0, &bs, &[1, 2, 3, 4]);
+    let log = cm::log(&s0, &s4, &bs);
+    let mut deriver = root_vk_deriver(cm::noop());
+    let vk2 = deriver.root_vk(&ForestShape::forest(2));
+    let vk4 = deriver.root_vk(&ForestShape::forest(4));
+
+    let mut cache = MergeCache::new(1);
+    let m12 = cache.merge(&l[0].0, &l[1].0, 2);
+    assert_eq!((cache.hits(), cache.misses()), (0, 1));
+    assert!(cache.contains(&l[2].0, &l[3].0), "same circuit, other data");
+    let m34 = cache.merge(&l[2].0, &l[3].0, 2);
+    let m34b = cache.merge(&l[2].0, &l[3].0, 2);
+    assert_eq!((cache.hits(), cache.misses()), (2, 1));
+    for (name, m) in [("[1,2] (miss)", &m12), ("[3,4] (hit)", &m34), ("[3,4] (hit, again)", &m34b)] {
+        assert_eq!(
+            outcome(|| verify_bound_stark_proof_pinned(&m.0, &vk2)),
+            Ok(()),
+            "{name} under the derived forest(2) VK"
+        );
+    }
+    #[cfg(feature = "zk")]
+    assert_ne!(
+        postcard::to_allocvec(&m34.0).unwrap(),
+        postcard::to_allocvec(&m34b.0).unwrap(),
+        "two hits must not share masks"
+    );
+    let state_at_4 = cm_commit(&s4);
+    let mut auditor = PrefixAuditor::new(cm::noop());
+    for m34 in [&m34, &m34b] {
+        let parts = [(&m12.0, ForestShape::forest(2)), (&m34.0, ForestShape::forest(2))];
+        assert_eq!(auditor.certify_prefix(&parts, &log, 4), Ok(state_at_4.clone()));
+    }
+    let root = cache.merge(&m12.0, &m34.0, 4);
+    assert_eq!(new_auditor(&root.0, &vk4, &log, &ForestShape::forest(4)), Ok(()));
 }
