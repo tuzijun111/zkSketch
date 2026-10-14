@@ -64,6 +64,11 @@ fn fold(mut forest: ForestCascade, trim: bool, label: &str) -> Vec<f64> {
         );
         assert!(!forest.peaks_hold_prover_data() || label.starts_with("retain"), "{label}: bare peaks");
         assert!(entries <= 1, "{label}: the cache holds at most its one entry");
+        if label.contains("cache") {
+            // The first merge (t = 2) fills the one entry; it stays.
+            assert_eq!(entries, usize::from(t >= 2), "{label}: one entry from t = 2 on");
+            assert_eq!(forest.holds_prover_data(), t >= 2, "{label}: the entry's prover data");
+        }
         rss.push(r);
     }
     let (root, merges) = forest.finalize();
@@ -106,12 +111,8 @@ fn rss_between_proofs_returns_near_the_first_leaf_level() {
             "with the cache, between-proof RSS grew {c_worst:.0} MiB over the post-first-leaf \
              level plus its one entry (> {SLACK_MB} MiB)"
         );
-        // Positive control: the pre-M0 fold does creep.
+        // Positive control: the pre-M0 fold does creep, by the same measure.
         assert!(old_worst > worst, "control: retaining + untrimmed grew only {old_worst:.0} MiB");
-        assert!(
-            old[old.len() - 1] - old[1] > c_worst,
-            "control: retaining + untrimmed grew only {:.0} MiB after t=2",
-            old[old.len() - 1] - old[1]
-        );
+        assert!(old_worst > SLACK_MB, "control: retaining + untrimmed grew only {old_worst:.0} MiB");
     }
 }
