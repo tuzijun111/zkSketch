@@ -167,7 +167,10 @@
 //!   the slice root keep each merge's prover data; default: bare proofs.
 //! - `EXP_MALLOC_TRIM=0` (off): no `malloc_trim(0)` after each leaf and
 //!   cascade step (workers) and after VK derivation / each query
-//!   (coordinator).
+//!   (coordinator). `EXP_MALLOC_TRIM=idle`: only before a process idles
+//!   (coordinator: after VK derivation, the audit and each query; worker:
+//!   after its slice and each cross-slice merge), never between a worker's
+//!   proofs (faster; the worker's resident set creeps instead).
 //! - `EXP_EXIT_BEFORE_AUDIT=0` (off): the procs coordinator audits before
 //!   sending the workers `Exit`, deriving the root VK from a fresh no-op
 //!   leaf; default: workers exit first and the root VK is derived through
@@ -175,10 +178,12 @@
 //! - `EXP_MERGE_CACHE=0` (off): every forest merge rebuilds its circuit and
 //!   preprocessed data; default: a prover-side cache of
 //!   `EXP_MERGE_CACHE_ENTRIES` (default 1) built merge circuits, smallest
-//!   subtrees first.
+//!   subtrees first. Each entry keeps its merge's prover data resident
+//!   (0.4-0.6 GB measured for GK and Bloom) through every later proof.
 //! Under `EXP_QUERY_LOG=1` the coordinator's `QLOG_PHASE` lines carry
 //! `unix_ms` (to align with an external RSS sampler) and each forest worker
-//! prints its merge-cache hits (`QLOG_WORKER`).
+//! prints its merge-cache hits and misses, finalization included, and its
+//! trim policy (`QLOG_WORKER`).
 //!
 //! RUNTIME WARNING: every leaf and every merge is a real STARK proof. Under
 //! `sim` everything proves sequentially (the k-machine split is a makespan

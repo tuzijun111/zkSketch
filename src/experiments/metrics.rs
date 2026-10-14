@@ -62,18 +62,62 @@ pub fn read_vmrss_kb() -> Option<u64> {
     None
 }
 
-/// `EXP_MALLOC_TRIM` (M0 harness switch): `0` disables [`trim_heap`] (the
-/// pre-M0 behaviour, where glibc keeps every freed heap page resident: an
-/// idle procs worker holds 2-3 GB of freed proving memory). Default on.
-pub fn malloc_trim_enabled() -> bool {
-    !std::env::var("EXP_MALLOC_TRIM").is_ok_and(|v| v.trim() == "0")
+/// Where the harness hands freed heap pages back to the OS
+/// (`EXP_MALLOC_TRIM`, M0 harness switch). Memory and time only: nothing a
+/// proof contains depends on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrimPolicy {
+    /// `0`: never (the pre-M0 behaviour, where glibc keeps every freed heap
+    /// page resident: an idle procs worker holds 2-3 GB of freed proving
+    /// memory).
+    Off,
+    /// `idle`: only before a process idles or hands over: the coordinator
+    /// after VK derivation, after the audit and around each query; a worker
+    /// after its slice's finalization and after each cross-slice merge. Not
+    /// between a worker's proofs, so the next proof reuses the freed pages
+    /// instead of faulting them back in (faster, but the worker's resident
+    /// set creeps by allocator fragmentation).
+    Idle,
+    /// Default (unset, `1`, any other value): the [`Idle`](Self::Idle)
+    /// sites plus after every worker leaf proof and cascade step (the
+    /// lowest resident set; each trim's pages are faulted back in by the
+    /// next proof).
+    Every,
 }
 
-/// Return freed heap pages to the OS (`malloc_trim(0)`, glibc only; a no-op
-/// elsewhere and under `EXP_MALLOC_TRIM=0`). Memory only: nothing a proof
-/// contains depends on it. Returns whether it trimmed.
+/// The `EXP_MALLOC_TRIM` policy ([`TrimPolicy`]).
+pub fn trim_policy() -> TrimPolicy {
+    parse_trim_policy(std::env::var("EXP_MALLOC_TRIM").ok().as_deref())
+}
+
+/// [`trim_policy`] of an `EXP_MALLOC_TRIM` value (`None`: unset).
+pub fn parse_trim_policy(value: Option<&str>) -> TrimPolicy {
+    match value.map(str::trim) {
+        Some("0") => TrimPolicy::Off,
+        Some(v) if v.eq_ignore_ascii_case("idle") => TrimPolicy::Idle,
+        _ => TrimPolicy::Every,
+    }
+}
+
+/// Whether [`trim_heap`] trims (`EXP_MALLOC_TRIM` is not `0`).
+pub fn malloc_trim_enabled() -> bool {
+    trim_policy() != TrimPolicy::Off
+}
+
+/// Return freed heap pages to the OS at an idle / hand-over site
+/// (`malloc_trim(0)`, glibc only; a no-op elsewhere and under
+/// `EXP_MALLOC_TRIM=0`). Returns whether it trimmed.
 pub fn trim_heap() -> bool {
     if !malloc_trim_enabled() {
+        return false;
+    }
+    trim_heap_now()
+}
+
+/// [`trim_heap`] at a site BETWEEN a worker's proofs (after a leaf proof or a
+/// cascade step): only under [`TrimPolicy::Every`] (the default).
+pub fn trim_heap_between_proofs() -> bool {
+    if trim_policy() != TrimPolicy::Every {
         return false;
     }
     trim_heap_now()
@@ -382,6 +426,19 @@ mod tests {
         assert_eq!(n, 6);
         assert_eq!(row.constraint_count, 24);
         assert!(row.prove_total_ms_median >= 3.0);
+    }
+
+    /// M0: `EXP_MALLOC_TRIM` values. `0` is the pre-M0 behaviour (never),
+    /// `idle` skips the between-proof sites, anything else is the default.
+    #[test]
+    fn m0_trim_policy_values() {
+        assert_eq!(parse_trim_policy(None), TrimPolicy::Every);
+        assert_eq!(parse_trim_policy(Some("1")), TrimPolicy::Every);
+        assert_eq!(parse_trim_policy(Some("0")), TrimPolicy::Off);
+        assert_eq!(parse_trim_policy(Some(" 0 ")), TrimPolicy::Off);
+        assert_eq!(parse_trim_policy(Some("idle")), TrimPolicy::Idle);
+        assert_eq!(parse_trim_policy(Some("IDLE")), TrimPolicy::Idle);
+        assert_eq!(parse_trim_policy(Some("")), TrimPolicy::Every);
     }
 
     #[test]

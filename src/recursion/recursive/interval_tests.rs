@@ -1537,16 +1537,25 @@ fn twin_merge_root_rejected_by_root_vk() {
 // ─── M0 harness switches: bare peaks and the merge cache ────────────────────
 
 /// M0 (`EXP_FOREST_RETAIN_PREP`, `EXP_MERGE_CACHE`): a cascade over 4 no-op
-/// Count-Min leaves (one shared leaf circuit, batches of `value = 0` records)
-/// with bare peaks and a one-entry merge cache holds NO prover data, by type:
-/// every peak is a `&BatchStarkProof` (`peaks()`), `holds_prover_data()` is
-/// false after every push, the cascade never keeps a reference to the leaf
-/// circuit's prover data (its `Rc` count drops back as each leaf is pushed),
-/// and the root comes back as `PeakProof::Bare`. The pre-M0 cascade
-/// (`ForestCascade::retaining`) does hold it. Both roots have the same VK,
-/// metadata and statement, and both verify against the root VK derived from
-/// public parameters and the batch log; the cached cascade's second
-/// level-1 merge (`[3, 4]`) was a cache hit.
+/// Count-Min leaves (one shared leaf circuit, batches of `value = 0` records),
+/// in three configurations:
+/// - **bare peaks, no merge cache**: the cascade holds NO prover data, by
+///   type: every peak is a `&BatchStarkProof` (`peaks()`),
+///   `holds_prover_data()` (peaks and cache) is false after every push, the
+///   cascade never keeps a reference to the leaf circuit's prover data (its
+///   `Rc` count drops back as each leaf is pushed), and the root comes back as
+///   `PeakProof::Bare`;
+/// - **bare peaks, one-entry merge cache** (the M0 default): the peaks hold
+///   none (`peaks_hold_prover_data()` false after every push, no leaf-prep
+///   handle), and the only prover data the cascade keeps is the cache's one
+///   entry, from the first merge on (`holds_prover_data()` true exactly when
+///   the cache is non-empty); the second level-1 merge (`[3, 4]`) was a cache
+///   hit;
+/// - **the pre-M0 cascade** (`ForestCascade::retaining`): its peaks do hold it.
+///
+/// All three roots have the same VK, metadata and statement, and each
+/// verifies against the root VK derived from public parameters and the batch
+/// log.
 #[test]
 fn m0_cascade_over_noop_leaves_holds_no_prover_data() {
     use std::rc::Rc;
@@ -1563,48 +1572,68 @@ fn m0_cascade_over_noop_leaves_holds_no_prover_data() {
     let shape = ForestShape::forest(4);
     let vk = root_vk_deriver(cm::noop()).root_vk(&shape);
 
+    // Per push: (peaks hold prover data, the cascade as a whole holds some,
+    // cache entries); then the root and the cache's (hits, misses).
+    type Held = Vec<(bool, bool, usize)>;
     let run = |mut forest: ForestCascade, leaf: &mut crate::sketch::countmin_omc::CmOmcLeafCircuit| {
         let (outs, _) = cm::leaves_at(leaf, &s0, &batches, &[1, 2, 3, 4]);
         let n = outs.len();
+        let mut held_log: Held = Vec::new();
         for (k, out) in outs.into_iter().enumerate() {
             let prep = Rc::downgrade(&out.1);
             forest.push(out);
             // Handles outside the cascade: the leaf circuit's own and the
-            // outputs not pushed yet. Bare: the cascade holds none.
+            // outputs not pushed yet. Bare: the cascade holds none (a cache
+            // entry is a MERGE circuit's prover data, never a leaf's).
             // Retaining: a lone leaf peak (t = 1, 3) holds one.
             let held = prep.strong_count() - (1 + n - (k + 1));
             let peaks: Vec<(u64, u64, &Proof)> = forest.peaks();
             assert_eq!(peaks.len(), (k + 1).count_ones() as usize);
+            let entries = forest.merge_cache().map_or(0, |c| c.len());
             println!(
-                "M0 push t={} leaf_prep_handles_in_cascade={held} holds_prover_data={}",
+                "M0 push t={} leaf_prep_handles_in_cascade={held} peaks_hold_prover_data={} \
+                 holds_prover_data={} cache_entries={entries}",
                 k + 1,
-                forest.holds_prover_data()
+                forest.peaks_hold_prover_data(),
+                forest.holds_prover_data(),
             );
-            assert_eq!(held, usize::from(forest.holds_prover_data() && (k + 1) % 2 == 1));
+            assert_eq!(held, usize::from(forest.peaks_hold_prover_data() && (k + 1) % 2 == 1));
+            held_log.push((forest.peaks_hold_prover_data(), forest.holds_prover_data(), entries));
         }
-        let stats = forest.merge_cache().map(|c| (c.hits(), c.misses()));
-        let held = forest.holds_prover_data();
-        let (root, merges) = forest.finalize();
+        let (root, merges, stats) = forest.finalize_with_stats();
         assert_eq!(merges, 0, "t = 4 is one perfect tree");
-        (root, held, stats)
+        (root, held_log, stats)
     };
 
-    let (bare, held, stats) =
-        run(ForestCascade::with_options(1, false, Some(MergeCache::new(1))), &mut leaf);
-    assert!(!held, "bare cascade holds no prover data");
+    // Bare peaks, no cache: nothing at all, after every push.
+    let (bare, held, stats) = run(ForestCascade::with_options(1, false, None), &mut leaf);
+    assert!(held.iter().all(|h| *h == (false, false, 0)), "bare cascade holds no prover data: {held:?}");
     assert!(matches!(bare, PeakProof::Bare(_)), "bare root");
+    assert_eq!(stats, None);
+
+    // Bare peaks + the default one-entry cache: only the cache's entry, from
+    // the first merge (t = 2) on.
+    let (cached, held, stats) =
+        run(ForestCascade::with_options(1, false, Some(MergeCache::new(1))), &mut leaf);
+    let expect: Held = vec![(false, false, 0), (false, true, 1), (false, true, 1), (false, true, 1)];
+    assert_eq!(held, expect, "peaks bare; the cascade's prover data is the one cache entry");
+    assert!(matches!(cached, PeakProof::Bare(_)), "bare root");
     assert_eq!(stats, Some((1, 2)), "merge [3, 4] reused the [1, 2] circuit");
 
+    // The pre-M0 cascade: the peaks keep the merges' prover data.
     let (old, held_old, stats_old) = run(ForestCascade::retaining(1), &mut leaf);
-    assert!(held_old, "the pre-M0 cascade keeps the merge's prover data");
+    assert!(held_old.iter().all(|h| h.0 && h.1 && h.2 == 0), "pre-M0 peaks hold it: {held_old:?}");
     assert!(matches!(old, PeakProof::Retained(_)));
     assert_eq!(stats_old, None);
 
-    assert_eq!(vk_pin_values(bare.proof()), vk_pin_values(old.proof()), "same root VK");
-    assert_eq!(bound_proof_shape(bare.proof()), bound_proof_shape(old.proof()));
-    assert_eq!(read_exposed_statement(bare.proof()), read_exposed_statement(old.proof()));
-    assert_eq!(new_auditor(bare.proof(), &vk, &log, &shape), Ok(()));
-    assert_eq!(new_auditor(old.proof(), &vk, &log, &shape), Ok(()));
+    for root in [&bare, &cached] {
+        assert_eq!(vk_pin_values(root.proof()), vk_pin_values(old.proof()), "same root VK");
+        assert_eq!(bound_proof_shape(root.proof()), bound_proof_shape(old.proof()));
+        assert_eq!(read_exposed_statement(root.proof()), read_exposed_statement(old.proof()));
+    }
+    for root in [&bare, &cached, &old] {
+        assert_eq!(new_auditor(root.proof(), &vk, &log, &shape), Ok(()));
+    }
 }
 
 /// M0 (`EXP_MERGE_CACHE`): every CACHE-HIT merge natively verifies against

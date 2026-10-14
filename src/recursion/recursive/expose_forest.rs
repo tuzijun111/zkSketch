@@ -470,9 +470,11 @@ struct MergeCacheEntry {
     left_result: MergeVerifierResult,
     right_result: MergeVerifierResult,
     /// The fork's slot: the circuit's prover data (AIRs + preprocessed
-    /// commitment) and its prover. The fork re-checks the circuit's
-    /// fingerprint (op count, witness count, every constant) against it on
-    /// every use.
+    /// commitment) and its prover. The fork compares the fingerprint of the
+    /// circuit it is handed with the one stored here, but a hit always hands
+    /// it [`Self::circuit`], from which this slot was built, so that check
+    /// cannot fail here: whether a hit is the right circuit rests on
+    /// [`MergeCacheKey`] alone.
     prep: Option<AggregationPrepCache<ConfigWithFriParams>>,
 }
 
@@ -486,7 +488,10 @@ struct MergeCacheEntry {
 /// fork's [`AggregationPrepCache`] (the AIRs and the preprocessed commitment),
 /// about 1.1 s per merge. The key is [`MergeCacheKey`] (both children's VK
 /// values and [`BoundProofShape`], whether their common data was rebuilt, and
-/// the mode); the fork's circuit fingerprint is a second guard on the prep.
+/// the mode), and it is the only guard: on a hit the fork's circuit
+/// fingerprint is computed from the cached circuit itself, so it is not a
+/// second, independent check (the tests pin every hit to the merge VK derived
+/// without the cache, [`hiding_merge_vk`] / [`root_vk_deriver`]).
 ///
 /// It never feeds the auditor: VKs are always derived independently from
 /// public parameters ([`root_vk_deriver`]), so a mis-keyed entry could only
@@ -494,9 +499,10 @@ struct MergeCacheEntry {
 /// prover's mask RNG advances from proof to proof (and `ZkRng` reseeds from
 /// the OS on clone).
 ///
-/// An entry holds a merge's prover data (about 1 GB under ZK), so the cache
-/// is bounded: at most `capacity` entries, ranked by the merged subtree's
-/// leaf count. A new circuit is admitted while there is room, or in place of
+/// An entry holds a merge's prover data (0.4-1.1 GB under ZK, measured) and
+/// keeps it resident through every later leaf proof and uncached merge
+/// ([`Self::holds_prover_data`]), so the cache is bounded: at most
+/// `capacity` entries, ranked by the merged subtree's leaf count. A new circuit is admitted while there is room, or in place of
 /// the largest-rank entry (the least recently used among equals) when its own
 /// rank is not larger; otherwise the merge is proved uncached. With one
 /// entry, a Bentley–Saxe cascade keeps its two-leaf merge circuit, which
@@ -530,6 +536,12 @@ impl MergeCache {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Whether an entry pins a merge circuit's prover data (the fork's
+    /// [`AggregationPrepCache`]: AIRs, preprocessed commitment, prover).
+    pub fn holds_prover_data(&self) -> bool {
+        self.entries.iter().any(|e| e.prep.is_some())
     }
 
     /// Whether the real merge of `left` and `right` would reuse a cached circuit.
@@ -1311,8 +1323,10 @@ pub fn prove_forest_over(
 /// merge reads only its children's proofs, so the merge circuit's prover
 /// data is dropped as soon as the merge returns; `EXP_FOREST_RETAIN_PREP=1`
 /// keeps whole [`RecursionOutput`]s as before. Merges go through a
-/// [`MergeCache`] unless `EXP_MERGE_CACHE=0`. Neither changes a proof's
-/// circuit, VK or statement.
+/// [`MergeCache`] unless `EXP_MERGE_CACHE=0`; its entries are the only
+/// prover data a bare cascade keeps ([`Self::holds_prover_data`] counts
+/// them, [`Self::peaks_hold_prover_data`] does not). Neither changes a
+/// proof's circuit, VK or statement.
 pub struct ForestCascade {
     first_index: u64,
     /// `(size, proof)`, left to right.
@@ -1352,8 +1366,15 @@ impl ForestCascade {
 
     /// Whether any live peak still pins a circuit's prover data (only under
     /// `retain_prep`).
-    pub fn holds_prover_data(&self) -> bool {
+    pub fn peaks_hold_prover_data(&self) -> bool {
         self.peaks.iter().any(|(_, p)| p.holds_prover_data())
+    }
+
+    /// Whether the cascade pins any circuit's prover data: a retained peak, or
+    /// a [`MergeCache`] entry (at most its capacity, by design).
+    pub fn holds_prover_data(&self) -> bool {
+        self.peaks_hold_prover_data()
+            || self.cache.as_ref().is_some_and(MergeCache::holds_prover_data)
     }
 
     /// The merge cache, if any (hit / miss counters).
@@ -1408,7 +1429,14 @@ impl ForestCascade {
     /// finalization); returns it with the number of merges. A one-leaf forest
     /// returns the lone leaf. The root is kept like a peak (bare unless
     /// `retain_prep`).
-    pub fn finalize(mut self) -> (PeakProof, u32) {
+    pub fn finalize(self) -> (PeakProof, u32) {
+        let (root, merges, _) = self.finalize_with_stats();
+        (root, merges)
+    }
+
+    /// [`Self::finalize`], also returning the merge cache's final `(hits,
+    /// misses)`, the finalization's own merges included (`None`: no cache).
+    pub fn finalize_with_stats(mut self) -> (PeakProof, u32, Option<(u64, u64)>) {
         assert!(!self.peaks.is_empty(), "finalize an empty forest");
         let peaks = std::mem::take(&mut self.peaks);
         let mut peaks = peaks.into_iter();
@@ -1420,7 +1448,8 @@ impl ForestCascade {
             acc = PeakProof::keep(merged, self.retain_prep);
             merges += 1;
         }
-        (acc, merges)
+        let stats = self.cache.as_ref().map(|c| (c.hits(), c.misses()));
+        (acc, merges, stats)
     }
 }
 

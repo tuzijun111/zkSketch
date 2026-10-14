@@ -201,7 +201,7 @@ use crate::sketch::ss_final_full_gl::{
 
 use super::audit::{self, PublicParams};
 use super::families::cm_empty;
-use super::metrics::trim_heap;
+use super::metrics::{trim_heap, trim_heap_between_proofs};
 use super::prover_commit::ProverCommit;
 use super::stream_compose::{
     bloom_keys_of, cm_updates_of, gk_vals_of, hll_keys_of, kmv_advance_records, kmv_records_of,
@@ -1496,8 +1496,9 @@ fn worker_session(s: &mut UnixStream) {
         let (output, prove_ms, verify_ms) =
             state.prove_leaf(&mut leaf, first_index + i as u64, batch, LeafOpen::Real(&commit));
         state.advance(&shape, batch);
-        // Release the leaf proof's freed working memory (`EXP_MALLOC_TRIM`).
-        trim_heap();
+        // Release the leaf proof's freed working memory (`EXP_MALLOC_TRIM`,
+        // default policy only).
+        trim_heap_between_proofs();
         // The final commitment this leaf's proof EXPOSES (the value a query
         // at this version must open), reported before its `LeafDone`.
         let final_commit = read_exposed_boundary_proof(&output.0).1 .0;
@@ -1537,8 +1538,9 @@ fn worker_session(s: &mut UnixStream) {
             }
         };
         if cascade_merges > 0 {
-            // Outside the cascade timing (`EXP_MALLOC_TRIM`).
-            trim_heap();
+            // Outside the cascade timing (`EXP_MALLOC_TRIM`, default policy
+            // only).
+            trim_heap_between_proofs();
         }
         // A query fires after this leaf: ship what certifies it (outside
         // the cascade timing; peaks are immutable, so each goes once).
@@ -1590,20 +1592,18 @@ fn worker_session(s: &mut UnixStream) {
         }
         StreamMode::Forest => {
             // Finalize surviving peaks left-to-right into the slice root.
-            let cache_stats = forest.merge_cache().map(|c| (c.hits(), c.misses()));
             let t0 = Instant::now();
-            let (acc, merges) = forest.finalize();
+            let (acc, merges, cache_stats) = forest.finalize_with_stats();
             let finalize_ms = t0.elapsed().as_secs_f64() * 1000.0;
-            if merges > 0 {
-                trim_heap();
-            }
             if super::stream_compose::qlog_on() {
-                // Logging only: the slice cascade's merge-cache use (before
-                // the finalize merges) and whether peaks kept prover data.
+                // Logging only: the slice's merge-cache use (the finalize
+                // merges included), whether peaks kept prover data and the
+                // trim policy.
                 eprintln!(
-                    "QLOG_WORKER,first_index={first_index},merge_cache={},retain_prep={retain_prep},trim={}",
+                    "QLOG_WORKER,first_index={first_index},merge_cache={},finalize_merges={merges},\
+                     retain_prep={retain_prep},trim={:?}",
                     cache_stats.map_or("off".to_string(), |(h, m)| format!("hits={h};misses={m}")),
-                    super::metrics::malloc_trim_enabled()
+                    super::metrics::trim_policy()
                 );
             }
             let root_bytes = ship_root
@@ -1617,6 +1617,10 @@ fn worker_session(s: &mut UnixStream) {
         }
         StreamMode::PerBatch => {}
     }
+    // The slice is done and reported: the worker now idles until the
+    // coordinator's next command (`EXP_MALLOC_TRIM`, every policy but `0`;
+    // outside every timing).
+    trim_heap();
 
     // Command loop: forest reduction merges / root shipping / exit.
     loop {
@@ -1697,7 +1701,7 @@ fn worker_session_gl(s: &mut UnixStream) {
         let (output, prove_ms, verify_ms) =
             state.prove_leaf(&mut leaf, first_index + i as u64, batch, LeafOpen::Real(&commit));
         state.advance(&shape, batch);
-        trim_heap(); // `EXP_MALLOC_TRIM`
+        trim_heap_between_proofs(); // `EXP_MALLOC_TRIM`, default policy only
 
         let (mut cascade_ms, mut cascade_merges) = (0.0f64, 0u32);
         let proof_bytes = match mode {
@@ -1743,7 +1747,8 @@ fn worker_session_gl(s: &mut UnixStream) {
             }
         };
         if cascade_merges > 0 {
-            trim_heap(); // outside the cascade timing (`EXP_MALLOC_TRIM`)
+            // Outside the cascade timing (`EXP_MALLOC_TRIM`, default policy only).
+            trim_heap_between_proofs();
         }
         send_msg(
             s,
@@ -1794,6 +1799,10 @@ fn worker_session_gl(s: &mut UnixStream) {
         }
         StreamMode::PerBatch => {}
     }
+    // The slice is done and reported: the worker now idles until the
+    // coordinator's next command (`EXP_MALLOC_TRIM`, every policy but `0`;
+    // outside every timing).
+    trim_heap();
 
     // Command loop: forest reduction merges / root shipping / exit.
     loop {

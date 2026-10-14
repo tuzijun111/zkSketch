@@ -18,7 +18,8 @@
 #   EXP_FOREST_RETAIN_PREP, EXP_MALLOC_TRIM, EXP_EXIT_BEFORE_AUDIT, EXP_MERGE_CACHE,
 #   EXP_MERGE_CACHE_ENTRIES  M0 harness switches, passed through (all other EXP_* are dropped);
 #                    unset = the new default. Pre-M0 behaviour: EXP_FOREST_RETAIN_PREP=1
-#                    EXP_MALLOC_TRIM=0 EXP_EXIT_BEFORE_AUDIT=0 EXP_MERGE_CACHE=0
+#                    EXP_MALLOC_TRIM=0 EXP_EXIT_BEFORE_AUDIT=0 EXP_MERGE_CACHE=0.
+#                    EXP_MALLOC_TRIM=idle trims only before a process idles, not between proofs
 # Exit status 0 only if every run exited 0 and wrote a CSV row with status=ok.
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
