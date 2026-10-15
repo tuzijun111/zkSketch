@@ -303,15 +303,22 @@ pub const HARNESS_DEFAULT_BLOOM_VARIANT: StreamFamily = StreamFamily::BloomOmc;
 /// [`HARNESS_DEFAULT_BLOOM_VARIANT`]). The explicit tokens `bloom_omc` and
 /// `bloom_packed` ignore it. A PUBLIC parameter (the two variants prove the
 /// same filter under different leaf, decode and root VKs and commitment
-/// families); the CSV `variant` column records it. A bad value panics.
+/// families); the CSV `variant` column records it. A bad value panics
+/// ([`try_bloom_variant_from_env`] reports it instead).
 pub fn bloom_variant_from_env() -> StreamFamily {
+    try_bloom_variant_from_env().unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`bloom_variant_from_env`] without the panic: a bad value is an error
+/// naming the accepted ones.
+pub fn try_bloom_variant_from_env() -> Result<StreamFamily, String> {
     match std::env::var("EXP_BLOOM_VARIANT") {
-        Err(_) => HARNESS_DEFAULT_BLOOM_VARIANT,
+        Err(_) => Ok(HARNESS_DEFAULT_BLOOM_VARIANT),
         Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
-            "" => HARNESS_DEFAULT_BLOOM_VARIANT,
-            "omc" | "bits" => StreamFamily::BloomOmc,
-            "packed" | "b1" | "bytes" => StreamFamily::BloomPacked,
-            other => panic!("EXP_BLOOM_VARIANT={other}: omc | packed"),
+            "" => Ok(HARNESS_DEFAULT_BLOOM_VARIANT),
+            "omc" | "bits" => Ok(StreamFamily::BloomOmc),
+            "packed" | "b1" | "bytes" => Ok(StreamFamily::BloomPacked),
+            other => Err(format!("EXP_BLOOM_VARIANT={other}: must be omc or packed")),
         },
     }
 }

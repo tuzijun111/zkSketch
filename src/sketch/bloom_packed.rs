@@ -70,13 +70,13 @@
 //! | A1 | `O_u, N_u ∈ [0,256)` | one byte lookup each | `o_pin`, `n_pin` |
 //! | A2 | `ft_u = flo + 2^8·fhi`, bytes ∈ [0,256) | 1 `mul_add`, 2 lookups | `ft_range` |
 //! | A3 | `Com(S_{t-1}) = H(pack(O))`, `Com(S_t) = H(pack(N))` | ALU packing, bound sponge | — |
-//! | B1 | `act ∈ {0,1}`, key limb `k_j = b_{2j} + 2^8·b_{2j+1}`, bytes ∈ [0,256) | BoolCheck, 4 `mul_add`, 8 lookups | — |
+//! | B1 | `act ∈ {0,1}`, key limb `k_j = b_{2j} + 2^8·b_{2j+1}`, bytes ∈ [0,256) | BoolCheck, 4 `mul_add`, 8 lookups | `act_bool`, `key_range` |
 //! | B2 | `act = 0 ⇒ k_0 + k_1 + k_2 + k_3 = 0` | 5 ALU | `dummy_canon` |
 //! | B3 | `rec = [k0, k1, k2, k3 + 2^16·act]`, `h = Poseidon2(rec)` (zero IV) | ALU recompose, bound sponge | — |
 //! | B4 | per slice: `i_0, i_1, i_2 ∈ {0,1}` | 3 BoolCheck | `i_bool` |
 //! | B5 | per slice: `q` from its bytes, `q ∈ [0, 2^{log_w−3})` exact | Horner + lookups (+1 shifted lookup) | `q_range` |
 //! | B6 | per slice: `hi` from bytes, `HI_MAX − hi` from bytes, `(HI_MAX − hi = 0) ⇒ pos = 0` | Horner + lookups, inverse trick | `canon` |
-//! | B7 | `digest[j] = 2^log_w·hi + 8q + i_0 + 2i_1 + 4i_2`, unused limbs from 4 bytes; `recompose(limbs) = h` | ALU | — |
+//! | B7 | `digest[j] = 2^log_w·hi + 8q + i_0 + 2i_1 + 4i_2`, unused limbs from 4 bytes; `recompose(limbs) = h` | ALU + lookups | `unused_limbs` |
 //! | B8 | `Com(B_t) = H(recs)`; Interval: `t` pinned, `H(TAG_LEAF, t, Com(B_t))` exposed | bound sponge | — |
 //! | D1 | `e = (1 + i_0)(1 + 3i_1)(1 + 15i_2)` | 5 ALU | — |
 //! | D2 | `c ∈ {0,1}` | BoolCheck | `c_bool` |
@@ -176,111 +176,244 @@ fn p_u64() -> u64 {
     <Val as PrimeField64>::ORDER_U64
 }
 
-// ─── Test switches ────────────────────────────────────────────────────────
+// ─── Test switches (positive controls) ────────────────────────────────────
 
-/// Which checks a leaf / query circuit is BUILT with. Every field is `true`
-/// in production; tests clear one at a time (via [`with_checks`]) to show the
-/// check is load-bearing (positive controls). A cleared check keeps its
-/// witnesses consumed by the remaining ALU rows, so the circuit still builds.
+/// **Every check of the packed leaf and the packed query, one switch each:
+/// the single place that lists them.** The deployed circuits are built with
+/// [`PackedChecks::ALL`], and outside `cfg(test)` that is the only set
+/// ([`checks`] ignores everything else), so no production caller can build a
+/// weakened circuit. A test removes ONE check with `with_checks` /
+/// `PackedChecks::without` (both `cfg(test)`) to build the positive-control
+/// circuit of a trace-level attack (plan §4.0 G-sound): with the check off
+/// the forgery must verify AND certify a wrong state or answer; with it on,
+/// the AIR, LogUp or range argument must reject it (not the witness runner).
+///
+/// Every single switch is clean (`check_switches_are_clean`): the circuit
+/// without that one check still proves an honest witness, and its VK differs
+/// from the deployed VK in exactly the circuits the check belongs to (and
+/// equals it in the other). A removed check leaves its witnesses consumed by
+/// the remaining ALU rows, so the WitnessChecks bus still balances.
+///
+/// | switch | circuit | constraint | what it stops (test) |
+/// |---|---|---|---|
+/// | `o_pin` | leaf | A1 `O_u ∈ [0,256)` | an extension-valued old byte (A6, old side) |
+/// | `n_pin` | leaf | A1 `N_u ∈ [0,256)` | an extension-valued new byte (`attack_extension_valued_new_byte`) |
+/// | `ft_range` | leaf | A2 `ft_u = flo + 2^8·fhi`, both bytes | a final-timestamp transplant (`attack_final_timestamp_transplant`) |
+/// | `act_bool` | leaf | B1 `act ∈ {0,1}` | a non-boolean activity flag |
+/// | `key_range` | leaf, query | B1 / Q3 the 8 key bytes `∈ [0,256)` (limbs `< 2^16`) | a record re-encoded with `act = 0` or as another key |
+/// | `dummy_canon` | leaf | B2 `act = 0 ⇒ k_0 + k_1 + k_2 + k_3 = 0` | a non-canonical dummy slot |
+/// | `i_bool` | leaf, query | B4 / Q3 `i_0, i_1, i_2 ∈ {0,1}` | a non-power-of-two `e` (`attack_nonboolean_position_bits`) |
+/// | `q_range` | leaf, query | B5 / Q3 `q ∈ [0, W/8)` exactly | a word of the next slice (`attack_word_index_shift`) |
+/// | `canon` | leaf, query | B6 / Q3 `hi ≤ HI_MAX`, `hi = HI_MAX ⇒ pos = 0` | the `x + p` split (`attack_noncanonical_split`) |
+/// | `unused_limbs` | leaf, query | B7 / Q3 each unused digest limb from 4 bytes | an extension-valued limb that moves a used limb in the recomposition |
+/// | `c_bool` | leaf, query | D2 / Q6 `c ∈ {0,1}` | `c = 2` (`attack_nonboolean_c`) |
+/// | `h_range` | leaf, query | D3 / Q6 `H ∈ [0,256)` | `attack_suppress_huge_h`, `attack_carry_huge_h` |
+/// | `l_nonneg` | leaf, query | D4 / Q6 `L ∈ [0,256)` | `attack_suppress_negative_l`, `attack_carry_negative_l` |
+/// | `l_lt_e` | leaf, query | D5 / Q6 `L < e` | `attack_carry_l_plus_e` |
+/// | `ts_lt_tau` | leaf | D8 the gap bytes, `ts ≤ τ_p − 1` | a self or future read (`attack_self_read`) |
+/// | `cell_pin` | query | Q1 `S_u ∈ [0,256)` | an extension-valued state byte |
+/// | `sel_bool` | query | Q4 `s1, s2` boolean | a signed selector combination |
+/// | `onehot_sum` | query | Q4 `Σ s1 = Σ s2 = 1` | a two-hot selector (`two_hot_selector_needs_the_onehot_sum`) |
+///
+/// The constraints without a switch ARE the relation: the packing and the
+/// commitments, the record recomposition and hash, the digest recomposition,
+/// the split and OR identities, the memory-checking elements and the Permute
+/// op, the selector-index and selected-value connects, and the answer
+/// product. The ConstAir binding of the word-address and timestamp constants
+/// has its own test-only hook, [`ConstSkew`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PackedChecks {
-    /// D2: `c ∈ {0,1}`.
-    pub c_bool: bool,
-    /// D3: `H ∈ [0,256)`.
-    pub h_range: bool,
-    /// D4: `L ∈ [0,256)` (`L ≥ 0`).
-    pub l_nonneg: bool,
-    /// D5: `L < e`.
-    pub l_lt_e: bool,
-    /// D8: the read-timestamp gap bytes (`ts ≤ τ − 1`).
-    pub ts_lt_tau: bool,
-    /// A2: the final-timestamp bytes.
-    pub ft_range: bool,
     /// A1: the old-state byte pins.
     pub o_pin: bool,
     /// A1: the new-state byte pins.
     pub n_pin: bool,
-    /// B4: the position bits.
-    pub i_bool: bool,
-    /// B5: the in-slice word index range.
-    pub q_range: bool,
-    /// B6: `hi ≤ HI_MAX` and the `hi = HI_MAX ⇒ pos = 0` edge.
-    pub canon: bool,
+    /// A2: the final-timestamp bytes.
+    pub ft_range: bool,
+    /// B1: `act ∈ {0,1}`.
+    pub act_bool: bool,
+    /// B1 / Q3: the key-byte lookups.
+    pub key_range: bool,
     /// B2: dummy records are canonical.
     pub dummy_canon: bool,
-    /// Query: the one-hot selector sums (`Σ s = 1`).
-    pub onehot_sum: bool,
-    /// Query: the opened cells' byte pins.
+    /// B4 / Q3: the position bits.
+    pub i_bool: bool,
+    /// B5 / Q3: the in-slice word index range.
+    pub q_range: bool,
+    /// B6 / Q3: `hi ≤ HI_MAX` and the `hi = HI_MAX ⇒ pos = 0` edge.
+    pub canon: bool,
+    /// B7 / Q3: the byte lookups of the unused digest limbs.
+    pub unused_limbs: bool,
+    /// D2 / Q6: `c ∈ {0,1}`.
+    pub c_bool: bool,
+    /// D3 / Q6: `H ∈ [0,256)`.
+    pub h_range: bool,
+    /// D4 / Q6: `L ∈ [0,256)` (`L ≥ 0`).
+    pub l_nonneg: bool,
+    /// D5 / Q6: `L < e`.
+    pub l_lt_e: bool,
+    /// D8: the read-timestamp gap bytes (`ts ≤ τ − 1`).
+    pub ts_lt_tau: bool,
+    /// Q1: the state-byte pins of the query.
     pub cell_pin: bool,
+    /// Q4: the selector BoolChecks.
+    pub sel_bool: bool,
+    /// Q4: the one-hot selector sums (`Σ s = 1`).
+    pub onehot_sum: bool,
 }
 
 impl PackedChecks {
     /// Every check on (the deployed circuits).
     pub const ALL: Self = PackedChecks {
+        o_pin: true,
+        n_pin: true,
+        ft_range: true,
+        act_bool: true,
+        key_range: true,
+        dummy_canon: true,
+        i_bool: true,
+        q_range: true,
+        canon: true,
+        unused_limbs: true,
         c_bool: true,
         h_range: true,
         l_nonneg: true,
         l_lt_e: true,
         ts_lt_tau: true,
-        ft_range: true,
-        o_pin: true,
-        n_pin: true,
-        i_bool: true,
-        q_range: true,
-        canon: true,
-        dummy_canon: true,
-        onehot_sum: true,
         cell_pin: true,
+        sel_bool: true,
+        onehot_sum: true,
     };
+
+    /// Every switch: `(name, in the leaf, in the query)`, in table order.
+    #[cfg(test)]
+    pub(crate) const SWITCHES: [(&'static str, bool, bool); 18] = [
+        ("o_pin", true, false),
+        ("n_pin", true, false),
+        ("ft_range", true, false),
+        ("act_bool", true, false),
+        ("key_range", true, true),
+        ("dummy_canon", true, false),
+        ("i_bool", true, true),
+        ("q_range", true, true),
+        ("canon", true, true),
+        ("unused_limbs", true, true),
+        ("c_bool", true, true),
+        ("h_range", true, true),
+        ("l_nonneg", true, true),
+        ("l_lt_e", true, true),
+        ("ts_lt_tau", true, false),
+        ("cell_pin", false, true),
+        ("sel_bool", false, true),
+        ("onehot_sum", false, true),
+    ];
+
+    /// All checks on except `name` (one of [`Self::SWITCHES`]).
+    #[cfg(test)]
+    pub(crate) fn without(name: &str) -> Self {
+        let mut c = Self::ALL;
+        let f = match name {
+            "o_pin" => &mut c.o_pin,
+            "n_pin" => &mut c.n_pin,
+            "ft_range" => &mut c.ft_range,
+            "act_bool" => &mut c.act_bool,
+            "key_range" => &mut c.key_range,
+            "dummy_canon" => &mut c.dummy_canon,
+            "i_bool" => &mut c.i_bool,
+            "q_range" => &mut c.q_range,
+            "canon" => &mut c.canon,
+            "unused_limbs" => &mut c.unused_limbs,
+            "c_bool" => &mut c.c_bool,
+            "h_range" => &mut c.h_range,
+            "l_nonneg" => &mut c.l_nonneg,
+            "l_lt_e" => &mut c.l_lt_e,
+            "ts_lt_tau" => &mut c.ts_lt_tau,
+            "cell_pin" => &mut c.cell_pin,
+            "sel_bool" => &mut c.sel_bool,
+            "onehot_sum" => &mut c.onehot_sum,
+            other => panic!("unknown PackedChecks switch {other:?}"),
+        };
+        *f = false;
+        c
+    }
 }
 
+#[cfg(test)]
 thread_local! {
+    /// Test-only: the checks the leaf and query circuits built on this
+    /// thread get.
     static CHECKS: std::cell::Cell<PackedChecks> = const { std::cell::Cell::new(PackedChecks::ALL) };
 }
 
-/// Run `f` (which builds circuits) with `checks` in force on this thread,
-/// then restore every check (test-only positive controls).
-pub fn with_checks<T>(checks: PackedChecks, f: impl FnOnce() -> T) -> T {
-    struct Restore;
+/// The checks a circuit built on this thread gets: always
+/// [`PackedChecks::ALL`] outside tests.
+pub(crate) fn checks() -> PackedChecks {
+    #[cfg(test)]
+    {
+        CHECKS.with(|c| c.get())
+    }
+    #[cfg(not(test))]
+    {
+        PackedChecks::ALL
+    }
+}
+
+/// Test-only: build the leaf / query circuits inside `f` with `checks` (one
+/// check removed, for a positive control); restores the previous set
+/// afterwards, also on a panic.
+#[cfg(test)]
+pub(crate) fn with_checks<T>(checks: PackedChecks, f: impl FnOnce() -> T) -> T {
+    struct Restore(PackedChecks);
     impl Drop for Restore {
         fn drop(&mut self) {
-            CHECKS.with(|c| c.set(PackedChecks::ALL));
+            CHECKS.with(|c| c.set(self.0));
         }
     }
-    CHECKS.with(|c| c.set(checks));
-    let _r = Restore;
+    let _r = Restore(CHECKS.with(|c| c.replace(checks)));
     f()
 }
 
-pub(crate) fn checks() -> PackedChecks {
-    CHECKS.with(|c| c.get())
-}
-
-/// Test-only: build the leaf with ONE constant moved (the ConstAir binding
-/// regression): `Tau(p)` uses the constant `τ_p` (instead of `τ_p − 1`) in
-/// pair `p`'s timestamp gap, `Word(u)` uses the address `u + 1` (mod `M_w`)
-/// in word `u`'s init / final elements. Never set outside tests.
+/// Test-only (the ConstAir binding regression, `const_values_are_bound`):
+/// build the leaf with ONE constant moved. `Tau(p)` uses the constant `τ_p`
+/// (instead of `τ_p − 1`) in pair `p`'s timestamp gap; `Word(u)` uses the
+/// address `u + 1` (mod `M_w`) in word `u`'s init / final elements. Always
+/// `None` outside tests.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ConstSkew {
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum ConstSkew {
     None,
     Tau(usize),
     Word(usize),
 }
 
+#[cfg(test)]
 thread_local! {
     static SKEW: std::cell::Cell<ConstSkew> = const { std::cell::Cell::new(ConstSkew::None) };
 }
 
-/// Run `f` with the constant skew `s` in force (test-only; restored after).
-pub fn with_skew<T>(s: ConstSkew, f: impl FnOnce() -> T) -> T {
-    struct Restore;
+/// The constant skew a leaf built on this thread gets: always `None`
+/// outside tests.
+fn const_skew() -> ConstSkew {
+    #[cfg(test)]
+    {
+        SKEW.with(|s| s.get())
+    }
+    #[cfg(not(test))]
+    {
+        ConstSkew::None
+    }
+}
+
+/// Test-only: run `f` with the constant skew `s` in force (the previous one
+/// is restored afterwards, also on a panic).
+#[cfg(test)]
+pub(crate) fn with_skew<T>(s: ConstSkew, f: impl FnOnce() -> T) -> T {
+    struct Restore(ConstSkew);
     impl Drop for Restore {
         fn drop(&mut self) {
-            SKEW.with(|c| c.set(ConstSkew::None));
+            SKEW.with(|c| c.set(self.0));
         }
     }
-    SKEW.with(|c| c.set(s));
-    let _r = Restore;
+    let _r = Restore(SKEW.with(|c| c.replace(s)));
     f()
 }
 
@@ -324,6 +457,19 @@ impl BloomPackedParams {
     pub fn m_words(&self) -> usize {
         self.k * self.words_per_slice()
     }
+    /// The filter shape alone, `(k, log_w)` (what the membership query
+    /// depends on; `batch` is not checked).
+    pub fn check_filter(&self) -> Result<(), String> {
+        if !(1..=MAX_K).contains(&self.k) {
+            return Err(format!("k must be in 1..={MAX_K}, got {}", self.k));
+        }
+        // log_w ≥ 7 keeps HI_MAX < 2^24 (3 bytes) and a whole number of bytes
+        // per slice; log_w ≤ 20 as in bloom_omc.
+        if !(7..=20).contains(&self.log_w) {
+            return Err(format!("log_w must be in 7..=20, got {}", self.log_w));
+        }
+        Ok(())
+    }
     /// Filter bits `M = k·W`.
     pub fn m_bits(&self) -> usize {
         self.k * self.w()
@@ -341,16 +487,11 @@ impl BloomPackedParams {
             panic!("{e}");
         }
     }
-    /// [`Self::validate`] without the panic.
+    /// [`Self::validate`] without the panic: the filter shape
+    /// ([`Self::check_filter`]), `batch ≥ 1` and the 16-bit timestamp bound
+    /// `k·batch < 2^16` (`batch ≤ 9,362` at `k = 7`).
     pub fn check(&self) -> Result<(), String> {
-        if !(1..=MAX_K).contains(&self.k) {
-            return Err(format!("k must be in 1..={MAX_K}, got {}", self.k));
-        }
-        // log_w ≥ 7 keeps HI_MAX < 2^24 (3 bytes) and a whole number of bytes
-        // per slice; log_w ≤ 20 as in bloom_omc.
-        if !(7..=20).contains(&self.log_w) {
-            return Err(format!("log_w must be in 7..=20, got {}", self.log_w));
-        }
+        self.check_filter()?;
         if self.batch < 1 {
             return Err("batch must be ≥ 1".into());
         }
@@ -738,7 +879,7 @@ pub(crate) fn route_packed(
     assert_eq!(key_bytes.len(), 8);
     assert_eq!(split.len(), split_count(p));
     let limbs: [ExprId; 4] =
-        std::array::from_fn(|j| from_bytes(b, c, &key_bytes[2 * j..2 * j + 2], KEY_LIMB_BITS, true));
+        std::array::from_fn(|j| from_bytes(b, c, &key_bytes[2 * j..2 * j + 2], KEY_LIMB_BITS, ck.key_range));
     let l3 = b.mul_add(act, c.act_shift, limbs[3]);
     let rec = b
         .recompose_base_coeffs_to_ext_via_alu::<Val>(&[limbs[0], limbs[1], limbs[2], l3])
@@ -788,7 +929,7 @@ pub(crate) fn route_packed(
             // Unused limb: only needs to be base-field (four byte lookups) so
             // the recomposition below is unique.
             let ub = take(4);
-            digest_limbs.push(from_bytes(b, c, &ub, 32, true));
+            digest_limbs.push(from_bytes(b, c, &ub, 32, ck.unused_limbs));
         }
     }
     let h0 = b.recompose_base_coeffs_to_ext_via_alu::<Val>(&digest_limbs[0..4]).expect("digest lo");
@@ -912,7 +1053,7 @@ pub fn build_bloom_packed_leaf_commit(
         (0..l).map(|_| std::array::from_fn(|_| b.alloc_private_input("pair"))).collect();
 
     // ── Stage A: the two dense states and their commitments ──
-    let skew = SKEW.with(|s| s.get());
+    let skew = const_skew();
     let mut input: Vec<ExprId> = Vec::with_capacity(mw + l);
     let mut target: Vec<ExprId> = Vec::with_capacity(mw + l);
     for u in 0..mw {
@@ -945,7 +1086,9 @@ pub fn build_bloom_packed_leaf_commit(
     let mut routes: Vec<(ExprId, ExprId, Route)> = Vec::with_capacity(l); // (act, act − act·c helper, route)
     for r in 0..batch {
         let act = rec_w[r][8];
-        b.assert_bool(act);
+        if ck.act_bool {
+            b.assert_bool(act);
+        }
         let (rec, limbs, out) = route_packed(&mut b, &cfg, &c, p, &rec_w[r][0..8], act, &split_w[r], &ck);
         if ck.dummy_canon {
             // act = 0 ⇒ k0 + k1 + k2 + k3 = 0 ⇒ every limb 0 (each < 2^16).

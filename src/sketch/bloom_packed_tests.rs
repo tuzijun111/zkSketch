@@ -1,6 +1,10 @@
 //! Tests of the packed-byte Bloom leaf ([`super`]): filter equality with
-//! `bloom_omc`, honest round trips in every layout and commitment mode, the
-//! hiding guards, and forgeries with positive controls.
+//! `bloom_omc` (native and random-batch differential fuzz at the deployed
+//! and test shapes; proved leaves and queries against `bloom_omc`'s at the
+//! test shape and at the deployed filter shape), the `k·m < 2^16` timestamp
+//! bound, honest round trips in every layout and commitment mode, the hiding
+//! guards, the cleanliness of every test switch ([`PackedChecks`]), and
+//! forgeries with positive controls.
 //!
 //! **Forgeries.** Each attack builds a forged epoch witness by replaying the
 //! batch with one (record, slice) pair or one routing split overridden; the
@@ -126,6 +130,133 @@ fn commitments_and_params() {
     assert!(BloomPackedParams { k: 9, log_w: 14, batch: 4 }.check().is_err());
 }
 
+/// splitmix64: a small deterministic generator for the fuzz tests.
+struct SplitMix(u64);
+
+impl SplitMix {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+/// A random batch of at most `batch` keys (the leaf pads the rest with
+/// dummies; a quarter of the batches are full): mostly drawn from `pool`, so
+/// keys repeat inside a batch and across batches, sometimes a fresh key or
+/// an edge key (`0`, `1`, `2^32 − 1`, `2^63`, `2^64 − 1`).
+fn random_batch(rng: &mut SplitMix, pool: &[u64], batch: usize) -> Vec<u64> {
+    let n = if rng.below(4) == 0 { batch } else { rng.below(batch + 1) };
+    (0..n)
+        .map(|_| match rng.below(8) {
+            0 => rng.next(),
+            1 => [0, 1, u32::MAX as u64, 1 << 63, u64::MAX][rng.below(5)],
+            _ => pool[rng.below(pool.len())],
+        })
+        .collect()
+}
+
+/// Differential fuzz against `bloom_omc` on RANDOM batches with duplicates
+/// (inside a batch, across batches, edge keys), at the deployed shape
+/// (k = 7, W = 2^14, m = 1,024), the test shapes (k = 3, log_w = 7, batch 4
+/// and 8) and a spread of others: after every batch
+/// `bits_to_words(bloom_insert(..)) == packed_insert(..)` and the HONEST LEAF
+/// WITNESS's final state (the per-access timestamped replay the circuit
+/// proves) agree word for word, every inserted key is a member of both, and
+/// random probes get the same answer from both.
+#[test]
+fn differential_fuzz_random_batches_vs_bloom_omc() {
+    use crate::sketch::bloom_omc::bloom_contains;
+    let mut rng = SplitMix(0x00B1_00B1_2026_1016);
+    for (k, log_w, batch, rounds) in
+        [(7usize, 14usize, 1024usize, 4usize), (3, 7, 4, 40), (3, 7, 8, 30), (1, 7, 3, 20), (8, 10, 64, 10), (2, 20, 16, 3)]
+    {
+        let pp = BloomPackedParams { k, log_w, batch };
+        let bp = pp.omc();
+        let pool: Vec<u64> = (0..(batch / 2).max(2)).map(|_| rng.next()).collect();
+        let mut bits = bloom_empty(&bp);
+        let mut w = packed_empty(&pp);
+        let mut inserted: Vec<u64> = Vec::new();
+        let (mut dups, mut dummies) = (0usize, 0usize);
+        for round in 0..rounds {
+            let ks = random_batch(&mut rng, &pool, batch);
+            let distinct: std::collections::HashSet<u64> = ks.iter().copied().collect();
+            dups += ks.len() - distinct.len();
+            dummies += batch - ks.len();
+            let wit = epoch_witness(&pp, &w, &ks);
+            bloom_insert(&mut bits, &bp, &ks);
+            packed_insert(&mut w, &pp, &ks);
+            let tag = format!("k={k} log_w={log_w} batch={batch} round {round}");
+            assert_eq!(wit.final_bytes(), w, "{tag}: the leaf witness's state");
+            assert_eq!(bits_to_words(&bits), w, "{tag}: bloom_omc's bits");
+            inserted.extend(&ks);
+            for &key in inserted.iter().rev().take(16) {
+                assert!(packed_contains(&w, &pp, key) && bloom_contains(&bits, &bp, key), "{tag}: member {key}");
+            }
+            for _ in 0..32 {
+                let key = rng.next();
+                assert_eq!(packed_contains(&w, &pp, key), bloom_contains(&bits, &bp, key), "{tag}: probe {key}");
+            }
+        }
+        assert!(dups > 0 && dummies > 0, "k={k} log_w={log_w}: the fuzz saw duplicates ({dups}) and dummies ({dummies})");
+    }
+}
+
+/// The 16-bit timestamp bound `k·batch < 2^16` (`m ≤ 9,362` at `k = 7`) is
+/// enforced with a clear error wherever a shape enters: the parameters, the
+/// leaf builder (before any circuit work), and the harness shape
+/// (`StreamShape::check_bloom_packed`, which `exp_compose` reports with exit
+/// 2 under `EXP_BLOOM_VARIANT=packed`). The bit-array leaf has no such bound,
+/// and the membership query ignores the batch size (its VK is the same at
+/// any `batch`).
+#[test]
+fn timestamp_bound_is_enforced_with_a_clear_error() {
+    use crate::experiments::stream_compose::StreamShape;
+    use crate::sketch::forge::catch_msg;
+    use crate::sketch::gk_bandmerge::GkRounds;
+    let ok = BloomPackedParams { k: 7, log_w: 14, batch: 9362 };
+    let bad = BloomPackedParams { batch: 9363, ..ok };
+    assert!(ok.check().is_ok(), "7·9,362 = 65,534 < 2^16");
+    let e = bad.check().unwrap_err();
+    assert!(e.contains("k·batch = 65541") && e.contains("below 2^16") && e.contains("batch ≤ 9362 at k = 7"), "{e}");
+    // k = 8: 8·8,191 = 65,528 is the last legal batch.
+    assert!(BloomPackedParams { k: 8, log_w: 14, batch: 8191 }.check().is_ok());
+    let e8 = BloomPackedParams { k: 8, log_w: 14, batch: 8192 }.check().unwrap_err();
+    assert!(e8.contains("batch ≤ 8191 at k = 8"), "{e8}");
+    // The leaf builder refuses before building anything.
+    let r = catch_msg(|| {
+        build_bloom_packed_leaf_commit(bad, Expose::Interval, CommitMode::Hiding);
+    });
+    assert!(r.is_err_and(|m| m.contains("16-bit timestamps")));
+    // The harness shape (what exp_compose checks for every m).
+    let sh = StreamShape {
+        d: 4,
+        w: 8,
+        b: 4,
+        capacity: 4,
+        gk_s: 2,
+        bloom_k: 7,
+        bloom_log_w: 14,
+        kmv_k: 4,
+        gk_rounds: GkRounds::SortedCopy,
+    };
+    assert_eq!(sh.check_bloom_packed(9362), Ok(ok));
+    assert!(sh.check_bloom_packed(9363).is_err_and(|m| m.contains("16-bit timestamps")));
+    assert!(catch_msg(|| sh.bloom_packed_params(9363)).is_err_and(|m| m.contains("16-bit timestamps")));
+    assert!(sh.check_bloom(9363).is_ok(), "the bit-array leaf has no timestamp bound");
+    // The membership query depends on (k, log_w) only.
+    let small = BloomPackedParams { k: 3, log_w: 7, batch: 4 };
+    let huge = BloomPackedParams { batch: 30_000, ..small };
+    assert!(huge.check().is_err() && huge.check_filter().is_ok());
+    let vk = |p| crate::decode::bloom_packed::bloom_packed_decode_vk(p).commitment;
+    assert_eq!(vk(small), vk(huge), "the query ignores the batch size");
+}
+
 // ─── Honest round trips ──────────────────────────────────────────────────────
 
 fn prove_layout(expose: Expose, mode: CommitMode, t: u64, initial: &[u8], ks: &[u64], seed: &SaltSeed) -> BloomPackedProof {
@@ -235,6 +366,184 @@ fn vk_is_data_independent() {
         &[],
     );
     assert_ne!(vk_pin_values(&a.output.0), vk_pin_values(&h.output.0));
+}
+
+/// Proved differential at the test shape (k = 3, log_w = 7, batch = 4): the
+/// same chain of random batches (repeated keys, dummy slots, an all-dummy
+/// batch) is proved epoch by epoch in BOTH commitment modes with the
+/// composition statement (Interval; Hiding with the honest openings of leaf
+/// `t`). Every proved state is `bits_to_words` of `bloom_omc`'s, every leaf
+/// starts at the previous leaf's exposed `Com(S_t)` (genesis
+/// `Com(0^{M_w}; 0)`), and proved membership queries of the packed decoder
+/// answer exactly what proved queries of the bit-array decoder answer.
+#[test]
+fn proved_differential_vs_bloom_omc_at_test_shape() {
+    use crate::decode::bloom::prove_bloom_query;
+    use crate::decode::bloom_packed::prove_bloom_packed_query;
+    use crate::sketch::bloom_omc::bloom_contains;
+    let p = BloomPackedParams { k: 3, log_w: 7, batch: 4 };
+    let op = p.omc();
+    let mut rng = SplitMix(0x7E57_5A9E);
+    let pool: Vec<u64> = (0..5).map(|_| rng.next()).collect();
+    let mut batches: Vec<Vec<u64>> = (0..4).map(|_| random_batch(&mut rng, &pool, p.batch)).collect();
+    batches[1] = vec![pool[0], pool[1], pool[0]]; // a repeat inside the batch, one dummy
+    batches.push(Vec::new()); // an all-dummy batch
+    let seed = SaltSeed::for_tests(41);
+    let mut finals: Vec<Vec<u8>> = Vec::new();
+    for mode in [CommitMode::Plain, CommitMode::Hiding] {
+        let mut leaf = build_bloom_packed_leaf_commit(p, Expose::Interval, mode);
+        let (mut words, mut bits) = (packed_empty(&p), bloom_empty(&op));
+        let mut prev = commit_packed_with(&p, &words, mode, &SaltBb::ZERO);
+        for (bi, ks) in batches.iter().enumerate() {
+            let t = bi as u64 + 1;
+            let pr = if mode.is_hiding() {
+                leaf.prove_epoch_commit(t, &words, ks, &Openings::for_leaf(&seed, FAMILY, t))
+            } else {
+                leaf.prove_epoch_at(t, &words, ks)
+            };
+            bloom_insert(&mut bits, &op, ks);
+            packed_insert(&mut words, &p, ks);
+            assert_eq!(pr.final_words, words, "{mode:?} leaf {t}");
+            assert_eq!(bits_to_words(&bits), pr.final_words, "{mode:?} leaf {t}: bloom_omc's bits");
+            assert_eq!(pr.initial_commit.0, prev, "{mode:?}: leaf {t} starts where leaf {} ended", t - 1);
+            let st = read_exposed_statement(&pr.output.0);
+            assert_eq!((st.init, st.final_), (prev.to_vec(), pr.final_commit.0.to_vec()), "{mode:?} leaf {t}");
+            prev = pr.final_commit.0;
+        }
+        finals.push(words);
+    }
+    assert_eq!(finals[0], finals[1], "both modes certify the same filter");
+    let words = &finals[0];
+    let bits = words_to_bits(words);
+    let mut probes: Vec<u64> = batches.iter().flatten().copied().take(4).collect();
+    probes.extend((0..4).map(|_| rng.next()));
+    let (mut ones, mut zeros) = (0, 0);
+    for key in probes {
+        let want = u64::from(bloom_contains(&bits, &op, key));
+        assert_eq!(prove_bloom_packed_query(p, words, key).answer, want, "packed query {key}");
+        assert_eq!(prove_bloom_query(op, &bits, key).answer, want, "bit-array query {key}");
+        if want == 1 { ones += 1 } else { zeros += 1 }
+    }
+    assert!(ones >= 4 && zeros >= 1, "members {ones}, non-members {zeros}");
+}
+
+/// The DEPLOYED filter shape (k = 7, W = 2^14, M_w = 14,336 bytes) through
+/// the circuits in the deployed form (Interval statement, Hiding
+/// commitments): a 16-slot leaf over a 2,000-key prior, with a key repeated
+/// in the batch, a key already in the prior and dummy slots, certifies
+/// exactly `bits_to_words` of `bloom_omc`'s insert; membership queries of the
+/// certified filter (members and non-members) answer `bloom_omc`'s AND and
+/// verify against the decode VK derived from public parameters.
+#[test]
+fn deployed_shape_leaf_and_queries_match_bloom_omc() {
+    use crate::decode::bloom::bloom_query_input;
+    use crate::decode::bloom_packed::{bloom_packed_decode_vk_commit, prove_bloom_packed_query_commit};
+    use crate::decode::{QueryStatement, verify_decode_proof};
+    use crate::sketch::bloom_omc::bloom_contains;
+    let p = BloomPackedParams { k: 7, log_w: 14, batch: 16 };
+    let op = p.omc();
+    let prior_keys = keys(2000, 0xD0D0);
+    let mut bits = bloom_empty(&op);
+    bloom_insert(&mut bits, &op, &prior_keys);
+    let init = bits_to_words(&bits);
+    let mut ks = keys(10, 0xFEED);
+    ks.push(ks[3]);
+    ks.push(prior_keys[17]);
+    let seed = SaltSeed::for_tests(1416);
+    let t = 2;
+    let open = Openings::for_leaf(&seed, FAMILY, t);
+    let pr = build_bloom_packed_leaf_commit(p, Expose::Interval, CommitMode::Hiding).prove_epoch_commit(t, &init, &ks, &open);
+    bloom_insert(&mut bits, &op, &ks);
+    assert_eq!(pr.final_words, bits_to_words(&bits), "the certified filter is bloom_omc's");
+    let st = read_exposed_statement(&pr.output.0);
+    assert_eq!(st.init, commit_packed_with(&p, &init, CommitMode::Hiding, &open.init).to_vec());
+    assert_eq!(st.final_, commit_packed_with(&p, &pr.final_words, CommitMode::Hiding, &open.final_).to_vec());
+    let vk = bloom_packed_decode_vk_commit(p, CommitMode::Hiding);
+    let commit = pr.final_commit.0;
+    let non: Vec<u64> = keys(500, 0xABBA).into_iter().filter(|&k| !bloom_contains(&bits, &op, k)).take(2).collect();
+    assert_eq!(non.len(), 2);
+    for key in [ks[0], ks[11], prior_keys[1999], non[0], non[1]] {
+        let want = u64::from(bloom_contains(&bits, &op, key));
+        let q = prove_bloom_packed_query_commit(p, &pr.final_words, key, CommitMode::Hiding, &open.final_);
+        assert_eq!(q.answer, want, "key {key}");
+        assert_eq!(
+            verify_decode_proof(&q.output.0, &vk),
+            Ok(QueryStatement::with_query(commit, bloom_query_input(key), want)),
+            "key {key}"
+        );
+    }
+}
+
+/// Every test switch ([`PackedChecks`]) is clean: with exactly one check
+/// removed, the leaf and the query still prove an honest witness (repeated
+/// key, dummy slot; a member query); the leaf's VK changes iff the check
+/// belongs to the leaf and the query's VK iff it belongs to the query; no
+/// two switches build the same circuit; the switches cover every field; and
+/// `with_checks` restores the deployed set.
+#[test]
+fn check_switches_are_clean() {
+    use crate::decode::bloom_packed::try_prove_bloom_packed_query_commit;
+    let p = BloomPackedParams { k: 3, log_w: 7, batch: 4 };
+    let init = prior(&p);
+    let mut ks = keys(2, 0x5150);
+    ks.push(ks[0]);
+    let want = expected(&p, &init, &ks);
+    let member = ks[1];
+    let query = || try_prove_bloom_packed_query_commit(p, &want, member, CommitMode::Plain, &SaltBb::ZERO);
+    let leaf_vk = build_bloom_packed_leaf_expose(p, Expose::Interval).vk_values();
+    let query_vk = vk_pin_values(&query().expect("deployed query").output.0);
+    let (mut leaf_vks, mut query_vks) = (vec![leaf_vk.clone()], vec![query_vk.clone()]);
+    let mut cleared = PackedChecks::ALL;
+    for (name, in_leaf, in_query) in PackedChecks::SWITCHES {
+        let off = PackedChecks::without(name);
+        let mut leaf = with_checks(off, || build_bloom_packed_leaf_expose(p, Expose::Interval));
+        let pr = leaf.prove_epoch_at(2, &init, &ks);
+        assert_eq!(pr.final_words, want, "{name}: the honest witness still proves");
+        let lv = vk_pin_values(&pr.output.0);
+        assert_eq!(lv != leaf_vk, in_leaf, "{name}: the leaf VK changes iff the check is in the leaf");
+        let q = with_checks(off, query).unwrap_or_else(|e| panic!("{name}: honest query: {e}"));
+        assert_eq!(q.answer, 1, "{name}");
+        let qv = vk_pin_values(&q.output.0);
+        assert_eq!(qv != query_vk, in_query, "{name}: the query VK changes iff the check is in the query");
+        if in_leaf {
+            assert!(!leaf_vks.contains(&lv), "{name}: a leaf circuit no other switch builds");
+            leaf_vks.push(lv);
+        }
+        if in_query {
+            assert!(!query_vks.contains(&qv), "{name}: a query circuit no other switch builds");
+            query_vks.push(qv);
+        }
+        let text = format!("{off:?}");
+        assert!(text.matches("false").count() == 1 && text.contains(&format!("{name}: false")), "{name}: turns off its own field only");
+        cleared = and(cleared, off);
+    }
+    assert!(!format!("{cleared:?}").contains("true"), "the switches cover every field: {cleared:?}");
+    assert_eq!(checks(), PackedChecks::ALL, "with_checks restores the deployed set");
+}
+
+/// Field-wise AND of two switch sets (a struct literal: a new field must be
+/// added here, and then to `PackedChecks::SWITCHES` for the coverage check).
+fn and(a: PackedChecks, b: PackedChecks) -> PackedChecks {
+    PackedChecks {
+        o_pin: a.o_pin && b.o_pin,
+        n_pin: a.n_pin && b.n_pin,
+        ft_range: a.ft_range && b.ft_range,
+        act_bool: a.act_bool && b.act_bool,
+        key_range: a.key_range && b.key_range,
+        dummy_canon: a.dummy_canon && b.dummy_canon,
+        i_bool: a.i_bool && b.i_bool,
+        q_range: a.q_range && b.q_range,
+        canon: a.canon && b.canon,
+        unused_limbs: a.unused_limbs && b.unused_limbs,
+        c_bool: a.c_bool && b.c_bool,
+        h_range: a.h_range && b.h_range,
+        l_nonneg: a.l_nonneg && b.l_nonneg,
+        l_lt_e: a.l_lt_e && b.l_lt_e,
+        ts_lt_tau: a.ts_lt_tau && b.ts_lt_tau,
+        cell_pin: a.cell_pin && b.cell_pin,
+        sel_bool: a.sel_bool && b.sel_bool,
+        onehot_sum: a.onehot_sum && b.onehot_sum,
+    }
 }
 
 // ─── Forgeries ───────────────────────────────────────────────────────────────

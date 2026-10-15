@@ -11,12 +11,12 @@
 //!
 //! ## Constraint list (query)
 //!
-//! | # | constraint | gadget | test switch |
+//! | # | constraint | gadget | test switch ([`PackedChecks`](crate::sketch::bloom_packed::PackedChecks), test-only) |
 //! |---|---|---|---|
 //! | Q1 | every state byte `S_u ∈ [0,256)` | one byte lookup | `cell_pin` |
 //! | Q2 | `Com(S) = H(pack(S))` (3 bytes per limb, salted under `Hiding`, family 7) | ALU packing, bound sponge | — |
-//! | Q3 | the key is routed as an ACTIVE record (`act = 1`): key bytes, record, bound Poseidon2 digest, canonical split `digest[j] = 2^log_w·hi + 8q_j + i_j` | the leaf's routing gadget | the leaf's B4–B7 switches |
-//! | Q4 | per slice a TENSOR one-hot selector: `s1 ∈ {0,1}^{na}`, `s2 ∈ {0,1}^{nb}` (`na·nb = W/8`), `Σ s1 = Σ s2 = 1`, `nb·Σ a·s1_a + Σ b·s2_b = q_j` | BoolCheck + ALU | `onehot_sum` |
+//! | Q3 | the key is routed as an ACTIVE record (`act = 1`): key bytes, record, bound Poseidon2 digest, canonical split `digest[j] = 2^log_w·hi + 8q_j + i_j` | the leaf's routing gadget | `key_range` and the leaf's B4–B7 switches |
+//! | Q4 | per slice a TENSOR one-hot selector: `s1 ∈ {0,1}^{na}`, `s2 ∈ {0,1}^{nb}` (`na·nb = W/8`), `Σ s1 = Σ s2 = 1`, `nb·Σ a·s1_a + Σ b·s2_b = q_j` | BoolCheck + ALU | `sel_bool`, `onehot_sum` |
 //! | Q5 | `o_j = Σ_b s2_b Σ_a s1_a S[j·W/8 + a·nb + b]` (exactly `S[j·W/8 + q_j]`) | ALU | — |
 //! | Q6 | split-at-bit of `o_j` at `e_j = 2^{i_j}`: `o_j = (2H + c_j)·e_j + L`, `c_j ∈ {0,1}`, `H, L ∈ [0,256)`, `L < e_j` | the leaf's split gadget | the leaf's D2–D5 switches |
 //! | Q7 | `answer = ∏_j c_j` | ALU | — |
@@ -72,14 +72,12 @@ const LOG_FINAL_POLY_LEN: usize = 6;
 
 pub use super::bloom::{QUERY_EXPOSED_LEN, bloom_query_input, read_exposed_query};
 
-thread_local! {
-    /// Test-only witness tampering of the query (see the injection site).
-    static TAMPER: std::cell::Cell<QueryTamper> = const { std::cell::Cell::new(QueryTamper::None) };
-}
-
 /// Test-only query forgeries (the circuit is unchanged; only the witness).
+/// Always `None` outside tests. The circuit's check switches are
+/// [`crate::sketch::bloom_packed::PackedChecks`] (the one list of them).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum QueryTamper {
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum QueryTamper {
     None,
     /// Open slice 0 at the next word (`q + 1 mod W/8`), selectors and all.
     ShiftWord,
@@ -88,16 +86,36 @@ pub enum QueryTamper {
     TwoHot,
 }
 
-/// Run `f` with the query tampering `t` (restored afterwards).
-pub fn with_query_tamper<T>(t: QueryTamper, f: impl FnOnce() -> T) -> T {
-    struct Restore;
+#[cfg(test)]
+thread_local! {
+    /// Test-only witness tampering of the query (see the injection site).
+    static TAMPER: std::cell::Cell<QueryTamper> = const { std::cell::Cell::new(QueryTamper::None) };
+}
+
+/// The tampering a query proved on this thread gets: always `None` outside
+/// tests.
+fn query_tamper() -> QueryTamper {
+    #[cfg(test)]
+    {
+        TAMPER.with(|t| t.get())
+    }
+    #[cfg(not(test))]
+    {
+        QueryTamper::None
+    }
+}
+
+/// Test-only: run `f` with the query tampering `t` (the previous one is
+/// restored afterwards, also on a panic).
+#[cfg(test)]
+pub(crate) fn with_query_tamper<T>(t: QueryTamper, f: impl FnOnce() -> T) -> T {
+    struct Restore(QueryTamper);
     impl Drop for Restore {
         fn drop(&mut self) {
-            TAMPER.with(|c| c.set(QueryTamper::None));
+            TAMPER.with(|c| c.set(self.0));
         }
     }
-    TAMPER.with(|c| c.set(t));
-    let _r = Restore;
+    let _r = Restore(TAMPER.with(|c| c.replace(t)));
     f()
 }
 
@@ -149,7 +167,8 @@ pub fn try_prove_bloom_packed_query_commit(
     mode: CommitMode,
     salt: &SaltBb,
 ) -> Result<DecodeProof, String> {
-    params.check()?;
+    // The query depends on the filter shape only (`batch` is ignored).
+    params.check_filter()?;
     let p = &params;
     let (mw, wps) = (p.m_words(), p.words_per_slice());
     assert_eq!(words.len(), mw, "state must have M_w = k·W/8 bytes");
@@ -217,17 +236,25 @@ pub fn try_prove_bloom_packed_query_commit(
         let (s1, s2) = &sel[j];
         let mut sum1 = s1[0];
         let mut ia = b.mul(s1[0], idx[0]);
-        b.assert_bool(s1[0]);
+        if ck.sel_bool {
+            b.assert_bool(s1[0]);
+        }
         for a in 1..na {
-            b.assert_bool(s1[a]);
+            if ck.sel_bool {
+                b.assert_bool(s1[a]);
+            }
             sum1 = b.add(sum1, s1[a]);
             ia = b.mul_add(s1[a], idx[a], ia);
         }
         let mut sum2 = s2[0];
         let mut ibx = b.mul(s2[0], idx[0]);
-        b.assert_bool(s2[0]);
+        if ck.sel_bool {
+            b.assert_bool(s2[0]);
+        }
         for bb in 1..nb {
-            b.assert_bool(s2[bb]);
+            if ck.sel_bool {
+                b.assert_bool(s2[bb]);
+            }
             sum2 = b.add(sum2, s2[bb]);
             ibx = b.mul_add(s2[bb], idx[bb], ibx);
         }
@@ -260,7 +287,7 @@ pub fn try_prove_bloom_packed_query_commit(
     let circuit = b.build().map_err(|e| format!("build: {e:?}"))?;
 
     // ─── Native witness ──────────────────────────────────────────────────
-    let tamper = TAMPER.with(|t| t.get());
+    let tamper = query_tamper();
     let mut opened: Vec<(u64, u64)> = packed_positions(p, Some(key));
     if tamper == QueryTamper::ShiftWord {
         opened[0].0 = (opened[0].0 + 1) % wps as u64;

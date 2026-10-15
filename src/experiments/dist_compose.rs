@@ -4315,6 +4315,50 @@ mod tests {
         }
     }
 
+    /// M2: the packed-byte Bloom family's genesis anchor, as the auditor
+    /// derives it from public parameters ([`audit::genesis_commit_bb`]), is
+    /// the prover's `Com(0^{M_w}; 0)` (commitment family 7) in both modes;
+    /// it differs between the modes and from the bit-array family's anchor;
+    /// and the public no-op VK-derivation input ([`noop_leaf_input`]) moves
+    /// neither the state nor `Com(S; 0)`. Under `Plain` the packed batch
+    /// commitments are the bit-array family's (same record slots); under
+    /// `Hiding` they differ (family 7 vs 5).
+    #[test]
+    fn bloom_packed_genesis_anchor_and_noop_input() {
+        let (sh, m) = (shape(), 4);
+        let family = StreamFamily::BloomPacked;
+        let p = sh.bloom_packed_params(m);
+        let mut st = FamState::empty(family, &sh, m);
+        let mut anchors = Vec::new();
+        for mode in [CommitMode::Plain, CommitMode::Hiding] {
+            let pp = |family| PublicParams { family, shape: sh, m, commit_mode: mode };
+            let anchor = audit::genesis_commit_bb(&pp(family));
+            assert_eq!(anchor, commit_packed_with(&p, &packed_empty(&p), mode, &SaltBb::ZERO), "{mode:?}");
+            assert_eq!(anchor, st.commit_with(&sh, mode, &SaltBb::ZERO), "{mode:?}: the prover's Com(S_0)");
+            assert_ne!(anchor, audit::genesis_commit_bb(&pp(StreamFamily::BloomOmc)), "{mode:?}: not bloom_omc's");
+            anchors.push(anchor);
+        }
+        assert_ne!(anchors[0], anchors[1], "the hiding anchor carries the tag prefix");
+        let (setup, batch) = noop_leaf_input(family, m);
+        assert!(setup.is_empty());
+        st.advance(&sh, &batch);
+        assert_eq!(st.commit(&sh), anchors[0], "the no-op input does not move the state");
+        assert_eq!(st.commit_with(&sh, CommitMode::Hiding, &SaltBb::ZERO), anchors[1]);
+        let batches: Vec<Vec<u32>> = (0..3u32).map(|i| (1..=4).map(|k| k * 7 + i * 13).collect()).collect();
+        let plain = ProverCommit::plain();
+        let hid = ProverCommit::hiding(SaltSeed::for_tests(1));
+        assert_eq!(
+            batch_commits_with(family, m, &batches, &plain),
+            batch_commits_with(StreamFamily::BloomOmc, m, &batches, &plain),
+            "Plain: the same record slots, the same batch commitments"
+        );
+        let (a, b) = (
+            batch_commits_with(family, m, &batches, &hid),
+            batch_commits_with(StreamFamily::BloomOmc, m, &batches, &hid),
+        );
+        assert!(a.iter().zip(&b).all(|(x, y)| x != y), "Hiding: family 7 vs family 5");
+    }
+
     /// `Plain` is the pre-B2 path: the published log and the batch
     /// commitments equal the old Plain functions' values, and a state
     /// commitment ignores any randomizer. Under `Hiding` every `Com(B_t)` and
@@ -5118,12 +5162,24 @@ mod tests {
     /// BabyBear families.
     #[test]
     fn inflated_genesis_rejected_by_the_anchor_check_bb() {
+        inflated_genesis_rejected_bb(&BB_FAMILIES);
+    }
+
+    /// [`inflated_genesis_rejected_by_the_anchor_check_bb`] for the
+    /// packed-byte Bloom family (M2), whose auditor-side anchor is
+    /// `Com(0^{M_w}; 0)` of commitment family 7.
+    #[test]
+    fn inflated_genesis_rejected_by_the_anchor_check_bloom_packed() {
+        inflated_genesis_rejected_bb(&[StreamFamily::BloomPacked]);
+    }
+
+    fn inflated_genesis_rejected_bb(families: &[StreamFamily]) {
         assert_eq!(composition_expose(), Expose::Interval, "default layout");
         let (sh, m, batches) = (shape(), 4, e2e_batches());
         let layout = composition_expose();
         for commit in both_modes() {
             let mode = commit.mode();
-            for family in BB_FAMILIES {
+            for &family in families {
                 let tag = format!("{family:?} {}", commit.label());
                 let pp = PublicParams { family, shape: sh, m, commit_mode: mode };
                 // PROVER: the inflated start, then honest leaves and folds.

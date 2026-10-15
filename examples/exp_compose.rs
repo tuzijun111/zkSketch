@@ -560,6 +560,11 @@ fn main() {
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(0.2);
 
+    // A bad EXP_BLOOM_VARIANT is a configuration error (exit 2), like a bad shape.
+    if let Err(e) = zksketch::experiments::stream_compose::try_bloom_variant_from_env() {
+        eprintln!("{e}");
+        std::process::exit(2);
+    }
     let families: Vec<StreamFamily> = env_str("EXP_COMPOSE_FAMILY", "cm,hll,ss,gk")
         .split(',')
         .filter_map(|s| {
