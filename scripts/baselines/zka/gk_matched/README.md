@@ -114,7 +114,10 @@ its decoder proves step 3's answer.
 
 `gk_matched_check.sh` (and the driver's `--mode check|certify`) produces it:
 
-- **Native unit tests** (`cargo test --release --locked -p gk-matched-host`, 8 tests):
+- **Native unit tests** (`cargo test --release --locked -p gk-matched-host`, 8 tests; they
+  pass in a debug build too, where zkSketch's `apply_batch2` stops at its `debug_assert!`
+  on a step that loses a record instead of truncating, and the tests count that as the
+  loss):
   every epoch of every implementation equals zkSketch's `apply_batch2` chain tuple by tuple
   at (capacity, m_sub) = (384, 128), (768, 512), (2048, 2048), (64, 256), with the
   commitment equal to SHA-256 of zkSketch's state; a tampered carried state, a wrong
@@ -171,8 +174,13 @@ $B --mode certify --epochs 2 --capacity 768 --m-sub 512 [--commit hiding|plain] 
 `verify_ms`, `receipt_bytes`, `r0vm_peak_rss_mb`, the four root-variant columns at the end),
 plus `algorithm=bm2`, `implementation`, `capacity`, `m_sub`, `steps`, `state_eq_zksketch`,
 `query_eq_zksketch`, `certified_eq` and `prof` (the guest's phase split in user cycles:
-`pre`, `read` = their Event deserialisation, `chain` = their batch-chain check, `flatten`,
-`carry`, `map`, `update` = the GK steps, `root`, `commit`, `link`, `journal`, `post`).
+`pre`, `read` = their Event deserialisation (from epoch 1 on also the chain-tip entry and
+the carried words, see Caveats), `chain` = their batch-chain check, `flatten`, `carry`,
+`map`, `update` = the GK steps, `root`, `commit`, `link`, `journal`, `post`).
+`s_per_segment` is `prove_s` / `segments`, as in every driver: a partial last segment
+counts as a whole one. The seconds per 2^20 padded cycles is `prove_s` / (`padded_cycles`
+/ 2^20): at config A (11 segments of 2^20 and one of 2^19, 11.5 x 2^20) a 351.78 s proof
+gives 30.59 s per 2^20 padded cycles, against `s_per_segment` = 29.32.
 Exit codes: 0 ok, 1 a check failed (row printed), 2 bad arguments, 3 capacity overflow.
 `RISC0_DEV_MODE` is refused.
 
@@ -186,19 +194,24 @@ Exit codes: 0 ok, 1 a check failed (row printed), 2 bad arguments, 3 capacity ov
   requirement: zkSketch's function is the `apply_batch2` chain from the previous state, and
   a fresh-per-epoch summary merged at query time would be a different sketch (as `../gk` is).
   What the carry costs zk-Analytics, per epoch from epoch 1 on, is the carried words' read
-  (risc0 serde, about 170 user cycles per word, like every other input word) plus the
+  (risc0 serde, about 150 user cycles per word, like every other input word) plus the
   `carry` phase (the commitment check and the decoding); at epoch 0 only the empty state's
-  commitment. With `tuned`, AOL, B = 2,048 (epoch 1 minus epoch 0 for the read):
+  commitment. With `tuned`, AOL, B = 2,048. The read is epoch 1 minus epoch 0 of `read`
+  (108,984 / 99,984 / 107,184) less the one source chain-tip entry (`prev_source_chain_tips`,
+  +140 input bytes) that every port reads from epoch 1 on, about 6.2k (6,186 `read` cycles
+  for the same entry in the SpaceSaving profile guest); what remains is the carried state
+  words, the previous link hash and the `Option` tag (679 / 619 / 667 words):
 
   | config | read of the carried words | `carry` phase | extra user cycles | share of the epoch |
   |---|---|---|---|---|
-  | A (384, 128) | 108,984 | 12,653 (epoch 0: 1,603) | about 0.12M | 1.1% |
-  | B (768, 512) | 99,984 | 11,798 (1,603) | about 0.11M | 1.0% |
-  | D (2048, 2048) | 107,184 | 12,522 (1,603) | about 0.12M | 1.1% |
+  | A (384, 128) | about 102.8k | 12,653 (epoch 0: 1,603) | about 0.12M | 1.0% |
+  | B (768, 512) | about 93.8k | 11,798 (1,603) | about 0.11M | 1.0% |
+  | D (2048, 2048) | about 101.0k | 12,522 (1,603) | about 0.11M | 1.1% |
 
   The `read` column of the CSV (`prof`) is their Event deserialisation plus, from epoch 1
-  on, the carried words. A raw `env::read_slice` of the words would save most of the read;
-  it is not used (all input goes through their serde path).
+  on, the chain-tip entry (all ports) and the carried words (this port). A raw
+  `env::read_slice` of the words would save most of the read; it is not used (all input
+  goes through their serde path).
 - **Data-dependent.** `tuned` and `fast` exploit the data (active prefix, early stop), as a
   zkVM may; zkSketch's circuit is oblivious. `fixed_linear` is the fixed schedule.
 - **Further tuning.** `tuned` spends about 27k user cycles per extra step at m_sub 128

@@ -1221,6 +1221,9 @@ fn main() {
 // ===========================================================================
 // Native tests (no zkVM): the core against zkSketch's own code. `--release` keeps them
 // fast:  cargo test --release --locked -p gk-matched-host
+// A debug build runs them too: there zkSketch's apply_batch2 stops at its debug_assert!
+// on a step that loses a record (a release build truncates silently), and `zk_step`
+// counts either outcome as the loss.
 // ===========================================================================
 #[cfg(test)]
 mod tests {
@@ -1232,6 +1235,14 @@ mod tests {
     }
     fn cfg(cap: u32, ms: u32, i: GkmImpl) -> GkmConfig {
         GkmConfig { capacity: cap, m_sub: ms, s: 51, implementation: i }
+    }
+    /// One step of zkSketch's native chain, or None where the step loses a record: in a
+    /// release build apply_batch2 truncates silently (active mass != n afterwards), in a
+    /// debug build it panics at its debug_assert! on the dropped rows.
+    fn zk_step(zk: &Gk2State, vals: &[u32]) -> Option<Gk2State> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| apply_batch2(zk, vals)))
+            .ok()
+            .filter(|s| zk_mass(s) == s.n)
     }
 
     /// Configs A (cap 384, 16 leaves of 128) and B (cap 768, 4 leaves of 512) plus the
@@ -1324,7 +1335,7 @@ mod tests {
     /// odd tables (zkSketch never pairs their last row), capacities at and below the
     /// overflow point, many repeated values, and the state carried between two epochs in
     /// compact and in full form. Wherever zkSketch's chain keeps every record, tuned's state
-    /// equals it row for row; wherever zkSketch's chain loses one (it truncates silently),
+    /// equals it row for row; wherever zkSketch's chain loses one (see `zk_step`),
     /// tuned panics.
     #[test]
     fn tuned_matches_zksketch_at_the_edges() {
@@ -1338,8 +1349,13 @@ mod tests {
                 let mut zk = Gk2State::empty(p);
                 let mut lossy = false;
                 for c in vals.chunks(ms) {
-                    zk = apply_batch2(&zk, c);
-                    lossy |= zk_mass(&zk) != zk.n;
+                    match zk_step(&zk, c) {
+                        Some(next) => zk = next,
+                        None => {
+                            lossy = true;
+                            break;
+                        }
+                    }
                 }
                 let c = cfg(cap as u32, ms as u32, GkmImpl::Tuned);
                 let whole = std::panic::catch_unwind(|| apply_epoch(&c, bm2::State::empty(c.params()), vals));
@@ -1352,7 +1368,7 @@ mod tests {
                 };
                 if lossy {
                     lost += 1;
-                    assert!(whole.is_err(), "cap {cap} m {ms}: zkSketch truncated, tuned must panic");
+                    assert!(whole.is_err(), "cap {cap} m {ms}: zkSketch lost a record, tuned must panic");
                 } else {
                     kept += 1;
                     let (st, steps) = whole.unwrap();
@@ -1391,13 +1407,18 @@ mod tests {
     fn overflow_is_a_hard_error() {
         let keys = aol();
         let vals: Vec<u32> = keys[..2048].iter().map(|&k| k & VALUE_MASK).collect();
-        // zkSketch's native code truncates silently at capacity 16
+        // zkSketch's native chain loses records at capacity 16 (see zk_step)
         let p = GkbParams { capacity: 16, batch: 256, s: 51 };
         let mut zk = Gk2State::empty(p);
         let mut truncated = false;
         for c in vals.chunks(256) {
-            zk = apply_batch2(&zk, &gk_vals_of(c));
-            truncated |= zk_mass(&zk) != zk.n;
+            match zk_step(&zk, &gk_vals_of(c)) {
+                Some(next) => zk = next,
+                None => {
+                    truncated = true;
+                    break;
+                }
+            }
         }
         assert!(truncated, "capacity 16 must overflow on AOL");
         for i in GkmImpl::ALL {

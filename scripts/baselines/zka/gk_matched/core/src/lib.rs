@@ -19,8 +19,8 @@
 //!        EpochChainLink::compute_final_hash); epoch 0 starts from the empty state
 //!     4. map the records with zkSketch's gk_vals_of (drop PAD_KEY, mask to 21 bits)
 //!     5. apply ceil(B / m_sub) successive zkSketch batch steps
-//!        S <- apply_batch2(S, values[j*m_sub .. (j+1)*m_sub])   -- ../../gk_bm2/core,
-//!        GkbParams { capacity, batch: m_sub, s }; a capacity overflow is a HARD ERROR
+//!        S <- apply_batch2(S, values[j*m_sub .. (j+1)*m_sub])   -- `tuned`: here; others:
+//!        ../../gk_bm2/core; GkbParams { capacity, batch: m_sub, s }; overflow: HARD ERROR
 //!     6. (variant) Merkle root over the state entries        -- their per-type pattern
 //!     7. unsalted SHA-256 state commitment                    -- their pattern (over the
 //!        parameters, n and the active tuples: `compact_words`)

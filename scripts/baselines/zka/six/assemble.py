@@ -64,6 +64,8 @@ on stderr and in `note`, and table.py then labels the GK row CONFIG MISMATCH, no
 both sides"). Rows of the textbook port (../gk, SIX_ZKA_GK=textbook, and the
 committed 2026-10-09 set) keep the system name 'zk-Analytics arch. (port †)'; in a new run
 their `note` says they are textbook GK, a reference (the committed set's output is unchanged).
+Rows of both ports in one results directory (exec, qexec, prove and vt files together) are
+refused, as are matched rows of several configurations.
 
 Verify protocol (both sides): `verify_ms` = the best of 5 in-process verify calls of the same
 proof (zk-Analytics: their drivers' loop; zkSketch: EXP_VERIFY_REPEATS=5). Deserialisation is
@@ -341,7 +343,14 @@ prove = attach_jobs(ZKA)
 def gk_algorithm():
     """('bm2', (capacity, m_sub, s, implementation, steps)) when the zk-Analytics GK rows come from
     the matched port (driver column algorithm=bm2), else ('textbook', None)."""
-    rs = [r for r in rows(f'{ZKA}_gk_exec.csv') + rows(f'{ZKA}_gk_qexec.csv') + prove['gk'] if r.get('algorithm')]
+    src = (rows(f'{ZKA}_gk_exec.csv') + rows(f'{ZKA}_gk_qexec.csv') + prove['gk']
+           + rows(f'{ZKA_VT}_gk_prove.csv'))
+    rs = [r for r in src if r.get('algorithm')]
+    if rs and len(rs) != len(src):
+        # the textbook driver writes no `algorithm` column: rows of both ports in one directory
+        # (SIX_ZKA_GK changed between run_zka.sh steps) would all be labelled the matched rule
+        sys.exit(f'{ZKA} gk: {len(rs)} matched-port rows (algorithm column) and {len(src) - len(rs)} textbook-port '
+                 f'rows (none) in one results directory: re-run every run_zka.sh step with one SIX_ZKA_GK')
     algos = {r['algorithm'] for r in rs}
     if len(algos) > 1:
         sys.exit(f'{ZKA} gk: rows of several GK algorithms ({sorted(algos)}) in one results directory')

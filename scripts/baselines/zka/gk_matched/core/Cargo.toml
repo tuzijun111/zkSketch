@@ -5,9 +5,10 @@ edition = "2021"
 
 # zk-Analytics' aggregation / query pipeline (their aggregator-core and querier-core,
 # the same dependency set and features as ../../gk/core) around zkSketch's GK batch
-# rule, taken from ../../gk_bm2/core unchanged (apply_batch2 and its fast /
-# fixed_linear ports, the gk_vals_of mapping, the state word encoding). No Poseidon, no
-# sorting certificates, no memory checking: plain Rust.
+# rule: the default implementation `tuned` is defined here (apply_epoch_tuned); the
+# literal / fast / fixed_linear ports of apply_batch2, the gk_vals_of mapping and the
+# state word encoding come from ../../gk_bm2/core unchanged. No Poseidon, no sorting
+# certificates, no memory checking: plain Rust.
 [dependencies]
 rust_crypto = { package = "sha2", version = "0.10", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
