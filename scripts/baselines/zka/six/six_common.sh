@@ -13,7 +13,7 @@
 #               sorted = the pre-M3 bm2 circuit (per-round sorted copy). Same batch rule
 #               (apply_batch2), commitments and decoder, different leaf/merge/root VKs; the
 #               run's CSV records it (variant gk_bandmerge2_stable, column gk_rounds).
-#   SIX_BLOOM_VARIANT  omc (default) | packed: the zkSketch Bloom leaf (exp_compose
+#   SIX_BLOOM_VARIANT  packed (default, since M2) | omc: the zkSketch Bloom leaf (exp_compose
 #               EXP_BLOOM_VARIANT, M2). omc = the bit-array leaf (one field element per filter bit);
 #               packed = the packed-byte B1 leaf (zksketch::sketch::bloom_packed: per-access
 #               timestamped memory checking over bytes, commitment family 7; needs 7 x SIX_M < 2^16).
@@ -72,7 +72,7 @@ SIX_N=${SIX_N:-$((SIX_M * SIX_T))}
 SIX_GK_CAP=${SIX_GK_CAP:-2048}
 SIX_GK_ROUNDS=${SIX_GK_ROUNDS:-stable}
 [[ $SIX_GK_ROUNDS == stable || $SIX_GK_ROUNDS == sorted ]] || six_die "SIX_GK_ROUNDS=$SIX_GK_ROUNDS must be stable or sorted"
-SIX_BLOOM_VARIANT=${SIX_BLOOM_VARIANT:-omc}
+SIX_BLOOM_VARIANT=${SIX_BLOOM_VARIANT:-packed}
 [[ $SIX_BLOOM_VARIANT == omc || $SIX_BLOOM_VARIANT == packed ]] || six_die "SIX_BLOOM_VARIANT=$SIX_BLOOM_VARIANT must be omc or packed"
 if [[ -z ${SIX_QNS:-} ]]; then
   SIX_QNS=1

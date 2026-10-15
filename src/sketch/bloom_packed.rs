@@ -96,7 +96,7 @@
 //! encoding and dummy rule are `bloom_omc`'s (module doc there), computed with
 //! byte witnesses instead of hint-decomposed range checks.
 //!
-//! **Changes from the 2026-10-14 prototype** (`latex/redesign_20261014/b1out`;
+//! **Changes from the 2026-10-14 design-round prototype** (not in the repository;
 //! same relation, cheaper gadgets; at k = 7, W = 2^14, m = 1,024 the ALU
 //! table falls from 245,257 rows (0.936 of 2^18) to 185,353 (0.707), every
 //! table keeping its padded height):

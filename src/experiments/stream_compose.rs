@@ -296,7 +296,7 @@ impl StreamFamily {
 
 /// The Bloom leaf the harness's `bloom` family token selects while the M2
 /// packed leaf is under review: the bit-array `omc` leaf.
-pub const HARNESS_DEFAULT_BLOOM_VARIANT: StreamFamily = StreamFamily::BloomOmc;
+pub const HARNESS_DEFAULT_BLOOM_VARIANT: StreamFamily = StreamFamily::BloomPacked;
 
 /// The Bloom leaf variant a `bloom` family token selects:
 /// `EXP_BLOOM_VARIANT=omc|packed` (unset or empty =

@@ -569,10 +569,12 @@ fn main() {
         .split(',')
         .filter_map(|s| {
             let s = s.trim();
-            // `bloom` runs the leaf EXP_BLOOM_VARIANT picks (M2); the
-            // explicit `bloom_omc` / `bloom_packed` tokens ignore it.
+            // `bloom` (and its aliases `bloomfilter` / `bloom_filter`) runs the leaf
+            // EXP_BLOOM_VARIANT picks (M2); the explicit `bloom_omc` / `bloom_packed`
+            // tokens ignore it.
+            let follows_switch = matches!(s.to_ascii_lowercase().as_str(), "bloom" | "bloomfilter" | "bloom_filter");
             let f = StreamFamily::parse(s).map(|f| {
-                if f == StreamFamily::BloomOmc && s.eq_ignore_ascii_case("bloom") {
+                if f == StreamFamily::BloomOmc && follows_switch {
                     zksketch::experiments::stream_compose::bloom_variant_from_env()
                 } else {
                     f
@@ -799,12 +801,18 @@ fn main() {
             ("salt_seed", commit.seed_label().into()),
             // GK round certification (EXP_GK_ROUNDS=sorted|stable, M3).
             ("gk_rounds", shape.gk_rounds.label().into()),
-            // Bloom leaf variant the `bloom` token runs (EXP_BLOOM_VARIANT, M2).
+            // Bloom leaf variant(s) this run actually proves (M2): from the resolved
+            // families, so an explicit `bloom_packed` / `bloom_omc` token is recorded too.
             (
                 "bloom_variant",
-                match zksketch::experiments::stream_compose::bloom_variant_from_env() {
-                    StreamFamily::BloomPacked => "packed",
-                    _ => "omc",
+                match (
+                    families.contains(&StreamFamily::BloomPacked),
+                    families.contains(&StreamFamily::BloomOmc),
+                ) {
+                    (true, true) => "omc+packed",
+                    (true, false) => "packed",
+                    (false, true) => "omc",
+                    (false, false) => "-",
                 }
                 .into(),
             ),
