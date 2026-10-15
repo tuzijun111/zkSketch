@@ -49,6 +49,16 @@
 //!        space-accuracy coupling `cap ≳ s·log(N/s)`), so cap alone sets the GK
 //!        size like the other families. Set `EXP_GK_S` only to override (a value
 //!        too big for the cap fragments → too_large; unset it to auto-derive).
+//!        `EXP_GK_ROUNDS=sorted|stable` picks the leaf's round certification
+//!        (M3): `sorted` = the pre-M3 bm2 circuit (per round a fused table, a
+//!        general sorted copy and its order checks), `stable` = the G1
+//!        stable-compaction circuit. Both prove the same batch rule
+//!        (`apply_batch2`), commitments and decoder; the leaf / merge / root VKs
+//!        differ. Unset = `stable` (`sorted` under `ZKSKETCH_BINDING=legacy`).
+//!        It is a public shape parameter: the CSV `variant`
+//!        (`gk_bandmerge2_stable`) and `gk_rounds` columns and env.json record
+//!        it. A step that would exceed the capacity is a hard error (the run is
+//!        recorded `too_large`).
 //! - bloom: `EXP_BLOOM_K` (slices = hash positions per key, default 7, `1..=8`),
 //!        `EXP_BLOOM_LOGW` (bits per slice `W = 2^logw`, default 14, `7..=20`)
 //!        — the deployed `M = 7·2^14` filter (~1% FPR at 12k keys). The CSV
@@ -136,7 +146,8 @@
 //!   scatter_state_bytes,scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,
 //!   local_fold_ms,merges_local,merges_cross,cross_rounds,
 //!   comm_msgs,comm_bytes,comm_ms_measured,comm_model_ms,merge_total_ms,
-//!   query_bind_ms,query_bind_ms_avg,commit,salt_seed,pcs,logup_mask,status
+//!   query_bind_ms,query_bind_ms_avg,commit,salt_seed,pcs,logup_mask,gk_rounds,
+//!   status
 //!
 //! ## Commitments (`ZKSKETCH_COMMIT`, `ZKSKETCH_SALT_SEED`)
 //! The run's commitment mode is read ONCE (`ProverCommit::from_env`):
@@ -594,12 +605,17 @@ fn main() {
         }),
         Err(_) => derive_gk_s(gk_cap, n),
     };
+    // GK round certification (EXP_GK_ROUNDS=sorted|stable; unset = the
+    // harness default, `HARNESS_DEFAULT_GK_ROUNDS`, under a bound binding).
+    // A bad value panics here, before any work.
+    let gk_rounds = zksketch::sketch::gk_bandmerge::default_gk_rounds();
     if families.contains(&StreamFamily::GkBandmerge2)
         || families.contains(&StreamFamily::GkBandmerge2Gl)
     {
         println!(
-            "gk: capacity={gk_cap}, s=1/ε={gk_s} ({})",
-            if gk_explicit { "EXP_GK_S set" } else { "derived from cap (set EXP_GK_S to override)" }
+            "gk: capacity={gk_cap}, s=1/ε={gk_s} ({}), rounds={} (EXP_GK_ROUNDS)",
+            if gk_explicit { "EXP_GK_S set" } else { "derived from cap (set EXP_GK_S to override)" },
+            gk_rounds.label()
         );
         // A manual EXP_GK_S that is too big for the cap fragments → flag it.
         if gk_explicit {
@@ -626,6 +642,10 @@ fn main() {
         bloom_log_w: env_size("EXP_BLOOM_LOGW", 14),
         // KMV: keep the k = 1024 smallest distinct hashes by default.
         kmv_k: env_size("EXP_KMV_K", 1024),
+        // GK round certification (EXP_GK_ROUNDS=sorted|stable, M3): read once
+        // here into the PUBLIC shape, from which the workers, the no-op
+        // VK-derivation leaf and the auditor build the leaf.
+        gk_rounds,
     };
 
     let dataset_str = env_str("EXP_DATASET", "uniform");
@@ -740,7 +760,7 @@ fn main() {
             ("commit", commit.label().into()),
             ("salt_seed", commit.seed_label().into()),
             // GK round certification (EXP_GK_ROUNDS=sorted|stable, M3).
-            ("gk_rounds", zksketch::sketch::gk_bandmerge::default_gk_rounds().label().into()),
+            ("gk_rounds", shape.gk_rounds.label().into()),
         ],
     );
 
@@ -774,7 +794,11 @@ fn main() {
         // default `zk` feature) and whether the revealed LogUp sums are
         // masked (`zksketch::config`). `commit` above is only the state
         // commitment mode.
-        "pcs", "logup_mask", "status",
+        "pcs", "logup_mask",
+        // GK band-merge round certification (EXP_GK_ROUNDS: sorted|stable;
+        // n/a for the other families). With `variant` and `m` it pins the
+        // leaf circuit the auditor re-derives the VKs of.
+        "gk_rounds", "status",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -859,13 +883,21 @@ fn main() {
                             ));
                             // The GK round certification (EXP_GK_ROUNDS, M3) is part of
                             // the variant: its leaf/merge/root VKs differ from bm2's.
+                            // It is a public shape parameter (`fshape.gk_rounds`).
                             let vl = if family == StreamFamily::GkBandmerge2
-                                && zksketch::sketch::gk_bandmerge::default_gk_rounds()
+                                && fshape.gk_rounds
                                     == zksketch::sketch::gk_bandmerge::GkRounds::StableCompact
                             {
                                 "gk_bandmerge2_stable"
                             } else {
                                 family.label()
+                            };
+                            // `gk_rounds` column: sorted|stable for the BabyBear GK leaf
+                            // (the only family with the switch), n/a otherwise.
+                            let gk_col: &str = if family == StreamFamily::GkBandmerge2 {
+                                fshape.gk_rounds.label()
+                            } else {
+                                "n/a"
                             };
                             let sh = shape_str(family, &fshape);
                             // The 10 identity columns every row shares.
@@ -954,6 +986,7 @@ fn main() {
                                         row.push(commit.seed_label().into());
                                         row.push(zksketch::config::pcs_label().into());
                                         row.push(zksketch::config::logup_mask_label().into());
+                                        row.push(gk_col.into());
                                         row.push("ok".into());
                                         write_row(&csv, &row);
                                         let qstr = if c.n_queries > 0 {
@@ -1006,6 +1039,7 @@ fn main() {
                                         row.push(commit.seed_label().into());
                                         row.push(zksketch::config::pcs_label().into());
                                         row.push(zksketch::config::logup_mask_label().into());
+                                        row.push(gk_col.into());
                                         row.push(status.into());
                                         write_row(&csv, &row);
                                         eprintln!(
@@ -1059,6 +1093,7 @@ fn main() {
                                         row.push(commit.seed_label().into());
                                         row.push(zksketch::config::pcs_label().into());
                                         row.push(zksketch::config::logup_mask_label().into());
+                                        row.push(gk_col.into());
                                         row.push("ok".into());
                                         write_row(&csv, &row);
                                         let qstr = if c.n_queries > 0 {
@@ -1107,6 +1142,7 @@ fn main() {
                                         row.push(commit.seed_label().into());
                                         row.push(zksketch::config::pcs_label().into());
                                         row.push(zksketch::config::logup_mask_label().into());
+                                        row.push(gk_col.into());
                                         row.push("too_large".into());
                                         write_row(&csv, &row);
                                         eprintln!(

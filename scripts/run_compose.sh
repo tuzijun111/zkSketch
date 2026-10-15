@@ -176,10 +176,12 @@
 #   scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,local_fold_ms,
 #   merges_local,merges_cross,cross_rounds,comm_msgs,
 #   comm_bytes,comm_ms_measured,comm_model_ms,merge_total_ms,
-#   query_bind_ms,query_bind_ms_avg,commit,salt_seed,pcs,logup_mask,status
+#   query_bind_ms,query_bind_ms_avg,commit,salt_seed,pcs,logup_mask,gk_rounds,
+#   status
 #   (commit = plain|hiding, salt_seed = env|os|n/a: plonky3 only;
 #    pcs = hiding|nonhiding, logup_mask = on|off: the plonky3 binary's proof
-#    system, hiding/on under the default zk build)
+#    system, hiding/on under the default zk build; gk_rounds = sorted|stable
+#    for the GK band-merge leaf (EXP_GK_ROUNDS, M3), n/a for other families)
 #   (procs: total_time_ms = measured end-to-end wall (witness pass → root);
 #    leafgen_ms = real parallel slice-phase wall; merge_ms = cross-machine
 #    composition wall; proof_bytes/verify_ms are Θ(t) for per_batch vs O(1)

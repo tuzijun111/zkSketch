@@ -357,3 +357,56 @@ fn zero_masks_make_the_zk_replay_exact() {
     assert_eq!(const_hits, const_len, "zero masks: the zk replay is exact");
     assert_eq!(hits, vec![SECRET_KEY], "zero masks: the revealed sum singles out the secret key");
 }
+
+/// G-zk for the M3 StableCompact GK leaf (`GkRounds::StableCompact`, cap 16,
+/// m 8, s 3, `Expose::None`, Semantic, plain commitments), the same checks as
+/// [`revealed_sums_are_fresh_per_proof_and_zero_sum_per_bus`] on two proofs
+/// of one witness: masked, every revealed sum of a multi-member bus is fresh
+/// per proof, every bus sums to zero, a one-member bus reveals 0, one
+/// revealed sum per global interaction; the non-zk control repeats them.
+#[test]
+fn stable_gk_leaf_revealed_sums_are_fresh_and_zero_sum_per_bus() {
+    use zksketch::commitment::hiding::CommitMode;
+    use zksketch::sketch::gk_bandmerge::{apply_batch2, build_gkb2_leaf_rounds, Gk2State, GkRounds, GkbParams};
+    let params = GkbParams { capacity: 16, batch: 8, s: 3 };
+    let prior = apply_batch2(&Gk2State::empty(params), &[100, 400, 200, 700, 300, 600, 500, 800]);
+    let batch = vec![150u32, 650, 250, 750, 350, 550, 450, 850];
+    let mut leaf = build_gkb2_leaf_rounds(params, Expose::None, BINDING, CommitMode::Plain, GkRounds::StableCompact);
+    let a = leaf.prove_epoch(prior.clone(), batch.clone());
+    let b = leaf.prove_epoch(prior, batch);
+    let (pa, pb) = (&a.output.0, &b.output.0);
+    assert_eq!(buses(pa), buses(pb), "same circuit, same interactions");
+    let lookups = &a.output.1.prover_data.common.lookups;
+    let (mut fresh, mut repeated, mut total) = (0, 0, 0);
+    for (bus, members) in buses(pa) {
+        for p in [pa, pb] {
+            let sum = members
+                .iter()
+                .fold(Challenge::ZERO, |acc, &(i, g)| acc + p.proof.global_lookup_data[i][g].cumulative_sum);
+            assert_eq!(sum, Challenge::ZERO, "bus {bus}: revealed sums must balance");
+        }
+        for &(i, g) in &members {
+            let (ca, cb) = (pa.proof.global_lookup_data[i][g].cumulative_sum, pb.proof.global_lookup_data[i][g].cumulative_sum);
+            total += 1;
+            if members.len() == 1 {
+                assert_eq!((ca, cb), (Challenge::ZERO, Challenge::ZERO), "bus {bus}: a one-member bus reveals 0");
+            } else if ca == cb {
+                repeated += 1;
+            } else {
+                fresh += 1;
+            }
+        }
+    }
+    for (i, lds) in pa.proof.global_lookup_data.iter().enumerate() {
+        let globals = lookups[i].iter().filter(|l| matches!(l.kind, p3_lookup::Kind::Global(_))).count();
+        assert_eq!(lds.len(), globals, "instance {i}: one revealed sum per global interaction");
+    }
+    println!("stable GK leaf: global interactions {total}, fresh {fresh}, repeated {repeated} (zk = {ZK})");
+    assert!(total > 2, "the leaf has global interactions");
+    if ZK {
+        assert_eq!(repeated, 0, "zk: every multi-member-bus sum is masked afresh per proof");
+        assert!(fresh > 0);
+    } else {
+        assert_eq!(fresh, 0, "non-zk control: the sums are a deterministic function of the witness");
+    }
+}

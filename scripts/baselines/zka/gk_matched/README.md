@@ -121,9 +121,9 @@ its decoder proves step 3's answer.
 `gk_matched_check.sh` (and the driver's `--mode check|certify`) produces it:
 
 - **Native unit tests** (`cargo test --release --locked -p gk-matched-host`, 8 tests; they
-  pass in a debug build too, where zkSketch's `apply_batch2` stops at its `debug_assert!`
-  on a step that loses a record instead of truncating, and the tests count that as the
-  loss):
+  pass in a debug build too; zkSketch's `apply_batch2` stops at a step that loses a record
+  instead of truncating (since M3 a hard error in every build, before that a
+  `debug_assert!`), and the tests count that as the loss):
   every epoch of every implementation equals zkSketch's `apply_batch2` chain tuple by tuple
   at (capacity, m_sub) = (384, 128), (768, 512), (2048, 2048), (64, 256), with the
   commitment equal to SHA-256 of zkSketch's state; a tampered carried state, a wrong

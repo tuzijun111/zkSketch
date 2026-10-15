@@ -399,3 +399,85 @@ fn plain_kmv_vks_are_pinned_through_the_commit_api() {
         }
     }
 }
+
+/// The StableCompact GK leaf (M3, `GkRounds::StableCompact`) at the test
+/// shape (capacity 4, batch 4, s 2), `Plain`: its no-op leaf VK per layout
+/// [Boundary, Interval] and binding [Semantic, Bound] (it has no Legacy
+/// form), and the root VK of a two-leaf forest (one merge) derived the way
+/// the auditor does, from public parameters only (`dist_compose`'s
+/// `derive_dist_leaf_vk` / `derive_dist_root_vk` with
+/// `StreamShape::gk_rounds = StableCompact`, under the default Semantic
+/// binding and Interval layout). Recorded on branch m3-gk-stable
+/// (2026-10-16). The SortedCopy leaf keeps its pre-M3 pins
+/// ([`plain_noop_leaf_vks_are_pinned`]), and the two variants' VKs differ.
+#[test]
+fn stable_gk_vks_are_pinned() {
+    use crate::experiments::dist_compose::{derive_dist_leaf_vk, derive_dist_root_vk};
+    use crate::experiments::stream_compose::{StreamFamily, StreamMode, StreamShape};
+    use crate::recursion::recursive::noop_leaf::gk2_noop_leaf_rounds;
+    use crate::sketch::gk_bandmerge::GkRounds;
+    // [expose][Semantic, Bound].
+    #[cfg(not(feature = "zk"))]
+    const LEAF: [[Pin; 2]; 2] = [
+        [(0x6618_286d_1a41_f4db, 0x35f6_ec3b_a619_a9b6), (0x6618_286d_1a41_f4db, 0x35f6_ec3b_a619_a9b6)],
+        [(0x2b3b_a97a_affd_83cb, 0x62ba_3978_d12a_73eb), (0x2b3b_a97a_affd_83cb, 0x62ba_3978_d12a_73eb)],
+    ];
+    #[cfg(not(feature = "zk"))]
+    const ROOT2: Pin = (0x5ea7_e57b_f8d7_301b, 0x809e_0789_92dc_feb8);
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const LEAF: [[Pin; 2]; 2] = [
+        [(0xe7e1_0028_884f_4649, 0xf8c6_5248_b2aa_7ece), (0xe7e1_0028_884f_4649, 0xf8c6_5248_b2aa_7ece)],
+        [(0xba14_f010_7f18_28a0, 0x17af_af30_932e_8e67), (0xba14_f010_7f18_28a0, 0x17af_af30_932e_8e67)],
+    ];
+    #[cfg(feature = "zk")]
+    const ROOT2: Pin = (0x0cd0_f357_3209_9954, 0x0018_d0fa_8d85_b96f);
+
+    let plain = CommitMode::Plain;
+    let gp = GkbParams { capacity: 4, batch: 4, s: 2 };
+    let mut got = [[(0u64, 0u64); 2]; 2];
+    for e in EXPOSES {
+        for (j, b) in [Binding::Semantic, Binding::Bound].into_iter().enumerate() {
+            let leaf = of_proof(&gk2_noop_leaf_rounds(gp, e, b, plain, GkRounds::StableCompact));
+            got[ei(e)][j] = leaf;
+            let sorted = of_proof(&gk2_noop_leaf_rounds(gp, e, b, plain, GkRounds::SortedCopy));
+            assert_ne!(leaf.0, sorted.0, "{e:?} {b:?}: the variants' leaf VKs differ");
+        }
+    }
+    // The auditor's derivation from public parameters (default binding and
+    // layout: Semantic, Interval).
+    let sh = StreamShape {
+        d: 4,
+        w: 8,
+        b: 4,
+        capacity: 4,
+        gk_s: 2,
+        bloom_k: 3,
+        bloom_log_w: 7,
+        kmv_k: 4,
+        gk_rounds: GkRounds::StableCompact,
+    };
+    let fam = StreamFamily::GkBandmerge2;
+    let lv = derive_dist_leaf_vk(fam, &sh, 4, plain);
+    let rv = derive_dist_root_vk(fam, &sh, 4, StreamMode::Forest, 2, 1, plain);
+    eprintln!(
+        "gk2 stable root pin: {:#018x?}",
+        fingerprint(&rv.commitment, rv.shape.as_ref().expect("root shape"))
+    );
+    eprintln!("gk2 stable leaf pins: {got:#018x?}");
+    for e in EXPOSES {
+        for (j, b) in [Binding::Semantic, Binding::Bound].into_iter().enumerate() {
+            check(&format!("gk2 stable leaf {e:?} {b:?}"), got[ei(e)][j], LEAF[ei(e)][j]);
+        }
+    }
+    check(
+        "gk2 stable leaf (auditor derivation)",
+        fingerprint(&lv.commitment, lv.shape.as_ref().expect("leaf shape")),
+        LEAF[ei(Expose::Interval)][0],
+    );
+    check(
+        "gk2 stable forest(2) root (auditor derivation)",
+        fingerprint(&rv.commitment, rv.shape.as_ref().expect("root shape")),
+        ROOT2,
+    );
+}

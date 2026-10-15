@@ -193,8 +193,23 @@ pub fn gk2_noop_leaf_commit(
     binding: crate::sketch::bind::Binding,
     mode: crate::commitment::hiding::CommitMode,
 ) -> Proof {
-    use crate::sketch::gk_bandmerge::{Gk2State, build_gkb2_leaf_commit};
-    build_gkb2_leaf_commit(params, expose, binding, mode)
+    use crate::sketch::gk_bandmerge::GkRounds;
+    gk2_noop_leaf_rounds(params, expose, binding, mode, GkRounds::SortedCopy)
+}
+
+/// [`gk2_noop_leaf_commit`] with an explicit round certification
+/// ([`GkRounds`](crate::sketch::gk_bandmerge::GkRounds), M3): the no-op leaf
+/// of the `rounds` leaf circuit, whose VK is that of every real leaf of the
+/// variant. `GkRounds::SortedCopy` is [`gk2_noop_leaf_commit`] byte for byte.
+pub fn gk2_noop_leaf_rounds(
+    params: crate::sketch::gk_bandmerge::GkbParams,
+    expose: Expose,
+    binding: crate::sketch::bind::Binding,
+    mode: crate::commitment::hiding::CommitMode,
+    rounds: crate::sketch::gk_bandmerge::GkRounds,
+) -> Proof {
+    use crate::sketch::gk_bandmerge::{Gk2State, build_gkb2_leaf_rounds};
+    build_gkb2_leaf_rounds(params, expose, binding, mode, rounds)
         .prove_epoch_public_zero(1, Gk2State::empty(params), Vec::new())
         .output
         .0

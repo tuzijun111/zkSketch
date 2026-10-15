@@ -79,7 +79,7 @@ use gk_matched_core::{
 use gk_matched_methods::{AGGR_GKM_ELF, AGGR_GKM_ID, QUERIER_GKM_ELF, QUERIER_GKM_ID};
 use risc0_zkvm::{default_executor, default_prover, ExecutorEnv, ProverOpts, SessionInfo};
 use zksketch::experiments::stream_compose::gk_vals_of;
-use zksketch::sketch::gk_bandmerge::{apply_batch2, Gk2State, Gk2Tuple, GkbParams};
+use zksketch::sketch::gk_bandmerge::{apply_batch2, try_apply_batch2, Gk2State, Gk2Tuple, GkbParams};
 use zkvm_common::Event;
 
 const VALUE_MASK: u32 = 0x001F_FFFF;
@@ -286,7 +286,9 @@ fn chain(keys: &[u32], n: usize, m: usize, cbs: usize, cfg: GkmConfig) -> (Vec<E
         for j in 0..m / ms {
             let lo = e * m + j * ms;
             let vals = gk_vals_of(&keys[lo..lo + ms]);
-            zk = apply_batch2(&zk, &vals);
+            // apply_batch2 refuses an overflow since M3 (a hard error); report it
+            // here with the step and exit 3 as before.
+            zk = try_apply_batch2(&zk, &vals).unwrap_or_else(|o| o.lossy_state);
             let mass = zk_mass(&zk);
             if mass != zk.n {
                 eprintln!(
@@ -749,7 +751,7 @@ mod certify {
     use zksketch::experiments::prover_commit::ProverCommit;
     use zksketch::recursion::recursive::statement::composition_expose;
     use zksketch::sketch::bind::default_binding;
-    use zksketch::sketch::gk_bandmerge::{build_gkb2_leaf_commit, commit_gk2_state_with};
+    use zksketch::sketch::gk_bandmerge::{build_gkb2_leaf_rounds, commit_gk2_state_with, default_gk_rounds};
 
     pub struct Epoch {
         pub leaves: usize,
@@ -776,8 +778,15 @@ mod certify {
             let pc = if hiding { ProverCommit::hiding(SaltSeed::for_tests(seed)) } else { ProverCommit::plain() };
             let params = zk_params(cfg);
             let t0 = Instant::now();
-            // exactly exp_compose's leaf (src/experiments/stream_compose.rs prove_leaves)
-            let leaf = build_gkb2_leaf_commit(params, composition_expose(), default_binding(), pc.mode());
+            // exactly exp_compose's leaf (src/experiments/stream_compose.rs prove_leaves),
+            // including its round certification (EXP_GK_ROUNDS; unset = exp_compose's default)
+            let leaf = build_gkb2_leaf_rounds(
+                params,
+                composition_expose(),
+                default_binding(),
+                pc.mode(),
+                default_gk_rounds(),
+            );
             eprintln!("gk_matched certify: zkSketch GK leaf circuit built in {:.1} s ({})", t0.elapsed().as_secs_f64(), pc.label());
             Certifier { mode_label: pc.label(), pc, leaf, params, st: Gk2State::empty(params), t: 0 }
         }

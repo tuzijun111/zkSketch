@@ -8,6 +8,11 @@
 #   SIX_N       records in all = SIX_M x SIX_T  (default 16384)
 #   SIX_QNS     query points n of the zk-Analytics side (default: powers of two <= T)
 #   SIX_GK_CAP  zkSketch GK capacity            (default 2048)
+#   SIX_GK_ROUNDS  stable (default) | sorted: the zkSketch GK leaf's round certification
+#               (exp_compose EXP_GK_ROUNDS, M3). stable = the G1 stable-compaction circuit;
+#               sorted = the pre-M3 bm2 circuit (per-round sorted copy). Same batch rule
+#               (apply_batch2), commitments and decoder, different leaf/merge/root VKs; the
+#               run's CSV records it (variant gk_bandmerge2_stable, column gk_rounds).
 #   SIX_ZKA_GK  matched (default) | textbook: the zk-Analytics side's GK. matched = our port
 #               of zkSketch's GK rule (two-sided band-merge, apply_batch2) in their pipeline
 #               (../gk_matched): the SAME algorithm as the zkSketch side, with zkSketch's
@@ -59,6 +64,8 @@ fi
 SIX_N=${SIX_N:-$((SIX_M * SIX_T))}
 (( SIX_N == SIX_M * SIX_T )) || six_die "SIX_N=$SIX_N must equal SIX_M x SIX_T = $((SIX_M * SIX_T))"
 SIX_GK_CAP=${SIX_GK_CAP:-2048}
+SIX_GK_ROUNDS=${SIX_GK_ROUNDS:-stable}
+[[ $SIX_GK_ROUNDS == stable || $SIX_GK_ROUNDS == sorted ]] || six_die "SIX_GK_ROUNDS=$SIX_GK_ROUNDS must be stable or sorted"
 if [[ -z ${SIX_QNS:-} ]]; then
   SIX_QNS=1
   for ((q = 2; q <= SIX_T; q *= 2)); do SIX_QNS+=",$q"; done

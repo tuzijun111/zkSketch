@@ -1483,24 +1483,79 @@ fn merge2(a: &Gk2Tuple, b: &Gk2Tuple, dir: u8) -> (Gk2Tuple, Gk2Tuple) {
 /// Apply a batch of inserted values to the two-sided sketch: union old ‖ fresh,
 /// value-sort, two-sided neighbor-init, `L_f = ⌈log₂(cap+m)⌉` parity-0 fuse
 /// rounds (re-sorting between rounds to recompact), then compact to capacity.
+///
+/// A capacity overflow is a **hard error** (G-cap): this panics with the
+/// [`GkCapacityOverflow`] message (which names the capacity, so the harness
+/// records the run as `too_large`, a failed run). [`try_apply_batch2`] is the
+/// same step returning the error instead. The output for every step that
+/// keeps all its survivors is unchanged.
 pub fn apply_batch2(s_old: &Gk2State, batch_vals: &[u32]) -> Gk2State {
+    try_apply_batch2(s_old, batch_vals).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`apply_batch2`] with the capacity overflow as an error value: `Err` when
+/// the step would lose a survivor (more than `capacity` live rows after the
+/// `L_f` rounds, or a live unpaired last row of an odd `capacity + m` table,
+/// which the parity-0 rounds drop). Before M3 release builds dropped those
+/// rows silently (the check was a `debug_assert!`); no leaf circuit proves
+/// such a step (the SortedCopy leaf pins its excess rows to dummies, the
+/// StableCompact leaf pins `α^L_cap = 0` and the mass).
+pub fn try_apply_batch2(s_old: &Gk2State, batch_vals: &[u32]) -> Result<Gk2State, GkCapacityOverflow> {
     let b = build_bm2(s_old, batch_vals);
     // The two-sided sketch has no hard case, so a capacity ≥ the Gribelyuk bound
-    // 2s·ln(N/s+2)+2 never overflows.
-    // A capacity overflow is a HARD error (G-cap): silently dropping a
-    // survivor would break mass conservation and the εN guarantee, and no
-    // leaf can prove it.
-    assert!(
-        b.excess.iter().all(|t| !is_active2(t)),
-        "two-sided sketch exceeded capacity {} (declare s' ≥ 2s·ln(N/s+2)+2)",
-        s_old.params.capacity
-    );
-    Gk2State {
-        tuples: b.final_tuples,
-        params: s_old.params,
-        n: b.n_t,
+    // 2s·ln(N/s+2)+2 never overflows; bm2 is not a fusion fixed point, so the
+    // deployed capacities are empirical and the check is a real error path.
+    match b.capacity_error(s_old.params) {
+        Some(e) => Err(e),
+        None => Ok(Gk2State {
+            tuples: b.final_tuples,
+            params: s_old.params,
+            n: b.n_t,
+        }),
     }
 }
+
+/// A band-merge step ([`try_apply_batch2`]) that would lose a survivor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GkCapacityOverflow {
+    /// The declared capacity `s'`.
+    pub capacity: usize,
+    /// The leaf batch size `m`.
+    pub batch: usize,
+    /// Live rows after the `L_f` rounds (`> capacity` on an overflow).
+    pub survivors: usize,
+    /// Live rows an odd `capacity + m` table dropped as its unpaired last row.
+    pub unpaired_dropped: usize,
+    /// `N_t` after the step.
+    pub n_t: u64,
+    /// The LOSSY state release builds returned before M3 (the first
+    /// `capacity` rows of the last round, the dropped survivors' mass lost).
+    /// NOT a valid summary: kept only so the zk-Analytics ports of that code
+    /// (`scripts/baselines/zka/gk_bm2`), which reproduce it, can still be
+    /// compared row for row.
+    pub lossy_state: Gk2State,
+}
+
+impl std::fmt::Display for GkCapacityOverflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "GK capacity overflow: {} survivors > capacity {} at N_t = {} (batch {}{}); the step would \
+             lose a survivor, which is a hard error: declare a larger capacity (s' >= 2s·ln(N/s+2)+2)",
+            self.survivors,
+            self.capacity,
+            self.n_t,
+            self.batch,
+            if self.unpaired_dropped > 0 {
+                format!(", {} live unpaired row(s) of the odd table dropped", self.unpaired_dropped)
+            } else {
+                String::new()
+            }
+        )
+    }
+}
+
+impl std::error::Error for GkCapacityOverflow {}
 
 /// One fixed-size parity-0 two-sided fuse round: pairs `(2i, 2i+1)`; per pair it
 /// captures the two threshold booleans and the direction (`0` none, `1` a→b,
@@ -1594,6 +1649,30 @@ struct Bm2Build {
     theta: u64,
     n_prev: u64,
     n_t: u64,
+    /// Live rows dropped as the unpaired last row of an odd table (never on
+    /// the leaves' even tables).
+    unpaired_dropped: usize,
+}
+
+impl Bm2Build {
+    /// The capacity overflow of this replay, if it loses a survivor: a live
+    /// excess row (more than `capacity` survivors) or a dropped live unpaired
+    /// row. `None` for every step whose output keeps all its survivors.
+    fn capacity_error(&self, params: GkbParams) -> Option<GkCapacityOverflow> {
+        let live = |ts: &[Gk2Tuple]| ts.iter().filter(|t| is_active2(t)).count();
+        let excess = live(&self.excess);
+        if excess == 0 && self.unpaired_dropped == 0 {
+            return None;
+        }
+        Some(GkCapacityOverflow {
+            capacity: params.capacity,
+            batch: params.batch,
+            survivors: live(&self.final_tuples) + excess,
+            unpaired_dropped: self.unpaired_dropped,
+            n_t: self.n_t,
+            lossy_state: Gk2State { tuples: self.final_tuples.clone(), params, n: self.n_t },
+        })
+    }
 }
 
 /// Witness-capturing fixed-size replay of the two-sided band-merge: captures
@@ -1676,7 +1755,13 @@ fn finish_bm2(
     let lf = num_rounds(total);
     let mut cur = union_init.clone();
     let mut rounds = Vec::with_capacity(lf);
+    let mut unpaired_dropped = 0usize;
     for _ in 0..lf {
+        // An odd table's last row is never paired and comes out a dummy:
+        // a live one is a lost survivor (see `Bm2Build::capacity_error`).
+        if total % 2 == 1 && is_active2(&cur[total - 1]) {
+            unpaired_dropped += 1;
+        }
         let (fused, dir, cond1, cond2) = fuse_round_fixed2(&cur, theta);
         let mut ridx: Vec<usize> = (0..total).collect();
         ridx.sort_by_key(|&i| (fused[i].e, fused[i].t));
@@ -1705,6 +1790,7 @@ fn finish_bm2(
         theta,
         n_prev,
         n_t,
+        unpaired_dropped,
     }
 }
 
@@ -3183,27 +3269,55 @@ impl GkRounds {
     }
 }
 
-/// Parse an `EXP_GK_ROUNDS` lookup: unset or empty = [`GkRounds::SortedCopy`];
-/// `sorted` / `stable` (any case) select that variant; anything else panics.
-pub fn parse_gk_rounds_env(var: Result<String, std::env::VarError>) -> GkRounds {
+impl std::str::FromStr for GkRounds {
+    type Err = String;
+    /// `sorted` / `stable` (any case), the [`GkRounds::label`]s.
+    fn from_str(v: &str) -> Result<Self, String> {
+        if v.eq_ignore_ascii_case("sorted") {
+            Ok(GkRounds::SortedCopy)
+        } else if v.eq_ignore_ascii_case("stable") {
+            Ok(GkRounds::StableCompact)
+        } else {
+            Err(format!("GK rounds {v:?}: expected sorted or stable"))
+        }
+    }
+}
+
+/// The round certification the experiment harness uses when `EXP_GK_ROUNDS`
+/// is unset (under a bound binding, see [`default_gk_rounds`]). The library
+/// builders that predate M3 ([`build_gkb2_leaf_commit`] and friends) keep
+/// building [`GkRounds::SortedCopy`] whatever this says, so their VKs and
+/// pins never move.
+pub const HARNESS_DEFAULT_GK_ROUNDS: GkRounds = GkRounds::StableCompact;
+
+/// Parse an `EXP_GK_ROUNDS` lookup: `Some` variant for `sorted` / `stable`
+/// (any case), `None` when unset or empty; anything else panics.
+pub fn parse_gk_rounds_env(var: Result<String, std::env::VarError>) -> Option<GkRounds> {
     match var {
-        Ok(v) if v.eq_ignore_ascii_case("sorted") => GkRounds::SortedCopy,
-        Ok(v) if v.eq_ignore_ascii_case("stable") => GkRounds::StableCompact,
-        Ok(v) if v.is_empty() => GkRounds::default(),
-        Ok(v) => panic!("EXP_GK_ROUNDS={v:?}: expected sorted or stable"),
-        Err(std::env::VarError::NotPresent) => GkRounds::default(),
+        Ok(v) if v.is_empty() => None,
+        Ok(v) => Some(v.parse().unwrap_or_else(|e: String| panic!("EXP_GK_ROUNDS: {e}"))),
+        Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(v)) => {
             panic!("EXP_GK_ROUNDS={v:?}: not valid UTF-8; expected sorted or stable")
         }
     }
 }
 
-/// The process-default round certification (`EXP_GK_ROUNDS`). Every GK
-/// band-merge leaf built through [`build_gkb2_leaf_commit`] (the harness
-/// leaves, the no-op VK-derivation leaf, the auditor's re-derivation) uses
-/// it, so one process never mixes the two VKs.
+/// The experiment harness's GK round certification: `EXP_GK_ROUNDS` when set,
+/// else [`HARNESS_DEFAULT_GK_ROUNDS`] under a bound binding and
+/// [`GkRounds::SortedCopy`] under `ZKSKETCH_BINDING=legacy` (the StableCompact
+/// leaf needs the in-circuit θ). The harness reads it ONCE into the public
+/// stream shape (`StreamShape::gk_rounds`), from which the workers, the no-op
+/// VK-derivation leaf and the auditor all build the leaf, so one run never
+/// mixes the two VKs and the auditor derives them from public parameters.
 pub fn default_gk_rounds() -> GkRounds {
-    parse_gk_rounds_env(std::env::var("EXP_GK_ROUNDS"))
+    parse_gk_rounds_env(std::env::var("EXP_GK_ROUNDS")).unwrap_or_else(|| {
+        if crate::sketch::bind::default_binding().is_bound() {
+            HARNESS_DEFAULT_GK_ROUNDS
+        } else {
+            GkRounds::SortedCopy
+        }
+    })
 }
 
 /// A built, reusable GK band-merge leaf: circuit graph + prover data +
@@ -3234,6 +3348,10 @@ pub struct Gkb2LeafCircuit {
     /// ([`GkRounds`]); the batch rule, `Com(S_t)` and the statement are the
     /// same under both, the VKs are not.
     rounds: GkRounds,
+    /// The StableCompact checks this leaf was built with (always
+    /// [`StableChecks::ALL`] outside tests; the witness packer follows the
+    /// liveness-carry switch).
+    stable_checks: StableChecks,
 }
 
 /// Build the reusable GK band-merge leaf circuit for a shape.
@@ -3301,16 +3419,16 @@ pub fn build_gkb2_leaf_expose_with(
 /// are witnesses, so the VK does not depend on them; prove with
 /// [`Gkb2LeafCircuit::prove_epoch_commit`].
 ///
-/// The round certification is the process default [`default_gk_rounds`]
-/// (`EXP_GK_ROUNDS`, unset = [`GkRounds::SortedCopy`], today's circuit byte
-/// for byte); see [`build_gkb2_leaf_rounds`].
+/// This is the [`GkRounds::SortedCopy`] leaf (the pre-M3 circuit byte for
+/// byte, whatever `EXP_GK_ROUNDS` says); [`build_gkb2_leaf_rounds`] selects
+/// the round certification.
 pub fn build_gkb2_leaf_commit(
     params: GkbParams,
     expose: Expose,
     binding: Binding,
     mode: CommitMode,
 ) -> Gkb2LeafCircuit {
-    build_gkb2_leaf_rounds(params, expose, binding, mode, default_gk_rounds())
+    build_gkb2_leaf_rounds(params, expose, binding, mode, GkRounds::SortedCopy)
 }
 
 /// [`build_gkb2_leaf_commit`] with an explicit round certification
@@ -3989,6 +4107,7 @@ fn build_gkb2_leaf_sorted(
         mode,
         batch_index: 1,
         rounds: GkRounds::SortedCopy,
+        stable_checks: StableChecks::ALL,
     }
 }
 
@@ -4078,7 +4197,9 @@ fn stable_rounds(union_init: &[Gk2Tuple], theta: u64, cap: usize) -> StableBuild
                 }
             }
             lt.push(l as u8);
-            cond.push(cd as u8);
+            // The circuit gates the threshold test by α_b (a dead b's stale
+            // fields may double-count mass), which forces cond = 0 there.
+            cond.push((cd && alive[2 * j + 1] == 1) as u8);
         }
         let mut src = vec![usize::MAX; total];
         let mut rho = 0usize;
@@ -4111,7 +4232,8 @@ fn stable_rounds(union_init: &[Gk2Tuple], theta: u64, cap: usize) -> StableBuild
 /// `lo = (e, g₁, g₂, B(k,0,p) + alive_p·LIVE_CARRY)`, `hi = (Δ₂, t, Δ₁, B(k,1,p))`.
 /// The op's input element of row `i` is the same with `p = dest_i` and
 /// `alive_p = sflag_i`, so the honest output is the input permuted by `src`.
-fn pack_stable_out(ts: &[Gk2Tuple], k: usize, alive: &[u8]) -> Vec<Challenge> {
+fn pack_stable_out(ts: &[Gk2Tuple], k: usize, alive: &[u8], live_carry: bool) -> Vec<Challenge> {
+    let carry = if live_carry { LIVE_CARRY } else { 0 };
     use p3_field::BasedVectorSpace;
     ts.iter()
         .enumerate()
@@ -4120,7 +4242,7 @@ fn pack_stable_out(ts: &[Gk2Tuple], k: usize, alive: &[u8]) -> Vec<Challenge> {
                 Val::from_u32(t.e),
                 Val::from_u32(t.g as u32),
                 Val::from_u32(t.g_o as u32),
-                Val::from_u64(bind_coord(k, 0, p) + alive[p] as u64 * LIVE_CARRY),
+                Val::from_u64(bind_coord(k, 0, p) + alive[p] as u64 * carry),
             ];
             let hi = [
                 Val::from_u32(t.delta_o as u32),
@@ -4136,10 +4258,207 @@ fn pack_stable_out(ts: &[Gk2Tuple], k: usize, alive: &[u8]) -> Vec<Challenge> {
         .collect()
 }
 
+/// **The checks of the StableCompact leaf, one switch each** — the single
+/// place that lists them. [`build_gkb2_leaf_stable`] builds every check whose
+/// switch is `true`; outside `cfg(test)` all are always on
+/// ([`StableChecks::ALL`]). A test removes ONE check with
+/// [`with_stable_checks`] to build the positive-control circuit of a
+/// trace-level attack (G-sound): with the check off the forgery must verify
+/// (and certify a wrong state), with it on the AIR / LogUp / range argument
+/// must reject it. Removing a check changes the leaf's VK
+/// (`stable_tests::g1_stable_check_switches_are_clean`).
+///
+/// Stage numbers refer to [`build_gkb2_leaf_stable`]. Hints are the private
+/// inputs `is_fresh`, `lt`, `cond`, `alive` (per round), the compacted round
+/// tables `out_r` and the inverse hints; every other wire is computed.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StableChecks {
+    /// Stage 3: init `e < 2^22` and `g₁, g₂, Δ₁, Δ₂, t < 2^24`, batch
+    /// `e < 2^22` (the union range checks, moved onto the committed rows).
+    pub init_ranges: bool,
+    /// Stage 3: `N_{t-1} − t ∈ [0, 2^24)` on every init row (review
+    /// G1-minor: no init row carries `t > N_{t-1}`; dead rows have `t = 0`).
+    pub init_t_le_n_prev: bool,
+    /// Stage 4: union source binding (`bind_output_pair`, op 0).
+    pub union_source: bool,
+    /// Stage 4: union `e` non-decreasing (22-bit) and `t` non-decreasing
+    /// among equal `e` (24-bit): the `(e, t)` order that makes `α⁰` a prefix.
+    pub union_order: bool,
+    /// Stage 4: dead union rows are the canonical dummy,
+    /// `(1 − α⁰)·{g₁, g₂, Δ₁, Δ₂, t} = 0`.
+    pub dead_union_canonical: bool,
+    /// Stage 4: `N_{t-1}, N_t < 2^24`.
+    pub n_ranges: bool,
+    /// Stage 5: `is_fresh` boolean.
+    pub fresh_bool: bool,
+    /// Stage 5: `is_fresh = [N_{t-1} + 1 ≤ t]` range test (24-bit).
+    pub fresh_range: bool,
+    /// Stage 5: `Σ is_fresh = #active(B_t)`.
+    pub fresh_count: bool,
+    /// Stage 6: `lt` boolean.
+    pub lt_bool: bool,
+    /// Stage 6: `lt = [a.t > b.t]` range test (24-bit).
+    pub lt_range: bool,
+    /// Stage 6: `cond` boolean.
+    pub cond_bool: bool,
+    /// Stage 6: `cond = [S ≤ θ]` range test (24-bit, gated by `α_b`).
+    pub cond_range: bool,
+    /// Stage 6: `α'_p` boolean on every round output row.
+    pub alive_bool: bool,
+    /// Stage 6: round output position pins, `lo[3] = B(k,0,p) + α'_p·C`,
+    /// `hi[3] = B(k,1,p)` (the destination binding).
+    pub out_pos_pins: bool,
+    /// Stage 6: the liveness carry `+ sflag_i·C` on the emitted lo
+    /// coordinate and `+ α'_p·C` on the output pin; off, `α'` is a free
+    /// boolean hint not tied to the survivor flags.
+    pub live_carry: bool,
+    /// Stage 7: `final = α^L ⊙ R^L` on the first `cap` rows (dead rows →
+    /// `(E_MAX, 0…0)`); off, the committed final is not tied to the rounds.
+    pub final_bind: bool,
+    /// Stage 7: `α^L_cap = 0` (at most `cap` survivors).
+    pub alive_cap: bool,
+    /// Stage 8: `Σ_{p<cap} α(g₁ + g₂ + 1) = N_t`.
+    pub mass: bool,
+    /// Stage 8: `N_{t-1} + #active(B_t) = N_t`.
+    pub n_count: bool,
+    /// Stage 9: `θ = ⌊N_t / s⌋` ([`bind_theta`]).
+    pub theta: bool,
+    /// Stage 10: fresh arrival positions ([`bind_arrival_positions`]).
+    pub arrivals: bool,
+}
+
+impl StableChecks {
+    /// Every check on: the deployed circuit.
+    pub const ALL: StableChecks = StableChecks {
+        init_ranges: true,
+        init_t_le_n_prev: true,
+        union_source: true,
+        union_order: true,
+        dead_union_canonical: true,
+        n_ranges: true,
+        fresh_bool: true,
+        fresh_range: true,
+        fresh_count: true,
+        lt_bool: true,
+        lt_range: true,
+        cond_bool: true,
+        cond_range: true,
+        alive_bool: true,
+        out_pos_pins: true,
+        live_carry: true,
+        final_bind: true,
+        alive_cap: true,
+        mass: true,
+        n_count: true,
+        theta: true,
+        arrivals: true,
+    };
+
+    /// Every switch with its name, all on; a test turns one off by name
+    /// ([`Self::without`]).
+    #[cfg(test)]
+    pub fn names() -> &'static [&'static str] {
+        &[
+            "init_ranges",
+            "init_t_le_n_prev",
+            "union_source",
+            "union_order",
+            "dead_union_canonical",
+            "n_ranges",
+            "fresh_bool",
+            "fresh_range",
+            "fresh_count",
+            "lt_bool",
+            "lt_range",
+            "cond_bool",
+            "cond_range",
+            "alive_bool",
+            "out_pos_pins",
+            "live_carry",
+            "final_bind",
+            "alive_cap",
+            "mass",
+            "n_count",
+            "theta",
+            "arrivals",
+        ]
+    }
+
+    /// All checks on except `name` (one of [`Self::names`]).
+    #[cfg(test)]
+    pub fn without(name: &str) -> StableChecks {
+        let mut c = Self::ALL;
+        let f = match name {
+            "init_ranges" => &mut c.init_ranges,
+            "init_t_le_n_prev" => &mut c.init_t_le_n_prev,
+            "union_source" => &mut c.union_source,
+            "union_order" => &mut c.union_order,
+            "dead_union_canonical" => &mut c.dead_union_canonical,
+            "n_ranges" => &mut c.n_ranges,
+            "fresh_bool" => &mut c.fresh_bool,
+            "fresh_range" => &mut c.fresh_range,
+            "fresh_count" => &mut c.fresh_count,
+            "lt_bool" => &mut c.lt_bool,
+            "lt_range" => &mut c.lt_range,
+            "cond_bool" => &mut c.cond_bool,
+            "cond_range" => &mut c.cond_range,
+            "alive_bool" => &mut c.alive_bool,
+            "out_pos_pins" => &mut c.out_pos_pins,
+            "live_carry" => &mut c.live_carry,
+            "final_bind" => &mut c.final_bind,
+            "alive_cap" => &mut c.alive_cap,
+            "mass" => &mut c.mass,
+            "n_count" => &mut c.n_count,
+            "theta" => &mut c.theta,
+            "arrivals" => &mut c.arrivals,
+            other => panic!("unknown StableChecks switch {other:?}"),
+        };
+        *f = false;
+        c
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only: the checks [`build_gkb2_leaf_stable`] builds on this thread.
+    static STABLE_CHECKS: std::cell::Cell<StableChecks> = const { std::cell::Cell::new(StableChecks::ALL) };
+}
+
+/// The StableCompact checks a leaf built on this thread gets: always
+/// [`StableChecks::ALL`] outside tests.
+fn stable_checks() -> StableChecks {
+    #[cfg(test)]
+    {
+        STABLE_CHECKS.with(|c| c.get())
+    }
+    #[cfg(not(test))]
+    {
+        StableChecks::ALL
+    }
+}
+
+/// Test-only: build StableCompact leaves inside `f` with `checks` (one check
+/// removed, for a positive control); restores the previous set afterwards,
+/// also on a panic.
+#[cfg(test)]
+pub(crate) fn with_stable_checks<R>(checks: StableChecks, f: impl FnOnce() -> R) -> R {
+    struct Restore(StableChecks);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STABLE_CHECKS.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(STABLE_CHECKS.with(|c| c.replace(checks)));
+    f()
+}
+
 /// `cond = [x ≤ y]` from `dm1 = x − y − 1`, in 4 ALU ops plus the range
 /// check: `w = dm1 − cond·(2·dm1 + 1)`, i.e. `(1−cond)·(x−y−1) + cond·(y−x)`,
 /// the [`force_le`] witness. With `|x − y| < 2^bits ≪ p`, a wrong (boolean)
 /// `cond` makes `w ≡ −w_true − 1` wrap to `≈ p` and fail the range check.
+/// `(boolean, range)` switch the two halves (test-only positive controls,
+/// [`StableChecks`]).
+#[allow(clippy::too_many_arguments)]
 fn force_le_dm1(
     b: &mut CircuitBuilder<Challenge>,
     cond: ExprId,
@@ -4147,12 +4466,18 @@ fn force_le_dm1(
     one: ExprId,
     two: ExprId,
     bits: usize,
+    boolean: bool,
+    range: bool,
 ) {
-    b.assert_bool(cond);
-    let k = b.mul_add(dm1, two, one);
-    let ck = b.mul(cond, k);
-    let w = b.sub(dm1, ck);
-    let _ = b.add_range_bits::<Val>(w, bits).expect("force_le_dm1 range");
+    if boolean {
+        b.assert_bool(cond);
+    }
+    if range {
+        let k = b.mul_add(dm1, two, one);
+        let ck = b.mul(cond, k);
+        let w = b.sub(dm1, ck);
+        let _ = b.add_range_bits::<Val>(w, bits).expect("force_le_dm1 range");
+    }
 }
 
 /// **The G1 stable-compaction band-merge leaf** (`GkRounds::StableCompact`).
@@ -4183,15 +4508,21 @@ fn force_le_dm1(
 ///   its fields are the emitted ones, bounded by induction (`merge ⇒ the new
 ///   side mass + Δ ≤ θ < 2^24`).
 ///
+/// The threshold test is gated by `α_b` (`dm1 = α_b·(S − 1 − θ)`): a dead
+/// `b` forces `cond = 0` (it never merges anyway), so stale dead fields,
+/// which may double-count mass, never reach the 24-bit test.
+///
 /// Once per leaf: init fields range-checked (e 22-bit, the rest 24-bit) and
-/// batch `e` (22-bit) instead of every union row; `N_{t-1}, N_t < 2^24`; the
-/// union's `(e,t)` order, neighbour-init and source binding as before; union
-/// liveness `α⁰ = [e ≠ E_MAX]` with dead union rows pinned to the canonical
-/// dummy; `Σ is_fresh = #active(B_t)` (no init row with a live `t > N_{t-1}`,
-/// review G1-minor); final `= α^L ⊙ R^L` (dead → `(E_MAX, 0…0)`) on the first
-/// `cap` rows and `α^L_cap = 0` (overflow is unprovable); mass and `N_t`, θ
-/// and arrival bindings as before. Requires a bound binding (`Semantic` /
-/// `Bound`): the 24-bit tests rely on the in-circuit `θ ≤ θ_max`.
+/// batch `e` (22-bit) instead of every union row; `N_{t-1} − t ∈ [0, 2^24)`
+/// on every init row (review G1-minor: no init row arrives after
+/// `N_{t-1}`); `N_{t-1}, N_t < 2^24`; the union's `(e,t)` order,
+/// neighbour-init and source binding as before; union liveness
+/// `α⁰ = [e ≠ E_MAX]` with dead union rows pinned to the canonical dummy;
+/// `Σ is_fresh = #active(B_t)`; final `= α^L ⊙ R^L` (dead → `(E_MAX, 0…0)`)
+/// on the first `cap` rows and `α^L_cap = 0` (overflow is unprovable); mass
+/// and `N_t`, θ and arrival bindings as before. Requires a bound binding
+/// (`Semantic` / `Bound`): the 24-bit tests rely on the in-circuit
+/// `θ ≤ θ_max`. Every check has a test-only switch ([`StableChecks`]).
 fn build_gkb2_leaf_stable(
     params: GkbParams,
     expose: Expose,
@@ -4202,6 +4533,8 @@ fn build_gkb2_leaf_stable(
         binding.is_bound(),
         "GkRounds::StableCompact needs a Semantic/Bound binding (in-circuit θ and arrival positions)"
     );
+    // Every check on outside tests (see `StableChecks`).
+    let chk = stable_checks();
     let expose_boundary = expose == Expose::Boundary;
     let cap = params.capacity;
     let m = params.batch;
@@ -4353,13 +4686,26 @@ fn build_gkb2_leaf_stable(
         b.connect(batch_f[2 * j + 1][0], zero);
         b.connect(batch_f[2 * j + 1][2], zero);
         b.connect(batch_f[2 * j + 1][3], zero);
-        let _ = b.add_range_bits::<Val>(batch_f[2 * j][0], E_BITS).expect("batch e range");
+        if chk.init_ranges {
+            let _ = b.add_range_bits::<Val>(batch_f[2 * j][0], E_BITS).expect("batch e range");
+        }
     }
     for i in 0..cap {
         let f = fld6(&init_f, i);
-        let _ = b.add_range_bits::<Val>(f[0], E_BITS).expect("init e range");
-        for (k, what) in [(1, "init g₁"), (2, "init g₂"), (3, "init Δ₁"), (4, "init Δ₂"), (5, "init t")] {
-            let _ = b.add_range_bits::<Val>(f[k], MASS_BITS).expect(what);
+        if chk.init_ranges {
+            let _ = b.add_range_bits::<Val>(f[0], E_BITS).expect("init e range");
+            for (k, what) in [(1, "init g₁"), (2, "init g₂"), (3, "init Δ₁"), (4, "init Δ₂"), (5, "init t")] {
+                let _ = b.add_range_bits::<Val>(f[k], MASS_BITS).expect(what);
+            }
+        }
+        // No init row arrives after N_{t-1} (review G1-minor): `N_{t-1} − t ∈
+        // [0, 2^24)`. A dead init row is the canonical dummy (`t = 0`, the
+        // Stage-4 pin on its union image), so this is `α_init·(N_{t-1} − t)
+        // ∈ [0, 2^24)` without the α; with `t, N_{t-1} < 2^24` a wrap is
+        // impossible.
+        if chk.init_t_le_n_prev {
+            let slack = b.sub(n_prev_pi, f[5]);
+            let _ = b.add_range_bits::<Val>(slack, MASS_BITS).expect("init t ≤ N_{t-1}");
         }
     }
     let mut combined: Vec<ExprId> = Vec::with_capacity(2 * total);
@@ -4392,17 +4738,21 @@ fn build_gkb2_leaf_stable(
     }
 
     // ── Stage 4: union source binding, (e,t) order, liveness ──
-    for r in 0..total {
-        bind_output_pair(&mut b, &uraw_f, r, 0);
+    if chk.union_source {
+        for r in 0..total {
+            bind_output_pair(&mut b, &uraw_f, r, 0);
+        }
     }
-    for r in 0..total - 1 {
-        let diff = b.sub(uraw_f[2 * (r + 1)][0], uraw_f[2 * r][0]);
-        let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("union e sortedness");
-        let nz = force_nz(&mut b, diff, de_inv_union[r], one, zero);
-        let is_de_zero = b.sub(one, nz);
-        let dt = b.sub(uraw_f[2 * (r + 1) + 1][1], uraw_f[2 * r + 1][1]);
-        let w = b.mul(is_de_zero, dt);
-        let _ = b.add_range_bits::<Val>(w, MASS_BITS).expect("union t tiebreak");
+    if chk.union_order {
+        for r in 0..total - 1 {
+            let diff = b.sub(uraw_f[2 * (r + 1)][0], uraw_f[2 * r][0]);
+            let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("union e sortedness");
+            let nz = force_nz(&mut b, diff, de_inv_union[r], one, zero);
+            let is_de_zero = b.sub(one, nz);
+            let dt = b.sub(uraw_f[2 * (r + 1) + 1][1], uraw_f[2 * r + 1][1]);
+            let w = b.mul(is_de_zero, dt);
+            let _ = b.add_range_bits::<Val>(w, MASS_BITS).expect("union t tiebreak");
+        }
     }
     // α⁰_r = [e_r ≠ E_MAX]: a prefix (e ≤ E_MAX and sorted). Dead union rows
     // must be the canonical dummy (E_MAX, 0…0): the final masks them, so a
@@ -4412,16 +4762,20 @@ fn build_gkb2_leaf_stable(
         let f = fld6b(&uraw_f, r);
         let de = b.sub(e_max, f[0]);
         let a0 = force_nz(&mut b, de, e_inv_union[r], one, zero);
-        let dead = b.sub(one, a0);
-        for k in 1..6 {
-            let z = b.mul(f[k], dead);
-            b.connect(z, zero);
+        if chk.dead_union_canonical {
+            let dead = b.sub(one, a0);
+            for k in 1..6 {
+                let z = b.mul(f[k], dead);
+                b.connect(z, zero);
+            }
         }
         alive_in.push(a0);
     }
     // N_{t-1}, N_t < 2^24: bounds every fresh t = N_{t-1}+1+j ≤ N_t (Stage 10).
-    let _ = b.add_range_bits::<Val>(n_prev_pi, MASS_BITS).expect("N_{t-1} range");
-    let _ = b.add_range_bits::<Val>(n_t_pi, MASS_BITS).expect("N_t range");
+    if chk.n_ranges {
+        let _ = b.add_range_bits::<Val>(n_prev_pi, MASS_BITS).expect("N_{t-1} range");
+        let _ = b.add_range_bits::<Val>(n_t_pi, MASS_BITS).expect("N_t range");
+    }
     // #active(B_t) = Σ [batch.e ≠ E_MAX].
     let mut count_batch = zero;
     let mut batch_act: Vec<ExprId> = Vec::with_capacity(m);
@@ -4438,10 +4792,12 @@ fn build_gkb2_leaf_stable(
     let mut fresh_count = zero;
     for r in 0..total {
         let dm1 = b.sub(n_prev_pi, uraw_f[2 * r + 1][1]); // (N_{t-1}+1) − t − 1
-        force_le_dm1(&mut b, is_fresh[r], dm1, one, two, MASS_BITS);
+        force_le_dm1(&mut b, is_fresh[r], dm1, one, two, MASS_BITS, chk.fresh_bool, chk.fresh_range);
         fresh_count = b.add(fresh_count, is_fresh[r]);
     }
-    b.connect(fresh_count, count_batch);
+    if chk.fresh_count {
+        b.connect(fresh_count, count_batch);
+    }
     let mut d1: Vec<ExprId> = vec![zero; total];
     for r in (0..total).rev() {
         let base = if r + 1 < total { b.add(uraw_f[2 * (r + 1)][1], d1[r + 1]) } else { zero };
@@ -4476,7 +4832,7 @@ fn build_gkb2_leaf_stable(
             let (al_a, al_b) = (alive_in[2 * j], alive_in[2 * j + 1]);
             // lt = [a.t > b.t] = [b.t + 1 ≤ a.t]
             let dm1t = b.sub(bb[5], a[5]);
-            force_le_dm1(&mut b, lt[round][j], dm1t, one, two, MASS_BITS);
+            force_le_dm1(&mut b, lt[round][j], dm1t, one, two, MASS_BITS, chk.lt_bool, chk.lt_range);
             // cond = [S ≤ θ], S = g₂ₐ + g₁_b + sel(lt; g₁ₐ, g₂_b) + sel(lt; Δ₁_b, Δ₂ₐ) + 1
             let c = b.add(a[2], bb[1]);
             let dg = b.sub(a[1], bb[2]);
@@ -4485,8 +4841,15 @@ fn build_gkb2_leaf_stable(
             let dd = b.sub(bb[3], a[4]);
             let seld = b.mul_add(lt[round][j], dd, a[4]);
             let u = b.add(mprime, seld);
-            let dm1c = b.sub(u, theta_pi); // S − 1 − θ
-            force_le_dm1(&mut b, cond[round][j], dm1c, one, two, MASS_BITS);
+            // S − 1 − θ, gated by α_b: a dead b never merges (merge = cond·α_b),
+            // and its STALE fields may double-count mass the survivor already
+            // absorbed (S up to ≈ 2·N_t + θ), which the 24-bit test could not
+            // hold for N_t ≥ 2^23; gated, a dead b forces cond = 0 instead.
+            // With α_b = 1 both rows are live (α is a prefix), their masses
+            // are disjoint, `S ≤ N_t + θ`, and every operand is < 2^26 ≪ p.
+            let dm1c_raw = b.sub(u, theta_pi);
+            let dm1c = b.mul(dm1c_raw, al_b);
+            force_le_dm1(&mut b, cond[round][j], dm1c, one, two, MASS_BITS, chk.cond_bool, chk.cond_range);
             // merge only a live b (α is a prefix, so then a is live too)
             let merge = b.mul(cond[round][j], al_b);
             let dir1 = b.mul(lt[round][j], merge);
@@ -4512,7 +4875,7 @@ fn build_gkb2_leaf_stable(
             let v = emitted[i];
             let omsf = b.sub(one, sflag[i]);
             let dest_lo = b.mul_add(omsf, tail[i], rho);
-            let lo_coord = b.mul_add(sflag[i], live_c, dest_lo);
+            let lo_coord = if chk.live_carry { b.mul_add(sflag[i], live_c, dest_lo) } else { dest_lo };
             let hi_coord = b.add(dest_lo, gap);
             let lo = b
                 .recompose_base_coeffs_to_ext::<Val>(&[v[0], v[1], v[2], lo_coord])
@@ -4535,12 +4898,16 @@ fn build_gkb2_leaf_stable(
         let out_f: Vec<Vec<ExprId>> = out_packed[round].iter().map(|&p| dec(&mut b, p)).collect();
         for p in 0..total {
             let al = alive[round][p];
-            b.assert_bool(al);
-            let c_lo = b.alloc_const(Challenge::from_u64(bind_coord(k_op, 0, p)), "out_lo");
-            let c_hi = b.alloc_const(Challenge::from_u64(bind_coord(k_op, 1, p)), "out_hi");
-            let want_lo = b.mul_add(al, live_c, c_lo);
-            b.connect(out_f[2 * p][3], want_lo);
-            b.connect(out_f[2 * p + 1][3], c_hi);
+            if chk.alive_bool {
+                b.assert_bool(al);
+            }
+            if chk.out_pos_pins {
+                let c_lo = b.alloc_const(Challenge::from_u64(bind_coord(k_op, 0, p)), "out_lo");
+                let c_hi = b.alloc_const(Challenge::from_u64(bind_coord(k_op, 1, p)), "out_hi");
+                let want_lo = if chk.live_carry { b.mul_add(al, live_c, c_lo) } else { c_lo };
+                b.connect(out_f[2 * p][3], want_lo);
+                b.connect(out_f[2 * p + 1][3], c_hi);
+            }
         }
         cur = (0..total).map(|p| fld6b(&out_f, p)).collect();
         alive_in = alive[round].clone();
@@ -4559,29 +4926,41 @@ fn build_gkb2_leaf_stable(
         let fd1 = b.mul(al, f[3]);
         let fd2 = b.mul(al, f[4]);
         let ft = b.mul(al, f[5]);
-        b.connect(final_f[2 * i][0], fe);
-        b.connect(final_f[2 * i][1], fg1);
-        b.connect(final_f[2 * i][2], fg2);
-        b.connect(final_f[2 * i][3], fd1);
-        b.connect(final_f[2 * i + 1][0], fd2);
-        b.connect(final_f[2 * i + 1][1], ft);
-        b.connect(final_f[2 * i + 1][2], zero);
-        b.connect(final_f[2 * i + 1][3], zero);
+        if chk.final_bind {
+            b.connect(final_f[2 * i][0], fe);
+            b.connect(final_f[2 * i][1], fg1);
+            b.connect(final_f[2 * i][2], fg2);
+            b.connect(final_f[2 * i][3], fd1);
+            b.connect(final_f[2 * i + 1][0], fd2);
+            b.connect(final_f[2 * i + 1][1], ft);
+            b.connect(final_f[2 * i + 1][2], zero);
+            b.connect(final_f[2 * i + 1][3], zero);
+        }
         // ── Stage 8 (mass): Σ α(g₁+g₂+1) = N_t ──
         let gg = b.add(fg1, fg2);
         mass = b.add(mass, gg);
         count = b.add(count, al);
     }
     // Capacity: the live rows are a prefix, so α^L_cap = 0 ⟺ #survivors ≤ cap.
-    b.connect(alive_in[cap], zero);
-    mass = b.add(mass, count);
-    b.connect(mass, n_t_pi);
-    let np_plus_b = b.add(n_prev_pi, count_batch);
-    b.connect(np_plus_b, n_t_pi);
+    if chk.alive_cap {
+        b.connect(alive_in[cap], zero);
+    }
+    if chk.mass {
+        mass = b.add(mass, count);
+        b.connect(mass, n_t_pi);
+    }
+    if chk.n_count {
+        let np_plus_b = b.add(n_prev_pi, count_batch);
+        b.connect(np_plus_b, n_t_pi);
+    }
     // ── Stage 9: θ = ⌊N_t/s⌋ ── Stage 10: arrival positions ──
-    bind_theta::<Val, Challenge>(&mut b, theta_pi, n_t_pi, params.s);
-    let batch_t: Vec<ExprId> = (0..m).map(|j| batch_f[2 * j + 1][1]).collect();
-    bind_arrival_positions(&mut b, &batch_t, &batch_act, n_prev_pi, one, zero);
+    if chk.theta {
+        bind_theta::<Val, Challenge>(&mut b, theta_pi, n_t_pi, params.s);
+    }
+    if chk.arrivals {
+        let batch_t: Vec<ExprId> = (0..m).map(|j| batch_f[2 * j + 1][1]).collect();
+        bind_arrival_positions(&mut b, &batch_t, &batch_act, n_prev_pi, one, zero);
+    }
 
     let circuit = b.build().expect("build gkb2 stable circuit");
 
@@ -4646,6 +5025,7 @@ fn build_gkb2_leaf_stable(
         mode,
         batch_index: 1,
         rounds: GkRounds::StableCompact,
+        stable_checks: chk,
     }
 }
 
@@ -4792,19 +5172,16 @@ impl Gkb2LeafCircuit {
 
         // ── Native replay ──
         let build = build_bm2(initial_state, batch_vals);
-        // A capacity overflow is a hard error (G-cap): the StableCompact
-        // circuit cannot prove it (`α^L_cap = 0`), and the caller must see a
-        // failed run, not a dropped survivor. Tests may lift it to show the
-        // circuit's own rejection.
-        if self.rounds == GkRounds::StableCompact && !allow_overflow_for_test() {
-            let live = build.excess.iter().filter(|t| t.active == 1).count();
-            assert!(
-                live == 0,
-                "GK capacity overflow: {} survivors > capacity {} (N_t = {}); declare a larger capacity",
-                cap + live,
-                cap,
-                build.n_t
-            );
+        // A capacity overflow is a hard error (G-cap) under both variants:
+        // neither circuit can prove it (SortedCopy pins its excess rows to
+        // dummies; StableCompact pins `α^L_cap = 0` and the mass), and the
+        // caller must see a failed run (the panic names the capacity, so the
+        // harness records `too_large`), not a dropped survivor or a witness
+        // conflict. Tests may lift it to show the circuit's own rejection.
+        if !allow_overflow_for_test() {
+            if let Some(e) = build.capacity_error(params) {
+                panic!("{e}");
+            }
         }
         build
     }
@@ -5189,7 +5566,12 @@ impl Gkb2LeafCircuit {
         let src_hi: Vec<usize> = (0..total).map(|r| build.sigma_union_chal[2 * r + 1] / 2).collect();
         private_inputs.extend_from_slice(&pack_bound2(&build.union_raw, 0, &src_lo, &src_hi));
         for (round, rd) in sb.rounds.iter().enumerate() {
-            private_inputs.extend_from_slice(&pack_stable_out(&rd.out, round + 1, &rd.alive));
+            private_inputs.extend_from_slice(&pack_stable_out(
+                &rd.out,
+                round + 1,
+                &rd.alive,
+                self.stable_checks.live_carry,
+            ));
         }
         for r in 0..total {
             let t = &build.union_raw[r];
@@ -7816,14 +8198,20 @@ mod stable_tests {
         let b = stable_leaf(params, Expose::Interval, CommitMode::Plain);
         let d = build_gkb2_leaf_commit(params, Expose::Interval, Binding::Semantic, CommitMode::Plain);
         assert_eq!(a.rounds(), GkRounds::SortedCopy);
-        assert_eq!(d.rounds(), default_gk_rounds());
+        // The pre-M3 builder is the SortedCopy leaf whatever EXP_GK_ROUNDS says.
+        assert_eq!(d.rounds(), GkRounds::SortedCopy);
+        assert_eq!(b.rounds(), GkRounds::StableCompact);
         assert_ne!(a.vk_pin_values(), b.vk_pin_values());
-        if default_gk_rounds() == GkRounds::SortedCopy {
-            assert_eq!(a.vk_pin_values(), d.vk_pin_values());
+        assert_eq!(a.vk_pin_values(), d.vk_pin_values());
+        assert_eq!(parse_gk_rounds_env(Ok("STABLE".into())), Some(GkRounds::StableCompact));
+        assert_eq!(parse_gk_rounds_env(Ok("sorted".into())), Some(GkRounds::SortedCopy));
+        assert_eq!(parse_gk_rounds_env(Ok(String::new())), None);
+        assert_eq!(parse_gk_rounds_env(Err(std::env::VarError::NotPresent)), None);
+        assert!(std::panic::catch_unwind(|| parse_gk_rounds_env(Ok("resort".into()))).is_err());
+        assert_eq!(GkRounds::default(), GkRounds::SortedCopy, "the type default is the pre-M3 leaf");
+        for r in [GkRounds::SortedCopy, GkRounds::StableCompact] {
+            assert_eq!(r.label().parse::<GkRounds>(), Ok(r));
         }
-        assert_eq!(parse_gk_rounds_env(Ok("STABLE".into())), GkRounds::StableCompact);
-        assert_eq!(parse_gk_rounds_env(Ok("sorted".into())), GkRounds::SortedCopy);
-        assert_eq!(parse_gk_rounds_env(Err(std::env::VarError::NotPresent)), GkRounds::SortedCopy);
     }
 
     /// The deployed config-B leaf shape (cap 768, m 512, s 51), ZK + Interval +
@@ -7872,33 +8260,381 @@ mod stable_tests {
         (params, st, vec![v, v + 1])
     }
 
-    /// **G-cap: S = cap proves, S = cap + 1 is a hard error natively and is
-    /// rejected by the circuit.**
+    /// **G-cap: S = cap proves, S = cap + 1 fails everywhere**, under both
+    /// round certifications: `apply_batch2` panics with the capacity message
+    /// (`try_apply_batch2` returns the error), both leaves refuse it natively
+    /// (the harness's failed run), and with the native guard lifted both
+    /// CIRCUITS refuse the honest-but-overflowing witness. Positive control:
+    /// the StableCompact leaf without its two overflow checks (`α^L_cap = 0`
+    /// and the mass) proves it, certifying the lossy truncated state.
     #[test]
     fn g1_stable_capacity_edge() {
         let cap = 6;
         let (params, st, next) = cap_edge(cap);
         assert_eq!(st.actives().len(), cap - 2, "precondition");
-        // S = cap: one more value fills the summary exactly.
-        let mut leaf = stable_leaf(params, Expose::None, CommitMode::Plain);
         let full = apply_batch2(&st, &next);
-        assert_eq!(full.actives().len(), cap);
-        let p = leaf.prove_epoch_at(1, st.clone(), next.clone());
-        assert_eq!(p.final_.0, commit_gk2_state(&full).0);
-        // S = cap + 1: native hard error ...
+        assert_eq!(full.actives().len(), cap, "S = cap");
         let over = vec![next[1] + 1]; // one more survivor: S = cap + 1
+        // Native: a hard error with the capacity in its message (the harness
+        // maps it to a failed `too_large` run), the typed error from try_.
         let r = std::panic::catch_unwind(|| apply_batch2(&full, &over));
-        assert!(r.is_err(), "apply_batch2 must refuse an overflow");
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            leaf.prove_epoch_at(2, full.clone(), over.clone())
-        }));
-        assert!(r.is_err(), "the harness must refuse an overflow natively");
-        // ... and the circuit itself rejects the honest-but-overflowing witness.
-        ALLOW_OVERFLOW.with(|c| c.set(Some(true)));
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            leaf.prove_epoch_at(2, full.clone(), over.clone())
-        }));
-        ALLOW_OVERFLOW.with(|c| c.set(None));
-        assert!(r.is_err(), "the circuit must reject S = cap + 1");
+        let msg = r.expect_err("apply_batch2 must refuse an overflow");
+        let msg = msg
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| msg.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(msg.contains("capacity"), "overflow message names the capacity: {msg}");
+        let err = try_apply_batch2(&full, &over).expect_err("try_apply_batch2 must refuse an overflow");
+        assert_eq!((err.capacity, err.survivors, err.unpaired_dropped), (cap, cap + 1, 0));
+        assert_eq!(try_apply_batch2(&st, &next), Ok(full.clone()), "S = cap is not an error");
+        for rounds in [GkRounds::SortedCopy, GkRounds::StableCompact] {
+            let mut leaf = build_gkb2_leaf_rounds(params, Expose::None, Binding::Semantic, CommitMode::Plain, rounds);
+            // S = cap proves and certifies the native state.
+            let p = leaf.prove_epoch_at(1, st.clone(), next.clone());
+            assert_eq!(p.final_.0, commit_gk2_state(&full).0, "{rounds:?}: S = cap");
+            // S = cap + 1: refused natively (the harness's failed run) ...
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                leaf.prove_epoch_at(2, full.clone(), over.clone())
+            }));
+            assert!(r.is_err(), "{rounds:?}: the leaf must refuse an overflow natively");
+            // ... and by the circuit itself (native guard lifted).
+            ALLOW_OVERFLOW.with(|c| c.set(Some(true)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                leaf.prove_epoch_at(2, full.clone(), over.clone())
+            }));
+            ALLOW_OVERFLOW.with(|c| c.set(None));
+            assert!(r.is_err(), "{rounds:?}: the circuit must reject S = cap + 1");
+        }
+        // Positive control: without α^L_cap = 0 and the mass check the
+        // StableCompact circuit proves the overflow and certifies the lossy
+        // state (the first `cap` survivors, the last survivor's mass lost).
+        let weak = StableChecks { alive_cap: false, mass: false, ..StableChecks::ALL };
+        let p = with_stable_checks(weak, || {
+            let mut leaf = stable_leaf(params, Expose::None, CommitMode::Plain);
+            ALLOW_OVERFLOW.with(|c| c.set(Some(true)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                leaf.prove_epoch_at(2, full.clone(), over.clone())
+            }));
+            ALLOW_OVERFLOW.with(|c| c.set(None));
+            r
+        })
+        .expect("control: the overflow proves once both overflow checks are removed");
+        assert_eq!(p.final_.0, commit_gk2_state(&err.lossy_state).0, "control certifies the lossy state");
+    }
+
+    /// An odd `cap + m` table's unpaired last row is dropped by the parity-0
+    /// rounds: when it is live (a full table) that is a lost survivor, now a
+    /// hard error too (before M3 it vanished silently, mass and all).
+    #[test]
+    fn odd_full_table_drop_is_an_overflow() {
+        let params = GkbParams { capacity: 4, batch: 1, s: 1000 };
+        let mut st = Gk2State::empty(params);
+        for v in [10u32, 20, 30, 40] {
+            st = apply_batch2(&st, &[v]);
+        }
+        assert_eq!(st.actives().len(), 4);
+        let err = try_apply_batch2(&st, &[50]).expect_err("a live unpaired row is lost");
+        assert_eq!(err.unpaired_dropped, 1);
+        assert_eq!(err.survivors, 4, "the 5th row was dropped, not compacted");
+        assert!(err.lossy_state.actives().iter().map(|t| t.mass()).sum::<u64>() < err.n_t);
+        assert!(err.to_string().contains("capacity"));
+        // A non-full odd table is unaffected.
+        let mut st = Gk2State::empty(params);
+        st = apply_batch2(&st, &[10]);
+        assert_eq!(try_apply_batch2(&st, &[5]).map(|s| s.actives().len()), Ok(2));
+    }
+
+    // ── Equivalence: StableCompact == SortedCopy == native apply_batch2 ──
+
+    /// The input patterns of the equivalence chains.
+    #[derive(Clone, Copy, Debug)]
+    enum Pattern {
+        /// Windows of the real AOL key stream (`data/aol.keys`), through
+        /// the harness's `gk_vals_of` (21-bit values, pads stripped).
+        Aol,
+        /// Windows of the frozen uniform stream (`data/uniform.keys`).
+        Uniform,
+        /// Increasing values (random start and step).
+        Ascending,
+        /// Decreasing values.
+        Descending,
+        /// A triangle wave: up `p` steps then down `p` (repeats values).
+        Zigzag,
+        /// Alternately from both ends of a range, converging to its middle.
+        OutsideIn,
+    }
+
+    /// The `len`-value stream of one chain in `pat`.
+    fn pattern_stream(pat: Pattern, len: usize, rng: &mut Lcg) -> Vec<u32> {
+        use crate::experiments::stream_compose::gk_vals_of;
+        let window = |keys: &[u32], rng: &mut Lcg| -> Vec<u32> {
+            let off = rng.below((keys.len() - len - 1) as u64) as usize;
+            gk_vals_of(&keys[off..off + len])
+        };
+        let base = rng.below(1 << 20) as u32;
+        let step = 1 + rng.below(5) as u32;
+        match pat {
+            Pattern::Aol => window(&crate::dataset::aol().expect("data/aol.keys"), rng),
+            Pattern::Uniform => window(&crate::dataset::uniform().expect("data/uniform.keys"), rng),
+            Pattern::Ascending => (0..len as u32).map(|i| base + i * step).collect(),
+            Pattern::Descending => (0..len as u32).map(|i| (base + len as u32 * step) - i * step).collect(),
+            Pattern::Zigzag => {
+                let p = 2 + rng.below(4) as u32;
+                (0..len as u32)
+                    .map(|i| {
+                        let ph = i % (2 * p);
+                        base + step * if ph < p { ph } else { 2 * p - ph }
+                    })
+                    .collect()
+            }
+            Pattern::OutsideIn => (0..len as u32)
+                .map(|i| if i % 2 == 0 { base + (i / 2) * step } else { base + 2 * len as u32 * step - (i / 2) * step })
+                .collect(),
+        }
+    }
+
+    type LeafKey = (usize, usize, u64, bool, GkRounds);
+
+    /// **Equivalence of the two round certifications on `chains` short
+    /// chained streams of pattern `pat`**: every batch is proved from the
+    /// running native state by the SortedCopy and the StableCompact leaf
+    /// (Interval statement; Plain and Hiding chains alternate), both proofs
+    /// self-verify, they expose the SAME statement (init, final, interval
+    /// digest), and it is `Com` of the native `try_apply_batch2` chain. A
+    /// step that overflows natively is refused by both leaves and ends the
+    /// chain. Returns `(chains, proved batches, overflows)`.
+    fn equivalence_chains(pat: Pattern, chains: usize, seed: u64) -> (usize, usize, usize) {
+        use crate::recursion::recursive::expose_forest::read_exposed_statement;
+        const SHAPES: [(usize, usize, u64); 6] = [(8, 4, 1), (8, 8, 2), (12, 4, 2), (16, 8, 3), (6, 2, 1), (16, 4, 1)];
+        let gk = CommitFamily::GreenwaldKhanna;
+        let mut rng = Lcg(seed);
+        let mut leaves: std::collections::HashMap<LeafKey, Gkb2LeafCircuit> = std::collections::HashMap::new();
+        let (mut batches, mut overflows) = (0usize, 0usize);
+        for c in 0..chains {
+            let (cap, m, s) = SHAPES[rng.below(SHAPES.len() as u64) as usize];
+            let params = GkbParams { capacity: cap, batch: m, s };
+            let hiding = c % 2 == 1;
+            let mode = if hiding { CommitMode::Hiding } else { CommitMode::Plain };
+            let salt_seed = SaltSeed::for_tests(seed ^ c as u64);
+            let steps = 2 + rng.below(3) as usize;
+            let sizes: Vec<usize> = (0..steps)
+                .map(|_| if rng.below(8) == 0 { rng.below(m as u64) as usize } else { m })
+                .collect();
+            let stream = pattern_stream(pat, sizes.iter().sum::<usize>() + 1, &mut rng);
+            let mut st = Gk2State::empty(params);
+            let mut pos = 0usize;
+            for (i, &k) in sizes.iter().enumerate() {
+                let t = i as u64 + 1;
+                let vals: Vec<u32> = stream[pos.min(stream.len())..(pos + k).min(stream.len())].to_vec();
+                pos += k;
+                let o = if hiding { Openings::for_leaf(&salt_seed, gk, t) } else { Openings::plain() };
+                let mut prove = |rounds: GkRounds, st: &Gk2State| {
+                    let leaf = leaves.entry((cap, m, s, hiding, rounds)).or_insert_with(|| {
+                        build_gkb2_leaf_rounds(params, Expose::Interval, Binding::Semantic, mode, rounds)
+                    });
+                    let st = st.clone();
+                    let vals = vals.clone();
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        if hiding {
+                            leaf.prove_epoch_commit(t, st, vals, &o)
+                        } else {
+                            leaf.prove_epoch_at(t, st, vals)
+                        }
+                    }))
+                };
+                match try_apply_batch2(&st, &vals) {
+                    Ok(next) => {
+                        let ps = prove(GkRounds::SortedCopy, &st).expect("SortedCopy leaf proves");
+                        let pg = prove(GkRounds::StableCompact, &st).expect("StableCompact leaf proves");
+                        let (ss, sg) = (read_exposed_statement(&ps.output.0), read_exposed_statement(&pg.output.0));
+                        let ctx = format!("{pat:?} chain {c} t={t} cap={cap} m={m} s={s} hiding={hiding}");
+                        assert_eq!(sg.values(), ss.values(), "{ctx}: exposed statements differ");
+                        let want_init = commit_gk2_state_with(&st, mode, &o.init).0;
+                        let want_final = commit_gk2_state_with(&next, mode, &o.final_).0;
+                        assert_eq!(sg.init, want_init.to_vec(), "{ctx}: exposed init != Com(native S_(t-1))");
+                        assert_eq!(sg.final_, want_final.to_vec(), "{ctx}: exposed final != Com(native S_t)");
+                        assert_eq!(pg.batch_commit.0, ps.batch_commit.0, "{ctx}: batch commitments differ");
+                        st = next;
+                        batches += 1;
+                    }
+                    Err(_) => {
+                        assert!(prove(GkRounds::SortedCopy, &st).is_err(), "SortedCopy must refuse an overflow");
+                        assert!(prove(GkRounds::StableCompact, &st).is_err(), "StableCompact must refuse an overflow");
+                        overflows += 1;
+                        break;
+                    }
+                }
+            }
+        }
+        eprintln!("G1 equivalence {pat:?}: {chains} chains, {batches} batches proved by both leaves, {overflows} overflow-terminated");
+        (chains, batches, overflows)
+    }
+
+    /// 80 chains per pattern, 480 in all (the M3 functional gate). All six
+    /// together: `cargo test --release --lib -- stable_tests::g1_equivalence`
+    /// (about 8 min on the 32-core box, 1,436 batches proved by both leaves).
+    const EQ_CHAINS: usize = 80;
+
+    #[test]
+    fn g1_equivalence_aol() {
+        let (c, b, _) = equivalence_chains(Pattern::Aol, EQ_CHAINS, 0xA01);
+        assert!(c == EQ_CHAINS && b >= 2 * EQ_CHAINS);
+    }
+
+    #[test]
+    fn g1_equivalence_uniform() {
+        let (c, b, _) = equivalence_chains(Pattern::Uniform, EQ_CHAINS, 0xB02);
+        assert!(c == EQ_CHAINS && b >= 2 * EQ_CHAINS);
+    }
+
+    #[test]
+    fn g1_equivalence_ascending() {
+        let (c, b, _) = equivalence_chains(Pattern::Ascending, EQ_CHAINS, 0xC03);
+        assert!(c == EQ_CHAINS && b >= 2 * EQ_CHAINS);
+    }
+
+    #[test]
+    fn g1_equivalence_descending() {
+        let (c, b, _) = equivalence_chains(Pattern::Descending, EQ_CHAINS, 0xD04);
+        assert!(c == EQ_CHAINS && b >= 2 * EQ_CHAINS);
+    }
+
+    #[test]
+    fn g1_equivalence_zigzag() {
+        let (c, b, _) = equivalence_chains(Pattern::Zigzag, EQ_CHAINS, 0xE05);
+        assert!(c == EQ_CHAINS && b >= 2 * EQ_CHAINS);
+    }
+
+    #[test]
+    fn g1_equivalence_outside_in() {
+        let (c, b, _) = equivalence_chains(Pattern::OutsideIn, EQ_CHAINS, 0xF06);
+        assert!(c == EQ_CHAINS && b >= 2 * EQ_CHAINS);
+    }
+
+    /// Every [`StableChecks`] switch is CLEAN: with exactly that check removed
+    /// the leaf still builds and proves an honest chained epoch with fusions
+    /// in both directions (no bus imbalance, no missing creator), and its VK
+    /// differs from the full circuit's (the switch removes something). The
+    /// attack suite builds its positive controls with these switches.
+    #[test]
+    fn g1_stable_check_switches_are_clean() {
+        let params = GkbParams { capacity: 16, batch: 8, s: 3 };
+        let b1 = vec![100u32, 400, 200, 700, 300, 600, 500, 800];
+        let b2 = vec![150u32, 650, 250, 750, 350, 550, 450, 850];
+        let s1 = apply_batch2(&Gk2State::empty(params), &b1);
+        let s2 = apply_batch2(&s1, &b2);
+        let full_vk = stable_leaf(params, Expose::Interval, CommitMode::Plain).vk_pin_values();
+        for &name in StableChecks::names() {
+            with_stable_checks(StableChecks::without(name), || {
+                let mut leaf = stable_leaf(params, Expose::Interval, CommitMode::Plain);
+                assert_ne!(leaf.vk_pin_values(), full_vk, "switch {name} removes nothing");
+                let p = leaf.prove_epoch_at(2, s1.clone(), b2.clone());
+                assert_eq!(p.final_.0, commit_gk2_state(&s2).0, "switch {name}: honest proof");
+            });
+        }
+        assert_eq!(stable_checks(), StableChecks::ALL, "the switches are restored");
+    }
+
+    fn fnv(vals: impl IntoIterator<Item = u64>) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for v in vals {
+            for b in v.to_le_bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        h
+    }
+
+    fn fnv_vals(v: &[Val]) -> u64 {
+        use p3_field::PrimeField32;
+        fnv(v.iter().map(|x| x.as_canonical_u32() as u64))
+    }
+
+    fn fnv_chals(v: &[Challenge]) -> u64 {
+        use p3_field::{BasedVectorSpace, PrimeField32};
+        fnv(v.iter().flat_map(|c| {
+            <Challenge as BasedVectorSpace<Val>>::as_basis_coefficients_slice(c)
+                .iter()
+                .map(|x| x.as_canonical_u32() as u64)
+                .collect::<Vec<_>>()
+        }))
+    }
+
+    /// **Byte-identity of what M3 must not move**: the genesis commitment
+    /// `Com(S_0; 0)` (Plain and Hiding), the state and batch commitments and
+    /// the packed tuple encoding of a fixed reachable state and batch, and
+    /// the GK decoder VK, pinned to the values of the pre-M3 tree (main
+    /// 23138f7; these functions are untouched by M3, so the values are the
+    /// same on both trees). They do not depend on the round certification by
+    /// construction; the decoder's pins live in `commitment::plain_vk_pins`.
+    #[test]
+    fn genesis_and_encodings_are_unchanged() {
+        use crate::commitment::hiding::SaltBb;
+        let params = GkbParams { capacity: 8, batch: 4, s: 2 };
+        let s0 = Gk2State::empty(params);
+        let b1 = vec![17u32, 3, 99, 41];
+        let s1 = apply_batch2(&s0, &b1);
+        let b2 = vec![5u32, 64];
+        let s2 = apply_batch2(&s1, &b2);
+        let salt = Openings::for_leaf(&SaltSeed::for_tests(2026), CommitFamily::GreenwaldKhanna, 2);
+        let got = [
+            fnv_vals(&commit_gk2_state(&s0).0),
+            fnv_vals(&commit_gk2_state_with(&s0, CommitMode::Hiding, &SaltBb::ZERO).0),
+            fnv_vals(&commit_gk2_state(&s2).0),
+            fnv_vals(&commit_gk2_state_with(&s2, CommitMode::Hiding, &salt.final_).0),
+            fnv_vals(&commit_gk2_batch(&b2, 4, s1.n).0),
+            fnv_vals(&commit_gk2_batch_with(&b2, 4, s1.n, CommitMode::Hiding, &salt.batch).0),
+            fnv_chals(&pack_tuples2(&s2.tuples)),
+            fnv_chals(&pack_tuples2(&fresh_tuples2(&b2, 4, s1.n))),
+        ];
+        // [Com(S_0) plain, Com(S_0; 0) hiding, Com(S_2) plain, Com(S_2; ρ)
+        // hiding, Com(B_2) plain, Com(B_2; ρ) hiding, pack(S_2), pack(B_2)],
+        // recorded on main 23138f7 (an export of that tree, the same probe).
+        const PINS: [u64; 8] = [
+            0x7479_190e_eb29_aadb,
+            0xa98d_b582_4b84_3597,
+            0xf0c4_b6ec_cad4_6be4,
+            0xde96_30a8_1eb5_b895,
+            0xb3ea_4435_4836_6dc0,
+            0x6bd7_8344_08ab_6d20,
+            0x71eb_2dac_e5df_d04d,
+            0xb009_e636_ad22_4b83,
+        ];
+        assert_eq!(got, PINS, "genesis / state / batch encodings moved: {got:#018x?}");
+    }
+    /// **G-base at the deployed shapes**: the SortedCopy leaf (through both the
+    /// pre-M3 builder and `build_gkb2_leaf_rounds(.., SortedCopy)`) and the GK
+    /// decoder keep their VKs byte for byte at cap 384 / m 128 and cap 768 /
+    /// m 512 (s 51, Interval, Semantic; Plain and Hiding leaves, Hiding
+    /// decoder). The literals were recorded on an export of main 23138f7
+    /// (the pre-M3 tree) with the same fingerprint; `zk` build only.
+    #[cfg(feature = "zk")]
+    #[test]
+    fn sorted_leaf_and_decoder_deployed_vks_are_unchanged() {
+        use crate::decode::gk_bandmerge::{gk2_decode_vk_commit, Gkb2DecodeParams};
+        use crate::decode::ReleasePolicy;
+        // (cap, m) -> (Plain leaf, Hiding leaf, Hiding decoder).
+        const PINS: [((usize, usize), [u64; 3]); 2] = [
+            ((384, 128), [0x4ffc_6719_9b31_bf9b, 0x4866_3b08_7e9f_e266, 0x3a62_d7ed_6d96_45e3]),
+            ((768, 512), [0x8f81_be07_530b_7cbe, 0x4e0c_9b44_17c4_db9c, 0xbdbf_480c_d567_7445]),
+        ];
+        for ((cap, m), pins) in PINS {
+            let p = GkbParams { capacity: cap, batch: m, s: 51 };
+            for (mode, pin) in [(CommitMode::Plain, pins[0]), (CommitMode::Hiding, pins[1])] {
+                let old = build_gkb2_leaf_commit(p, Expose::Interval, Binding::Semantic, mode).vk_pin_values();
+                let new = build_gkb2_leaf_rounds(p, Expose::Interval, Binding::Semantic, mode, GkRounds::SortedCopy)
+                    .vk_pin_values();
+                assert_eq!(fnv_chals(&old), pin, "cap {cap} m {m} {mode:?}: SortedCopy leaf VK moved");
+                assert_eq!(new, old, "cap {cap} m {m} {mode:?}: build_gkb2_leaf_rounds(SortedCopy) != the pre-M3 builder");
+            }
+            let dvk = gk2_decode_vk_commit(
+                Gkb2DecodeParams { capacity: cap, release: ReleasePolicy::Identity },
+                Binding::Semantic,
+                CommitMode::Hiding,
+            );
+            assert_eq!(fnv_chals(&dvk.commitment), pins[2], "cap {cap}: GK decoder VK moved");
+        }
     }
 }

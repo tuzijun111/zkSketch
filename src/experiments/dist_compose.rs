@@ -145,8 +145,8 @@ use crate::sketch::countmin_omc::{
     countmin_omc_batch_commit_salted, CmOmcLeafCircuit, CmOmcParams,
 };
 use crate::sketch::gk_bandmerge::{
-    apply_batch2, build_gkb2_leaf_commit, commit_gk2_batch, commit_gk2_batch_with,
-    commit_gk2_state, commit_gk2_state_with, Gk2State, Gk2Tuple, Gkb2LeafCircuit, GkbParams,
+    apply_batch2, build_gkb2_leaf_rounds, commit_gk2_batch, commit_gk2_batch_with,
+    commit_gk2_state, commit_gk2_state_with, Gk2State, Gk2Tuple, Gkb2LeafCircuit, GkRounds, GkbParams,
 };
 use crate::sketch::hll_omc::{
     build_hll_omc_leaf_commit, commit_hll_omc, commit_hll_omc_with, hll_omc_advance,
@@ -827,11 +827,15 @@ impl FamLeafCircuit {
                 expose,
                 mode,
             )),
-            StreamFamily::GkBandmerge2 => Self::Gk(build_gkb2_leaf_commit(
+            // The round certification is a public shape parameter
+            // (`StreamShape::gk_rounds`): the no-op VK-derivation leaf and the
+            // auditor build exactly the workers' leaf.
+            StreamFamily::GkBandmerge2 => Self::Gk(build_gkb2_leaf_rounds(
                 GkbParams { capacity: shape.capacity, batch: m, s: shape.gk_s },
                 expose,
                 binding,
                 mode,
+                shape.gk_rounds,
             )),
             // One (bound) construction: no binding switch.
             StreamFamily::BloomOmc => {
@@ -1123,6 +1127,8 @@ struct WireShape {
     bloom_k: u32,
     bloom_log_w: u32,
     kmv_k: u32,
+    /// `StreamShape::gk_rounds`: 0 = SortedCopy, 1 = StableCompact.
+    gk_rounds: u8,
 }
 
 impl WireShape {
@@ -1136,6 +1142,10 @@ impl WireShape {
             bloom_k: s.bloom_k as u32,
             bloom_log_w: s.bloom_log_w as u32,
             kmv_k: s.kmv_k as u32,
+            gk_rounds: match s.gk_rounds {
+                GkRounds::SortedCopy => 0,
+                GkRounds::StableCompact => 1,
+            },
         }
     }
     fn to_shape(self) -> StreamShape {
@@ -1148,6 +1158,11 @@ impl WireShape {
             bloom_k: self.bloom_k as usize,
             bloom_log_w: self.bloom_log_w as usize,
             kmv_k: self.kmv_k as usize,
+            gk_rounds: match self.gk_rounds {
+                0 => GkRounds::SortedCopy,
+                1 => GkRounds::StableCompact,
+                x => panic!("wire shape: GK rounds code {x}"),
+            },
         }
     }
 }
@@ -4064,7 +4079,17 @@ mod tests {
     };
 
     fn shape() -> StreamShape {
-        StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2, bloom_k: 3, bloom_log_w: 7, kmv_k: 4 }
+        StreamShape {
+            d: 4,
+            w: 8,
+            b: 4,
+            capacity: 4,
+            gk_s: 2,
+            bloom_k: 3,
+            bloom_log_w: 7,
+            kmv_k: 4,
+            gk_rounds: GkRounds::SortedCopy,
+        }
     }
 
     const BB_FAMILIES: [StreamFamily; 6] = [
@@ -4387,7 +4412,12 @@ mod tests {
     /// both commitment modes (the hiding leaves open with the seed's
     /// randomizers, the log is the prover's published one).
     fn assert_dist_root_vk_derivable(family: StreamFamily, commit: &ProverCommit) {
-        let sh = shape();
+        assert_dist_root_vk_derivable_in(family, commit, shape());
+    }
+
+    /// [`assert_dist_root_vk_derivable`] at the public shape `sh` (e.g. the
+    /// StableCompact GK leaf, `sh.gk_rounds`).
+    fn assert_dist_root_vk_derivable_in(family: StreamFamily, commit: &ProverCommit, sh: StreamShape) {
         let m = 4;
         let (t, machines) = (3usize, 2usize);
         let batches: Vec<Vec<u32>> = (0..t as u32).map(|i| (1..=4).map(|k| k * 7 + i * 13).collect()).collect();
@@ -4677,7 +4707,12 @@ mod tests {
     /// wire-round-tripped leaf 3; plus the published log. Returns only public
     /// artifacts: the seed stays in `commit`.
     fn prove_run_bb(family: StreamFamily, commit: &ProverCommit) -> PublishedRun<Val> {
-        let (sh, m, batches) = (shape(), 4, e2e_batches());
+        prove_run_bb_in(family, &shape(), commit)
+    }
+
+    /// [`prove_run_bb`] at the public shape `sh`.
+    fn prove_run_bb_in(family: StreamFamily, sh: &StreamShape, commit: &ProverCommit) -> PublishedRun<Val> {
+        let (sh, m, batches) = (*sh, 4, e2e_batches());
         let mut leaf = FamLeafCircuit::build(family, &sh, m, commit.mode());
         let mut st = FamState::empty(family, &sh, m);
         let mut outs = Vec::new();
@@ -4773,12 +4808,18 @@ mod tests {
     /// log's boundary with the other seed's batch commitments spliced in, and
     /// (c) the `Plain` log of the same stream are all rejected in every mode.
     fn assert_hiding_end_to_end(family: StreamFamily) {
+        assert_hiding_end_to_end_in(family, shape());
+    }
+
+    /// [`assert_hiding_end_to_end`] at the public shape `sh` (BabyBear
+    /// families; e.g. the StableCompact GK leaf, `sh.gk_rounds`).
+    fn assert_hiding_end_to_end_in(family: StreamFamily, sh: StreamShape) {
         if root_vk_overridden() {
             eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
             return;
         }
         assert_eq!(composition_expose(), Expose::Interval, "default layout");
-        let (sh, m) = (shape(), 4);
+        let m = 4;
         let honest = ProverCommit::hiding(SaltSeed::for_tests(1));
         let other = ProverCommit::hiding(SaltSeed::for_tests(2));
         let pp = PublicParams { family, shape: sh, m, commit_mode: CommitMode::Hiding };
@@ -4786,7 +4827,7 @@ mod tests {
         macro_rules! run {
             ($prove:ident, $audit:ident, $publish:ident) => {{
                 // The prover's run: the seed never leaves `honest`.
-                let run = $prove(family, &honest);
+                let run = $prove(family, &sh, &honest);
                 // Auditor: public artifacts only.
                 for (r, mode) in $audit(&pp, &run.leaves, &run.chain, &run.forest, &run.log).iter().zip(modes) {
                     println!("B2 e2e {family:?} hiding {mode}: {r:?}");
@@ -4806,10 +4847,76 @@ mod tests {
             }};
         }
         if family.is_gl() {
-            run!(prove_run_gl, audit_run_gl, publish_batch_log_gl);
+            let prove_gl = |f: StreamFamily, _sh: &StreamShape, c: &ProverCommit| prove_run_gl(f, c);
+            run!(prove_gl, audit_run_gl, publish_batch_log_gl);
         } else {
-            run!(prove_run_bb, audit_run_bb, publish_batch_log);
+            run!(prove_run_bb_in, audit_run_bb, publish_batch_log);
         }
+    }
+
+    /// The deployed auditor path end to end over StableCompact GK leaves
+    /// (M3): leaves, chain and forest roots verified against VKs derived from
+    /// the public parameters (`shape.gk_rounds = StableCompact`), honest run
+    /// accepted, wrong logs rejected.
+    #[test]
+    fn hiding_end_to_end_gk_bandmerge2_stable() {
+        let sh = StreamShape { gk_rounds: GkRounds::StableCompact, ..shape() };
+        assert_hiding_end_to_end_in(StreamFamily::GkBandmerge2, sh);
+    }
+
+    /// The auditor's root-VK derivation from public parameters reproduces a
+    /// real dist forest's root VK over StableCompact GK leaves (both
+    /// commitment modes), and it differs from the SortedCopy forest's: the
+    /// variant is a public parameter the derivation must see.
+    #[test]
+    fn dist_root_vk_derivable_gk_stable() {
+        let stable = StreamShape { gk_rounds: GkRounds::StableCompact, ..shape() };
+        for commit in both_modes() {
+            assert_dist_root_vk_derivable_in(StreamFamily::GkBandmerge2, &commit, stable);
+        }
+        let (m, t, machines) = (4, 3, 2);
+        let mode = CommitMode::Plain;
+        let a = derive_dist_root_vk(StreamFamily::GkBandmerge2, &stable, m, StreamMode::Forest, t, machines, mode);
+        let b = derive_dist_root_vk(StreamFamily::GkBandmerge2, &shape(), m, StreamMode::Forest, t, machines, mode);
+        assert_ne!(a.commitment, b.commitment, "the two GK variants have different root VKs");
+        let la = derive_dist_leaf_vk(StreamFamily::GkBandmerge2, &stable, m, mode);
+        let lb = derive_dist_leaf_vk(StreamFamily::GkBandmerge2, &shape(), m, mode);
+        assert_ne!(la.commitment, lb.commitment, "the two GK variants have different leaf VKs");
+    }
+
+    /// **G-cap in the harness**: a GK stream whose capacity is exactly filled
+    /// (S = cap) runs; one more survivor (S = cap + 1) is a hard error of the
+    /// witness pass with the capacity in its message (exp_compose maps it to
+    /// the failed status `too_large`), under both round certifications.
+    #[test]
+    fn gk_capacity_overflow_is_a_failed_run() {
+        for rounds in [GkRounds::SortedCopy, GkRounds::StableCompact] {
+            // s = 1000: θ = 0, nothing fuses; cap 4.
+            let sh = StreamShape { capacity: 4, gk_s: 1000, gk_rounds: rounds, ..shape() };
+            let m = 4;
+            let fits = vec![vec![11u32, 12, 13, 14]];
+            let log = stream_batch_log(StreamFamily::GkBandmerge2, &sh, m, &fits);
+            assert_eq!(log.batch_commits.len(), 1, "S = cap runs");
+            let over = vec![vec![11u32, 12, 13, 14], vec![15u32]];
+            let r = crate::sketch::forge::catch_msg(|| {
+                stream_batch_log(StreamFamily::GkBandmerge2, &sh, m, &over)
+            });
+            let msg = r.expect_err("S = cap + 1 must fail the run");
+            assert!(msg.contains("capacity"), "{rounds:?}: the failure names the capacity: {msg}");
+            // The leaf refuses it too (the worker side).
+            let mut leaf = FamLeafCircuit::build(StreamFamily::GkBandmerge2, &sh, m, mode_plain());
+            let mut st = FamState::empty(StreamFamily::GkBandmerge2, &sh, m);
+            let _ = st.prove_leaf(&mut leaf, 1, &over[0], LeafOpen::Real(&ProverCommit::plain()));
+            st.advance(&sh, &over[0]);
+            let r = crate::sketch::forge::catch_msg(|| {
+                st.prove_leaf(&mut leaf, 2, &over[1], LeafOpen::Real(&ProverCommit::plain())).0
+            });
+            assert!(r.is_err_and(|m| m.contains("capacity")), "{rounds:?}: the leaf refuses S = cap + 1");
+        }
+    }
+
+    fn mode_plain() -> CommitMode {
+        CommitMode::Plain
     }
 
     #[test]

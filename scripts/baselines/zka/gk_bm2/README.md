@@ -79,8 +79,13 @@ the guest picks one by an input word (`variant`):
   - Left out: only the circuit-witness captures that zkSketch retains (per-round
     `fused`, a clone of `resorted`, `sigma`, direction and condition vectors,
     `union_raw`, `union_init`, `expand_sigma`, `excess`). None feeds the output.
-  - zkSketch checks the excess only by `debug_assert!`, which its release
-    builds compile out, so a capacity overflow truncates silently in both.
+  - zkSketch checked the excess only by `debug_assert!`, which its release
+    builds compile out, so a capacity overflow truncated silently in both.
+    Since M3 (2026-10-16) zkSketch's `apply_batch2` refuses an overflow (a
+    hard error); the guest still truncates as before (unchanged image), and
+    the host compares an overflowing step with `try_apply_batch2`'s
+    `lossy_state`, the pre-M3 output row for row. Deployed shapes never
+    overflow (the host's check mode reports it).
 - **`literal_reuse`** (`apply_batch2_reuse`) is the same statements and sorts
   with the per-round tables allocated once. risc0's default guest allocator is a
   bump allocator that never frees, so `literal` allocates and zero-fills about

@@ -133,7 +133,7 @@ use crate::sketch::bloom_omc::{
 use crate::sketch::countmin::{CountMinState, CountMinUpdate};
 use crate::sketch::countmin_omc::{build_countmin_omc_leaf_commit, countmin_omc_advance, CmOmcParams};
 use crate::sketch::gk_bandmerge::{
-    apply_batch2, build_gkb2_leaf_commit, commit_gk2_state, commit_gk2_state_with, Gk2State,
+    apply_batch2, build_gkb2_leaf_rounds, commit_gk2_state, commit_gk2_state_with, Gk2State, GkRounds,
     GkbParams,
 };
 use crate::sketch::hll_omc::{
@@ -328,6 +328,12 @@ pub struct StreamShape {
     /// KMV: capacity `k` = the number of smallest distinct hash values kept
     /// (a multiple of 4 in `4..=2^15`, `k + m < 2^24`).
     pub kmv_k: usize,
+    /// GK band-merge: how the leaf certifies its fusion rounds
+    /// ([`GkRounds`], `EXP_GK_ROUNDS`). A PUBLIC parameter: the two variants
+    /// prove the same batch rule under different leaf (hence merge and root)
+    /// VKs, so the workers, the no-op VK-derivation leaf and the auditor all
+    /// build the leaf from this field.
+    pub gk_rounds: GkRounds,
 }
 
 impl StreamShape {
@@ -1492,7 +1498,13 @@ fn prove_leaves(
                 // leaf pads its fresh-tuple rows with E_MAX dummies itself).
                 let vals = gk_vals_of(batch);
                 let t = bi as u64 + 1;
-                let mut l = build_gkb2_leaf_commit(params, composition_expose(), default_binding(), mode);
+                let mut l = build_gkb2_leaf_rounds(
+                    params,
+                    composition_expose(),
+                    default_binding(),
+                    mode,
+                    shape.gk_rounds,
+                );
                 let leaf = if commit.is_hiding() {
                     l.prove_epoch_commit(t, state.clone(), vals.clone(), &commit.openings(cf, t))
                 } else {
@@ -1912,7 +1924,17 @@ mod tests {
     use crate::recursion::recursive::expose_forest::{prove_chain_over, read_exposed_statement};
 
     fn shape() -> StreamShape {
-        StreamShape { d: 4, w: 8, b: 4, capacity: 4, gk_s: 2, bloom_k: 3, bloom_log_w: 7, kmv_k: 4 }
+        StreamShape {
+            d: 4,
+            w: 8,
+            b: 4,
+            capacity: 4,
+            gk_s: 2,
+            bloom_k: 3,
+            bloom_log_w: 7,
+            kmv_k: 4,
+            gk_rounds: GkRounds::SortedCopy,
+        }
     }
 
     const FAMILIES: [StreamFamily; 6] = [

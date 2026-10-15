@@ -53,7 +53,7 @@ use gk_bm2_methods::{GK_BM2_STEP_ELF, GK_BM2_STEP_ID};
 use risc0_zkvm::{default_executor, ExecutorEnv};
 use zksketch::dataset::{synthetic_stream, Synthetic};
 use zksketch::experiments::stream_compose::{build_query_schedule_batches, gk_vals_of, StreamFamily, PAD_KEY};
-use zksketch::sketch::gk_bandmerge::{apply_batch2, Gk2State, Gk2Tuple, GkbParams};
+use zksketch::sketch::gk_bandmerge::{try_apply_batch2, Gk2State, Gk2Tuple, GkbParams};
 
 const S_PER_SEG: f64 = 30.1;
 const S_PER_SEG_LO: f64 = 29.73;
@@ -438,7 +438,14 @@ fn native_step(s: &Gk2State, batch: &[u32], e: usize) -> Step {
         eprintln!("gk_bm2: MISMATCH epoch {e}: vals_of != gk_vals_of");
         ok = false;
     }
-    let next = apply_batch2(s, &vals);
+    // Since M3 zkSketch's apply_batch2 refuses a capacity overflow (a hard
+    // error); the ports reproduce the pre-M3 release output, which drops the
+    // excess survivors, so an overflowing step is compared against that lossy
+    // state (`GkCapacityOverflow::lossy_state`, the old output row for row).
+    let next = match try_apply_batch2(s, &vals) {
+        Ok(next) => next,
+        Err(overflow) => overflow.lossy_state,
+    };
     let p = to_port(s);
     let mut census: Option<[u64; 2]> = None;
     for v in ALL_VARIANTS {
@@ -619,12 +626,12 @@ mod tests {
         (st.tuples.iter().filter(|t| t.active == 1).count(), truncated, dirs)
     }
 
-    /// Includes shapes whose capacity overflows (s large for the capacity): zkSketch's
-    /// overflow check is a debug_assert!, so under --release both sides truncate and
-    /// must still agree tuple for tuple. Odd `capacity + m` tables are included.
+    /// Includes shapes whose capacity overflows (s large for the capacity): the ports
+    /// truncate as zkSketch's pre-M3 release build did, and must agree tuple for tuple
+    /// with that lossy output (`try_apply_batch2`'s `lossy_state`; apply_batch2 itself
+    /// now refuses the step). Odd `capacity + m` tables are included.
     #[test]
     fn ports_equal_zksketch_on_small_shapes() {
-        assert!(!cfg!(debug_assertions), "run with --release (zkSketch debug_asserts on overflow)");
         let (mut runs, mut overflowed) = (0, 0);
         for &(cap, m) in &[(4usize, 4usize), (5, 8), (8, 7), (16, 16), (32, 64), (64, 256), (7, 33), (128, 512)] {
             for &s in &[1u64, 2, 3, 5, 8] {

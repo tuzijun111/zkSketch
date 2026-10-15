@@ -95,7 +95,7 @@ use zksketch::sketch::bloom_omc::{BloomOmcLeafCircuit, BloomOmcParams, bloom_emp
 use zksketch::sketch::countmin::{CountMinParams, CountMinUpdate};
 use zksketch::sketch::countmin_omc::{CmOmcLeafCircuit, CmOmcParams, build_countmin_omc_leaf_commit};
 use zksketch::sketch::countmin_v9::CountMinV9;
-use zksketch::sketch::gk_bandmerge::{Gk2State, Gkb2LeafCircuit, GkbParams, build_gkb2_leaf_commit};
+use zksketch::sketch::gk_bandmerge::{Gk2State, Gkb2LeafCircuit, GkbParams, build_gkb2_leaf_rounds, default_gk_rounds};
 use zksketch::sketch::hll_omc::{
     HllOmcLeafCircuit, HllOmcParams, build_hll_omc_leaf_commit, hll_omc_advance_with, hll_omc_empty,
 };
@@ -171,7 +171,7 @@ fn variant(fam: &str) -> &'static str {
         "cm" | "hll" | "bloom" => "omc",
         "ss" => "certified",
         // EXP_GK_ROUNDS (M3): the round certification is part of the variant.
-        "gk" => match zksketch::sketch::gk_bandmerge::default_gk_rounds() {
+        "gk" => match default_gk_rounds() {
             zksketch::sketch::gk_bandmerge::GkRounds::SortedCopy => "bandmerge2",
             zksketch::sketch::gk_bandmerge::GkRounds::StableCompact => "bandmerge2_stable",
         },
@@ -218,7 +218,8 @@ impl Leaf {
             }
             "gk" => {
                 let p = GkbParams { capacity: g.gk_cap, batch: m, s: g.gk_s };
-                Leaf::Gk(build_gkb2_leaf_commit(p, expose, binding, mode), p)
+                // EXP_GK_ROUNDS (M3): sorted | stable (unset = the harness default).
+                Leaf::Gk(build_gkb2_leaf_rounds(p, expose, binding, mode, default_gk_rounds()), p)
             }
             "bloom" => {
                 let p = BloomOmcParams { k: g.bloom_k, log_w: g.bloom_log_w, batch: m };
