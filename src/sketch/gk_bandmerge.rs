@@ -7826,6 +7826,39 @@ mod stable_tests {
         assert_eq!(parse_gk_rounds_env(Err(std::env::VarError::NotPresent)), GkRounds::SortedCopy);
     }
 
+    /// The deployed config-B leaf shape (cap 768, m 512, s 51), ZK + Interval +
+    /// Hiding as the composition harness builds it: three chained batches of
+    /// pseudo-random 20-bit values each prove and verify and certify the
+    /// native `apply_batch2` state. Heavy (~4.3 GB, ~7 s per leaf):
+    /// `cargo test --release --lib -- --ignored g1_stable_deployed_shape_chain`.
+    #[test]
+    #[ignore]
+    fn g1_stable_deployed_shape_chain() {
+        let params = GkbParams { capacity: 768, batch: 512, s: 51 };
+        let gk = CommitFamily::GreenwaldKhanna;
+        let seed = SaltSeed::for_tests(1016);
+        let t0 = std::time::Instant::now();
+        let mut leaf = stable_leaf(params, Expose::Interval, CommitMode::Hiding);
+        eprintln!("build {:.2}s", t0.elapsed().as_secs_f64());
+        let mut rng = Lcg(0xA0C1_2026);
+        let mut st = Gk2State::empty(params);
+        for t in 1..=3u64 {
+            let vals: Vec<u32> = (0..params.batch).map(|_| rng.below(1 << 20) as u32).collect();
+            let t1 = std::time::Instant::now();
+            let p = leaf.prove_epoch_commit(t, st.clone(), vals.clone(), &Openings::for_leaf(&seed, gk, t));
+            let next = apply_batch2(&st, &vals);
+            let o = Openings::for_leaf(&seed, gk, t);
+            assert_eq!(p.final_.0, commit_gk2_state_with(&next, CommitMode::Hiding, &o.final_).0);
+            eprintln!(
+                "leaf t={t}: {:.2}s, N={}, survivors={}",
+                t1.elapsed().as_secs_f64(),
+                next.n,
+                next.actives().len()
+            );
+            st = next;
+        }
+    }
+
     /// A state of exactly `cap` survivors whose next batch adds one more
     /// survivor: increasing values that never fuse (s large, θ = 0).
     fn cap_edge(cap: usize) -> (GkbParams, Gk2State, Vec<u32>) {
