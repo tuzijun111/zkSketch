@@ -2016,9 +2016,18 @@ Event deserialisation plus, from epoch 1 on, the carried state's words (see Cave
   vs about 3M user cycles for the summary at 2,048 records), so the matched baseline is
   FASTER than the textbook one: 11.5 / 11.0 padded segments at configs A / B instead of
   13.25, a zk-Analytics estimate of about 346 / 331 s instead of 398.5 s at k_s = 30.07 s.
-  That tightens the 10x threshold for zkSketch to about **34.6 s at (384, 128)** and
-  **33.1 s at (768, 512)** (with `fast` it was 39.1 / 36.1 s). These are executor counts;
-  the real proofs are in `results/20261015-m1/`.
+- **Real proofs** (M1, `results/20261015-m1/`; their shipped tier `ProverOpts::succinct()`,
+  CPU r0vm 3.0.6, epoch 0, noroot, gated on a quiet box, journal == native):
+
+  | config | impl | prove_s | segments (padded, x 2^20) | s per padded 2^20 | verify | receipt | r0vm peak RSS |
+  |---|---|---|---|---|---|---|---|
+  | A (384, 128), 16 steps | **tuned** | **352.4** | 12 (11.5) | 30.64 | 9.7 ms | 225,114 B | 9,398 MiB |
+  | A | fast (round 1) | 392.7 | 13 (13.0) | 30.20 | 11.5 ms | 225,114 B | 9,388 MiB |
+  | B (768, 512), 4 steps | **tuned** | **338.1** | 11 (11.0) | 30.74 | 9.8 ms | 225,114 B | 9,390 MiB |
+  | B | fast (round 1) | 363.0 | 12 (12.0) | 30.25 | 11.5 ms | 225,114 B | 9,397 MiB |
+
+  So the 10x threshold for zkSketch's 2,048-record GK batch is **35.2 s at (384, 128)** and
+  **33.8 s at (768, 512)** (39.3 / 36.3 s against `fast`).
 - **Implementations** (check rows, epoch 0, user cycles / segments; check rows carry a few
   thousand to 38k cycles for emitting the state):
 
@@ -2041,7 +2050,7 @@ Event deserialisation plus, from epoch 1 on, the carried state's words (see Cave
   is close to the work the schedule needs per step (merging about 180 rows, two neighbour
   passes, about six shrinking fuse rounds).
 - **zk-Analytics' own memory.** A real proof of one of these epochs peaks at about
-  9.2 GiB of r0vm RSS (9,388-9,418 MiB combined with the driver in M1; r0vm's default
+  9.2 GiB of r0vm RSS (r0vm 9,388-9,398 MiB, 9,404-9,428 MiB with the driver, in M1; r0vm's default
   po2-20 segment prover, not tuned): any "8 GiB" statement about zkSketch is not one about
   both sides.
 

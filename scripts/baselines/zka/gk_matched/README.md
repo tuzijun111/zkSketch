@@ -79,9 +79,9 @@ its decoder proves step 3's answer.
     re-checks the canonical form of all `capacity` rows, clears and prefix-sums two
     2,049-entry radix tables, pads its output to `capacity` with dummies and allocates
     fresh buffers. At m_sub 128 (16 steps per 2,048 records) that per-step overhead is
-    0.88M of its 1.84M update cycles and costs zk-Analytics a whole segment (13 instead
-    of 12 at config A); it was the default until 2026-10-15 (round 2 of M1) and stays
-    for comparison.
+    0.88M of its 1.84M update cycles: 13 segments (13.0 x 2^20 padded cycles) instead of
+    `tuned`'s 12 (11.5 x 2^20) at config A, a real proof of 392.7 s instead of 352.4 s.
+    It was the default until 2026-10-15 (round 2 of M1) and stays for comparison.
   - `fixed_linear` (zkSketch's fixed schedule: every row of the capacity + m_sub table,
     every one of the ceil(log2(capacity + m_sub)) rounds) and `literal` (zkSketch's
     native code statement for statement), for sensitivity.
