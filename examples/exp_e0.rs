@@ -170,7 +170,11 @@ fn variant(fam: &str) -> &'static str {
     match fam {
         "cm" | "hll" | "bloom" => "omc",
         "ss" => "certified",
-        "gk" => "bandmerge2",
+        // EXP_GK_ROUNDS (M3): the round certification is part of the variant.
+        "gk" => match zksketch::sketch::gk_bandmerge::default_gk_rounds() {
+            zksketch::sketch::gk_bandmerge::GkRounds::SortedCopy => "bandmerge2",
+            zksketch::sketch::gk_bandmerge::GkRounds::StableCompact => "bandmerge2_stable",
+        },
         _ => unreachable!(),
     }
 }

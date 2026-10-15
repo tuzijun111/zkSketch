@@ -739,6 +739,8 @@ fn main() {
             // never the seed.
             ("commit", commit.label().into()),
             ("salt_seed", commit.seed_label().into()),
+            // GK round certification (EXP_GK_ROUNDS=sorted|stable, M3).
+            ("gk_rounds", zksketch::sketch::gk_bandmerge::default_gk_rounds().label().into()),
         ],
     );
 
@@ -855,7 +857,16 @@ fn main() {
                                 family.label(),
                                 shape_str(family, &fshape),
                             ));
-                            let vl = family.label();
+                            // The GK round certification (EXP_GK_ROUNDS, M3) is part of
+                            // the variant: its leaf/merge/root VKs differ from bm2's.
+                            let vl = if family == StreamFamily::GkBandmerge2
+                                && zksketch::sketch::gk_bandmerge::default_gk_rounds()
+                                    == zksketch::sketch::gk_bandmerge::GkRounds::StableCompact
+                            {
+                                "gk_bandmerge2_stable"
+                            } else {
+                                family.label()
+                            };
                             let sh = shape_str(family, &fshape);
                             // The 10 identity columns every row shares.
                             let prefix = |machines_col: usize| -> Vec<String> {

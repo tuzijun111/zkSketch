@@ -1487,7 +1487,10 @@ pub fn apply_batch2(s_old: &Gk2State, batch_vals: &[u32]) -> Gk2State {
     let b = build_bm2(s_old, batch_vals);
     // The two-sided sketch has no hard case, so a capacity ≥ the Gribelyuk bound
     // 2s·ln(N/s+2)+2 never overflows.
-    debug_assert!(
+    // A capacity overflow is a HARD error (G-cap): silently dropping a
+    // survivor would break mass conservation and the εN guarantee, and no
+    // leaf can prove it.
+    assert!(
         b.excess.iter().all(|t| !is_active2(t)),
         "two-sided sketch exceeded capacity {} (declare s' ≥ 2s·ln(N/s+2)+2)",
         s_old.params.capacity
@@ -3045,6 +3048,16 @@ fn pack_bound2_w(
         .collect()
 }
 
+/// Test-only: let a `StableCompact` leaf pack an overflowing batch (so a
+/// test can show the circuit itself rejects it). Always `false` outside tests.
+fn allow_overflow_for_test() -> bool {
+    #[cfg(test)]
+    if let Some(v) = ALLOW_OVERFLOW.with(|c| c.get()) {
+        return v;
+    }
+    false
+}
+
 /// Whether [`build_gkb2_leaf`] uses the source-bound layout. Always on
 /// outside tests.
 fn use_pair_bind() -> bool {
@@ -3068,6 +3081,8 @@ thread_local! {
     /// [`bind_arrival_positions`]. `None` = the honest [`fresh_tuples2`].
     static TAMPER_FRESH: std::cell::RefCell<Option<Vec<Gk2Tuple>>> =
         const { std::cell::RefCell::new(None) };
+    /// Test-only: lift the StableCompact native overflow hard error.
+    static ALLOW_OVERFLOW: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// The two-sided band-merge transition circuit.
@@ -3137,6 +3152,60 @@ pub fn prove_gkb2_exposed(
     prove_gkb2_inner(params, initial_state, batch_vals, true)
 }
 
+/// How a band-merge leaf certifies the recompaction after each of its `L_f`
+/// fusion rounds. Both variants prove the SAME batch rule, `apply_batch2`
+/// (union, two-sided neighbour-init, `L_f` parity-0 rounds of the Gribelyuk
+/// Alg-4 test, compaction to `capacity`), the same `Com(S_{t-1})`,
+/// `Com(B_t)`, `Com(S_t)` encodings and statement, so the GK decoder and its
+/// VK are shared; the leaf (hence merge and root) VKs differ.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default, Hash)]
+pub enum GkRounds {
+    /// Today's circuit: per round a committed fused table, a general sorted
+    /// copy (one resort permute) and its range + `(e, t)` order checks.
+    #[default]
+    SortedCopy,
+    /// G1 (M3): per round one threshold test selected by the checked
+    /// direction bit, a shared survivor update, and a STABLE compaction with
+    /// computed destinations (survivors to their rank, dead rows to the
+    /// tail) certified by destination-bound permute coordinates that also
+    /// carry each row's liveness; union range checks move onto the committed
+    /// init ([`build_gkb2_leaf_stable`]).
+    StableCompact,
+}
+
+impl GkRounds {
+    /// The CSV / profile label (`EXP_GK_ROUNDS` value).
+    pub fn label(self) -> &'static str {
+        match self {
+            GkRounds::SortedCopy => "sorted",
+            GkRounds::StableCompact => "stable",
+        }
+    }
+}
+
+/// Parse an `EXP_GK_ROUNDS` lookup: unset or empty = [`GkRounds::SortedCopy`];
+/// `sorted` / `stable` (any case) select that variant; anything else panics.
+pub fn parse_gk_rounds_env(var: Result<String, std::env::VarError>) -> GkRounds {
+    match var {
+        Ok(v) if v.eq_ignore_ascii_case("sorted") => GkRounds::SortedCopy,
+        Ok(v) if v.eq_ignore_ascii_case("stable") => GkRounds::StableCompact,
+        Ok(v) if v.is_empty() => GkRounds::default(),
+        Ok(v) => panic!("EXP_GK_ROUNDS={v:?}: expected sorted or stable"),
+        Err(std::env::VarError::NotPresent) => GkRounds::default(),
+        Err(std::env::VarError::NotUnicode(v)) => {
+            panic!("EXP_GK_ROUNDS={v:?}: not valid UTF-8; expected sorted or stable")
+        }
+    }
+}
+
+/// The process-default round certification (`EXP_GK_ROUNDS`). Every GK
+/// band-merge leaf built through [`build_gkb2_leaf_commit`] (the harness
+/// leaves, the no-op VK-derivation leaf, the auditor's re-derivation) uses
+/// it, so one process never mixes the two VKs.
+pub fn default_gk_rounds() -> GkRounds {
+    parse_gk_rounds_env(std::env::var("EXP_GK_ROUNDS"))
+}
+
 /// A built, reusable GK band-merge leaf: circuit graph + prover data +
 /// registered prover. Build once per `(params, expose_boundary)`; each
 /// [`Self::prove_epoch`] swaps the `1 + lf` Permute ops’ trace-generation
@@ -3161,6 +3230,10 @@ pub struct Gkb2LeafCircuit {
     mode: CommitMode,
     /// Batch index `t` of the next proof (Interval statement only).
     batch_index: u64,
+    /// How the circuit certifies each fusion round's recompaction
+    /// ([`GkRounds`]); the batch rule, `Com(S_t)` and the statement are the
+    /// same under both, the VKs are not.
+    rounds: GkRounds,
 }
 
 /// Build the reusable GK band-merge leaf circuit for a shape.
@@ -3227,7 +3300,40 @@ pub fn build_gkb2_leaf_expose_with(
 /// binding would change the Bound VKs and is a separate decision. The salts
 /// are witnesses, so the VK does not depend on them; prove with
 /// [`Gkb2LeafCircuit::prove_epoch_commit`].
+///
+/// The round certification is the process default [`default_gk_rounds`]
+/// (`EXP_GK_ROUNDS`, unset = [`GkRounds::SortedCopy`], today's circuit byte
+/// for byte); see [`build_gkb2_leaf_rounds`].
 pub fn build_gkb2_leaf_commit(
+    params: GkbParams,
+    expose: Expose,
+    binding: Binding,
+    mode: CommitMode,
+) -> Gkb2LeafCircuit {
+    build_gkb2_leaf_rounds(params, expose, binding, mode, default_gk_rounds())
+}
+
+/// [`build_gkb2_leaf_commit`] with an explicit round certification
+/// ([`GkRounds`]). `SortedCopy` is the pre-M3 circuit (same VK);
+/// `StableCompact` is the G1 circuit ([`build_gkb2_leaf_stable`]), which
+/// proves the same batch rule `apply_batch2` (same `Com(S_t)`, statement and
+/// decoder) under its own VK.
+pub fn build_gkb2_leaf_rounds(
+    params: GkbParams,
+    expose: Expose,
+    binding: Binding,
+    mode: CommitMode,
+    rounds: GkRounds,
+) -> Gkb2LeafCircuit {
+    match rounds {
+        GkRounds::SortedCopy => build_gkb2_leaf_sorted(params, expose, binding, mode),
+        GkRounds::StableCompact => build_gkb2_leaf_stable(params, expose, binding, mode),
+    }
+}
+
+/// The `SortedCopy` leaf: per round a fused table, a general sorted copy
+/// (resort permute) and its `(e, t)` order checks. Unchanged since before M3.
+fn build_gkb2_leaf_sorted(
     params: GkbParams,
     expose: Expose,
     binding: Binding,
@@ -3882,6 +3988,664 @@ pub fn build_gkb2_leaf_commit(
         expose,
         mode,
         batch_index: 1,
+        rounds: GkRounds::SortedCopy,
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// G1 (M3): GkRounds::StableCompact — the same batch rule, each round's
+// recompaction certified by a STABLE compaction with computed destinations.
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Why the output is the SortedCopy circuit's (= `finish_bm2`'s): after every
+// round the SortedCopy circuit turns each folded-away row into the
+// `(E_MAX, 0…0)` dummy and re-sorts by `(e, t)`. A fusion only changes a
+// survivor's `g₁` or `g₂`; its `(e, t)` key is unchanged, and the round input
+// is `(e, t)`-sorted with the live rows first. So the re-sort is exactly
+// "survivors in their input order, then dummies": a stable compaction. The
+// stable variant moves survivors to their rank (`ρ_i = Σ_{j<i} sflag_j`) and
+// dead rows to the tail (reversed, `T−1−#dead-before-i`), keeps the dead rows'
+// stale contents (positional liveness marks them dead: they never fuse again
+// and are masked to the dummy in the final), and so reproduces every round's
+// live prefix bit for bit. `stable_rounds` replays it natively and the prover
+// asserts its masked final equals `finish_bm2`'s before every proof.
+
+/// Liveness carry of the destination-bound round layout: the lo coordinate
+/// of a round-op element whose row survives the round carries
+/// `+ LIVE_CARRY`. Every plain coordinate `bind_coord(k, h, x)` with
+/// `k ≤ L_f ≤ 20`, `x < 2^SRC_BITS` is `< 43·2^20 < 2^26`, so plain and
+/// carried coordinates are disjoint and `LIVE_CARRY + bind_coord < 2^28 < p`:
+/// a coordinate names `(op, half, position, liveness)` uniquely.
+const LIVE_CARRY: u64 = 1 << 27;
+
+/// One stable-compaction round of the native replay.
+#[derive(Clone)]
+struct StableRound {
+    /// `lt = [a.t > b.t]` per pair (also on dead pairs: the honest value).
+    lt: Vec<u8>,
+    /// `cond = [S ≤ θ]` per pair, `S` the lt-selected Alg-4 sum.
+    cond: Vec<u8>,
+    /// Output rows, `out[p] = emitted[src[p]]` (dead rows keep stale fields).
+    out: Vec<Gk2Tuple>,
+    /// Output liveness `alive[p] = sflag[src[p]]` (a prefix of ones).
+    alive: Vec<u8>,
+    /// Input row placed at output position `p` (inverse of the destinations).
+    src: Vec<usize>,
+}
+
+/// Native witness of the stable-compaction rounds.
+#[derive(Clone)]
+struct StableBuild {
+    rounds: Vec<StableRound>,
+    /// The masked final state: live prefix of the last round, then dummies.
+    final_tuples: Vec<Gk2Tuple>,
+    /// Live rows after the last round (`> cap` is a capacity overflow).
+    survivors: usize,
+}
+
+/// Replay the `L_f` rounds of `finish_bm2` as stable compactions from the
+/// neighbour-initialised union (`union_init`, `(e,t)`-sorted, dummies last).
+fn stable_rounds(union_init: &[Gk2Tuple], theta: u64, cap: usize) -> StableBuild {
+    let total = union_init.len();
+    assert!(total >= 2 && total % 2 == 0, "stable rounds need an even union of >= 2 rows");
+    let lf = num_rounds(total);
+    let mut cur = union_init.to_vec();
+    let mut alive: Vec<u8> = cur.iter().map(|t| (t.e != E_MAX) as u8).collect();
+    let mut rounds = Vec::with_capacity(lf);
+    for _ in 0..lf {
+        let mut emitted = cur.clone();
+        let mut sflag = alive.clone();
+        let mut lt = Vec::with_capacity(total / 2);
+        let mut cond = Vec::with_capacity(total / 2);
+        for j in 0..total / 2 {
+            let (a, b) = (cur[2 * j], cur[2 * j + 1]);
+            let l = a.t > b.t;
+            // S = g₂ₐ + g₁_b + (lt ? g₁ₐ + Δ₁_b : g₂_b + Δ₂ₐ) + 1 — Alg 4's sum1 / sum2.
+            let c = a.g_o + b.g;
+            let selg = if l { a.g } else { b.g_o };
+            let seld = if l { b.delta } else { a.delta_o };
+            let cd = c + selg + seld + 1 <= theta;
+            let merge = cd && alive[2 * j + 1] == 1;
+            let mnew = c + selg + 1; // the survivor's new side mass
+            if merge {
+                debug_assert_eq!(alive[2 * j], 1, "liveness is a prefix");
+                if l {
+                    emitted[2 * j + 1].g = mnew; // a folds right into b
+                    sflag[2 * j] = 0;
+                } else {
+                    emitted[2 * j].g_o = mnew; // b folds left into a
+                    sflag[2 * j + 1] = 0;
+                }
+            }
+            lt.push(l as u8);
+            cond.push(cd as u8);
+        }
+        let mut src = vec![usize::MAX; total];
+        let mut rho = 0usize;
+        for i in 0..total {
+            let dest = if sflag[i] == 1 { rho } else { rho + total - 1 - i };
+            assert_eq!(src[dest], usize::MAX, "stable destinations form a permutation");
+            src[dest] = i;
+            rho += sflag[i] as usize;
+        }
+        let out: Vec<Gk2Tuple> = src.iter().map(|&i| emitted[i]).collect();
+        let alive_out: Vec<u8> = src.iter().map(|&i| sflag[i]).collect();
+        rounds.push(StableRound {
+            lt,
+            cond,
+            out: out.clone(),
+            alive: alive_out.clone(),
+            src,
+        });
+        cur = out;
+        alive = alive_out;
+    }
+    let survivors = alive.iter().filter(|&&a| a == 1).count();
+    let final_tuples = (0..cap)
+        .map(|p| if alive[p] == 1 { Gk2Tuple { active: 1, ..cur[p] } } else { Gk2Tuple::dummy() })
+        .collect();
+    StableBuild { rounds, final_tuples, survivors }
+}
+
+/// Pack round op `k`'s output table in the destination-bound layout:
+/// `lo = (e, g₁, g₂, B(k,0,p) + alive_p·LIVE_CARRY)`, `hi = (Δ₂, t, Δ₁, B(k,1,p))`.
+/// The op's input element of row `i` is the same with `p = dest_i` and
+/// `alive_p = sflag_i`, so the honest output is the input permuted by `src`.
+fn pack_stable_out(ts: &[Gk2Tuple], k: usize, alive: &[u8]) -> Vec<Challenge> {
+    use p3_field::BasedVectorSpace;
+    ts.iter()
+        .enumerate()
+        .flat_map(|(p, t)| {
+            let lo = [
+                Val::from_u32(t.e),
+                Val::from_u32(t.g as u32),
+                Val::from_u32(t.g_o as u32),
+                Val::from_u64(bind_coord(k, 0, p) + alive[p] as u64 * LIVE_CARRY),
+            ];
+            let hi = [
+                Val::from_u32(t.delta_o as u32),
+                Val::from_u32(t.t as u32),
+                Val::from_u32(t.delta as u32),
+                Val::from_u64(bind_coord(k, 1, p)),
+            ];
+            [
+                Challenge::from_basis_coefficients_slice(&lo).expect("4 lo coeffs"),
+                Challenge::from_basis_coefficients_slice(&hi).expect("4 hi coeffs"),
+            ]
+        })
+        .collect()
+}
+
+/// `cond = [x ≤ y]` from `dm1 = x − y − 1`, in 4 ALU ops plus the range
+/// check: `w = dm1 − cond·(2·dm1 + 1)`, i.e. `(1−cond)·(x−y−1) + cond·(y−x)`,
+/// the [`force_le`] witness. With `|x − y| < 2^bits ≪ p`, a wrong (boolean)
+/// `cond` makes `w ≡ −w_true − 1` wrap to `≈ p` and fail the range check.
+fn force_le_dm1(
+    b: &mut CircuitBuilder<Challenge>,
+    cond: ExprId,
+    dm1: ExprId,
+    one: ExprId,
+    two: ExprId,
+    bits: usize,
+) {
+    b.assert_bool(cond);
+    let k = b.mul_add(dm1, two, one);
+    let ck = b.mul(cond, k);
+    let w = b.sub(dm1, ck);
+    let _ = b.add_range_bits::<Val>(w, bits).expect("force_le_dm1 range");
+}
+
+/// **The G1 stable-compaction band-merge leaf** (`GkRounds::StableCompact`).
+///
+/// Same public inputs, commitments (Stage 1), statement and batch rule as
+/// [`build_gkb2_leaf_sorted`]; what changes is how each fusion round and
+/// its recompaction are certified (per round, per pair `(a, b) = (R[2j],
+/// R[2j+1])`, liveness `α`):
+///
+/// * `lt = [a.t > b.t]` ([`force_le_dm1`], 24-bit), and ONE threshold test
+///   `cond = [S ≤ θ]` with `S = g₂ₐ + g₁_b + sel(lt; g₁ₐ, g₂_b) +
+///   sel(lt; Δ₁_b, Δ₂ₐ) + 1` (24-bit) — Alg 4's `sum1` when `lt`, `sum2`
+///   otherwise, replacing the two 27-bit tests and the per-round `e ≠ E_MAX`
+///   activity gadgets;
+/// * `merge = cond·α_b`, `d₁ = lt·merge`, `d₂ = merge − d₁`, survivor flags
+///   `sflag_a = α_a − d₁`, `sflag_b = α_b − d₂`, and the shared survivor mass
+///   `M = g₂ₐ + g₁_b + sel(lt; g₁ₐ, g₂_b) + 1`: `g₁_b ← g₁_b + d₁·(M − g₁_b)`,
+///   `g₂ₐ ← g₂ₐ + d₂·(M − g₂ₐ)`; nothing else changes (dead rows go stale);
+/// * destinations `dest_i = ρ_i + (1 − sflag_i)·(T−1−i)`, `ρ_i = Σ_{j<i}
+///   sflag_j`: survivors to their rank, dead rows to the tail;
+/// * one permute (op `k = r+1`): input `lo = (e, g₁, g₂, B(k,0,dest_i) +
+///   sflag_i·C)`, `hi = (Δ₂, t, Δ₁, B(k,1,dest_i))`, output position `p`
+///   pinned to `B(k,0,p) + α'_p·C`, `B(k,1,p)` with `α'_p` boolean
+///   (`C = LIVE_CARRY`). The multiset equality then forces `out[dest_i] =
+///   emitted[i]` (a bijection; no half re-pairing, no cross-op trade) and
+///   carries the liveness `α'_{dest_i} = sflag_i`, which is a prefix by the
+///   destination arithmetic. No range or order check of the output is needed:
+///   its fields are the emitted ones, bounded by induction (`merge ⇒ the new
+///   side mass + Δ ≤ θ < 2^24`).
+///
+/// Once per leaf: init fields range-checked (e 22-bit, the rest 24-bit) and
+/// batch `e` (22-bit) instead of every union row; `N_{t-1}, N_t < 2^24`; the
+/// union's `(e,t)` order, neighbour-init and source binding as before; union
+/// liveness `α⁰ = [e ≠ E_MAX]` with dead union rows pinned to the canonical
+/// dummy; `Σ is_fresh = #active(B_t)` (no init row with a live `t > N_{t-1}`,
+/// review G1-minor); final `= α^L ⊙ R^L` (dead → `(E_MAX, 0…0)`) on the first
+/// `cap` rows and `α^L_cap = 0` (overflow is unprovable); mass and `N_t`, θ
+/// and arrival bindings as before. Requires a bound binding (`Semantic` /
+/// `Bound`): the 24-bit tests rely on the in-circuit `θ ≤ θ_max`.
+fn build_gkb2_leaf_stable(
+    params: GkbParams,
+    expose: Expose,
+    binding: Binding,
+    mode: CommitMode,
+) -> Gkb2LeafCircuit {
+    assert!(
+        binding.is_bound(),
+        "GkRounds::StableCompact needs a Semantic/Bound binding (in-circuit θ and arrival positions)"
+    );
+    let expose_boundary = expose == Expose::Boundary;
+    let cap = params.capacity;
+    let m = params.batch;
+    let total = cap + m;
+    assert_eq!(total % 2, 0, "total = cap+m must be even");
+    assert!(cap >= 1 && m >= 1, "stable leaf needs cap, m >= 1");
+    let lf = num_rounds(total);
+    let num_pairs = total / 2;
+    check_bind_range(total, lf);
+    assert!(
+        bind_coord(lf, 1, (1 << SRC_BITS) - 1) < LIVE_CARRY
+            && LIVE_CARRY + bind_coord(lf, 1, (1 << SRC_BITS) - 1) < 2_013_265_921,
+        "liveness carry must clear every plain coordinate and stay below p"
+    );
+
+    // ── Circuit ──
+    let mut b = CircuitBuilder::<Challenge>::new();
+    b.enable_poseidon2_perm::<BabyBearD4Width16, _>(
+        generate_poseidon2_trace::<Challenge, BabyBearD4Width16>,
+        default_babybear_poseidon2_16(),
+    );
+    b.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
+    crate::recompose_binding::configure(&mut b);
+    b.enable_permute(generate_permute_trace::<Val, Challenge>);
+    b.enable_range(generate_range_trace::<Val, Challenge>);
+    if expose.exposes() {
+        b.enable_expose(generate_expose_trace::<Val, Challenge>);
+    }
+
+    let init_pis: [ExprId; DIGEST_PACKING] =
+        std::array::from_fn(|i| b.alloc_public_input(if i == 0 { "init_lo" } else { "init_hi" }));
+    let final_pis: [ExprId; DIGEST_PACKING] =
+        std::array::from_fn(|i| b.alloc_public_input(if i == 0 { "final_lo" } else { "final_hi" }));
+    if expose_boundary {
+        b.add_expose(&[init_pis[0], init_pis[1], final_pis[0], final_pis[1]])
+            .expect("add_expose boundary");
+    }
+    let batch_pis: [ExprId; DIGEST_PACKING] =
+        std::array::from_fn(|i| b.alloc_public_input(if i == 0 { "batch_lo" } else { "batch_hi" }));
+    let theta_pi = b.alloc_public_input("theta");
+    let n_prev_pi = b.alloc_public_input("n_prev");
+    let n_t_pi = b.alloc_public_input("n_t");
+
+    let one = b.alloc_const(Challenge::ONE, "one");
+    let zero = b.alloc_const(Challenge::ZERO, "zero");
+    let two = b.alloc_const(Challenge::from_u64(2), "two");
+    let e_max = b.alloc_const(Challenge::from_u64(E_MAX as u64), "e_max");
+    let live_c = b.alloc_const(Challenge::from_u64(LIVE_CARRY), "live_carry");
+
+    let salts = hiding::alloc_leaf_salts(&mut b, mode);
+    // Private inputs — 2 challenges per tuple. Alloc order == packing order.
+    let init_packed: Vec<ExprId> = (0..2 * cap).map(|_| b.alloc_private_input("init")).collect();
+    let final_packed: Vec<ExprId> = (0..2 * cap).map(|_| b.alloc_private_input("final")).collect();
+    let batch_packed: Vec<ExprId> = (0..2 * m).map(|_| b.alloc_private_input("batch")).collect();
+    let union_raw_packed: Vec<ExprId> =
+        (0..2 * total).map(|_| b.alloc_private_input("union_raw")).collect();
+    let out_packed: Vec<Vec<ExprId>> = (0..lf)
+        .map(|_| (0..2 * total).map(|_| b.alloc_private_input("compacted")).collect())
+        .collect();
+    let is_fresh: Vec<ExprId> = (0..total).map(|_| b.alloc_private_input("is_fresh")).collect();
+    let lt: Vec<Vec<ExprId>> = (0..lf)
+        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("lt")).collect())
+        .collect();
+    let cond: Vec<Vec<ExprId>> = (0..lf)
+        .map(|_| (0..num_pairs).map(|_| b.alloc_private_input("cond")).collect())
+        .collect();
+    let alive: Vec<Vec<ExprId>> = (0..lf)
+        .map(|_| (0..total).map(|_| b.alloc_private_input("alive")).collect())
+        .collect();
+    let e_inv_union: Vec<ExprId> = (0..total).map(|_| b.alloc_private_input("e_inv_u")).collect();
+    let e_inv_batch: Vec<ExprId> = (0..m).map(|_| b.alloc_private_input("e_inv_batch")).collect();
+    let de_inv_union: Vec<ExprId> =
+        (0..total - 1).map(|_| b.alloc_private_input("de_inv_u")).collect();
+
+    // ── Stage 1: commit bindings (as the SortedCopy leaf) ──
+    let cfg = Poseidon2Config::BABY_BEAR_D4_W16;
+    let fam = CommitFamily::GreenwaldKhanna;
+    let h_init = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::State,
+        fam,
+        salts.as_ref().map(|s| &s.init),
+        &init_packed,
+        zero,
+        Binding::Semantic,
+    );
+    for i in 0..DIGEST_PACKING {
+        b.connect(h_init[i], init_pis[i]);
+    }
+    let h_final = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::State,
+        fam,
+        salts.as_ref().map(|s| &s.final_),
+        &final_packed,
+        zero,
+        Binding::Semantic,
+    );
+    for i in 0..DIGEST_PACKING {
+        b.connect(h_final[i], final_pis[i]);
+    }
+    let h_batch = hiding::commit_hash::<Val, Challenge>(
+        &mut b,
+        &cfg,
+        CommitKind::Batch,
+        fam,
+        salts.as_ref().map(|s| &s.batch),
+        &batch_packed,
+        zero,
+        Binding::Semantic,
+    );
+    for i in 0..DIGEST_PACKING {
+        b.connect(h_batch[i], batch_pis[i]);
+    }
+    if expose.is_interval() {
+        let _t = statement::expose_leaf_interval::<Val, Challenge>(
+            &mut b,
+            &Poseidon2Config::BABY_BEAR_D4_W16,
+            &init_pis,
+            &final_pis,
+            &h_batch,
+            zero,
+            crate::sketch::bind::Binding::Semantic,
+            IndexPin::Range,
+        );
+    }
+
+    // ── Stage 2: decompose ──
+    let dec = |b: &mut CircuitBuilder<Challenge>, p: ExprId| -> Vec<ExprId> {
+        b.decompose_ext_to_base_coeffs::<Val>(p).expect("decompose")
+    };
+    let init_f: Vec<Vec<ExprId>> = init_packed.iter().map(|&p| dec(&mut b, p)).collect();
+    let final_f: Vec<Vec<ExprId>> = final_packed.iter().map(|&p| dec(&mut b, p)).collect();
+    let batch_f: Vec<Vec<ExprId>> = batch_packed.iter().map(|&p| dec(&mut b, p)).collect();
+    let uraw_f: Vec<Vec<ExprId>> = union_raw_packed.iter().map(|&p| dec(&mut b, p)).collect();
+
+    // ── Stage 3: well-formed committed inputs + union multiset ──
+    // Batch rows (v,0,0,0,0,t) with zero pads; init pads zero. The union
+    // range checks of the SortedCopy leaf move here, onto the committed rows
+    // the union permutes: init fields (e 22-bit, g₁ g₂ Δ₁ Δ₂ t 24-bit) and
+    // batch e (22-bit); batch g/Δ are pinned to 0 and batch t is bound by
+    // Stage 10 to N_{t-1}+1+j ≤ N_t < 2^24 (or 0).
+    for j in 0..m {
+        b.connect(batch_f[2 * j][1], zero);
+        b.connect(batch_f[2 * j][2], zero);
+        b.connect(batch_f[2 * j][3], zero);
+        b.connect(batch_f[2 * j + 1][0], zero);
+        b.connect(batch_f[2 * j + 1][2], zero);
+        b.connect(batch_f[2 * j + 1][3], zero);
+        let _ = b.add_range_bits::<Val>(batch_f[2 * j][0], E_BITS).expect("batch e range");
+    }
+    for i in 0..cap {
+        let f = fld6(&init_f, i);
+        let _ = b.add_range_bits::<Val>(f[0], E_BITS).expect("init e range");
+        for (k, what) in [(1, "init g₁"), (2, "init g₂"), (3, "init Δ₁"), (4, "init Δ₂"), (5, "init t")] {
+            let _ = b.add_range_bits::<Val>(f[k], MASS_BITS).expect(what);
+        }
+    }
+    let mut combined: Vec<ExprId> = Vec::with_capacity(2 * total);
+    for i in 0..total {
+        let f: &[Vec<ExprId>] = if i < cap {
+            &init_f[2 * i..2 * i + 2]
+        } else {
+            &batch_f[2 * (i - cap)..2 * (i - cap) + 2]
+        };
+        if i < cap {
+            b.connect(f[1][2], zero);
+            b.connect(f[1][3], zero);
+        }
+        let b_lo = b.alloc_const(Challenge::from_u64(bind_coord(0, 0, i)), "bind_lo");
+        let b_hi = b.alloc_const(Challenge::from_u64(bind_coord(0, 1, i)), "bind_hi");
+        let lo = b
+            .recompose_base_coeffs_to_ext_via_alu::<Val>(&[f[0][0], f[0][1], f[0][2], b_lo])
+            .expect("bound lo");
+        let hi = b
+            .recompose_base_coeffs_to_ext_via_alu::<Val>(&[f[1][0], f[1][1], f[0][3], b_hi])
+            .expect("bound hi");
+        combined.push(lo);
+        combined.push(hi);
+    }
+    let union_perm = b
+        .add_permute(&combined, (0..combined.len()).collect::<Vec<_>>())
+        .expect("permute union");
+    for i in 0..2 * total {
+        b.connect(union_perm[i], union_raw_packed[i]);
+    }
+
+    // ── Stage 4: union source binding, (e,t) order, liveness ──
+    for r in 0..total {
+        bind_output_pair(&mut b, &uraw_f, r, 0);
+    }
+    for r in 0..total - 1 {
+        let diff = b.sub(uraw_f[2 * (r + 1)][0], uraw_f[2 * r][0]);
+        let _ = b.add_range_bits::<Val>(diff, E_BITS).expect("union e sortedness");
+        let nz = force_nz(&mut b, diff, de_inv_union[r], one, zero);
+        let is_de_zero = b.sub(one, nz);
+        let dt = b.sub(uraw_f[2 * (r + 1) + 1][1], uraw_f[2 * r + 1][1]);
+        let w = b.mul(is_de_zero, dt);
+        let _ = b.add_range_bits::<Val>(w, MASS_BITS).expect("union t tiebreak");
+    }
+    // α⁰_r = [e_r ≠ E_MAX]: a prefix (e ≤ E_MAX and sorted). Dead union rows
+    // must be the canonical dummy (E_MAX, 0…0): the final masks them, so a
+    // poisoned dummy would otherwise drop out silently.
+    let mut alive_in: Vec<ExprId> = Vec::with_capacity(total);
+    for r in 0..total {
+        let f = fld6b(&uraw_f, r);
+        let de = b.sub(e_max, f[0]);
+        let a0 = force_nz(&mut b, de, e_inv_union[r], one, zero);
+        let dead = b.sub(one, a0);
+        for k in 1..6 {
+            let z = b.mul(f[k], dead);
+            b.connect(z, zero);
+        }
+        alive_in.push(a0);
+    }
+    // N_{t-1}, N_t < 2^24: bounds every fresh t = N_{t-1}+1+j ≤ N_t (Stage 10).
+    let _ = b.add_range_bits::<Val>(n_prev_pi, MASS_BITS).expect("N_{t-1} range");
+    let _ = b.add_range_bits::<Val>(n_t_pi, MASS_BITS).expect("N_t range");
+    // #active(B_t) = Σ [batch.e ≠ E_MAX].
+    let mut count_batch = zero;
+    let mut batch_act: Vec<ExprId> = Vec::with_capacity(m);
+    for j in 0..m {
+        let dj = b.sub(e_max, batch_f[2 * j][0]);
+        let actj = force_nz(&mut b, dj, e_inv_batch[j], one, zero);
+        count_batch = b.add(count_batch, actj);
+        batch_act.push(actj);
+    }
+
+    // ── Stage 5: is_fresh + two-sided neighbour-init ──
+    // is_fresh_r = [N_{t-1}+1 ≤ t_r]; Σ is_fresh = #active(B_t), so no init row
+    // carries t > N_{t-1} (dead rows have t = 0, fresh rows t > N_{t-1}).
+    let mut fresh_count = zero;
+    for r in 0..total {
+        let dm1 = b.sub(n_prev_pi, uraw_f[2 * r + 1][1]); // (N_{t-1}+1) − t − 1
+        force_le_dm1(&mut b, is_fresh[r], dm1, one, two, MASS_BITS);
+        fresh_count = b.add(fresh_count, is_fresh[r]);
+    }
+    b.connect(fresh_count, count_batch);
+    let mut d1: Vec<ExprId> = vec![zero; total];
+    for r in (0..total).rev() {
+        let base = if r + 1 < total { b.add(uraw_f[2 * (r + 1)][1], d1[r + 1]) } else { zero };
+        let f_part = b.mul(is_fresh[r], base);
+        let omf = b.sub(one, is_fresh[r]);
+        let o_part = b.mul(omf, fld6b(&uraw_f, r)[3]);
+        d1[r] = b.add(f_part, o_part);
+    }
+    let mut d2: Vec<ExprId> = vec![zero; total];
+    for r in 0..total {
+        let base = if r >= 1 { b.add(uraw_f[2 * (r - 1)][2], d2[r - 1]) } else { zero };
+        let f_part = b.mul(is_fresh[r], base);
+        let omf = b.sub(one, is_fresh[r]);
+        let o_part = b.mul(omf, uraw_f[2 * r + 1][0]);
+        d2[r] = b.add(f_part, o_part);
+    }
+    let mut cur: Vec<[ExprId; 6]> = (0..total)
+        .map(|r| [uraw_f[2 * r][0], uraw_f[2 * r][1], uraw_f[2 * r][2], d1[r], d2[r], uraw_f[2 * r + 1][1]])
+        .collect();
+
+    // ── Stage 6: L_f rounds — selected test, survivor update, stable compaction ──
+    let tail: Vec<ExprId> = (0..total)
+        .map(|i| b.alloc_const(Challenge::from_u64((total - 1 - i) as u64), "tail_offset"))
+        .collect();
+    for round in 0..lf {
+        let k_op = round + 1;
+        let mut emitted: Vec<[ExprId; 6]> = cur.clone();
+        let mut sflag: Vec<ExprId> = alive_in.clone();
+        for j in 0..num_pairs {
+            let a = cur[2 * j];
+            let bb = cur[2 * j + 1];
+            let (al_a, al_b) = (alive_in[2 * j], alive_in[2 * j + 1]);
+            // lt = [a.t > b.t] = [b.t + 1 ≤ a.t]
+            let dm1t = b.sub(bb[5], a[5]);
+            force_le_dm1(&mut b, lt[round][j], dm1t, one, two, MASS_BITS);
+            // cond = [S ≤ θ], S = g₂ₐ + g₁_b + sel(lt; g₁ₐ, g₂_b) + sel(lt; Δ₁_b, Δ₂ₐ) + 1
+            let c = b.add(a[2], bb[1]);
+            let dg = b.sub(a[1], bb[2]);
+            let selg = b.mul_add(lt[round][j], dg, bb[2]);
+            let mprime = b.add(c, selg);
+            let dd = b.sub(bb[3], a[4]);
+            let seld = b.mul_add(lt[round][j], dd, a[4]);
+            let u = b.add(mprime, seld);
+            let dm1c = b.sub(u, theta_pi); // S − 1 − θ
+            force_le_dm1(&mut b, cond[round][j], dm1c, one, two, MASS_BITS);
+            // merge only a live b (α is a prefix, so then a is live too)
+            let merge = b.mul(cond[round][j], al_b);
+            let dir1 = b.mul(lt[round][j], merge);
+            let dir2 = b.sub(merge, dir1);
+            sflag[2 * j] = b.sub(al_a, dir1);
+            sflag[2 * j + 1] = b.sub(al_b, dir2);
+            // shared survivor mass M = mprime + 1
+            let mnew = b.add(mprime, one);
+            let ub = b.sub(mnew, bb[1]);
+            emitted[2 * j + 1][1] = b.mul_add(dir1, ub, bb[1]);
+            let ua = b.sub(mnew, a[2]);
+            emitted[2 * j][2] = b.mul_add(dir2, ua, a[2]);
+        }
+        // destinations: ρ' runs from B(k,0,0); dest_lo_i = ρ'_i + (1−sflag_i)·(T−1−i)
+        let base_lo = b.alloc_const(Challenge::from_u64(bind_coord(k_op, 0, 0)), "dest_base_lo");
+        let gap = b.alloc_const(
+            Challenge::from_u64(bind_coord(k_op, 1, 0) - bind_coord(k_op, 0, 0)),
+            "dest_gap",
+        );
+        let mut rho = base_lo;
+        let mut emit_packed: Vec<ExprId> = Vec::with_capacity(2 * total);
+        for i in 0..total {
+            let v = emitted[i];
+            let omsf = b.sub(one, sflag[i]);
+            let dest_lo = b.mul_add(omsf, tail[i], rho);
+            let lo_coord = b.mul_add(sflag[i], live_c, dest_lo);
+            let hi_coord = b.add(dest_lo, gap);
+            let lo = b
+                .recompose_base_coeffs_to_ext::<Val>(&[v[0], v[1], v[2], lo_coord])
+                .expect("emit lo");
+            let hi = b
+                .recompose_base_coeffs_to_ext::<Val>(&[v[4], v[5], v[3], hi_coord])
+                .expect("emit hi");
+            emit_packed.push(lo);
+            emit_packed.push(hi);
+            if i + 1 < total {
+                rho = b.add(rho, sflag[i]);
+            }
+        }
+        let perm = b
+            .add_permute(&emit_packed, (0..emit_packed.len()).collect::<Vec<_>>())
+            .expect("permute stable compaction");
+        for i in 0..2 * total {
+            b.connect(perm[i], out_packed[round][i]);
+        }
+        let out_f: Vec<Vec<ExprId>> = out_packed[round].iter().map(|&p| dec(&mut b, p)).collect();
+        for p in 0..total {
+            let al = alive[round][p];
+            b.assert_bool(al);
+            let c_lo = b.alloc_const(Challenge::from_u64(bind_coord(k_op, 0, p)), "out_lo");
+            let c_hi = b.alloc_const(Challenge::from_u64(bind_coord(k_op, 1, p)), "out_hi");
+            let want_lo = b.mul_add(al, live_c, c_lo);
+            b.connect(out_f[2 * p][3], want_lo);
+            b.connect(out_f[2 * p + 1][3], c_hi);
+        }
+        cur = (0..total).map(|p| fld6b(&out_f, p)).collect();
+        alive_in = alive[round].clone();
+    }
+
+    // ── Stage 7: final = α^L ⊙ R^L on the first cap rows; α^L_cap = 0 ──
+    let mut mass = zero;
+    let mut count = zero;
+    for i in 0..cap {
+        let f = cur[i];
+        let al = alive_in[i];
+        let em = b.sub(f[0], e_max);
+        let fe = b.mul_add(al, em, e_max);
+        let fg1 = b.mul(al, f[1]);
+        let fg2 = b.mul(al, f[2]);
+        let fd1 = b.mul(al, f[3]);
+        let fd2 = b.mul(al, f[4]);
+        let ft = b.mul(al, f[5]);
+        b.connect(final_f[2 * i][0], fe);
+        b.connect(final_f[2 * i][1], fg1);
+        b.connect(final_f[2 * i][2], fg2);
+        b.connect(final_f[2 * i][3], fd1);
+        b.connect(final_f[2 * i + 1][0], fd2);
+        b.connect(final_f[2 * i + 1][1], ft);
+        b.connect(final_f[2 * i + 1][2], zero);
+        b.connect(final_f[2 * i + 1][3], zero);
+        // ── Stage 8 (mass): Σ α(g₁+g₂+1) = N_t ──
+        let gg = b.add(fg1, fg2);
+        mass = b.add(mass, gg);
+        count = b.add(count, al);
+    }
+    // Capacity: the live rows are a prefix, so α^L_cap = 0 ⟺ #survivors ≤ cap.
+    b.connect(alive_in[cap], zero);
+    mass = b.add(mass, count);
+    b.connect(mass, n_t_pi);
+    let np_plus_b = b.add(n_prev_pi, count_batch);
+    b.connect(np_plus_b, n_t_pi);
+    // ── Stage 9: θ = ⌊N_t/s⌋ ── Stage 10: arrival positions ──
+    bind_theta::<Val, Challenge>(&mut b, theta_pi, n_t_pi, params.s);
+    let batch_t: Vec<ExprId> = (0..m).map(|j| batch_f[2 * j + 1][1]).collect();
+    bind_arrival_positions(&mut b, &batch_t, &batch_act, n_prev_pi, one, zero);
+
+    let circuit = b.build().expect("build gkb2 stable circuit");
+
+    let config = make_leaf_config();
+    let table_packing = TablePacking::new(1, 2).with_fri_params(LOG_FINAL_POLY_LEN, LOG_BLOWUP);
+    let mut preprocessors = vec![
+        poseidon2_preprocessor::<Val>(),
+        recompose_preprocessor::<Val>(false),
+        permute_preprocessor::<Val>(),
+        range_preprocessor::<Val>(),
+    ];
+    let mut air_builders = poseidon2_air_builders_d4::<ConfigWithFriParams>();
+    air_builders.extend(recompose_air_builders::<ConfigWithFriParams, 4>(1, false));
+    air_builders.extend(permute_air_builders::<ConfigWithFriParams, 4>(1));
+    air_builders.extend(range_air_builders::<ConfigWithFriParams, 4>(1));
+    if expose.exposes() {
+        preprocessors.push(expose_preprocessor::<Val>());
+        air_builders.extend(expose_air_builders::<ConfigWithFriParams, 4>());
+    }
+    let (airs_degrees, primitive_columns, non_primitive_columns) =
+        get_airs_and_degrees_with_prep::<ConfigWithFriParams, Challenge, 4>(
+            &circuit,
+            &table_packing,
+            &preprocessors,
+            &air_builders,
+            ConstraintProfile::Standard,
+        )
+        .expect("airs_and_degrees");
+    crate::experiments::table_probe::record_leaf(
+        "gk_bandmerge2_stable",
+        &table_packing,
+        &airs_degrees,
+        &non_primitive_columns,
+        &primitive_columns,
+    );
+    crate::experiments::table_probe::maybe_stop();
+    let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
+    let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
+    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
+    let circuit_prover_data =
+        CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
+    let mut prover = BatchStarkProver::new(config.clone()).with_table_packing(table_packing);
+    prover.register_poseidon2_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16);
+    prover.register_recompose_table::<4>(Poseidon2Config::BABY_BEAR_D4_W16.d() != 4);
+    prover.register_permute_table::<4>();
+    prover.register_range_table::<4>();
+    if expose.exposes() {
+        prover.register_expose_table::<4>();
+    }
+    let trace_rows: u64 = ext_degrees.iter().map(|&d| 1u64 << d).sum();
+    let table_rows: Vec<usize> = ext_degrees.iter().map(|&d| 1usize << d).collect();
+
+    Gkb2LeafCircuit {
+        params,
+        circuit,
+        prover,
+        circuit_prover_data: Rc::new(circuit_prover_data),
+        trace_rows,
+        table_rows,
+        pair_bind: true,
+        expose,
+        mode,
+        batch_index: 1,
+        rounds: GkRounds::StableCompact,
     }
 }
 
@@ -3909,6 +4673,11 @@ impl Gkb2LeafCircuit {
         crate::recursion::recursive::expose_forest::common_vk_pin_values(
             self.circuit_prover_data.common_data(),
         )
+    }
+
+    /// The round certification this leaf was built with ([`GkRounds`]).
+    pub fn rounds(&self) -> GkRounds {
+        self.rounds
     }
 
     /// `Σ 2^degree` over all tables.
@@ -4022,7 +4791,22 @@ impl Gkb2LeafCircuit {
         assert_eq!(total % 2, 0, "total = cap+m must be even");
 
         // ── Native replay ──
-        build_bm2(initial_state, batch_vals)
+        let build = build_bm2(initial_state, batch_vals);
+        // A capacity overflow is a hard error (G-cap): the StableCompact
+        // circuit cannot prove it (`α^L_cap = 0`), and the caller must see a
+        // failed run, not a dropped survivor. Tests may lift it to show the
+        // circuit's own rejection.
+        if self.rounds == GkRounds::StableCompact && !allow_overflow_for_test() {
+            let live = build.excess.iter().filter(|t| t.active == 1).count();
+            assert!(
+                live == 0,
+                "GK capacity overflow: {} survivors > capacity {} (N_t = {}); declare a larger capacity",
+                cap + live,
+                cap,
+                build.n_t
+            );
+        }
+        build
     }
 
     /// Shared body of the `prove_epoch_*` entry points (no opening checks).
@@ -4137,6 +4921,9 @@ impl Gkb2LeafCircuit {
         build: &Bm2Build,
         openings: &Openings,
     ) -> Gk2Witness {
+        if self.rounds == GkRounds::StableCompact {
+            return self.pack_opened_stable(initial_state, batch_vals, build, openings);
+        }
         let params = self.params;
         let cap = params.capacity;
         let m = params.batch;
@@ -4313,6 +5100,118 @@ impl Gkb2LeafCircuit {
                     private_inputs.push(inv(de));
                 }
             }
+        }
+
+        Gk2Witness { public_inputs, private_inputs, initial_commit, final_commit, batch_commit }
+    }
+}
+
+impl Gkb2LeafCircuit {
+    /// [`Self::pack_opened`] for a `StableCompact` leaf: replays the rounds as
+    /// stable compactions ([`stable_rounds`]) from the same union, asserts the
+    /// masked final equals the bm2 replay's (`finish_bm2`), and packs the
+    /// stable witness in [`build_gkb2_leaf_stable`]'s allocation order.
+    fn pack_opened_stable(
+        &mut self,
+        initial_state: &Gk2State,
+        batch_vals: &[u32],
+        build: &Bm2Build,
+        openings: &Openings,
+    ) -> Gk2Witness {
+        use p3_field::Field;
+        let params = self.params;
+        let cap = params.capacity;
+        let m = params.batch;
+        let total = cap + m;
+        let sb = stable_rounds(&build.union_init, build.theta, cap);
+        if sb.survivors <= cap {
+            assert!(
+                sb.final_tuples == build.final_tuples,
+                "G1 stable-compaction replay diverged from the bm2 replay (finish_bm2)"
+            );
+        }
+        let final_state = Gk2State {
+            tuples: sb.final_tuples.clone(),
+            params,
+            n: build.n_t,
+        };
+        let mode = self.mode;
+        let fresh = leaf_fresh_rows(batch_vals, m, build.n_prev);
+        let initial_commit = commit_gk2_state_with(initial_state, mode, &openings.init);
+        let final_commit = commit_gk2_state_with(&final_state, mode, &openings.final_);
+        let batch_commit = commit_gk2_rows_with(&fresh, mode, &openings.batch);
+        let lf = num_rounds(total);
+        assert_eq!(sb.rounds.len(), lf);
+
+        // Permute hints: the union sort, then each round's compaction.
+        let mut sigmas: Vec<Vec<usize>> = Vec::with_capacity(1 + lf);
+        sigmas.push(build.sigma_union_chal.clone());
+        for rd in &sb.rounds {
+            sigmas.push(expand_sigma(&rd.src));
+        }
+        self.circuit
+            .update_permute_witnesses(&sigmas)
+            .expect("update permute witnesses (gkb2 stable)");
+
+        let pack = |c: &Gk2StateCommit| pack_commit_to_challenge(&crate::commitment::CountMinCommit(c.0));
+        let mut public_inputs: Vec<Challenge> = Vec::new();
+        public_inputs.extend_from_slice(&pack(&initial_commit));
+        public_inputs.extend_from_slice(&pack(&final_commit));
+        public_inputs.extend_from_slice(&pack_commit_to_challenge(&crate::commitment::CountMinCommit(
+            batch_commit.0,
+        )));
+        public_inputs.push(Challenge::from_u64(build.theta));
+        let n_prev_pub = {
+            #[allow(unused_mut)]
+            let mut v = build.n_prev;
+            #[cfg(test)]
+            if let Some(t) = TAMPER_NPREV.with(|c| c.get()) {
+                v = t;
+            }
+            v
+        };
+        public_inputs.push(Challenge::from_u64(n_prev_pub));
+        public_inputs.push(Challenge::from_u64(build.n_t));
+        if self.expose.is_interval() {
+            public_inputs.push(Challenge::from_u64(self.batch_index));
+        }
+
+        let inv = |x: u64| if x == 0 { Challenge::ZERO } else { Challenge::from_u64(x).inverse() };
+        let bit = |x: u8| if x == 1 { Challenge::ONE } else { Challenge::ZERO };
+        let mut private_inputs: Vec<Challenge> = Vec::new();
+        if mode.is_hiding() {
+            private_inputs.extend(openings.private_inputs());
+        }
+        private_inputs.extend_from_slice(&pack_tuples2(&initial_state.tuples));
+        private_inputs.extend_from_slice(&pack_tuples2(&final_state.tuples));
+        private_inputs.extend_from_slice(&pack_tuples2(&fresh));
+        let src_lo: Vec<usize> = (0..total).map(|r| build.sigma_union_chal[2 * r] / 2).collect();
+        let src_hi: Vec<usize> = (0..total).map(|r| build.sigma_union_chal[2 * r + 1] / 2).collect();
+        private_inputs.extend_from_slice(&pack_bound2(&build.union_raw, 0, &src_lo, &src_hi));
+        for (round, rd) in sb.rounds.iter().enumerate() {
+            private_inputs.extend_from_slice(&pack_stable_out(&rd.out, round + 1, &rd.alive));
+        }
+        for r in 0..total {
+            let t = &build.union_raw[r];
+            private_inputs.push(bit((t.t > build.n_prev) as u8));
+        }
+        for rd in &sb.rounds {
+            private_inputs.extend(rd.lt.iter().map(|&x| bit(x)));
+        }
+        for rd in &sb.rounds {
+            private_inputs.extend(rd.cond.iter().map(|&x| bit(x)));
+        }
+        for rd in &sb.rounds {
+            private_inputs.extend(rd.alive.iter().map(|&x| bit(x)));
+        }
+        for r in 0..total {
+            private_inputs.push(inv((E_MAX - build.union_raw[r].e) as u64));
+        }
+        for j in 0..m {
+            private_inputs.push(inv((E_MAX - fresh[j].e) as u64));
+        }
+        for r in 0..total - 1 {
+            private_inputs.push(inv((build.union_raw[r + 1].e - build.union_raw[r].e) as u64));
         }
 
         Gk2Witness { public_inputs, private_inputs, initial_commit, final_commit, batch_commit }
@@ -6778,5 +7677,195 @@ mod tests {
             let fin = apply_batch2(&Gk2State::empty(p), &vals);
             assert_eq!(r.final_, commit_gk2_state_with(&fin, CommitMode::Hiding, &rho_state_bb(&seed, GK, 1)));
         }
+    }
+}
+
+// ── G1 (M3) StableCompact tests ──────────────────────────────────────────
+#[cfg(test)]
+mod stable_tests {
+    use super::*;
+    use crate::commitment::hiding::{Openings, SaltSeed};
+
+    /// Small deterministic generator (no external RNG).
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n.max(1)
+        }
+    }
+
+    /// One batch of `k` values in input pattern `mode` (random, ascending,
+    /// descending, duplicate-heavy, zigzag, outside-in), offset by `n`.
+    fn batch_vals(mode: usize, k: usize, n: u64, rng: &mut Lcg) -> Vec<u32> {
+        let n = n as u32;
+        match mode {
+            0 => (0..k).map(|_| rng.below(1 << 21) as u32).collect(),
+            1 => (0..k as u32).map(|i| n + 1 + i).collect(),
+            2 => (0..k as u32).map(|i| (1 << 20) - n - i).collect(),
+            3 => (0..k).map(|_| rng.below(4) as u32).collect(),
+            4 => (0..k as u32)
+                .map(|i| if i % 2 == 0 { n + i / 2 } else { (1 << 20) - n - i / 2 })
+                .collect(),
+            _ => (0..k as u32)
+                .map(|i| {
+                    let h = i / 2;
+                    if i % 2 == 0 { (1 << 19) - 4096 + n % 2048 + h } else { (1 << 19) + 4096 - n % 2048 - h }
+                })
+                .collect(),
+        }
+    }
+
+    /// **G1 output equivalence, natively.** The stable-compaction replay of the
+    /// rounds ([`stable_rounds`]) equals the bm2 replay (`finish_bm2`, the
+    /// SortedCopy circuit's witness) on >= 480 chains of mixed shapes and input
+    /// patterns, and both agree on overflow.
+    #[test]
+    fn g1_stable_rounds_match_bm2_native() {
+        let mut rng = Lcg(0x6131_5EED);
+        let (mut chains, mut batches, mut overflows) = (0usize, 0usize, 0usize);
+        for _ in 0..600 {
+            let s = [1u64, 2, 3, 4, 6, 51][rng.below(6) as usize];
+            let cap = [4usize, 8, 16, 32, 64][rng.below(5) as usize];
+            let mut m = [1usize, 2, 4, 8, 16, 32][rng.below(6) as usize];
+            if (cap + m) % 2 == 1 {
+                m += 1;
+            }
+            let mode = rng.below(6) as usize;
+            let params = GkbParams { capacity: cap, batch: m, s };
+            let mut st = Gk2State::empty(params);
+            for _ in 0..1 + rng.below(12) {
+                let k = rng.below(m as u64 + 1) as usize;
+                let vals = batch_vals(mode, k, st.n, &mut rng);
+                let b = build_bm2(&st, &vals);
+                let overflow = b.excess.iter().any(|t| t.active == 1);
+                let sb = stable_rounds(&b.union_init, b.theta, cap);
+                assert_eq!(sb.survivors > cap, overflow, "overflow verdicts differ");
+                if overflow {
+                    overflows += 1;
+                    break;
+                }
+                assert!(sb.final_tuples == b.final_tuples, "G1 final != bm2 final (s={s} cap={cap} m={m} mode={mode})");
+                st = Gk2State { tuples: b.final_tuples, params, n: b.n_t };
+                batches += 1;
+            }
+            chains += 1;
+        }
+        eprintln!("G1 vs bm2: {chains} chains, {batches} batches equal, {overflows} overflow-terminated");
+        assert!(chains >= 480 && batches >= 2000);
+    }
+
+    fn stable_leaf(params: GkbParams, expose: Expose, mode: CommitMode) -> Gkb2LeafCircuit {
+        build_gkb2_leaf_rounds(params, expose, Binding::Semantic, mode, GkRounds::StableCompact)
+    }
+
+    /// **Honest prove/verify of the StableCompact leaf** (Plain, no expose),
+    /// three chained epochs with both fusion directions: every proof
+    /// self-verifies and certifies the native `apply_batch2` state.
+    #[test]
+    fn g1_stable_circuit_round_trip_chained() {
+        let params = GkbParams { capacity: 16, batch: 8, s: 3 };
+        let mut leaf = stable_leaf(params, Expose::None, CommitMode::Plain);
+        let batches: [Vec<u32>; 3] = [
+            vec![100, 400, 200, 700, 300, 600, 500, 800],
+            vec![150, 650, 250, 750, 350, 550, 450, 850],
+            vec![10, 20, 30, 40, 900, 910],
+        ];
+        let mut st = Gk2State::empty(params);
+        for (t, b) in batches.iter().enumerate() {
+            let p = leaf.prove_epoch_at(t as u64 + 1, st.clone(), b.clone());
+            let s2 = apply_batch2(&st, b);
+            assert_eq!(p.initial.0, commit_gk2_state(&st).0);
+            assert_eq!(p.final_.0, commit_gk2_state(&s2).0, "certified final == native apply_batch2");
+            st = s2;
+        }
+        assert!(st.actives().len() < st.n as usize, "some fusion must have happened");
+    }
+
+    /// The deployed statement: Interval + Hiding commitments, honest openings,
+    /// two chained leaves, plus the no-op VK-derivation leaf on the same circuit.
+    #[test]
+    fn g1_stable_interval_hiding_round_trip() {
+        let params = GkbParams { capacity: 8, batch: 8, s: 2 };
+        let gk = CommitFamily::GreenwaldKhanna;
+        let seed = SaltSeed::for_tests(77);
+        let mut leaf = stable_leaf(params, Expose::Interval, CommitMode::Hiding);
+        let s0 = Gk2State::empty(params);
+        let b1 = vec![5u32, 9, 1, 7, 3, 8, 2, 6];
+        let p1 = leaf.prove_epoch_commit(1, s0.clone(), b1.clone(), &Openings::for_leaf(&seed, gk, 1));
+        let s1 = apply_batch2(&s0, &b1);
+        let b2 = vec![4u32, 10, 11, 0];
+        let p2 = leaf.prove_epoch_commit(2, s1.clone(), b2.clone(), &Openings::for_leaf(&seed, gk, 2));
+        assert_eq!(p1.final_.0, p2.initial.0, "leaf 1's final commitment is leaf 2's init");
+        let noop = stable_leaf(params, Expose::Interval, CommitMode::Hiding)
+            .prove_epoch_public_zero(1, s0.clone(), Vec::new());
+        assert_eq!(noop.initial.0, noop.final_.0);
+        assert_eq!(leaf.vk_pin_values(), crate::recursion::recursive::expose_forest::vk_pin_values(&noop.output.0));
+    }
+
+    /// The variants have different leaf VKs; the SortedCopy builder is the
+    /// default and reproduces the pre-M3 circuit (its pins live in
+    /// `commitment::plain_vk_pins`).
+    #[test]
+    fn g1_stable_vk_differs_from_sorted() {
+        let params = GkbParams { capacity: 4, batch: 4, s: 2 };
+        let a = build_gkb2_leaf_rounds(params, Expose::Interval, Binding::Semantic, CommitMode::Plain, GkRounds::SortedCopy);
+        let b = stable_leaf(params, Expose::Interval, CommitMode::Plain);
+        let d = build_gkb2_leaf_commit(params, Expose::Interval, Binding::Semantic, CommitMode::Plain);
+        assert_eq!(a.rounds(), GkRounds::SortedCopy);
+        assert_eq!(d.rounds(), default_gk_rounds());
+        assert_ne!(a.vk_pin_values(), b.vk_pin_values());
+        if default_gk_rounds() == GkRounds::SortedCopy {
+            assert_eq!(a.vk_pin_values(), d.vk_pin_values());
+        }
+        assert_eq!(parse_gk_rounds_env(Ok("STABLE".into())), GkRounds::StableCompact);
+        assert_eq!(parse_gk_rounds_env(Ok("sorted".into())), GkRounds::SortedCopy);
+        assert_eq!(parse_gk_rounds_env(Err(std::env::VarError::NotPresent)), GkRounds::SortedCopy);
+    }
+
+    /// A state of exactly `cap` survivors whose next batch adds one more
+    /// survivor: increasing values that never fuse (s large, θ = 0).
+    fn cap_edge(cap: usize) -> (GkbParams, Gk2State, Vec<u32>) {
+        let params = GkbParams { capacity: cap, batch: 2, s: 1000 };
+        let mut st = Gk2State::empty(params);
+        let mut v = 10u32;
+        while st.actives().len() + 4 <= cap {
+            st = apply_batch2(&st, &[v, v + 1]);
+            v += 2;
+        }
+        (params, st, vec![v, v + 1])
+    }
+
+    /// **G-cap: S = cap proves, S = cap + 1 is a hard error natively and is
+    /// rejected by the circuit.**
+    #[test]
+    fn g1_stable_capacity_edge() {
+        let cap = 6;
+        let (params, st, next) = cap_edge(cap);
+        assert_eq!(st.actives().len(), cap - 2, "precondition");
+        // S = cap: one more value fills the summary exactly.
+        let mut leaf = stable_leaf(params, Expose::None, CommitMode::Plain);
+        let full = apply_batch2(&st, &next);
+        assert_eq!(full.actives().len(), cap);
+        let p = leaf.prove_epoch_at(1, st.clone(), next.clone());
+        assert_eq!(p.final_.0, commit_gk2_state(&full).0);
+        // S = cap + 1: native hard error ...
+        let over = vec![next[1] + 1]; // one more survivor: S = cap + 1
+        let r = std::panic::catch_unwind(|| apply_batch2(&full, &over));
+        assert!(r.is_err(), "apply_batch2 must refuse an overflow");
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            leaf.prove_epoch_at(2, full.clone(), over.clone())
+        }));
+        assert!(r.is_err(), "the harness must refuse an overflow natively");
+        // ... and the circuit itself rejects the honest-but-overflowing witness.
+        ALLOW_OVERFLOW.with(|c| c.set(Some(true)));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            leaf.prove_epoch_at(2, full.clone(), over.clone())
+        }));
+        ALLOW_OVERFLOW.with(|c| c.set(None));
+        assert!(r.is_err(), "the circuit must reject S = cap + 1");
     }
 }
