@@ -38,11 +38,14 @@
 //! against zkSketch's native `apply_batch2` chain tuple by tuple and against the
 //! commitments zkSketch's GK leaf circuit exposes (`../host`, `--mode check|certify`).
 //!
-//! Three implementations of the one transition are selectable (`GkmImpl`, ported and
-//! tested in ../../gk_bm2): `Fast` (the default, the steelman: a data-dependent
-//! schedule a zkVM may use), `FixedLinear` (zkSketch's fixed schedule, linear-time
-//! tables) and `Literal` (zkSketch's code statement for statement). They give the
-//! same state; the guest's cycle count depends on the choice.
+//! Four implementations of the one transition are selectable (`GkmImpl`). `Tuned`
+//! (the default, the steelman) is defined here: `Fast`'s data-dependent schedule run as
+//! one loop over the epoch's steps, without `Fast`'s per-step fixed costs (see
+//! [`apply_epoch_tuned`]). `Fast` (a data-dependent schedule a zkVM may use, one
+//! `apply_batch2_fast` call per step), `FixedLinear` (zkSketch's fixed schedule,
+//! linear-time tables) and `Literal` (zkSketch's code statement for statement) are
+//! ported and tested in ../../gk_bm2. All four give the same state; the guest's cycle
+//! count depends on the choice.
 //!
 //! Upstream items that are `pub` are imported. Items that are private upstream are
 //! copied VERBATIM below, each with its upstream file:line at commit d4a5a9a.
@@ -258,27 +261,36 @@ fn verify_epoch_chain_integrity(chain_links: &[EpochChainLink]) {
 /// The genesis epoch-chain hash (their querier/core GENESIS, `[0u8; 32]`).
 pub const GENESIS: [u8; HASH_BYTES_LEN] = [0u8; HASH_BYTES_LEN];
 
-/// Which implementation of zkSketch's batch transition the guest runs. All three give
-/// the same state (../../gk_bm2/README.md); only the guest's cycle count differs.
+/// Which implementation of zkSketch's batch transition the guest runs. All four give
+/// the same state (../../gk_bm2/README.md for the three ported there, [`apply_epoch_tuned`]
+/// for `Tuned`); only the guest's cycle count differs.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum GkmImpl {
-    /// `apply_batch2_fast`: data-dependent schedule (active prefix only, early stop).
-    /// The default: the efficient implementation a zkVM programmer would write.
+    /// `apply_batch2_fast` once per step: data-dependent schedule (active prefix only,
+    /// early stop), with that function's per-call costs (canonical check of the whole
+    /// capacity table, two 2^11-bucket radix tables, padding the output to capacity,
+    /// fresh buffers) paid at every step.
     Fast,
     /// `apply_batch2_fixed`: zkSketch's fixed schedule (full capacity + m_sub table,
     /// every round, every pair) with linear-time union and compaction.
     FixedLinear,
     /// `apply_batch2`: zkSketch's native code statement for statement.
     Literal,
+    /// [`apply_epoch_tuned`]: `Fast`'s schedule as one loop over the epoch's steps (the
+    /// compact active prefix carried from step to step, the canonical check once per
+    /// epoch, a radix sort sized to the batch, buffers allocated once). The default: the
+    /// efficient implementation a zkVM programmer would write, the steelman.
+    Tuned,
 }
 
 impl GkmImpl {
-    pub const ALL: [GkmImpl; 3] = [GkmImpl::Fast, GkmImpl::FixedLinear, GkmImpl::Literal];
+    pub const ALL: [GkmImpl; 4] = [GkmImpl::Tuned, GkmImpl::Fast, GkmImpl::FixedLinear, GkmImpl::Literal];
     pub fn name(self) -> &'static str {
         match self {
             GkmImpl::Fast => "fast",
             GkmImpl::FixedLinear => "fixed_linear",
             GkmImpl::Literal => "literal",
+            GkmImpl::Tuned => "tuned",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -308,10 +320,12 @@ impl GkmConfig {
     }
 }
 
-/// One step of zkSketch's GK batch rule with the chosen implementation.
+/// One step of zkSketch's GK batch rule with the chosen implementation. `Tuned` differs
+/// from `Fast` only across the steps of an epoch ([`apply_epoch_tuned`]); one step of it
+/// is `Fast`'s.
 pub fn apply_step(implementation: GkmImpl, s: &State, vals: &[u32]) -> State {
     match implementation {
-        GkmImpl::Fast => bm2::apply_batch2_fast(s, vals),
+        GkmImpl::Fast | GkmImpl::Tuned => bm2::apply_batch2_fast(s, vals),
         GkmImpl::FixedLinear => bm2::apply_batch2_fixed(s, vals),
         GkmImpl::Literal => bm2::apply_batch2(s, vals),
     }
@@ -335,8 +349,13 @@ pub fn capacity_violation(s: &State) -> Option<(u64, u64)> {
 
 /// The epoch's sub-batch steps: `vals` in chunks of `m_sub`, each one apply_batch2
 /// step from the previous state; panics (a HARD ERROR: the guest proves nothing) on a
-/// capacity overflow. Returns the new state and the number of steps.
+/// capacity overflow. Returns the new state and the number of steps. `Tuned` returns the
+/// state COMPACT (its active rows only, see [`apply_epoch_tuned`]); the others return all
+/// `capacity` rows. [`padded`] gives the canonical full form of either.
 pub fn apply_epoch(cfg: &GkmConfig, s_prev: State, vals: &[u32]) -> (State, u32) {
+    if cfg.implementation == GkmImpl::Tuned {
+        return apply_epoch_tuned(cfg, s_prev, vals);
+    }
     let mut s = s_prev;
     let mut steps = 0u32;
     for chunk in vals.chunks(cfg.m_sub as usize) {
@@ -351,6 +370,256 @@ pub fn apply_epoch(cfg: &GkmConfig, s_prev: State, vals: &[u32]) -> (State, u32)
         steps += 1;
     }
     (s, steps)
+}
+
+// ===========================================================================
+// TUNED: Fast's schedule as one loop over the epoch's steps (the steelman).
+// ===========================================================================
+
+/// The canonical full form of a state: its rows padded with dummies to `capacity` (a
+/// no-op on a full state; [`apply_epoch_tuned`] keeps states compact). Panics on more
+/// rows than `capacity` (nothing is ever truncated here).
+pub fn padded(mut s: State) -> State {
+    assert!(s.tuples.len() <= s.params.capacity, "state has more rows than its capacity");
+    s.tuples.resize(s.params.capacity, Tuple::dummy());
+    s
+}
+
+/// Radix plan of the fresh-value sort: `passes` LSD digits of `bits` bits cover the
+/// `vbits` significant bits of the epoch's values; the digit width minimises a simple
+/// cost model, passes x (2 x 2^bits bucket work + 4 x k element work), so a 128-value
+/// batch gets 3 digits of 7 bits (128-entry tables), not `Fast`'s 2 digits of 11 bits
+/// (two 2,049-entry tables cleared and prefix-summed per step).
+fn radix_plan(vbits: u32, k: usize) -> (u32, u32) {
+    if vbits == 0 || k <= 1 {
+        return (0, 0);
+    }
+    let mut best = (u64::MAX, 0u32, 0u32);
+    for passes in 1..=vbits.min(8) {
+        let bits = vbits.div_ceil(passes);
+        if bits > 16 {
+            continue;
+        }
+        let cost = passes as u64 * (2 * (1u64 << bits) + 4 * k as u64);
+        if cost < best.0 {
+            best = (cost, bits, passes);
+        }
+    }
+    (best.1, best.2)
+}
+
+/// The batch positions `0..vals.len()` stably sorted by value (so by (value, position) =
+/// (e, t)), by an LSD radix sort under the plan [`radix_plan`]; `order`, `tmp` and `cnt`
+/// are reused from step to step.
+fn radix_order(vals: &[u32], bits: u32, passes: u32, order: &mut Vec<u32>, tmp: &mut Vec<u32>, cnt: &mut Vec<u32>) {
+    let k = vals.len();
+    order.clear();
+    order.extend(0..k as u32);
+    if passes == 0 || k <= 1 {
+        return;
+    }
+    let radix = 1usize << bits;
+    let mask = (radix - 1) as u32;
+    tmp.clear();
+    tmp.resize(k, 0);
+    if cnt.len() < radix + 1 {
+        cnt.resize(radix + 1, 0);
+    }
+    for d in 0..passes {
+        let shift = d * bits;
+        let c = &mut cnt[..radix + 1];
+        c.fill(0);
+        for &v in vals {
+            c[((v >> shift) & mask) as usize + 1] += 1;
+        }
+        for b in 0..radix {
+            c[b + 1] += c[b];
+        }
+        for &p in order.iter() {
+            let b = ((vals[p as usize] >> shift) & mask) as usize;
+            tmp[c[b] as usize] = p;
+            c[b] += 1;
+        }
+        core::mem::swap(order, tmp);
+    }
+}
+
+/// Number of leading active rows of a state that must be canonical, as `apply_batch2`
+/// outputs it and [`bm2::canonical_violation`] defines it, in compact or full form: a
+/// prefix of actives (`e < E_MAX`, `t <= n`) strictly increasing in `(e, t)`, then only
+/// exact dummies, at most `capacity` rows in all. Also requires the active mass to be `n`
+/// (every state chained from the empty one carries all of its records; see
+/// [`capacity_violation`]). Panics otherwise.
+fn tuned_check_entry(s: &State) -> usize {
+    assert!(s.params.s >= 1, "GK state: s = 0");
+    assert!(s.tuples.len() <= s.params.capacity, "GK state: more rows than its capacity");
+    let mut prev: Option<(u32, u64)> = None;
+    let mut mass = 0u64;
+    let mut k = 0usize;
+    for t in &s.tuples {
+        if t.active != 1 {
+            break;
+        }
+        assert!(t.e < bm2::E_MAX, "GK state not canonical: active value >= E_MAX");
+        assert!(t.t <= s.n, "GK state not canonical: active insertion time > n");
+        if let Some(p) = prev {
+            assert!((t.e, t.t) > p, "GK state not canonical: actives not strictly increasing in (e, t)");
+        }
+        prev = Some((t.e, t.t));
+        mass += t.mass();
+        k += 1;
+    }
+    assert!(
+        s.tuples[k..].iter().all(|t| *t == Tuple::dummy()),
+        "GK state not canonical: non-canonical dummy, or an active after a dummy"
+    );
+    assert!(mass == s.n, "GK state: active mass {} != n = {}", mass, s.n);
+    k
+}
+
+/// [`apply_epoch`] for `GkmImpl::Tuned`: the same chain of `apply_batch2` steps, on
+/// `Fast`'s data-dependent schedule (`bm2::apply_batch2_fast`: merge the sorted fresh
+/// values into the sorted old actives, fuse over the active prefix only, compact instead
+/// of re-sorting, stop after the first round that changes nothing), written as one loop
+/// over the epoch the way a zkVM programmer would write it. What `Fast` pays at EVERY step
+/// and this pays once per epoch or not at all:
+///   - the canonical-form check: once, on the carried state ([`tuned_check_entry`]); each
+///     step's output is canonical by construction (the argument in gk_bm2's
+///     `apply_batch2_fixed` doc), so it is not re-checked;
+///   - the dummy padding: the state stays COMPACT (its active rows) from step to step and
+///     is returned compact; dummies are never materialised (the state commitment is over
+///     the active rows anyway, [`compact_words`]);
+///   - the fresh-value sort's tables: an LSD radix sort with digits sized to the batch
+///     ([`radix_plan`]) instead of two 2,049-entry count tables per step;
+///   - allocations: the union / round buffers, the sort's buffers and its count table
+///     are allocated once per epoch and reused (risc0's guest allocator never frees);
+///   - the overflow check: from the drops themselves (a row cut past `capacity`, or the
+///     never-paired last row of a full odd table), instead of summing the mass of the
+///     whole state after every step. With the entry check (mass == n) this is exactly
+///     [`capacity_violation`]'s condition: fusions conserve the mass, only a drop loses
+///     any, so the state after a step has mass N_t iff that step dropped nothing.
+/// Same state, row for row, as zkSketch's `apply_batch2` chain (host tests and
+/// `--mode check`); panics (a HARD ERROR) on a capacity overflow at the same step as
+/// the other implementations. Accepts `s_prev` compact or full; returns it compact.
+pub fn apply_epoch_tuned(cfg: &GkmConfig, s_prev: State, vals: &[u32]) -> (State, u32) {
+    let params = s_prev.params;
+    let k_old = tuned_check_entry(&s_prev);
+    let cap = params.capacity;
+    let m = params.batch;
+    let total = cap + m;
+    let lf = bm2::num_rounds(total);
+    let ms = cfg.m_sub as usize;
+    // One pass over the epoch's values: the E_MAX bound (gk_vals_of's mask guarantees it)
+    // and the number of significant bits the radix sort must cover.
+    let (or_all, max_all) = vals.iter().fold((0u32, 0u32), |(o, x), &v| (o | v, x.max(v)));
+    assert!(vals.is_empty() || max_all < bm2::E_MAX, "batch value >= E_MAX");
+    let (bits, passes) = radix_plan(32 - or_all.leading_zeros(), ms.min(m));
+
+    let mut cur = s_prev.tuples;
+    cur.truncate(k_old);
+    cur.reserve(total.saturating_sub(cur.len()));
+    let mut next: Vec<Tuple> = Vec::with_capacity(total);
+    let mut order: Vec<u32> = Vec::with_capacity(ms.min(m));
+    let mut tmp: Vec<u32> = Vec::with_capacity(ms.min(m));
+    let mut cnt: Vec<u32> = Vec::new();
+    let mut n = s_prev.n;
+    let mut steps = 0u32;
+    for chunk in vals.chunks(ms) {
+        // only the first m values enter zkSketch's table (chunks are m_sub = m here)
+        let fresh = &chunk[..chunk.len().min(m)];
+        let n_prev = n;
+        n = n_prev + chunk.len() as u64;
+        let theta = n / params.s;
+
+        // Union: the old actives (sorted) merged with the fresh singletons (sorted by
+        // (value, position)); an old row goes first on equal values (its t <= n_prev).
+        radix_order(fresh, bits, passes, &mut order, &mut tmp, &mut cnt);
+        next.clear();
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < cur.len() && j < order.len() {
+            let p = order[j] as usize;
+            if cur[i].e <= fresh[p] {
+                next.push(cur[i]);
+                i += 1;
+            } else {
+                next.push(Tuple { e: fresh[p], g: 0, g_o: 0, delta: 0, delta_o: 0, t: n_prev + 1 + p as u64, active: 1 });
+                j += 1;
+            }
+        }
+        next.extend_from_slice(&cur[i..]);
+        for &p in &order[j..] {
+            let p = p as usize;
+            next.push(Tuple { e: fresh[p], g: 0, g_o: 0, delta: 0, delta_o: 0, t: n_prev + 1 + p as u64, active: 1 });
+        }
+        core::mem::swap(&mut cur, &mut next);
+
+        // Two-sided neighbour init of the fresh rows (a dummy or no neighbour gives 0).
+        let a = cur.len();
+        for i in (0..a).rev() {
+            if cur[i].t > n_prev {
+                cur[i].delta = if i + 1 < a { cur[i + 1].g + cur[i + 1].delta } else { 0 };
+            }
+        }
+        for i in 0..a {
+            if cur[i].t > n_prev {
+                cur[i].delta_o = if i >= 1 { cur[i - 1].g_o + cur[i - 1].delta_o } else { 0 };
+            }
+        }
+
+        // Fuse rounds over the active prefix, Fast's loop statement for statement, plus
+        // the drop flag.
+        let mut dropped = false;
+        for _ in 0..lf {
+            next.clear();
+            let len = cur.len();
+            let mut changed = false;
+            let mut p = 0;
+            while p + 1 < len {
+                let x = cur[p];
+                let y = cur[p + 1];
+                if x.t > y.t {
+                    if x.g + x.g_o + y.g + y.delta + 1 <= theta {
+                        next.push(Tuple { g: x.g + x.g_o + y.g + 1, ..y });
+                        changed = true;
+                    } else {
+                        next.push(x);
+                        next.push(y);
+                    }
+                } else if y.g_o + y.g + x.g_o + x.delta_o + 1 <= theta {
+                    next.push(Tuple { g_o: y.g_o + y.g + x.g_o + 1, ..x });
+                    changed = true;
+                } else {
+                    next.push(x);
+                    next.push(y);
+                }
+                p += 2;
+            }
+            if p < len {
+                // the unpaired last active: zkSketch pairs it with a dummy (kept), except
+                // in the never-paired last row of a full odd table, where it is lost
+                if len < total {
+                    next.push(cur[p]);
+                } else {
+                    dropped = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+            core::mem::swap(&mut cur, &mut next);
+        }
+        if dropped || cur.len() > cap {
+            let kept: u64 = cur[..cur.len().min(cap)].iter().map(Tuple::mass).sum();
+            panic!(
+                "GK capacity overflow at step {} of the epoch: capacity {} kept mass {} of N_t = {} records \
+                 (raise the capacity; zkSketch's leaf circuit cannot prove this step either)",
+                steps, cfg.capacity, kept, n
+            );
+        }
+        steps += 1;
+    }
+    (State { tuples: cur, params, n }, steps)
 }
 
 // ===========================================================================
@@ -528,9 +797,14 @@ pub const MARK_NAMES: [&str; 8] = ["chain", "flatten", "carry", "map", "update",
 const TAG_GKM_STATE_COMMIT: &[u8] = b"ZKTLM_GKM_STATE_COMMIT_V1";
 
 /// Compact words: `bm2::state_to_words` of the state restricted to its active prefix
-/// (header capacity, m_sub, s, n and the active count k, then k rows of 12 words).
+/// (header capacity, m_sub, s, n and the active count k, then k rows of 12 words). A
+/// state that is already compact (every row active: `Tuned`'s) is encoded as it is.
 pub fn compact_words(s: &State) -> Vec<u32> {
-    bm2::state_to_words(&State { tuples: actives(s).to_vec(), params: s.params, n: s.n })
+    let a = actives(s);
+    if a.len() == s.tuples.len() {
+        return bm2::state_to_words(s);
+    }
+    bm2::state_to_words(&State { tuples: a.to_vec(), params: s.params, n: s.n })
 }
 
 /// The canonical state of compact words: their k rows (all active, k <= capacity)
@@ -556,6 +830,9 @@ pub fn gkm_state_commit(s: &State) -> [u8; HASH_BYTES_LEN] {
     commit_words(&compact_words(s))
 }
 
+/// One aggregation epoch: (S_e, journal output). S_e is in the implementation's form:
+/// compact (active rows only) for `Tuned`, all `capacity` rows otherwise; [`padded`] gives
+/// the canonical full form. The output does not depend on the form.
 pub fn process_gkm_aggr(input: &GkmAggrInput, root: GkmRoot) -> (State, GkmAggrOutput) {
     process_gkm_aggr_marked(input, root, &mut |_| {})
 }
@@ -592,13 +869,16 @@ pub fn process_gkm_aggr_marked<F: FnMut(Mark)>(
     let cfg = input.config;
     cfg.validate();
     let params = cfg.params();
+    // Tuned keeps the state compact (no dummy rows are ever materialised); the other
+    // implementations take the full `capacity`-row state.
+    let compact = cfg.implementation == GkmImpl::Tuned;
     let (s_prev, prev_state_commit) = match &input.carried {
         None => {
             assert!(
                 input.prev_chain_hash == GENESIS,
                 "no carried state, but prev_chain_hash is not the genesis hash"
             );
-            let s = State::empty(params);
+            let s = if compact { State { tuples: Vec::new(), params, n: 0 } } else { State::empty(params) };
             let c = gkm_state_commit(&s);
             (s, c)
         }
@@ -608,7 +888,16 @@ pub fn process_gkm_aggr_marked<F: FnMut(Mark)>(
                 EpochChainLink::compute_final_hash(c.link_prev_hash, com) == input.prev_chain_hash,
                 "carried state does not match the previous epoch's state_commit"
             );
-            let s = from_compact_words(&c.state_words);
+            let s = if compact {
+                // the checks of from_compact_words; the rest of the canonical form and the
+                // mass are checked once by apply_epoch_tuned
+                let s = bm2::state_from_words(&c.state_words);
+                assert!(s.tuples.len() <= s.params.capacity, "compact state has more rows than its capacity");
+                assert!(s.tuples.iter().all(|t| t.active == 1), "compact state holds a non-active row");
+                s
+            } else {
+                from_compact_words(&c.state_words)
+            };
             assert!(s.params == params, "carried state's GK parameters differ from the configuration");
             (s, com)
         }

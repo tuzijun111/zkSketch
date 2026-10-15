@@ -17,7 +17,8 @@ risc0_zkvm::guest::entry!(main);
 // (GkmRoot, GkmAggrOutput), as ../../../gk/guests/aggr_root.
 // Private stdout (never the journal or the receipt): the cycle_count marks start, read,
 // one per phase (MARK_NAMES), journal; then, when the host asked for it (`emit`), the
-// new state's gk_bm2 words for the tuple-by-tuple equivalence check.
+// new state's gk_bm2 words for the tuple-by-tuple equivalence check (in the
+// implementation's form: compact for `tuned`, all capacity rows otherwise; the host pads).
 fn main() {
     let mut marks = [0u64; MARK_NAMES.len() + 3];
     marks[0] = env::cycle_count();

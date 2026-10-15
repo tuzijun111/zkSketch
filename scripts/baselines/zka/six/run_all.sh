@@ -49,8 +49,8 @@
 #                  (../gk_matched): the same algorithm on both sides. textbook = textbook
 #                  Greenwald-Khanna rebuilt per epoch (../gk), a different algorithm, kept as a
 #                  labelled reference; SIX_ZKA_ROOTS=legacy needs it (the committed rows are textbook)
-#   SIX_ZKA_GK_IMPL  fast (default) | fixed_linear | literal: the matched GK guest's implementation of
-#                  the one transition (same state; fast = the efficient data-dependent one, the steelman)
+#   SIX_ZKA_GK_IMPL  tuned (default) | fast | fixed_linear | literal: the matched GK guest's implementation
+#                  of the one transition (same state; tuned = the efficient data-dependent one, the steelman)
 #   SIX_QUICK_PROVE  quick: the jobs proved for real, as jobs.py --select selectors
 #                  (default cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key: CM and
 #                  KMV noroot at epoch 0, the GK query and the Bloom absent-key query at n = 1)
@@ -86,7 +86,7 @@ cm_ref_on() {  # cm_ref_on <roots> <cm_ref>: their shipped CM is planned as a re
 }
 gk_knobs_ok() {  # gk_knobs_ok <zka_gk> <impl> <roots>: "" if fine, else why not
   case $1 in matched|textbook) ;; *) echo "SIX_ZKA_GK=$1: matched or textbook"; return ;; esac
-  [[ $2 =~ ^(fast|fixed_linear|literal)$ ]] || { echo "SIX_ZKA_GK_IMPL=$2: fast, fixed_linear or literal"; return; }
+  [[ $2 =~ ^(tuned|fast|fixed_linear|literal)$ ]] || { echo "SIX_ZKA_GK_IMPL=$2: tuned, fast, fixed_linear or literal"; return; }
   [[ $1 == textbook || ,$3, != *,legacy,* ]] ||
     echo "SIX_ZKA_ROOTS=$3 has legacy (the committed 2026-10-09 guests, whose GK is the textbook port): set SIX_ZKA_GK=textbook with it"
 }
@@ -247,9 +247,9 @@ check_repo() {
     read -r -a pc <<< "$(plan_counts "$roots" "$cmref")"
     info "zk-Analytics aggregation root variants: SIX_ZKA_ROOTS=$roots, SIX_ZKA_CM_REF=$cmref (full proves ${pc[1]} aggregation + 28 query$( (( pc[2] )) && echo " + ${pc[2]} CM reference (their shipped CM)") = ${pc[0]} jobs)"
   fi
-  local zgk=${SIX_ZKA_GK:-matched} zgi=${SIX_ZKA_GK_IMPL:-fast} why
+  local zgk=${SIX_ZKA_GK:-matched} zgi=${SIX_ZKA_GK_IMPL:-tuned} why
   why=$(gk_knobs_ok "$zgk" "$zgi" "$roots")
-  if [[ -n $why ]]; then miss "$why" "unset SIX_ZKA_GK / SIX_ZKA_GK_IMPL (defaults matched / fast)"
+  if [[ -n $why ]]; then miss "$why" "unset SIX_ZKA_GK / SIX_ZKA_GK_IMPL (defaults matched / tuned)"
   elif [[ $zgk == matched ]]; then info "zk-Analytics GK: SIX_ZKA_GK=matched, zkSketch's GK rule in their pipeline (the same algorithm on both sides), implementation $zgi"
   else info "zk-Analytics GK: SIX_ZKA_GK=textbook, textbook Greenwald-Khanna (NOT zkSketch's algorithm: a reference)"; fi
   if [[ -x $ZKS_BIN ]]; then ok "zkSketch exp_compose built ($ZKS_BIN)"; else info "zkSketch exp_compose not built yet -- run_all.sh build"; fi
@@ -418,7 +418,7 @@ load_shape() {  # load_shape <mode>: export the run shape for the child scripts
   export SIX_ZKA_ROOTS=${SIX_ZKA_ROOTS:-noroot} SIX_ZKA_CM_REF=${SIX_ZKA_CM_REF:-1}
   roots_ok "$SIX_ZKA_ROOTS" || die "SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS must be a comma list of distinct designed, noroot, legacy"
   [[ $SIX_ZKA_CM_REF == [01] ]] || die "SIX_ZKA_CM_REF=$SIX_ZKA_CM_REF must be 0 or 1"
-  export SIX_ZKA_GK=${SIX_ZKA_GK:-matched} SIX_ZKA_GK_IMPL=${SIX_ZKA_GK_IMPL:-fast}
+  export SIX_ZKA_GK=${SIX_ZKA_GK:-matched} SIX_ZKA_GK_IMPL=${SIX_ZKA_GK_IMPL:-tuned}
   local why; why=$(gk_knobs_ok "$SIX_ZKA_GK" "$SIX_ZKA_GK_IMPL" "$SIX_ZKA_ROOTS")
   [[ -z $why ]] || die "$why"
   EXEC_ROOTS=$SIX_ZKA_ROOTS

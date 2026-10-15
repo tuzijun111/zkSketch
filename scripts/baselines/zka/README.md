@@ -839,7 +839,7 @@ zkSketch's algorithm in their pipeline". The other matched-rule guests (`ss_mg/`
   | Count-Min | their `aggr_cm` / `querier-guest-cm`, 3 x 1024, `CM_TOPK_SLOTS=1` | `cm` (omc leaf), `EXP_D=3 EXP_W=1024` | point count of the heaviest key of the queried prefix (their `Estimate` target rule; zkSketch `EXP_QUERY_KEY_MODE=hot`; ties to the smaller key on both sides; the same key on both sides at each n: 3,011,223,745 for n <= 5, 3,780,053,395 for n >= 6) |
   | HyperLogLog | `hll/` †, b = 14 | `hll` (omc), `EXP_HLL_B=14` | cardinality |
   | SpaceSaving / Misra-Gries | `spacesaving/` †, SpaceSaving s = 1,024 per epoch, sum-and-truncate merge | `ss` (certified MG), `EXP_SS_CAP=1024` (MG with s counters ~ SpaceSaving with s+1) | top-1: theirs `topk --limit 1` (key, count, error); ours the top-1 mass (`c = 1`, count only, no key). This is the closest pair the two query sets allow |
-  | Greenwald-Khanna | `gk_matched/` † (default, `SIX_ZKA_GK=matched`): zkSketch's band-merge rule, `--capacity $SIX_GK_CAP --s 51 --m-sub $SIX_GK_MSUB` (= 2048 / 51 / 2048: one `apply_batch2` step per epoch), state carried across epochs, guest implementation `fast`. Reference (`SIX_ZKA_GK=textbook`, and the committed rows): `gk/` †, textbook GK, eps = 1/51, COMPRESS every 25 records | `gk` (band-merge), `EXP_GK_CAP=2048 EXP_GK_S=51` | rank of the same value on both sides: the most frequent 21-bit value of the prefix (zkSketch `EXP_QUERY_KEY_MODE=hot`; 1,810,625 for n <= 5, 985,491 for n >= 6), passed to theirs as `--rank-value`; the matched port answers with zkSketch's decoder estimator on the latest state |
+  | Greenwald-Khanna | `gk_matched/` † (default, `SIX_ZKA_GK=matched`): zkSketch's band-merge rule, `--capacity $SIX_GK_CAP --s 51 --m-sub $SIX_GK_MSUB` (= 2048 / 51 / 2048: one `apply_batch2` step per epoch), state carried across epochs, guest implementation `tuned`. Reference (`SIX_ZKA_GK=textbook`, and the committed rows): `gk/` †, textbook GK, eps = 1/51, COMPRESS every 25 records | `gk` (band-merge), `EXP_GK_CAP=2048 EXP_GK_S=51` | rank of the same value on both sides: the most frequent 21-bit value of the prefix (zkSketch `EXP_QUERY_KEY_MODE=hot`; 1,810,625 for n <= 5, 985,491 for n >= 6), passed to theirs as `--rank-value`; the matched port answers with zkSketch's decoder estimator on the latest state |
   | Bloom (partitioned) | `bloom/` †, k = 7 x W = 2^14 | `bloom`, `EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14` | membership of the same two keys per n: an inserted key (the first record of batch n; zkSketch `first`, theirs `--probe first`) and an absent key (zkSketch `EXP_QUERY_KEY_MODE=absent`, a second zkSketch run; the key it drew is passed to theirs as `--probe key:<k>`) |
   | KMV / bottom-k | `kmv/` †, k = 1,024, 64-bit hash | `kmv`, `EXP_KMV_K=1024`, 27-bit hash | distinct count |
 
@@ -1093,8 +1093,8 @@ SIX_ZKA_GK=textbook scripts/baselines/zka/six/run_all.sh full   # textbook GK on
 GK on the zk-Analytics side (`six_common.sh`): `SIX_ZKA_GK=matched` (default) runs
 `gk_matched/` with zkSketch's capacity `SIX_GK_CAP`, s = 51 and leaf size `SIX_GK_MSUB`
 (default `SIX_M`: one `apply_batch2` step per epoch, as zkSketch's `SIX_M`-record leaves),
-implementation `SIX_ZKA_GK_IMPL` (`fast`, the default; `fixed_linear`, `literal` for
-sensitivity); `SIX_ZKA_GK=textbook` runs `gk/`. To match a zkSketch GK run with smaller
+implementation `SIX_ZKA_GK_IMPL` (`tuned`, the default, the steelman; `fast`,
+`fixed_linear`, `literal` for sensitivity); `SIX_ZKA_GK=textbook` runs `gk/`. To match a zkSketch GK run with smaller
 leaves than the zk-Analytics epoch (a memory-matched forest), run the two sides separately
 with the same capacity, e.g. zkSketch `SIX_M=128 SIX_T=16 SIX_GK_CAP=384 run_zks.sh gk` and
 zk-Analytics `SIX_M=2048 SIX_T=1 SIX_GK_CAP=384 SIX_GK_MSUB=128 run_zka.sh exec`
@@ -1957,11 +1957,14 @@ reference (`SIX_ZKA_GK=textbook`). Full detail: `gk_matched/README.md`.
 
 - **Guest = zkSketch's native chain, tuple by tuple.** `gk_matched --mode check` at
   (capacity, m_sub) = (384, 128) [16 steps per 2,048-record epoch], (768, 512) [4 steps]
-  and (2048, 2048) [1 step], epochs 0 and 1, AOL, all three implementations (`fast`,
-  `fixed_linear`, `literal`): 18 rows, each with the guest's emitted state equal to
-  zkSketch's `apply_batch2` chain in all 7 fields of every row, n and the parameters,
-  `journal_eq_native=true`, and the query guest's bounds equal to zkSketch's
-  `Gk2State::rank_interval` on its own chain.
+  and (2048, 2048) [1 step], epochs 0 and 1, AOL, implementations `fast`,
+  `fixed_linear`, `literal`: 18 rows (round 1); `tuned`, the default since round 2: 26
+  more rows, (384, 128) epochs 0-3 (with `fast` and `fixed_linear`), (768, 512) epochs 0-1
+  (all four), (2048, 2048) epochs 0-1 (with `fast`) and (64, 256) epochs 0-1. Each row has
+  the guest's emitted state equal to zkSketch's `apply_batch2` chain in all 7 fields of
+  every row, n and the parameters, `journal_eq_native=true`, and the query guest's bounds
+  equal to zkSketch's `Gk2State::rank_interval` on its own chain; at each epoch every
+  implementation gives the same `state_commit`.
 - **Guest = what zkSketch's leaf circuit certifies.** `gk_matched --mode certify` proved
   zkSketch's GK leaf, built as `exp_compose` builds it (hiding commitments), for every
   leaf of epochs 0 and 1: 32 leaves at (384, 128) (90 s per epoch) and 8 at (768, 512)
@@ -1978,47 +1981,99 @@ reference (`SIX_ZKA_GK=textbook`). Full detail: `gk_matched/README.md`.
   8 x 2,048) answered 1,786, 3,557, 5,274, 7,095, 8,916, 5,877, 6,915, 7,927 at n = 1..8,
   and the matched query guest gives the same eight answers. A fresh six-harness smoke test
   at 2 x 256 records (cap 512) gave 171 / 330 on both sides.
-- **Native unit tests** (6): the chain at four configurations, carried-state binding
+- **Native unit tests** (8): the chain at four configurations, carried-state binding
   (tampered state, wrong previous link, missing state, changed configuration, fake
-  genesis are refused), overflow = panic in all implementations (capacity 16, where
-  zkSketch's native code truncates silently), the estimator, the root variants, and the
+  genesis are refused; so is a correctly linked state with rows out of order or a mass
+  other than n), overflow = panic in all implementations (capacity 16, where
+  zkSketch's native code truncates silently), `tuned` against zkSketch's chain on 22 edge
+  shapes (odd tables, capacities at and below overflow: equal where zkSketch keeps every
+  record, a panic where it loses one), the estimator, the root variants, and the
   query's one-unbroken-chain rule (a genesis restart, which their link check accepts, and
   a stale state are refused).
 
-### Executor results, one 2,048-record AOL epoch (noroot, `fast`; `results/20261015-m1/`)
+### Executor results, one 2,048-record AOL epoch (noroot; `results/20261015-m1/`)
 
-| zk-Analytics GK | epoch | user cycles | segments (padded 2^20) | Event read | batch chain | GK update | everything else | MODELED (30.1 s/seg) |
-|---|---|---|---|---|---|---|---|---|
-| matched, (384, 128), 16 steps | 0 | 11,879,811 | 13 | 7,605,762 | 2,245,157 | 1,841,333 | 187,559 | 391 s |
-| matched, (384, 128) | 1 | 11,983,830 | 13 | 7,714,746 | 2,245,656 | 1,826,401 | 197,027 | 391 s |
-| matched, (768, 512), 4 steps | 0 | 11,047,353 | 12 | 7,605,762 | 2,245,157 | 987,878 | 208,556 | 361 s |
-| matched, (768, 512) | 1 | 11,174,793 | 12 | 7,705,746 | 2,245,656 | 1,004,059 | 219,332 | 361 s |
-| matched, (2048, 2048), 1 step | 0 | 10,872,657 | 12 | 7,605,762 | 2,245,157 | 737,882 | 283,856 | 361 s |
-| textbook (`gk/`, memmatch 2026-10-14) | 0 | 12,862,178 | 14 | | | | | 421 s |
+`tuned` is the headline (the default since round 2 of M1, 2026-10-15); `fast` was the
+default before and is kept for comparison (see "Implementations" below). `read` is their
+Event deserialisation plus, from epoch 1 on, the carried state's words (see Caveats).
 
-- The epoch costs about the same with either GK: 83-91% of the user cycles are their
+| zk-Analytics GK | impl | epoch | user cycles | segments (padded, x 2^20) | read (Events + carried state) | batch chain | GK update | everything else | MODELED (padded x 30.07 s) |
+|---|---|---|---|---|---|---|---|---|---|
+| matched, (384, 128), 16 steps | **tuned** | 0 | 10,979,416 | **12** (11.5) | 7,605,761 | 2,245,159 | 965,322 | 163,174 | 345.8 s |
+| matched, (384, 128) | tuned | 1 | 11,085,631 | 12 (11.5) | 7,714,745 | 2,245,658 | 952,085 | 173,143 | 345.8 s |
+| matched, (384, 128) | fast | 0 | 11,879,837 | 13 (13.0) | 7,605,761 | 2,245,159 | 1,841,352 | 187,565 | 390.9 s |
+| matched, (768, 512), 4 steps | **tuned** | 0 | 10,693,564 | **11** (11.0) | 7,605,761 | 2,245,159 | 680,565 | 162,079 | 330.8 s |
+| matched, (768, 512) | tuned | 1 | 10,822,662 | 12 (11.25) | 7,705,745 | 2,245,658 | 698,971 | 172,288 | 338.3 s |
+| matched, (768, 512) | fast | 0 | 11,047,367 | 12 (12.0) | 7,605,761 | 2,245,159 | 987,885 | 208,562 | 360.8 s |
+| matched, (2048, 2048), 1 step | **tuned** | 0 | 10,569,752 | **11** (11.0) | 7,605,761 | 2,245,159 | 555,837 | 162,995 | 330.8 s |
+| matched, (2048, 2048) | tuned | 7 | 10,716,409 | 12 (11.125) | 7,703,945 | 2,245,658 | 595,196 | 171,610 | 334.5 s |
+| matched, (2048, 2048) | fast | 0 | 10,872,657 | 12 (11.5) | 7,605,762 | 2,245,157 | 737,882 | 283,856 | 345.8 s |
+| textbook (`gk/`, memmatch 2026-10-14) | | 0 | 12,862,178 | 14 (13.25) | | | | | 398.5 s |
+
+- The epoch costs about the same with either GK: 89-93% of the user cycles are their
   framework (Event deserialisation and the batch-chain check), identical in every port.
-  zkSketch's rule is slightly cheaper in their pipeline than textbook GK (0.98M-1.84M vs
-  about 3M user cycles for the summary at 2,048 records), so the matched baseline is a
-  little FASTER than the textbook one: 13 / 12 segments instead of 14, i.e. a
-  zk-Analytics estimate of 391 / 361 s instead of 398.5 s at k_s = 30.07 s, which tightens
-  the 10x threshold for zkSketch accordingly (39.1 s at (384, 128), 36.1 s at (768, 512)).
-  These are executor counts; the real proof is M1's measurement.
-- Implementations (check rows, epoch 0, user cycles / segments): (384, 128) `fast` 11.92M /
-  13, `fixed_linear` 16.71M / 18, `literal` 30.36M / 37; (768, 512) 11.12M / 12, 14.85M / 16,
-  25.37M / 31. Check rows carry +38k cycles for emitting the state.
-- The carried state costs about 0.1M cycles to read (compact: the 48-53 active tuples, not
-  the `capacity` rows) and about 15k to commit.
+  zkSketch's rule is cheaper in their pipeline than textbook GK (0.56M-0.97M with `tuned`
+  vs about 3M user cycles for the summary at 2,048 records), so the matched baseline is
+  FASTER than the textbook one: 11.5 / 11.0 padded segments at configs A / B instead of
+  13.25, a zk-Analytics estimate of about 346 / 331 s instead of 398.5 s at k_s = 30.07 s.
+  That tightens the 10x threshold for zkSketch to about **34.6 s at (384, 128)** and
+  **33.1 s at (768, 512)** (with `fast` it was 39.1 / 36.1 s). These are executor counts;
+  the real proofs are in `results/20261015-m1/`.
+- **Implementations** (check rows, epoch 0, user cycles / segments; check rows carry a few
+  thousand to 38k cycles for emitting the state):
+
+  | config | `tuned` | `fast` | `fixed_linear` | `literal` |
+  |---|---|---|---|---|
+  | (384, 128), 16 steps | 10.98M / 12 | 11.92M / 13 | 16.71M / 18 | 30.36M / 37 |
+  | (768, 512), 4 steps | 10.70M / 11 | 11.12M / 12 | 14.85M / 16 | 25.37M / 31 |
+  | (2048, 2048), 1 step | 10.58M / 11 | 11.08M / 12 | 14.35M / 16 | 23.69M / 30 |
+
+  `fast` calls `apply_batch2_fast` once per step, and each call re-checks the canonical
+  form of all `capacity` rows, clears and prefix-sums two 2,049-entry radix tables, pads
+  its output to `capacity` with dummies and allocates fresh buffers (and epoch 0 builds a
+  `capacity`-row empty state). `tuned` runs the same schedule as one loop over the
+  epoch: the state stays compact, the canonical check runs once on the carried state, the
+  radix digits are sized to the batch, the buffers are allocated once. Same 2,048 AOL
+  records at capacity 384, GK update cycles by leaf size: m_sub 2048 / 512 / 256 / 128
+  (1 / 4 / 8 / 16 steps) = 555,837 / 680,565 / 774,181 / 965,322 with `tuned` (11 / 11 /
+  12 / 12 segments), against 586,458 / 848,102 / 1,178,141 / 1,841,333 with `fast` (12 /
+  12 / 12 / 13). `tuned`'s remaining cost per extra step, about 27k cycles at m_sub 128,
+  is close to the work the schedule needs per step (merging about 180 rows, two neighbour
+  passes, about six shrinking fuse rounds).
+- **zk-Analytics' own memory.** A real proof of one of these epochs peaks at about
+  9.2 GiB of r0vm RSS (9,388-9,418 MiB combined with the driver in M1; r0vm's default
+  po2-20 segment prover, not tuned): any "8 GiB" statement about zkSketch is not one about
+  both sides.
 
 ### Caveats
 
 - **Their pipeline, our port (†).** zk-Analytics ships no rank-guaranteed quantile summary;
-  the GK update is zkSketch's (from `gk_bm2/core`), the rest is their code or pattern.
-- **Data-dependent.** `fast` exploits the data (active prefix, early stop), as a zkVM
-  programmer would; zkSketch's circuit is oblivious. `fixed_linear` is the fixed schedule.
+  the GK update is zkSketch's (`tuned` here, the other implementations from `gk_bm2/core`),
+  the rest is their code or pattern.
+- **The carried state departs from their architecture.** Their aggregators build each
+  epoch's summary fresh and independently (one chain per aggregator; epochs can be
+  aggregated in parallel, by different aggregators) and merge the n summaries at query
+  time. The matched port carries S_{e-1} into epoch e, forces one sequential chain
+  (a chain that restarts at genesis is refused), and its query opens the latest state
+  without a merge. That is forced by the same-function requirement: zkSketch's function is
+  the `apply_batch2` chain from the previous state, and a fresh-per-epoch summary merged at
+  query time is a different sketch (textbook `gk/` is one). Extra cost to zk-Analytics per
+  epoch, from epoch 1 on (`tuned`, AOL): the carried words' read, through risc0 serde like
+  every other input word (epoch 1 minus epoch 0 of `read`: 108,984 at (384, 128), 99,984 at
+  (768, 512), 107,184 at (2048, 2048)), plus the `carry` phase (commitment check and
+  decoding: 12,653 / 11,798 / 12,522; 1,603 at epoch 0). About 0.11-0.12M user cycles,
+  1.0-1.1% of the epoch; the state commitment itself (12-14k) is paid by every port.
+- **Data-dependent.** `tuned` and `fast` exploit the data (active prefix, early stop), as a
+  zkVM may; zkSketch's circuit is oblivious. `fixed_linear` is the fixed schedule.
+- **No padding on their side.** zkSketch's `gk_vals_of` drops `PAD_KEY` slots (only its
+  early-sealed batches have them). A zk-Analytics epoch has none, so the guest's drop is a
+  no-op, and the driver refuses a dataset holding a key equal to `PAD_KEY` (`u32::MAX`),
+  which the two sides would summarise differently. `data/aol.keys` has none.
 - **Leaf size.** A six run uses `SIX_M` for both (one step per epoch). A zkSketch forest
   with smaller leaves (`SIX_M=128`, 16 leaves per 2,048 records) is matched by running the
-  zk-Analytics side at `SIX_M=2048 SIX_GK_MSUB=128` with the same `SIX_GK_CAP`.
+  zk-Analytics side at `SIX_M=2048 SIX_GK_MSUB=128` with the same `SIX_GK_CAP`. When the two
+  sides' capacity, s or leaf size differ, `assemble.py` says CONFIG MISMATCH in the note and
+  `table.py` labels the GK row "CONFIG MISMATCH: same rule, NOT the same function".
 - **Accuracy columns are native checks** of the state (exact rank inside [lo, hi] for every
   distinct value covered; certified half-width vs eps N), not guest work: 37 / 77 at
   (384, 128) against eps N = 40.2 / 80.3.

@@ -60,7 +60,8 @@ GK on the zk-Analytics side: the rows of a `run_all.sh` run come from the MATCHE
 driver rows say algorithm=bm2): those rows are labelled system 'zk-Analytics arch. (port †,
 zkSketch GK rule)' and their `note` names the GK configuration; when a zkSketch GK CSV is
 present its capacity, s and leaf size are checked against the port's (a mismatch is reported
-on stderr and in `note`). Rows of the textbook port (../gk, SIX_ZKA_GK=textbook, and the
+on stderr and in `note`, and table.py then labels the GK row CONFIG MISMATCH, not "same rule
+both sides"). Rows of the textbook port (../gk, SIX_ZKA_GK=textbook, and the
 committed 2026-10-09 set) keep the system name 'zk-Analytics arch. (port †)'; in a new run
 their `note` says they are textbook GK, a reference (the committed set's output is unchanged).
 

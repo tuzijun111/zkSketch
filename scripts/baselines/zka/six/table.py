@@ -36,7 +36,9 @@ the previous version are printed unchanged; added are the variant note at the to
 GK: the zk-Analytics GK rows of a run with SIX_ZKA_GK=matched (the default since 2026-10-15)
 run zkSketch's own GK batch rule in their pipeline (assemble.py names their system '... zkSketch
 GK rule'): the GK row is labelled "same rule both sides" and a line under the run line gives
-the configuration. Otherwise (the committed set, SIX_ZKA_GK=textbook) the zk-Analytics GK is
+the configuration; when assemble.py found the zkSketch GK run at another capacity, s or leaf
+size (CONFIG MISMATCH in the note) it is labelled "CONFIG MISMATCH: same rule, NOT the same
+function" instead. Otherwise (the committed set, SIX_ZKA_GK=textbook) the zk-Analytics GK is
 textbook Greenwald-Khanna, a different algorithm: the row is labelled "zkA: textbook GK".
 """
 import argparse
@@ -64,8 +66,16 @@ LEGACY = any((r['system'], r['run']) == ('zkSketch', 'r2') for r in rows)
 # GK: zkSketch's own rule on the zk-Analytics side (the matched port) or textbook GK (a reference)
 GK_ROWS = [r for r in rows if r['family'] == 'gk' and r['system'].startswith('zk-Analytics')]
 GK_MATCHED = any('zkSketch GK rule' in r['system'] for r in GK_ROWS)
-NAME['gk'] = 'GK eps=1/51 † (same rule both sides)' if GK_MATCHED else 'GK eps=1/51 † (zkA: textbook GK)'
 GK_NOTE = next((r['note'] for r in GK_ROWS if r.get('note')), '')
+# assemble.py appends CONFIG MISMATCH to the note when the zkSketch GK run used another capacity,
+# s or leaf size: the same rule, but not the same function, so the row must not say so
+GK_MISMATCH = any('CONFIG MISMATCH' in (r.get('note') or '') for r in GK_ROWS)
+if GK_MATCHED and GK_MISMATCH:
+    NAME['gk'] = 'GK eps=1/51 † (CONFIG MISMATCH: same rule, NOT the same function)'
+elif GK_MATCHED:
+    NAME['gk'] = 'GK eps=1/51 † (same rule both sides)'
+else:
+    NAME['gk'] = 'GK eps=1/51 † (zkA: textbook GK)'
 if LEGACY:
     ZKS = ('zkSketch', 'r2')
 else:

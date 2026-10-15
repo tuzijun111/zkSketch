@@ -22,10 +22,14 @@
 //                   B / M successive apply_batch2 steps. B must be a multiple of M, so the
 //                   steps are exactly zkSketch's leaves)
 //   --s S          (default 51; EXP_GK_S)
-//   --impl fast|fixed_linear|literal   (default fast; the guest's implementation of the one
-//                   transition, ../../gk_bm2/README.md; same state, different cycles)
+//   --impl tuned|fast|fixed_linear|literal   (default tuned, the steelman; the guest's
+//                   implementation of the one transition: tuned = ../core apply_epoch_tuned,
+//                   the others ../../gk_bm2/README.md; same state, different cycles)
 // A capacity overflow is a HARD ERROR: the native reference detects it first and the
 // driver exits 3 without running a guest; the guest itself also panics on one.
+// zk-Analytics epochs are never padded, so the guest's gk_vals_of PAD_KEY strip is a no-op
+// here (the driver masks value = key & 0x1FFFFF): the driver refuses a dataset with a key
+// equal to PAD_KEY (u32::MAX) in the epochs it runs, where zkSketch would strip that record.
 //
 // Modes:
 //   --mode aggr [--epoch-index i] [--root designed|noroot|pertuple] [--emit-state] [--prove]
@@ -68,7 +72,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gk_matched_core::{
-    actives, batch_chain_hash, bm2, compact_words, gkm_rank, gkm_state_commit, process_gkm_aggr, run_gkm_query,
+    actives, batch_chain_hash, bm2, compact_words, gkm_rank, gkm_state_commit, padded, process_gkm_aggr, run_gkm_query,
     BatchInput, EpochChainLink, GkmAggrInput, GkmAggrOutput, GkmCarried, GkmConfig, GkmImpl, GkmQueryInput,
     GkmQueryOutput, GkmRoot, MARK_NAMES,
 };
@@ -252,7 +256,7 @@ fn zk_mass(s: &Gk2State) -> u64 {
 /// One epoch of the native pipeline.
 struct EpochNative {
     input: GkmAggrInput,
-    /// S_e as our core computes it (host build of the guest code).
+    /// S_e as our core computes it (host build of the guest code), in its full form.
     state: bm2::State,
     /// The noroot journal output.
     out: GkmAggrOutput,
@@ -303,6 +307,7 @@ fn chain(keys: &[u32], n: usize, m: usize, cbs: usize, cfg: GkmConfig) -> (Vec<E
         let input =
             GkmAggrInput { prev_chain_hash, batches, prev_source_chain_tips: prev_tips.clone(), config: cfg, carried };
         let (state, out) = process_gkm_aggr(&input, GkmRoot::None);
+        let state = padded(state);
         assert_eq!(out.n_events as usize, m);
         assert_eq!(out.epoch_chain_link.prev_chain_hash, prev_chain_hash);
         let zk_eq = compare_state(&zk, &state);
@@ -328,6 +333,7 @@ fn with_impl(input: &GkmAggrInput, i: GkmImpl) -> GkmAggrInput {
 /// state commitment, epoch link, n_events, tips and steps; the root field as specified.
 fn variants_agree(input: &GkmAggrInput) -> bool {
     let (st, base) = process_gkm_aggr(input, GkmRoot::None);
+    let st = padded(st);
     let blank = |o: &GkmAggrOutput| {
         let mut o = o.clone();
         o.tuples_root = [0u8; 32];
@@ -338,7 +344,7 @@ fn variants_agree(input: &GkmAggrInput) -> bool {
     GkmImpl::ALL.iter().all(|&i| {
         [GkmRoot::Buckets64, GkmRoot::None, GkmRoot::PerTuple].iter().all(|&r| {
             let (s2, o) = process_gkm_aggr(&with_impl(input, i), r);
-            s2 == st
+            padded(s2) == st
                 && blank(&o) == blank(&base)
                 && match r {
                     GkmRoot::None => o.tuples_root == [0u8; 32],
@@ -725,11 +731,11 @@ fn parse_root() -> (&'static str, GkmRoot) {
 fn parse_impls(default_all: bool) -> Vec<GkmImpl> {
     match arg_str("--impl").as_deref() {
         None if default_all => GkmImpl::ALL.to_vec(),
-        None => vec![GkmImpl::Fast],
+        None => vec![GkmImpl::Tuned],
         Some("all") => GkmImpl::ALL.to_vec(),
         Some(list) => list
             .split(',')
-            .map(|s| GkmImpl::parse(s).unwrap_or_else(|| die(&format!("--impl {s}: expected fast|fixed_linear|literal|all"))))
+            .map(|s| GkmImpl::parse(s).unwrap_or_else(|| die(&format!("--impl {s}: expected tuned|fast|fixed_linear|literal|all"))))
             .collect(),
     }
 }
@@ -880,6 +886,14 @@ fn main() {
         if n * m > keys.len() {
             die(&format!("{n} epochs of {m} need {} keys, {keys_path} has {}", n * m, keys.len()));
         }
+        // zkSketch drops a PAD_KEY record (gk_vals_of); here it would arrive masked to
+        // 0x1FFFFF and be kept, so such a dataset has no matched counterpart.
+        if let Some(i) = keys[..n * m].iter().position(|&k| k == bm2::PAD_KEY) {
+            die(&format!(
+                "{keys_path}: record {i} is PAD_KEY (u32::MAX), which zkSketch's gk_vals_of drops; zk-Analytics \
+                 epochs carry no padding, so the matched configuration needs a PAD_KEY-free dataset"
+            ));
+        }
     };
 
     match mode.as_str() {
@@ -896,12 +910,13 @@ fn main() {
             let (eps, _links) = chain(&keys, idx + 1, m, cbs, cfg);
             let ep = &eps[idx];
             let (st, native) = process_gkm_aggr(&ep.input, root);
+            let st = padded(st);
             let expect: (GkmRoot, GkmAggrOutput) = (root, native.clone());
             let agree = variants_agree(&ep.input);
             let x = exec_aggr(root, &ep.input, emit);
             let got: (GkmRoot, GkmAggrOutput) = x.session.journal.decode().unwrap();
             let eq = got == expect;
-            let emitted_eq = x.emitted.as_ref().map(|w| compare_state(&ep.zk_state, &bm2::state_from_words(w)));
+            let emitted_eq = x.emitted.as_ref().map(|w| compare_state(&ep.zk_state, &padded(bm2::state_from_words(w))));
             if let Some(Err(e)) = &emitted_eq {
                 eprintln!("gk_matched: MISMATCH guest-emitted state vs zkSketch: {e}");
             }
@@ -1070,11 +1085,12 @@ fn main() {
                     let cfg = GkmConfig { implementation: i, ..base_cfg };
                     let input = with_impl(&ep.input, i);
                     let (st, native) = process_gkm_aggr(&input, GkmRoot::None);
+                    let st = padded(st);
                     let x = exec_aggr(GkmRoot::None, &input, true);
                     let got: (GkmRoot, GkmAggrOutput) = x.session.journal.decode().unwrap();
                     let eq = got == (GkmRoot::None, native.clone());
                     let cmp = match &x.emitted {
-                        Some(w) => compare_state(&ep.zk_state, &bm2::state_from_words(w)),
+                        Some(w) => compare_state(&ep.zk_state, &padded(bm2::state_from_words(w))),
                         None => Err("guest emitted no state".into()),
                     };
                     // the journal's commitment is SHA-256 of zkSketch's own state (its
@@ -1146,7 +1162,7 @@ fn main() {
                 let got: (GkmRoot, GkmAggrOutput) = x.session.journal.decode().unwrap();
                 let eq = got == (GkmRoot::None, ep.out.clone());
                 let gstate = match &x.emitted {
-                    Some(w) => bm2::state_from_words(w),
+                    Some(w) => padded(bm2::state_from_words(w)),
                     None => die("guest emitted no state"),
                 };
                 let q = hot_value(&keys, (e + 1) * m);
@@ -1209,7 +1225,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gk_matched_core::{apply_epoch, capacity_violation, process_gkm_aggr_marked, Mark};
+    use gk_matched_core::{apply_epoch, capacity_violation, commit_words, process_gkm_aggr_marked, Mark};
 
     fn aol() -> Vec<u32> {
         load_keys(&format!("{}/../../../../../data/aol.keys", env!("CARGO_MANIFEST_DIR")))
@@ -1238,11 +1254,17 @@ mod tests {
     }
 
     /// The carried state is checked: a tampered state, a wrong previous link, a missing
-    /// state after genesis and a changed configuration are all refused.
+    /// state after genesis and a changed configuration are all refused (`fast` and `tuned`
+    /// read the carried state differently: full and compact form).
     #[test]
     fn carried_state_is_bound() {
+        for i in [GkmImpl::Fast, GkmImpl::Tuned] {
+            carried_state_is_bound_for(i);
+        }
+    }
+    fn carried_state_is_bound_for(i: GkmImpl) {
         let keys = aol();
-        let (eps, _) = chain(&keys, 2, 2048, 8, cfg(384, 128, GkmImpl::Fast));
+        let (eps, _) = chain(&keys, 2, 2048, 8, cfg(384, 128, i));
         let good = eps[1].input.clone();
         assert!(std::panic::catch_unwind(|| process_gkm_aggr(&good, GkmRoot::None)).is_ok());
         let mut bad = good.clone();
@@ -1261,6 +1283,89 @@ mod tests {
         let mut bad = eps[0].input.clone();
         bad.prev_chain_hash[0] = 1;
         assert!(std::panic::catch_unwind(|| process_gkm_aggr(&bad, GkmRoot::None)).is_err(), "fake genesis");
+    }
+
+    /// A carried state that is correctly linked but is not what an honest epoch outputs is
+    /// refused: rows out of (e, t) order (by the implementations that rely on the canonical
+    /// form, `fast` and `tuned`; zkSketch's literal code re-sorts them) and an active mass
+    /// other than n (by all four).
+    #[test]
+    fn linked_but_malformed_state_is_refused() {
+        let keys = aol();
+        let (eps, _) = chain(&keys, 2, 2048, 8, cfg(384, 128, GkmImpl::Tuned));
+        let relink = |w: &[u32], i: GkmImpl| {
+            let mut x = with_impl(&eps[1].input, i);
+            let c = x.carried.as_mut().unwrap();
+            x.prev_chain_hash = EpochChainLink::compute_final_hash(c.link_prev_hash, commit_words(w));
+            c.state_words = w.to_vec();
+            x
+        };
+        let w = eps[1].input.carried.as_ref().unwrap().state_words.clone();
+        let (h, tw) = (bm2::STATE_HDR_WORDS, bm2::TUPLE_WORDS);
+        let mut swapped = w.clone();
+        for j in 0..tw {
+            swapped.swap(h + j, h + tw + j);
+        }
+        let mut heavy = w.clone();
+        heavy[h + 1] += 1; // g of row 0: active mass n + 1
+        for i in GkmImpl::ALL {
+            let x = relink(&w, i);
+            assert!(std::panic::catch_unwind(|| process_gkm_aggr(&x, GkmRoot::None)).is_ok(), "{}: control", i.name());
+            let x = relink(&heavy, i);
+            assert!(std::panic::catch_unwind(|| process_gkm_aggr(&x, GkmRoot::None)).is_err(), "{}: mass != n", i.name());
+        }
+        for i in [GkmImpl::Fast, GkmImpl::Tuned] {
+            let x = relink(&swapped, i);
+            assert!(std::panic::catch_unwind(|| process_gkm_aggr(&x, GkmRoot::None)).is_err(), "{}: rows out of order", i.name());
+        }
+    }
+
+    /// `tuned` against zkSketch's own apply_batch2 chain beyond the measured configurations:
+    /// odd tables (zkSketch never pairs their last row), capacities at and below the
+    /// overflow point, many repeated values, and the state carried between two epochs in
+    /// compact and in full form. Wherever zkSketch's chain keeps every record, tuned's state
+    /// equals it row for row; wherever zkSketch's chain loses one (it truncates silently),
+    /// tuned panics.
+    #[test]
+    fn tuned_matches_zksketch_at_the_edges() {
+        let keys = aol();
+        let aol_vals: Vec<u32> = keys[..4096].iter().map(|&k| k & VALUE_MASK).collect();
+        let dup_vals: Vec<u32> = (0..4096u32).map(|i| (i * 7919) % 37).collect();
+        let (mut kept, mut lost) = (0, 0);
+        for vals in [&aol_vals, &dup_vals] {
+            for (cap, ms) in [(16usize, 64usize), (31, 64), (33, 32), (48, 64), (63, 64), (64, 64), (95, 128), (128, 128), (200, 64), (385, 128), (384, 128)] {
+                let p = GkbParams { capacity: cap, batch: ms, s: 51 };
+                let mut zk = Gk2State::empty(p);
+                let mut lossy = false;
+                for c in vals.chunks(ms) {
+                    zk = apply_batch2(&zk, c);
+                    lossy |= zk_mass(&zk) != zk.n;
+                }
+                let c = cfg(cap as u32, ms as u32, GkmImpl::Tuned);
+                let whole = std::panic::catch_unwind(|| apply_epoch(&c, bm2::State::empty(c.params()), vals));
+                // two epochs: the first two steps from the compact genesis, the rest from
+                // that state, once compact and once padded to its full form
+                let split = |full: bool| {
+                    let (s1, _) = apply_epoch(&c, bm2::State { tuples: Vec::new(), params: c.params(), n: 0 }, &vals[..2 * ms]);
+                    let s1 = if full { padded(s1) } else { s1 };
+                    apply_epoch(&c, s1, &vals[2 * ms..]).0
+                };
+                if lossy {
+                    lost += 1;
+                    assert!(whole.is_err(), "cap {cap} m {ms}: zkSketch truncated, tuned must panic");
+                } else {
+                    kept += 1;
+                    let (st, steps) = whole.unwrap();
+                    assert_eq!(steps as usize, vals.len().div_ceil(ms));
+                    assert!(st.tuples.iter().all(|t| t.active == 1), "tuned returns the compact state");
+                    assert_eq!(compare_state(&zk, &padded(st)), Ok(()), "cap {cap} m {ms}");
+                    for full in [false, true] {
+                        assert_eq!(compare_state(&zk, &padded(split(full))), Ok(()), "cap {cap} m {ms} split full={full}");
+                    }
+                }
+            }
+        }
+        assert!(kept >= 4 && lost >= 4, "both outcomes covered: kept {kept}, lost {lost}");
     }
 
     /// The query opens the latest carried state against an unbroken chain: the honest links
