@@ -196,31 +196,35 @@ fn p_u64() -> u64 {
 ///
 /// | switch | circuit | constraint | what it stops (test) |
 /// |---|---|---|---|
-/// | `o_pin` | leaf | A1 `O_u ∈ [0,256)` | an extension-valued old byte (A6, old side) |
+/// | `o_pin` | leaf | A1 `O_u ∈ [0,256)` | an extension-valued old byte that clears a bit under the honest `Com(S_{t-1})` (`attacks::a6_extension_valued_state_bytes`) |
 /// | `n_pin` | leaf | A1 `N_u ∈ [0,256)` | an extension-valued new byte (`attack_extension_valued_new_byte`) |
 /// | `ft_range` | leaf | A2 `ft_u = flo + 2^8·fhi`, both bytes | a final-timestamp transplant (`attack_final_timestamp_transplant`) |
-/// | `act_bool` | leaf | B1 `act ∈ {0,1}` | a non-boolean activity flag |
-/// | `key_range` | leaf, query | B1 / Q3 the 8 key bytes `∈ [0,256)` (limbs `< 2^16`) | a record re-encoded with `act = 0` or as another key |
-/// | `dummy_canon` | leaf | B2 `act = 0 ⇒ k_0 + k_1 + k_2 + k_3 = 0` | a non-canonical dummy slot |
+/// | `act_bool` | leaf | B1 `act ∈ {0,1}` | a non-boolean activity flag (only under a non-canonical `Com(B_t)`: `attacks::record_and_routing_forgeries`) |
+/// | `key_range` | leaf, query | B1 / Q3 the 8 key bytes `∈ [0,256)` (limbs `< 2^16`) | an active record re-encoded as a dummy with extension-valued limbs (leaf: `attacks::record_and_routing_forgeries`; in the query the record public input already pins the limbs) |
+/// | `dummy_canon` | leaf | B2 `act = 0 ⇒ k_0 + k_1 + k_2 + k_3 = 0` | a non-canonical dummy slot (`attacks::record_and_routing_forgeries`) |
 /// | `i_bool` | leaf, query | B4 / Q3 `i_0, i_1, i_2 ∈ {0,1}` | a non-power-of-two `e` (`attack_nonboolean_position_bits`) |
 /// | `q_range` | leaf, query | B5 / Q3 `q ∈ [0, W/8)` exactly | a word of the next slice (`attack_word_index_shift`) |
 /// | `canon` | leaf, query | B6 / Q3 `hi ≤ HI_MAX`, `hi = HI_MAX ⇒ pos = 0` | the `x + p` split (`attack_noncanonical_split`) |
-/// | `unused_limbs` | leaf, query | B7 / Q3 each unused digest limb from 4 bytes | an extension-valued limb that moves a used limb in the recomposition |
+/// | `unused_limbs` | leaf, query | B7 / Q3 each unused digest limb from 4 bytes | an extension-valued limb that moves a used limb in the recomposition (`attacks::record_and_routing_forgeries`, `attacks::a9_query_selector_forgeries`) |
 /// | `c_bool` | leaf, query | D2 / Q6 `c ∈ {0,1}` | `c = 2` (`attack_nonboolean_c`) |
 /// | `h_range` | leaf, query | D3 / Q6 `H ∈ [0,256)` | `attack_suppress_huge_h`, `attack_carry_huge_h` |
 /// | `l_nonneg` | leaf, query | D4 / Q6 `L ∈ [0,256)` | `attack_suppress_negative_l`, `attack_carry_negative_l` |
 /// | `l_lt_e` | leaf, query | D5 / Q6 `L < e` | `attack_carry_l_plus_e` |
 /// | `ts_lt_tau` | leaf | D8 the gap bytes, `ts ≤ τ_p − 1` | a self or future read (`attack_self_read`) |
-/// | `cell_pin` | query | Q1 `S_u ∈ [0,256)` | an extension-valued state byte |
-/// | `sel_bool` | query | Q4 `s1, s2` boolean | a signed selector combination |
-/// | `onehot_sum` | query | Q4 `Σ s1 = Σ s2 = 1` | a two-hot selector (`two_hot_selector_needs_the_onehot_sum`) |
+/// | `cell_pin` | query | Q1 `S_u ∈ [0,256)` | an extension-valued state byte (`attacks::query_value_forgeries`) |
+/// | `sel_bool` | query | Q4 `s1, s2` boolean | a signed selector combination (`attacks::query_value_forgeries`) |
+/// | `onehot_sum` | query | Q4 `Σ s1 = Σ s2 = 1` | a two-hot or zero-hot selector (`two_hot_selector_needs_the_onehot_sum`, `attacks::a9_query_selector_forgeries`) |
 ///
 /// The constraints without a switch ARE the relation: the packing and the
 /// commitments, the record recomposition and hash, the digest recomposition,
 /// the split and OR identities, the memory-checking elements and the Permute
 /// op, the selector-index and selected-value connects, and the answer
 /// product. The ConstAir binding of the word-address and timestamp constants
-/// has its own test-only hook, [`ConstSkew`].
+/// has its own test-only hook, [`ConstSkew`]. Every switch, every
+/// `connect` of the relation (split wires) and the constants (ConstAir) are
+/// attacked at the trace level on the deployed layout (Interval + Hiding) in
+/// `bloom_packed_attacks.rs` (`cargo test --release --lib --
+/// bloom_packed::attacks::`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PackedChecks {
     /// A1: the old-state byte pins.
@@ -1546,3 +1550,7 @@ pub fn prove_bloom_packed(params: BloomPackedParams, initial: &[u8], keys: &[u64
 #[cfg(test)]
 #[path = "bloom_packed_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bloom_packed_attacks.rs"]
+mod attacks;

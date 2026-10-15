@@ -119,6 +119,53 @@ pub(crate) fn with_query_tamper<T>(t: QueryTamper, f: impl FnOnce() -> T) -> T {
     f()
 }
 
+/// Test-only **trace forger** of the query (a malicious prover): it replaces
+/// the honest witness runner, mapping `(circuit, public inputs, private
+/// inputs)` to traces (typically: patched inputs, split wires, then a runner
+/// over a CLONE of the circuit). The deployed circuit and the prover data built
+/// from it are untouched, so the forged traces are proved and verified
+/// against the deployed VK. Always absent outside tests.
+#[cfg(test)]
+pub(crate) type QueryForger = std::rc::Rc<
+    dyn Fn(
+        &p3_circuit::Circuit<Challenge>,
+        &[Challenge],
+        &[Challenge],
+    ) -> Result<p3_circuit::tables::Traces<Challenge>, String>,
+>;
+
+#[cfg(test)]
+thread_local! {
+    static FORGER: std::cell::RefCell<Option<QueryForger>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: prove queries inside `f` with the trace forger `forger` (the
+/// previous one is restored afterwards, also on a panic).
+#[cfg(test)]
+pub(crate) fn with_query_forger<T>(forger: QueryForger, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<QueryForger>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            FORGER.with(|c| *c.borrow_mut() = prev);
+        }
+    }
+    let _r = Restore(FORGER.with(|c| c.borrow_mut().replace(forger)));
+    f()
+}
+
+/// The honest witness runner of the query.
+fn run_query_witness(
+    circuit: &p3_circuit::Circuit<Challenge>,
+    public_inputs: &[Challenge],
+    private_inputs: &[Challenge],
+) -> Result<p3_circuit::tables::Traces<Challenge>, String> {
+    let mut runner = circuit.runner();
+    runner.set_public_inputs(public_inputs).map_err(|e| format!("set_public_inputs: {e:?}"))?;
+    runner.set_private_inputs(private_inputs).map_err(|e| format!("set_private_inputs: {e:?}"))?;
+    runner.run().map_err(|e| format!("run: {e:?}"))
+}
+
 /// Tensor dimensions of the per-slice selector: `na·nb = W/8`, `na ≥ nb`.
 pub fn selector_dims(p: &BloomPackedParams) -> (usize, usize) {
     let qa = p.q_bits().div_ceil(2);
@@ -328,12 +375,13 @@ pub fn try_prove_bloom_packed_query_commit(
         Challenge::from_u64(answer_native),
     ];
     let t_w = std::time::Instant::now();
-    let traces = {
-        let mut runner = circuit.runner();
-        runner.set_public_inputs(&public_inputs).map_err(|e| format!("set_public_inputs: {e:?}"))?;
-        runner.set_private_inputs(&private_inputs).map_err(|e| format!("set_private_inputs: {e:?}"))?;
-        runner.run().map_err(|e| format!("run: {e:?}"))?
+    #[cfg(test)]
+    let traces = match FORGER.with(|c| c.borrow().clone()) {
+        Some(forge) => forge(&circuit, &public_inputs, &private_inputs).map_err(|e| format!("forger: {e}"))?,
+        None => run_query_witness(&circuit, &public_inputs, &private_inputs)?,
     };
+    #[cfg(not(test))]
+    let traces = run_query_witness(&circuit, &public_inputs, &private_inputs)?;
     let witness = t_w.elapsed();
 
     let config = make_leaf_config();
