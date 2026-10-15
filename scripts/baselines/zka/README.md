@@ -839,7 +839,7 @@ zkSketch's algorithm in their pipeline". The other matched-rule guests (`ss_mg/`
   | Count-Min | their `aggr_cm` / `querier-guest-cm`, 3 x 1024, `CM_TOPK_SLOTS=1` | `cm` (omc leaf), `EXP_D=3 EXP_W=1024` | point count of the heaviest key of the queried prefix (their `Estimate` target rule; zkSketch `EXP_QUERY_KEY_MODE=hot`; ties to the smaller key on both sides; the same key on both sides at each n: 3,011,223,745 for n <= 5, 3,780,053,395 for n >= 6) |
   | HyperLogLog | `hll/` †, b = 14 | `hll` (omc), `EXP_HLL_B=14` | cardinality |
   | SpaceSaving / Misra-Gries | `spacesaving/` †, SpaceSaving s = 1,024 per epoch, sum-and-truncate merge | `ss` (certified MG), `EXP_SS_CAP=1024` (MG with s counters ~ SpaceSaving with s+1) | top-1: theirs `topk --limit 1` (key, count, error); ours the top-1 mass (`c = 1`, count only, no key). This is the closest pair the two query sets allow |
-  | Greenwald-Khanna | `gk_matched/` † (default, `SIX_ZKA_GK=matched`): zkSketch's band-merge rule, `--capacity $SIX_GK_CAP --s 51 --m-sub $SIX_GK_MSUB` (= 2048 / 51 / 2048: one `apply_batch2` step per epoch), state carried across epochs, guest implementation `tuned`. Reference (`SIX_ZKA_GK=textbook`, and the committed rows): `gk/` †, textbook GK, eps = 1/51, COMPRESS every 25 records | `gk` (band-merge), `EXP_GK_CAP=2048 EXP_GK_S=51` | rank of the same value on both sides: the most frequent 21-bit value of the prefix (zkSketch `EXP_QUERY_KEY_MODE=hot`; 1,810,625 for n <= 5, 985,491 for n >= 6), passed to theirs as `--rank-value`; the matched port answers with zkSketch's decoder estimator on the latest state |
+  | Greenwald-Khanna | `gk_matched/` † (default, `SIX_ZKA_GK=matched`): zkSketch's band-merge rule, `--capacity $SIX_GK_CAP --s 51 --m-sub $SIX_GK_MSUB` (= 2048 / 51 / 2048: one `apply_batch2` step per epoch), state carried across epochs, guest implementation `tuned`. Reference (`SIX_ZKA_GK=textbook`, and the committed rows): `gk/` †, textbook GK, eps = 1/51, COMPRESS every 25 records | `gk` (band-merge), `EXP_GK_CAP=2048 EXP_GK_S=51 EXP_GK_ROUNDS=$SIX_GK_ROUNDS` (`SIX_GK_ROUNDS`, default `stable`: the M3 stable-compaction leaf, CSV `variant` `gk_bandmerge2_stable`, `gk_rounds` `stable`; `sorted` = the pre-M3 leaf byte for byte, `variant` `gk_bandmerge2`, which every zkSketch GK row recorded before M3, 2026-10-15, used) | rank of the same value on both sides: the most frequent 21-bit value of the prefix (zkSketch `EXP_QUERY_KEY_MODE=hot`; 1,810,625 for n <= 5, 985,491 for n >= 6), passed to theirs as `--rank-value`; the matched port answers with zkSketch's decoder estimator on the latest state |
   | Bloom (partitioned) | `bloom/` †, k = 7 x W = 2^14 | `bloom`, `EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14` | membership of the same two keys per n: an inserted key (the first record of batch n; zkSketch `first`, theirs `--probe first`) and an absent key (zkSketch `EXP_QUERY_KEY_MODE=absent`, a second zkSketch run; the key it drew is passed to theirs as `--probe key:<k>`) |
   | KMV / bottom-k | `kmv/` †, k = 1,024, 64-bit hash | `kmv`, `EXP_KMV_K=1024`, 27-bit hash | distinct count |
 
@@ -1198,7 +1198,11 @@ executed and proved, default `noroot`; `run_all.sh` and `run_zka.sh exec` read i
 reference and `designed` executed for all six; `0` off; `jobs.py` takes `--cm-ref`);
 `SIX_QUICK_PROVE` (the jobs `quick` proves, above); `GATE_WAIT_S` (default 1800; `quick` 0),
 `GATE_MAX_LOAD` (default CPUs / 8; 2 below 16 CPUs), `GATE_MAX_BUSY` (default 4);
-`EXP_VERIFY_REPEATS` (default 5). The run shape `SIX_M`, `SIX_T` (records per epoch,
+`EXP_VERIFY_REPEATS` (default 5); `SIX_GK_ROUNDS` (`stable` | `sorted`, default `stable`:
+the zkSketch GK leaf's round certification, passed to `exp_compose` as `EXP_GK_ROUNDS`; both
+prove the same `apply_batch2` rule, commitments and decoder with different leaf/merge/root VKs,
+the run's CSV records it in `variant` and `gk_rounds`, and `run_all.sh` keeps it for `quick` /
+`full` and writes it to the manifest; `sorted` reproduces the pre-M3 rows). The run shape `SIX_M`, `SIX_T` (records per epoch,
 epochs; `N = M x T`), `SIX_GK_CAP` and `SIX_QNS` (query points) applies only to the
 individual `six/*.sh` scripts (`jobs.py` takes `--m`, `--t`, `--qns`): `run_all.sh
 quick` / `full` use their fixed shapes and say so when these are set. The run

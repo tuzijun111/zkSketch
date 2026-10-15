@@ -367,13 +367,37 @@ fn zero_masks_make_the_zk_replay_exact() {
 #[test]
 fn stable_gk_leaf_revealed_sums_are_fresh_and_zero_sum_per_bus() {
     use zksketch::commitment::hiding::CommitMode;
+    stable_gk_leaf_sums(Expose::None, CommitMode::Plain);
+}
+
+/// The same G-zk checks on the DEPLOYED form of the StableCompact leaf:
+/// Interval statement and Hiding commitments (the expose table, the salt
+/// inputs and the salted commitment rows), proved twice from one witness with
+/// the honest openings of leaf `t = 2` (`Openings::for_leaf`).
+#[test]
+fn stable_gk_leaf_interval_hiding_revealed_sums_are_fresh_and_zero_sum_per_bus() {
+    use zksketch::commitment::hiding::CommitMode;
+    stable_gk_leaf_sums(Expose::Interval, CommitMode::Hiding);
+}
+
+/// Prove one StableCompact GK epoch twice (cap 16, m 8, s 3; `expose`,
+/// `mode`) and check the revealed LogUp sums (see the two tests above).
+fn stable_gk_leaf_sums(expose: Expose, mode: zksketch::commitment::hiding::CommitMode) {
+    use zksketch::commitment::hiding::{CommitFamily, Openings, SaltSeed};
     use zksketch::sketch::gk_bandmerge::{apply_batch2, build_gkb2_leaf_rounds, Gk2State, GkRounds, GkbParams};
     let params = GkbParams { capacity: 16, batch: 8, s: 3 };
     let prior = apply_batch2(&Gk2State::empty(params), &[100, 400, 200, 700, 300, 600, 500, 800]);
     let batch = vec![150u32, 650, 250, 750, 350, 550, 450, 850];
-    let mut leaf = build_gkb2_leaf_rounds(params, Expose::None, BINDING, CommitMode::Plain, GkRounds::StableCompact);
-    let a = leaf.prove_epoch(prior.clone(), batch.clone());
-    let b = leaf.prove_epoch(prior, batch);
+    let mut leaf = build_gkb2_leaf_rounds(params, expose, BINDING, mode, GkRounds::StableCompact);
+    let (a, b) = if mode.is_hiding() {
+        let open = Openings::for_leaf(&SaltSeed::for_tests(2026), CommitFamily::GreenwaldKhanna, 2);
+        let a = leaf.prove_epoch_commit(2, prior.clone(), batch.clone(), &open);
+        let b = leaf.prove_epoch_commit(2, prior, batch, &open);
+        assert_eq!(a.final_.0, b.final_.0, "same witness and openings: same Com(S_t; rho)");
+        (a, b)
+    } else {
+        (leaf.prove_epoch(prior.clone(), batch.clone()), leaf.prove_epoch(prior, batch))
+    };
     let (pa, pb) = (&a.output.0, &b.output.0);
     assert_eq!(buses(pa), buses(pb), "same circuit, same interactions");
     let lookups = &a.output.1.prover_data.common.lookups;
@@ -401,7 +425,7 @@ fn stable_gk_leaf_revealed_sums_are_fresh_and_zero_sum_per_bus() {
         let globals = lookups[i].iter().filter(|l| matches!(l.kind, p3_lookup::Kind::Global(_))).count();
         assert_eq!(lds.len(), globals, "instance {i}: one revealed sum per global interaction");
     }
-    println!("stable GK leaf: global interactions {total}, fresh {fresh}, repeated {repeated} (zk = {ZK})");
+    println!("stable GK leaf ({expose:?}, {mode:?}): global interactions {total}, fresh {fresh}, repeated {repeated} (zk = {ZK})");
     assert!(total > 2, "the leaf has global interactions");
     if ZK {
         assert_eq!(repeated, 0, "zk: every multi-member-bus sum is masked afresh per proof");

@@ -401,15 +401,19 @@ fn plain_kmv_vks_are_pinned_through_the_commit_api() {
 }
 
 /// The StableCompact GK leaf (M3, `GkRounds::StableCompact`) at the test
-/// shape (capacity 4, batch 4, s 2), `Plain`: its no-op leaf VK per layout
-/// [Boundary, Interval] and binding [Semantic, Bound] (it has no Legacy
-/// form), and the root VK of a two-leaf forest (one merge) derived the way
-/// the auditor does, from public parameters only (`dist_compose`'s
-/// `derive_dist_leaf_vk` / `derive_dist_root_vk` with
-/// `StreamShape::gk_rounds = StableCompact`, under the default Semantic
-/// binding and Interval layout). Recorded on branch m3-gk-stable
-/// (2026-10-16). The SortedCopy leaf keeps its pre-M3 pins
-/// ([`plain_noop_leaf_vks_are_pinned`]), and the two variants' VKs differ.
+/// shape (capacity 4, batch 4, s 2), in BOTH commitment modes (`Plain`, and
+/// `Hiding`, the deployed mode): its no-op leaf VK per layout [Boundary,
+/// Interval] and binding [Semantic, Bound] (it has no Legacy form), and the
+/// root VK of a two-leaf forest (one merge) derived the way the auditor
+/// does, from public parameters only (`dist_compose`'s `derive_dist_leaf_vk`
+/// / `derive_dist_root_vk` with `StreamShape::gk_rounds = StableCompact`,
+/// under the default Semantic binding and Interval layout). The `Plain`
+/// literals were recorded on branch m3-gk-stable (2026-10-15, 353981e), the
+/// `Hiding` ones in review round 1 (same branch and day, from the same
+/// unchanged builder). The SortedCopy leaf keeps its pre-M3 pins
+/// ([`plain_noop_leaf_vks_are_pinned`]), and the two variants' VKs differ in
+/// both modes. The deployed shape (cap 768, m 512) is pinned by
+/// `gk_bandmerge::stable_tests::stable_leaf_deployed_vks_are_pinned`.
 #[test]
 fn stable_gk_vks_are_pinned() {
     use crate::experiments::dist_compose::{derive_dist_leaf_vk, derive_dist_root_vk};
@@ -432,16 +436,38 @@ fn stable_gk_vks_are_pinned() {
     ];
     #[cfg(feature = "zk")]
     const ROOT2: Pin = (0x0cd0_f357_3209_9954, 0x0018_d0fa_8d85_b96f);
+    // The `Hiding` twins: [expose][Semantic, Bound] and the forest(2) root.
+    #[cfg(not(feature = "zk"))]
+    const HLEAF: [[Pin; 2]; 2] = [
+        [(0x8d69_621a_feb7_4489, 0xe531_fa4e_c534_a88f), (0x8d69_621a_feb7_4489, 0xe531_fa4e_c534_a88f)],
+        [(0x1870_9aa9_3f92_9430, 0x123b_ddc6_60b9_6df2), (0x1870_9aa9_3f92_9430, 0x123b_ddc6_60b9_6df2)],
+    ];
+    #[cfg(not(feature = "zk"))]
+    const HROOT2: Pin = (0xe6cf_33ac_2731_53cd, 0x809e_0789_92dc_feb8);
+    #[cfg(feature = "zk")]
+    const HLEAF: [[Pin; 2]; 2] = [
+        [(0x7949_8f00_4443_c30b, 0x5f08_af97_7182_625f), (0x7949_8f00_4443_c30b, 0x5f08_af97_7182_625f)],
+        [(0x82cd_881b_4c29_35c2, 0x9772_6523_330a_a4fe), (0x82cd_881b_4c29_35c2, 0x9772_6523_330a_a4fe)],
+    ];
+    #[cfg(feature = "zk")]
+    const HROOT2: Pin = (0xd86a_edf1_f130_95b7, 0x0018_d0fa_8d85_b96f);
 
     let plain = CommitMode::Plain;
+    let hiding = CommitMode::Hiding;
     let gp = GkbParams { capacity: 4, batch: 4, s: 2 };
     let mut got = [[(0u64, 0u64); 2]; 2];
+    let mut got_h = [[(0u64, 0u64); 2]; 2];
     for e in EXPOSES {
         for (j, b) in [Binding::Semantic, Binding::Bound].into_iter().enumerate() {
             let leaf = of_proof(&gk2_noop_leaf_rounds(gp, e, b, plain, GkRounds::StableCompact));
             got[ei(e)][j] = leaf;
             let sorted = of_proof(&gk2_noop_leaf_rounds(gp, e, b, plain, GkRounds::SortedCopy));
             assert_ne!(leaf.0, sorted.0, "{e:?} {b:?}: the variants' leaf VKs differ");
+            let hleaf = of_proof(&gk2_noop_leaf_rounds(gp, e, b, hiding, GkRounds::StableCompact));
+            got_h[ei(e)][j] = hleaf;
+            let hsorted = of_proof(&gk2_noop_leaf_rounds(gp, e, b, hiding, GkRounds::SortedCopy));
+            assert_ne!(hleaf.0, hsorted.0, "{e:?} {b:?} Hiding: the variants' leaf VKs differ");
+            assert_ne!(hleaf.0, leaf.0, "{e:?} {b:?}: the Hiding and Plain stable leaves differ");
         }
     }
     // The auditor's derivation from public parameters (default binding and
@@ -460,11 +486,18 @@ fn stable_gk_vks_are_pinned() {
     let fam = StreamFamily::GkBandmerge2;
     let lv = derive_dist_leaf_vk(fam, &sh, 4, plain);
     let rv = derive_dist_root_vk(fam, &sh, 4, StreamMode::Forest, 2, 1, plain);
+    let lv_h = derive_dist_leaf_vk(fam, &sh, 4, hiding);
+    let rv_h = derive_dist_root_vk(fam, &sh, 4, StreamMode::Forest, 2, 1, hiding);
     eprintln!(
         "gk2 stable root pin: {:#018x?}",
         fingerprint(&rv.commitment, rv.shape.as_ref().expect("root shape"))
     );
     eprintln!("gk2 stable leaf pins: {got:#018x?}");
+    eprintln!(
+        "gk2 stable Hiding root pin: {:#018x?}",
+        fingerprint(&rv_h.commitment, rv_h.shape.as_ref().expect("root shape"))
+    );
+    eprintln!("gk2 stable Hiding leaf pins: {got_h:#018x?}");
     for e in EXPOSES {
         for (j, b) in [Binding::Semantic, Binding::Bound].into_iter().enumerate() {
             check(&format!("gk2 stable leaf {e:?} {b:?}"), got[ei(e)][j], LEAF[ei(e)][j]);
@@ -480,4 +513,20 @@ fn stable_gk_vks_are_pinned() {
         fingerprint(&rv.commitment, rv.shape.as_ref().expect("root shape")),
         ROOT2,
     );
+    for e in EXPOSES {
+        for (j, b) in [Binding::Semantic, Binding::Bound].into_iter().enumerate() {
+            check(&format!("gk2 stable Hiding leaf {e:?} {b:?}"), got_h[ei(e)][j], HLEAF[ei(e)][j]);
+        }
+    }
+    check(
+        "gk2 stable Hiding leaf (auditor derivation)",
+        fingerprint(&lv_h.commitment, lv_h.shape.as_ref().expect("leaf shape")),
+        HLEAF[ei(Expose::Interval)][0],
+    );
+    check(
+        "gk2 stable Hiding forest(2) root (auditor derivation)",
+        fingerprint(&rv_h.commitment, rv_h.shape.as_ref().expect("root shape")),
+        HROOT2,
+    );
+    assert_ne!(rv_h.commitment, rv.commitment, "the Hiding and Plain stable roots differ");
 }

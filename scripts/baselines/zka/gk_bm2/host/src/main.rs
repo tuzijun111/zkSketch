@@ -407,6 +407,22 @@ struct Step {
     next: Gk2State,
     port_ok: bool,
     merges: [u64; 2],
+    /// `Some(reason)` when zkSketch refuses this step as a capacity overflow
+    /// (`next` is then the pre-M3 lossy output the guest reproduces).
+    overflow: Option<String>,
+}
+
+/// G-cap: a measured (`--mode exec`) chain that overflows the capacity at any
+/// step is a FAILED run (exit 3, no row), as on zkSketch's side, where
+/// `apply_batch2` and the leaf circuit refuse the step. The guest image is
+/// unchanged (it still truncates like zkSketch's pre-M3 release build), so the
+/// host refuses before executing it; `--mode check` still compares the lossy
+/// output, the port-equivalence check of that truncation.
+fn refuse_overflow(e: usize, step: &Step) {
+    if let Some(why) = &step.overflow {
+        eprintln!("gk_bm2: GK CAPACITY OVERFLOW at epoch {e}: {why}; a failed run (exit 3), no row is written");
+        std::process::exit(3);
+    }
 }
 
 /// A port run (native) with its merge census.
@@ -442,9 +458,12 @@ fn native_step(s: &Gk2State, batch: &[u32], e: usize) -> Step {
     // error); the ports reproduce the pre-M3 release output, which drops the
     // excess survivors, so an overflowing step is compared against that lossy
     // state (`GkCapacityOverflow::lossy_state`, the old output row for row).
-    let next = match try_apply_batch2(s, &vals) {
-        Ok(next) => next,
-        Err(overflow) => overflow.lossy_state,
+    let (next, overflow) = match try_apply_batch2(s, &vals) {
+        Ok(next) => (next, None),
+        Err(overflow) => {
+            let why = overflow.to_string();
+            (overflow.lossy_state, Some(why))
+        }
     };
     let p = to_port(s);
     let mut census: Option<[u64; 2]> = None;
@@ -463,7 +482,7 @@ fn native_step(s: &Gk2State, batch: &[u32], e: usize) -> Step {
             _ => {}
         }
     }
-    Step { next, port_ok: ok, merges: census.unwrap_or_default() }
+    Step { next, port_ok: ok, merges: census.unwrap_or_default(), overflow }
 }
 
 const ALL_VARIANTS: [u32; 4] =
@@ -521,10 +540,12 @@ fn main() {
             let mut port_ok = true;
             for (e, b) in batches[..idx].iter().enumerate() {
                 let step = native_step(&st, b, e);
+                refuse_overflow(e, &step);
                 port_ok &= step.port_ok;
                 st = step.next;
             }
             let mut step = native_step(&st, &batches[idx], idx);
+            refuse_overflow(idx, &step);
             step.port_ok &= port_ok;
             let ctx = Ctx { arm: "exec", dataset: &dataset, batching: "plain".into() };
             let mut all = true;
@@ -565,6 +586,9 @@ fn main() {
             let mut st = Gk2State::empty(params);
             for (e, b) in batches.iter().enumerate() {
                 let step = native_step(&st, b, e);
+                if let Some(why) = &step.overflow {
+                    eprintln!("gk_bm2: check epoch {e}: zkSketch refuses this step ({why}); comparing the guest with the pre-M3 lossy output (port equivalence only; --mode exec refuses such a chain)");
+                }
                 for &v in &vs {
                     if !run_epoch(&ctx, e, v, true, &st, &step, b) {
                         std::process::exit(1);
@@ -619,6 +643,10 @@ mod tests {
             let p = to_port(&step.next);
             assert_eq!(port::state_from_words(&port::state_to_words(&p)), p);
             truncated |= p.active_mass() != step.next.n;
+            // zkSketch refuses exactly the steps that lose mass (G-cap). The chain goes on
+            // from the lossy state, so compare this step's deficit with the inherited one.
+            let deficit_in = st.n - to_port(&st).active_mass();
+            assert_eq!(step.overflow.is_some(), step.next.n - p.active_mass() > deficit_in, "epoch {e}: overflow verdict");
             dirs[0] += step.merges[0];
             dirs[1] += step.merges[1];
             st = step.next;

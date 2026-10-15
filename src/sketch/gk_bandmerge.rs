@@ -3288,6 +3288,21 @@ impl std::str::FromStr for GkRounds {
 /// builders that predate M3 ([`build_gkb2_leaf_commit`] and friends) keep
 /// building [`GkRounds::SortedCopy`] whatever this says, so their VKs and
 /// pins never move.
+///
+/// **Decision record (M3).** The default is `StableCompact` because the G1
+/// leaf passed the plan's G-sound gate: every new constraint has a
+/// trace-level forgery with a positive control in
+/// `gk_bandmerge::stable_attacks` (`src/sketch/gk_stable_attacks.rs`; each
+/// control proves and certifies the forged wrong state, the deployed leaf
+/// rejects every forgery in the AIR / LogUp / range argument, at two
+/// shapes), next to the completeness, output-equivalence, VK-derivation and
+/// G-zk tests in `stable_tests`. The default depends on that suite: a change
+/// to [`build_gkb2_leaf_stable`] must keep it passing, or this default goes
+/// back to `SortedCopy`. `EXP_GK_ROUNDS=sorted` (`SIX_GK_ROUNDS=sorted`)
+/// reproduces the pre-M3 leaf byte for byte for side-by-side runs, and the
+/// CSV `variant` / `gk_rounds` columns record which one ran. Harnesses whose
+/// stored rows were measured on the pre-M3 leaf pin `sorted` explicitly
+/// (`scripts/baselines/zkstream/sketch_run.sh`, `OURS_GK_ROUNDS`).
 pub const HARNESS_DEFAULT_GK_ROUNDS: GkRounds = GkRounds::StableCompact;
 
 /// Parse an `EXP_GK_ROUNDS` lookup: `Some` variant for `sorted` / `stable`
@@ -4128,6 +4143,31 @@ fn build_gkb2_leaf_sorted(
 // and are masked to the dummy in the final), and so reproduces every round's
 // live prefix bit for bit. `stable_rounds` replays it natively and the prover
 // asserts its masked final equals `finish_bm2`'s before every proof.
+//
+// Accepted sets at the LEAF level (review G1 r1): on inits reachable from
+// genesis (canonical, `g + Δ ≤ θ < 2^24` on every live row) both variants
+// accept exactly the same `(Com(S_{t-1}), Com(B_t), Com(S_t))` triples, the
+// `apply_batch2` step. On CRAFTED, unreachable inits that pass the 24-bit
+// init range checks the two accepted sets differ in BOTH directions, so
+// neither contains the other: the SortedCopy leaf range-checks every
+// resorted row and the final at 24 bits, the StableCompact leaf only the
+// committed init/batch (round outputs are the emitted rows, bounded by
+// induction FROM a canonical init). Example: a live init row `q` with
+// `g₁_q, Δ₁_q < 2^24` but `g₁_q + Δ₁_q ≥ 2^24` whose left neighbour is fresh;
+// neighbour-init gives the fresh row `Δ₁ = g₁_q + Δ₁_q ≥ 2^24`, which
+// SortedCopy rejects at its resort range check while StableCompact can
+// certify a final carrying it (and the next leaf's init range checks
+// reject that final). Neither is reachable: the root binds `Com(S_0)`, and
+// from a canonical init each leaf's output is `apply_batch2`'s, which keeps
+// `g + Δ ≤ θ`. The soundness argument also relies on two NON-byte-aligned
+// range checks being exact: union `e < 2^22` (E_BITS, keeps `α⁰` a prefix:
+// an `e ∈ (E_MAX, 2^24)` would sort after the dummies while live) and
+// `src < 2^20` (SRC_BITS in `bind_output_pair`, keeps the union op's
+// coordinate class disjoint from the round ops'). `add_range_bits` is exact
+// for unaligned widths only on a fork with the full top-byte check
+// (Plonky3_RangeAir ≥ d73ae98; pinned e11b1a6), regression-tested by
+// `fork_soundness::add_range_bits_unaligned_{22,20}_bit_forgery_is_rejected`
+// and `stable_attacks::g1_attack_init_e_beyond_e_max`.
 
 /// Liveness carry of the destination-bound round layout: the lo coordinate
 /// of a round-op element whose row survives the round carries
@@ -4267,6 +4307,26 @@ fn pack_stable_out(ts: &[Gk2Tuple], k: usize, alive: &[u8], live_carry: bool) ->
 /// (and certify a wrong state), with it on the AIR / LogUp / range argument
 /// must reject it. Removing a check changes the leaf's VK
 /// (`stable_tests::g1_stable_check_switches_are_clean`).
+///
+/// Only SINGLE switches are guaranteed clean (the leaf without that one
+/// check still proves honest witnesses), plus the combinations the attack
+/// suite uses as controls, each of which `reject_only` / the controls first
+/// run on an honest witness. Other combinations may leave a wire with an
+/// unbalanced WitnessChecks creator / reader set and reject even honest
+/// witnesses: e.g. {`out_pos_pins`, `live_carry`, `alive_bool`} together
+/// fail an honest witness with
+/// `GlobalCumulativeMismatch: WitnessChecks`, so a "control" built on that
+/// combination would be vacuous (found by the round-1 attacker; the suite
+/// never uses it).
+///
+/// `cond_bool` is defense in depth: it is implied by `lt_bool` plus the
+/// destination binding (`out_pos_pins` + `live_carry`). A `cond = 2` passes
+/// the 24-bit threshold test on a fusible pair (`w = −3·dm1c − 2`), but with
+/// `lt` boolean the pair's survivor flags become `1 − cond = −1` and `1`, so
+/// the folded row's destination is no output position and the destination
+/// binding rejects it (`stable_attacks::g1_probe_cond_bool_is_implied`: the
+/// leaf without `cond_bool` rejects it on the WitnessChecks bus at the
+/// destination pin). It is kept (1 ALU op per pair per round).
 ///
 /// Stage numbers refer to [`build_gkb2_leaf_stable`]. Hints are the private
 /// inputs `is_fresh`, `lt`, `cond`, `alive` (per round), the compacted round
@@ -8140,6 +8200,153 @@ mod stable_tests {
         assert!(chains >= 480 && batches >= 2000);
     }
 
+    /// Largest value of each witness class the StableCompact leaf range-checks
+    /// (or relies on staying small), over a chain.
+    #[derive(Default, Debug)]
+    struct HorizonMax {
+        init_field: u64,
+        init_slack: u64,
+        fresh_w: u64,
+        union_de: u64,
+        union_dt: u64,
+        lt_w: u64,
+        cond_w: u64,
+        row_field: u64,
+        theta: u64,
+        n_t: u64,
+        survivors: usize,
+    }
+
+    /// Mirror of the leaf's range-checked witnesses for ONE step (Stages 3-7
+    /// of [`build_gkb2_leaf_stable`]), asserting each lies in its range;
+    /// returns the next state. `w = cond ? −dm1 − 1 : dm1` is the
+    /// [`force_le_dm1`] witness.
+    fn horizon_step(st: &Gk2State, vals: &[u32], mx: &mut HorizonMax, step: usize) -> Gk2State {
+        const LIM: i128 = 1 << MASS_BITS;
+        let params = st.params;
+        let cap = params.capacity;
+        let n_prev_u = st.n;
+        let chk = |what: &str, v: i128, m: &mut u64| {
+            assert!((0..LIM).contains(&v), "step {step} (N_prev = {n_prev_u}): {what} = {v} outside [0, 2^24)");
+            *m = (*m).max(v as u64);
+        };
+        let b = build_bm2(st, vals);
+        assert!(b.capacity_error(params).is_none(), "step {step}: capacity overflow at N_t = {}", b.n_t);
+        let (n_prev, n_t, theta) = (b.n_prev as i128, b.n_t as i128, b.theta as i128);
+        chk("N_t", n_t, &mut mx.n_t);
+        chk("θ", theta, &mut mx.theta);
+        // Stage 3: init ranges and N_{t-1} − t ∈ [0, 2^24).
+        for t in &st.tuples {
+            assert!(t.e <= E_MAX, "step {step}: init e > E_MAX");
+            for v in [t.g, t.g_o, t.delta, t.delta_o, t.t] {
+                chk("init field", v as i128, &mut mx.init_field);
+            }
+            chk("N_{t-1} − t (init)", n_prev - t.t as i128, &mut mx.init_slack);
+        }
+        // Stage 4: union e non-decreasing (22-bit), t tiebreak among equal e.
+        for w in b.union_raw.windows(2) {
+            let de = w[1].e as i128 - w[0].e as i128;
+            assert!((0..1i128 << E_BITS).contains(&de), "step {step}: union e diff {de}");
+            mx.union_de = mx.union_de.max(de as u64);
+            if de == 0 {
+                chk("union t tiebreak", w[1].t as i128 - w[0].t as i128, &mut mx.union_dt);
+            }
+        }
+        // Stage 5: is_fresh = [N_{t-1} + 1 ≤ t] from dm1 = N_{t-1} − t.
+        for t in &b.union_raw {
+            let dm1 = n_prev - t.t as i128;
+            let fresh = t.t as i128 > n_prev;
+            chk("is_fresh witness", if fresh { -dm1 - 1 } else { dm1 }, &mut mx.fresh_w);
+        }
+        // Stage 6: per round and pair, lt and the α_b-gated cond witness.
+        let sb = stable_rounds(&b.union_init, b.theta, cap);
+        let mut cur = b.union_init.clone();
+        let mut alive: Vec<u8> = cur.iter().map(|t| (t.e != E_MAX) as u8).collect();
+        for (r, rd) in sb.rounds.iter().enumerate() {
+            for j in 0..cur.len() / 2 {
+                let (a, bb) = (cur[2 * j], cur[2 * j + 1]);
+                let lt = rd.lt[j] == 1;
+                assert_eq!(lt, a.t > bb.t, "step {step} round {r}: lt");
+                let dm1t = bb.t as i128 - a.t as i128;
+                chk("lt witness", if lt { -dm1t - 1 } else { dm1t }, &mut mx.lt_w);
+                let u = (a.g_o + bb.g + if lt { a.g } else { bb.g_o } + if lt { bb.delta } else { a.delta_o }) as i128;
+                let dm1c = alive[2 * j + 1] as i128 * (u - theta);
+                let cond = rd.cond[j] == 1;
+                assert_eq!(cond, dm1c < 0, "step {step} round {r}: cond");
+                chk("cond witness", if cond { -dm1c - 1 } else { dm1c }, &mut mx.cond_w);
+            }
+            for t in &rd.out {
+                for v in [t.g, t.g_o, t.delta, t.delta_o, t.t] {
+                    chk("round output field", v as i128, &mut mx.row_field);
+                }
+            }
+            cur = rd.out.clone();
+            alive = rd.alive.clone();
+        }
+        assert!(sb.survivors <= cap && sb.final_tuples == b.final_tuples, "step {step}: G1 final != bm2 final");
+        mx.survivors = mx.survivors.max(sb.survivors);
+        Gk2State { tuples: b.final_tuples, params, n: b.n_t }
+    }
+
+    /// **Completeness of the narrowed 24-bit tests up to the horizon**
+    /// (review G1 r1): natively, at the config-B leaf shape (cap 768, m 512,
+    /// s 51), two chains run to `N_t = 2^24 − 1`, the largest `N` the leaf's
+    /// `N_t < 2^24` check admits (so the regime `2^23 ≤ N_t < 2^24`, where
+    /// the 27 → 24-bit cut and stale dead-row fields would bite, is covered):
+    /// the real AOL keys (`gk_vals_of`, cycled with a per-pass rotation) and
+    /// an adversarial mix (per batch: uniform, ascending, descending, zigzag,
+    /// outside-in, duplicate-heavy; 21-bit values). At every step every
+    /// witness the StableCompact leaf range-checks — init fields and
+    /// `N_{t-1} − t`, union order, `is_fresh`, every round's `lt` and
+    /// α_b-gated `cond` witness — lies in `[0, 2^24)` (and every round output
+    /// field too), the stable replay equals `finish_bm2`, and no step
+    /// overflows the capacity. ~1-2 min in release.
+    #[test]
+    fn g1_stable_witness_ranges_hold_to_the_horizon() {
+        use crate::experiments::stream_compose::gk_vals_of;
+        let params = GkbParams { capacity: 768, batch: 512, s: 51 };
+        let horizon: u64 = (1 << MASS_BITS) - 1;
+        let aol = crate::dataset::aol().expect("data/aol.keys");
+        let mut rng = Lcg(0x4E0_1E5);
+        for chain in ["aol", "adversarial"] {
+            let mut st = Gk2State::empty(params);
+            let mut mx = HorizonMax::default();
+            let mut step = 0usize;
+            while st.n < horizon {
+                let k = (params.batch as u64).min(horizon - st.n) as usize;
+                let vals: Vec<u32> = if chain == "aol" {
+                    let pass = (st.n as usize) / aol.len();
+                    let off = ((st.n as usize) + pass * 7919) % aol.len();
+                    let keys: Vec<u32> = (0..k).map(|i| aol[(off + i) % aol.len()]).collect();
+                    gk_vals_of(&keys)
+                } else {
+                    const M21: u64 = (1 << 21) - 1;
+                    let base = rng.below(1 << 21);
+                    let p = 2 + rng.below(6);
+                    (0..k as u64)
+                        .map(|i| {
+                            (match step % 6 {
+                                0 => rng.below(1 << 21),
+                                1 => base + i,
+                                2 => base + (1 << 21) - i,
+                                3 => base + if i % (2 * p) < p { i % (2 * p) } else { 2 * p - i % (2 * p) },
+                                4 => if i % 2 == 0 { base + i / 2 } else { base + (1 << 20) - i / 2 },
+                                _ => base + rng.below(4),
+                            } & M21) as u32
+                        })
+                        .collect()
+                };
+                if vals.is_empty() {
+                    break;
+                }
+                st = horizon_step(&st, &vals, &mut mx, step);
+                step += 1;
+            }
+            eprintln!("G1 horizon {chain}: {step} steps to N = {} (2^24 − 1 = {horizon}); maxima {mx:?}", st.n);
+            assert_eq!(st.n, horizon, "{chain}: reached the horizon");
+        }
+    }
+
     fn stable_leaf(params: GkbParams, expose: Expose, mode: CommitMode) -> Gkb2LeafCircuit {
         build_gkb2_leaf_rounds(params, expose, Binding::Semantic, mode, GkRounds::StableCompact)
     }
@@ -8635,6 +8842,37 @@ mod stable_tests {
                 CommitMode::Hiding,
             );
             assert_eq!(fnv_chals(&dvk.commitment), pins[2], "cap {cap}: GK decoder VK moved");
+        }
+    }
+
+    /// **G-vk at the deployed shape for the NEW leaf**: the StableCompact
+    /// leaf's VK at config B (cap 768, m 512, s 51, Interval, Semantic; Plain
+    /// and Hiding — Hiding is the deployed mode), pinned like the SortedCopy
+    /// twin above (same fingerprint), so a drift of either stable builder
+    /// path (the shared commitment / union / θ / arrival stages are written
+    /// in both builders) moves a literal. The literals were recorded in M3
+    /// review round 1 on branch m3-gk-stable (2026-10-15) from the builder
+    /// at 353981e, and equal the round-1 VK reviewer's independent probe of
+    /// an export of 353981e (`M3REV B leaf vk {Plain, Hiding}`, same
+    /// fingerprint); they differ from the SortedCopy ones. `zk` build only.
+    #[cfg(feature = "zk")]
+    #[test]
+    fn stable_leaf_deployed_vks_are_pinned() {
+        // (cap, m) -> (Plain leaf, Hiding leaf).
+        const PINS: [((usize, usize), [u64; 2]); 1] = [((768, 512), [0xda49_253f_4670_9060, 0x3c86_b29e_ca25_2dc6])];
+        for ((cap, m), pins) in PINS {
+            let p = GkbParams { capacity: cap, batch: m, s: 51 };
+            let mut got = [0u64; 2];
+            for (i, mode) in [CommitMode::Plain, CommitMode::Hiding].into_iter().enumerate() {
+                got[i] = fnv_chals(
+                    &build_gkb2_leaf_rounds(p, Expose::Interval, Binding::Semantic, mode, GkRounds::StableCompact)
+                        .vk_pin_values(),
+                );
+            }
+            eprintln!("cap {cap} m {m}: StableCompact leaf VK pins (Plain, Hiding) = {got:#018x?}");
+            assert_eq!(got, pins, "cap {cap} m {m}: StableCompact leaf VK moved");
+            assert_ne!(got[0], 0x8f81_be07_530b_7cbe, "differs from the SortedCopy Plain leaf");
+            assert_ne!(got[1], 0x4e0c_9b44_17c4_db9c, "differs from the SortedCopy Hiding leaf");
         }
     }
 }

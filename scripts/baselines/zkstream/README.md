@@ -132,7 +132,7 @@ None of zkSketch's techniques appear:
 | | ZoKrates operators (ours, zkStream's method) | zkSketch leaves |
 |---|---|---|
 | Code | `hll/`, `ss/`, `gk/` in this directory | `98113ce` (branch `revision-soundness`, merged into `main`; after the soundness fixes, before hiding), exported with `git archive`, built outside the repo |
-| Circuit | `hll_op`, `ss_op`, `gk_op` | `hll_omc`, `ss_final_full`, `gk_bandmerge2`, default binding, Interval statement |
+| Circuit | `hll_op`, `ss_op`, `gk_op` | `hll_omc`, `ss_final_full`, `gk_bandmerge2` (the pre-M3 `sorted` GK leaf, pinned by `sketch_run.sh` as `OURS_GK_ROUNDS=sorted`; `OURS_GK_ROUNDS=stable` measures the M3 stable-compaction leaf, labelled `gk_bandmerge2_stable`), default binding, Interval statement |
 | Proof system | Groth16 (ark) over BN254, per-circuit trusted setup, **zero-knowledge** | batch-STARK (Plonky3) over BabyBear (degree-4 extension), Poseidon2, FRI with log-blowup 2, 54 queries and 15-bit query PoW (124-bit target, `src/config.rs`), transparent, **not zero-knowledge yet** |
 | One proof covers | one chunk of k records | one batch of m records (a leaf) |
 | Prover cost measured | witness (`compute-witness`) + `generate-proof`, median of the 4 (5 at k=1) chained chunks | trace generation + `prove_all_tables`, median of 5 runs, each a fresh leaf over the first m AOL keys. Both circuits are fixed-shape, so the cost does not depend on the state |

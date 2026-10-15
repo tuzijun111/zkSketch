@@ -54,11 +54,13 @@
 //! | init row `t > N_{t-1}` | init `t ≤ N_{t-1}` + fresh count (each alone rejects) | Range / WitnessChecks |
 //! | poisoned dummy | canonical dead rows | WitnessChecks |
 //! | crafted huge-`g` init | init ranges | Range |
+//! | init `e` beyond `E_MAX` (live after the dummies) | init ranges | Range |
 //! | `is_fresh` swapped | `is_fresh` range | Range |
 //! | `θ` inflated / `±1` | `θ` binding | Range |
 //! | phantom records (`N` shifted) / wrong `N_{t-1}` | mass / count+arrivals+fresh count | WitnessChecks |
 //! | arrival positions shifted / swapped | arrival binding | WitnessChecks |
 //! | `S = cap + 1` | `α^L_cap = 0` + mass | WitnessChecks (A), PermuteBus (B) |
+//! | `S = cap + 1`, each check alone | — (`α^L_cap = 0` alone; mass alone) | WitnessChecks / PermuteBus |
 //! | committed final not `α ⊙ R` | final binding | WitnessChecks |
 //! | union liveness hint forged | — (`force_nz` is unconditional) | WitnessChecks |
 //!
@@ -1914,6 +1916,47 @@ fn g1_attack_crafted_huge_g_init() {
     duel("crafted huge-g init", params(), &["init_ranges"], &a, &Tools::default(), &a, &Tools::default(), sc.honest_final());
 }
 
+/// **Init `e` beyond `E_MAX`** (review G1 r1): a live init row's value set
+/// to `e = 2^22 + 5` (mass moved onto it from another live row so that it is
+/// too heavy to fold, the init's total mass unchanged). The union `(e, t)`
+/// sort puts it after every dummy while it stays live (`α⁰ = [e ≠ E_MAX] =
+/// 1`), so `α⁰` is no longer a prefix; the round-0 compaction moves it into
+/// the live prefix and the leaf certifies a final carrying a live `e ≥
+/// 2^22`, outside the value domain. Target: the init range check `e <
+/// 2^22`, a NON-byte-aligned width (exact only with the fork's full top-byte
+/// check; the field-fraction top-byte forger is
+/// `fork_soundness::add_range_bits_unaligned_22_bit_forgery_is_rejected`).
+/// Deployed: Range lookup.
+#[test]
+fn g1_attack_init_e_beyond_e_max() {
+    let beyond = (1u64 << 22) + 5;
+    let (sc, a) = find("a live init row to push past E_MAX", params(), 2, 1 << 12, |sc, _| {
+        let base = sc.honest(true);
+        let live: Vec<usize> = (0..params().capacity).filter(|&i| sc.init.tuples[i].active == 1).collect();
+        for &i in live.iter().rev() {
+            for k in std::iter::once(None).chain(live.iter().filter(|&&k| k != i).map(|&k| Some(k))) {
+                let mut a = base.clone();
+                a.init[i][0] = fv(beyond);
+                if let Some(k) = k {
+                    let dg = sc.init.tuples[k].g;
+                    if dg == 0 {
+                        continue;
+                    }
+                    a.init[i][1] += fv(dg);
+                    a.init[k][1] -= fv(dg);
+                }
+                let Ok(s) = catch_msg(|| simulate(&a)) else { continue };
+                let out = s.final8.iter().any(|r| can(r[0]) == beyond);
+                if out && s.final_commit != sc.honest_final() && mass_of(&s.final8) == a.n_t {
+                    return Some(a);
+                }
+            }
+        }
+        None
+    });
+    duel("init e beyond E_MAX", params(), &["init_ranges"], &a, &Tools::default(), &a, &Tools::default(), sc.honest_final());
+}
+
 /// **Freshness swapped**: a fresh batch row is declared not fresh (it skips
 /// neighbour-init) and an old init row fresh (its `Δ` re-initialised); the
 /// fresh count is unchanged. Target: the `is_fresh = [N_{t-1}+1 ≤ t]` range
@@ -2094,6 +2137,23 @@ fn g1_attack_capacity_plus_one() {
     assert_eq!(mass_of(&simulate(&a2).final8), a2.n_t, "forger (B) keeps the mass");
     let why_b = reject_only("S = cap + 1 (B)", params, StableChecks::ALL, &Attack::honest(&st, &[], true), &a2, &Tools::default());
     eprintln!("[G-sound] S = cap + 1: control (without alive_cap + mass) ACCEPTED the lossy state; deployed REJECTED (A) {why_a}; (B) {why_b}");
+    // Each check ALONE (review G1 r1), against every forger:
+    // * `α^L_cap = 0` on, mass off: the pin is a `connect` to the Const zero,
+    //   so `α'_cap = 1` cannot even be written; forgers (A) and (B) honour it
+    //   and are rejected by the destination binding / the permutation;
+    // * mass on, `α^L_cap = 0` off: the honest liveness (`α'_cap = 1`, the
+    //   lossy final) is rejected by the mass (WitnessChecks), and forger (B)
+    //   (mass folded into row 0) by the permutation.
+    let sane = Attack::honest(&st, &[], true);
+    for (label, off, attack, tools) in [
+        ("α^L_cap = 0 alone, forger (A)", "mass", &a1, Tools::split()),
+        ("α^L_cap = 0 alone, forger (B)", "mass", &a2, Tools::default()),
+        ("mass alone, honest liveness (lossy final)", "alive_cap", &h, Tools::split()),
+        ("mass alone, forger (B)", "alive_cap", &a2, Tools::default()),
+    ] {
+        let why = reject_only(&format!("S = cap + 1 ({label})"), params, checks_without(&[off]), &sane, attack, &tools);
+        eprintln!("[G-sound] S = cap + 1: {label} (leaf without {off}) REJECTS: {why}");
+    }
 }
 
 /// **Committed final not `α^L ⊙ R^L`**: the final commitment opens to the
@@ -2151,6 +2211,7 @@ fn g1_attacks_at_a_second_shape() {
     g1_attack_init_t_after_n_prev();
     g1_attack_poisoned_dummy();
     g1_attack_crafted_huge_g_init();
+    g1_attack_init_e_beyond_e_max();
     g1_attack_is_fresh_swapped();
     g1_attack_theta();
     g1_attack_wrong_n_prev();

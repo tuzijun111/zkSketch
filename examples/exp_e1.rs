@@ -163,6 +163,18 @@ fn main() {
     // The PROVER's commitment context for the deployed variants, read once
     // (the seed is never printed). Baselines stay Plain.
     let commit = ProverCommit::from_env();
+    // EXP_GK_ROUNDS (M3) selects the GK leaf's round certification in
+    // exp_compose / exp_e0 only; every e1 GK variant here (bandmerge2
+    // included) builds the pre-M3 SortedCopy leaf, so say so instead of
+    // silently ignoring it.
+    if let Ok(v) = std::env::var("EXP_GK_ROUNDS")
+        && !v.is_empty()
+    {
+        eprintln!(
+            "exp_e1: WARNING: EXP_GK_ROUNDS={v:?} is ignored here; every e1 GK variant (bandmerge2 included) \
+             builds the pre-M3 SortedCopy leaf. Use exp_compose / exp_e0 for the stable-compaction leaf."
+        );
+    }
 
     let dataset_arg = env_str("EXP_DATASET", "uniform");
     // EXP_DATASET may be a comma-list of datasets — sweep each in turn.

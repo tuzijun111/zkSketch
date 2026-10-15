@@ -703,14 +703,30 @@ fn merge2(a: &Gk2Tuple, b: &Gk2Tuple, dir: u8) -> (Gk2Tuple, Gk2Tuple) {
 /// Apply a batch of inserted values to the two-sided sketch: union old ‖ fresh,
 /// value-sort, two-sided neighbor-init, `L_f = ⌈log₂(cap+m)⌉` parity-0 fuse
 /// rounds (re-sorting between rounds to recompact), then compact to capacity.
+///
+/// A capacity overflow is a **hard error** in every build (G-cap, M3; it was
+/// a `debug_assert!`, so release builds dropped the excess survivors
+/// silently): this panics, with "capacity" in the message so the harness
+/// records the run as `too_large`, when the step would lose a survivor — a
+/// live excess row, or the live never-paired last row of an odd table,
+/// either of which leaves the final's mass `Σ (g₁ + g₂ + 1)` below `N_t`.
+/// Every step that keeps all its survivors is unchanged (the BabyBear
+/// [`crate::sketch::gk_bandmerge::apply_batch2`] is the same rule).
 pub fn apply_batch2(s_old: &Gk2State, batch_vals: &[u32]) -> Gk2State {
     let b = build_bm2(s_old, batch_vals);
     // The two-sided sketch has no hard case, so a capacity ≥ the Gribelyuk bound
-    // 2s·ln(N/s+2)+2 never overflows.
-    debug_assert!(
-        b.excess.iter().all(|t| !is_active2(t)),
-        "two-sided sketch exceeded capacity {} (declare s' ≥ 2s·ln(N/s+2)+2)",
-        s_old.params.capacity
+    // 2s·ln(N/s+2)+2 never overflows; bm2 is not a fusion fixed point, so the
+    // deployed capacities are empirical and this is a real error path.
+    let excess = b.excess.iter().filter(|t| is_active2(t)).count();
+    let mass: u64 = b.final_tuples.iter().filter(|t| is_active2(t)).map(|t| t.g + t.g_o + 1).sum();
+    assert!(
+        excess == 0 && mass == b.n_t,
+        "GK capacity overflow (Goldilocks apply_batch2): {excess} live excess row(s), final mass {mass} < N_t = {} \
+         at capacity {} (batch {}); the step would lose a survivor, which is a hard error: declare a larger \
+         capacity (s' >= 2s·ln(N/s+2)+2)",
+        b.n_t,
+        s_old.params.capacity,
+        s_old.params.batch
     );
     Gk2State {
         tuples: b.final_tuples,
@@ -2765,6 +2781,35 @@ pub fn gk2_gl_noop_leaf_commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **G-cap (M3), Goldilocks**: `apply_batch2` keeps an exactly full state
+    /// (`S = cap`) and refuses one more survivor (`S = cap + 1`) with a panic
+    /// naming the capacity, in every build (it was a `debug_assert!`), at an
+    /// even and an odd table.
+    #[test]
+    fn gl_apply_batch2_capacity_overflow_is_a_hard_error() {
+        let msg = |r: std::thread::Result<Gk2State>| -> String {
+            let p = r.expect_err("the overflowing step must panic");
+            p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()
+        };
+        // s = 1000: θ = 0 for N < 1000, nothing fuses.
+        let params = GkbParams { capacity: 4, batch: 2, s: 1000 };
+        let s1 = apply_batch2(&Gk2State::empty(params), &[10, 20]);
+        let full = apply_batch2(&s1, &[30, 40]);
+        assert_eq!(full.actives().len(), 4, "S = cap is kept");
+        assert_eq!(full.n, 4);
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let over = std::panic::catch_unwind(|| apply_batch2(&full, &[5]));
+        // odd table (cap 4 + m 3 = 7): a full state plus 3 fresh rows.
+        let odd = GkbParams { capacity: 4, batch: 3, s: 1000 };
+        let s_odd = apply_batch2(&apply_batch2(&Gk2State::empty(odd), &[10, 20, 30]), &[40]);
+        let over_odd = std::panic::catch_unwind(|| apply_batch2(&s_odd, &[50, 60, 70]));
+        std::panic::set_hook(prev);
+        for (what, m) in [("S = cap + 1", msg(over)), ("odd table", msg(over_odd))] {
+            assert!(m.contains("capacity overflow") && m.contains("capacity 4"), "{what}: {m}");
+        }
+    }
 
     /// Gating check for the Goldilocks (D=2) GK band-merge leaf: prove one epoch
     /// end-to-end. `prove_epoch` runs the circuit (`runner.run()` — the point the

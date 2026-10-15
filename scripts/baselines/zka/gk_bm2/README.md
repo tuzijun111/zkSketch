@@ -81,11 +81,15 @@ the guest picks one by an input word (`variant`):
     `union_raw`, `union_init`, `expand_sigma`, `excess`). None feeds the output.
   - zkSketch checked the excess only by `debug_assert!`, which its release
     builds compile out, so a capacity overflow truncated silently in both.
-    Since M3 (2026-10-16) zkSketch's `apply_batch2` refuses an overflow (a
-    hard error); the guest still truncates as before (unchanged image), and
-    the host compares an overflowing step with `try_apply_batch2`'s
-    `lossy_state`, the pre-M3 output row for row. Deployed shapes never
-    overflow (the host's check mode reports it).
+    Since M3 (2026-10-15) zkSketch's `apply_batch2` refuses an overflow (a
+    hard error); the guest still truncates as before (unchanged image). The
+    host's `--mode exec` (the measurement) therefore refuses a chain that
+    overflows at any step before executing the guest: it exits 3 with the
+    reason and writes no row, a failed run, as on zkSketch's side. `--mode
+    check` compares an overflowing step with `try_apply_batch2`'s
+    `lossy_state`, the pre-M3 output row for row (the port-equivalence check
+    of the truncation, e.g. the capacity-48 chain below), and logs it.
+    Deployed shapes never overflow.
 - **`literal_reuse`** (`apply_batch2_reuse`) is the same statements and sorts
   with the per-round tables allocated once. risc0's default guest allocator is a
   bump allocator that never frees, so `literal` allocates and zero-fills about

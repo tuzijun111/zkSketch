@@ -488,6 +488,17 @@ fn range_exact(b: &mut CircuitBuilder<Challenge>, x: ExprId, n: usize) {
 /// value in the ALU, Public and Range tables (and the exposed `x`) through `remap`, which
 /// lists `(honest value, forged value)` for every wire derived from `x`.
 fn range_bits_forgery(exact: bool, n: usize, x_honest: u64, remap: &[(Val, Val)]) -> Verdict {
+    range_bits_forgery_inspect(exact, n, x_honest, remap, &|_| {})
+}
+
+/// [`range_bits_forgery`] with `inspect` run on the (forged) traces before proving.
+fn range_bits_forgery_inspect(
+    exact: bool,
+    n: usize,
+    x_honest: u64,
+    remap: &[(Val, Val)],
+    inspect: &dyn Fn(&Traces<Challenge>),
+) -> Verdict {
     let mut b = CircuitBuilder::<Challenge>::new();
     b.enable_range(generate_range_trace::<Val, Challenge>);
     b.enable_expose(generate_expose_trace::<Val, Challenge>);
@@ -548,6 +559,7 @@ fn range_bits_forgery(exact: bool, n: usize, x_honest: u64, remap: &[(Val, Val)]
         let x_wid = traces.tag_to_witness["x"];
         patch_exposed(&mut traces, &[(x_wid, Challenge::from(x_forged))]);
     }
+    inspect(&traces);
 
     prove_and_verify(&traces, &cpd, |p| {
         p.register_range_table::<EXT_D>();
@@ -635,4 +647,89 @@ fn add_range_bits_unaligned_accepts_max_value() {
         );
         assert_eq!(verdict.exposed()[0].as_canonical_u64(), x);
     }
+}
+
+/// The forged trace of a 3-byte unaligned check is consistent everywhere except the one
+/// lookup the fork fix added: every Add / Mul / MulAdd ALU row holds, and the only Range
+/// input outside `[0, 256)` is the forged top byte `top` (its shifted copy is a byte). So
+/// a rejection can only come from the unshifted top-byte lookup.
+fn assert_only_top_byte_out_of_range(traces: &Traces<Challenge>, top: Val) {
+    use p3_circuit::AluOpKind;
+    let alu = &traces.alu_trace;
+    for (i, (k, v)) in alu.op_kind.iter().zip(alu.values.iter()).enumerate() {
+        let ok = match k {
+            AluOpKind::Add => v[0] + v[1] == v[3],
+            AluOpKind::Mul => v[0] * v[1] == v[3],
+            AluOpKind::MulAdd => v[0] * v[1] + v[2] == v[3],
+            _ => true,
+        };
+        assert!(ok, "forged ALU row {i} ({k:?}) is inconsistent: {v:?}");
+    }
+    let rt: &RangeTrace<Val> = traces
+        .non_primitive_trace::<RangeTrace<Val>>(&NpoTypeId::range())
+        .expect("range trace");
+    let mut out: Vec<Val> = Vec::new();
+    for op in &rt.operations {
+        for v in op.input_values.chunks(EXT_D) {
+            if v[1..].iter().any(|c| *c != Val::ZERO) || v[0].as_canonical_u64() >= 256 {
+                out.push(v[0]);
+            }
+        }
+    }
+    assert_eq!(out, vec![top], "the forged top byte is the only out-of-byte Range input");
+}
+
+/// `n = 22` (`k = 3`, `r = 6`, the StableCompact leaf's union `e` width `E_BITS`): the
+/// pre-fix check (shifted top byte only) proved just `x < 2^22 + 2^16`. Honest
+/// `x = 7 + 256·9 + 65536·13 = 854279` (shifted top byte 52); forged `x = 2^22 + 5`
+/// as bytes `5, 64, 255·4^{-1}`: the shifted top byte is `255 < 256`, so only the
+/// unshifted lookup of `255·4^{-1} mod p` can reject it. An `e = 2^22 + 5` would sort
+/// after the `E_MAX` dummies while live and break the stable leaf's liveness prefix.
+#[test]
+fn add_range_bits_unaligned_22_bit_forgery_is_rejected() {
+    let honest = range_bits_forgery(false, 22, 854_279, &[]);
+    assert_eq!(honest.exposed()[0], Val::from_u64(854_279), "honest run must verify");
+    let top = Val::from_u64(255) * Val::from_u64(4).inverse();
+    let x_forged = Val::from_u64((1 << 22) + 5);
+    assert_eq!(Val::from_u64(16_389) + Val::from_u64(65_536) * top, x_forged, "forged bytes recompose to 2^22 + 5");
+    let remap = [
+        (Val::from_u64(854_279), x_forged),
+        (Val::from_u64(7), Val::from_u64(5)),
+        (Val::from_u64(9), Val::from_u64(64)),
+        (Val::from_u64(13), top),
+        (Val::from_u64(2_311), Val::from_u64(16_389)),
+        (Val::from_u64(52), Val::from_u64(255)),
+    ];
+    let forged = range_bits_forgery_inspect(false, 22, 854_279, &remap, &|t| assert_only_top_byte_out_of_range(t, top));
+    eprintln!("add_range_bits(x, 22), x = 2^22 + 5: {}", forged.describe());
+    assert!(!forged.is_accepted(), "add_range_bits(x, 22) must reject x = 2^22 + 5");
+    let max = range_bits_forgery(false, 22, (1 << 22) - 1, &[]);
+    assert!(max.is_accepted(), "add_range_bits(2^22 - 1, 22) must verify: {}", max.describe());
+}
+
+/// `n = 20` (`k = 3`, `r = 4`, the union source coordinate width `SRC_BITS` of
+/// `bind_output_pair`): the pre-fix check proved just `x < 2^20 + 2^16`. Honest
+/// `x = 7 + 256·9 + 65536·11 = 723207` (shifted top byte 176); forged `x = 2^20 + 5` as
+/// bytes `5, 16, 255·16^{-1}` (shifted top byte 255). A source coordinate `≥ 2^20` would
+/// let the union op's coordinate class overlap a round op's.
+#[test]
+fn add_range_bits_unaligned_20_bit_forgery_is_rejected() {
+    let honest = range_bits_forgery(false, 20, 723_207, &[]);
+    assert_eq!(honest.exposed()[0], Val::from_u64(723_207), "honest run must verify");
+    let top = Val::from_u64(255) * Val::from_u64(16).inverse();
+    let x_forged = Val::from_u64((1 << 20) + 5);
+    assert_eq!(Val::from_u64(4_101) + Val::from_u64(65_536) * top, x_forged, "forged bytes recompose to 2^20 + 5");
+    let remap = [
+        (Val::from_u64(723_207), x_forged),
+        (Val::from_u64(7), Val::from_u64(5)),
+        (Val::from_u64(9), Val::from_u64(16)),
+        (Val::from_u64(11), top),
+        (Val::from_u64(2_311), Val::from_u64(4_101)),
+        (Val::from_u64(176), Val::from_u64(255)),
+    ];
+    let forged = range_bits_forgery_inspect(false, 20, 723_207, &remap, &|t| assert_only_top_byte_out_of_range(t, top));
+    eprintln!("add_range_bits(x, 20), x = 2^20 + 5: {}", forged.describe());
+    assert!(!forged.is_accepted(), "add_range_bits(x, 20) must reject x = 2^20 + 5");
+    let max = range_bits_forgery(false, 20, (1 << 20) - 1, &[]);
+    assert!(max.is_accepted(), "add_range_bits(2^20 - 1, 20) must verify: {}", max.describe());
 }

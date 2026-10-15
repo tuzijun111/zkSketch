@@ -43,6 +43,12 @@
 #   OURS_REV=HEAD                 git revision of zkSketch measured by 'ours' (git archive)
 #   OURS_DIR=$BASELINE_DIR/build/zks_sketch_ours   exported source + its CARGO_TARGET_DIR
 #   OURS_REPS=3                   repetitions per point (the CSV keeps every rep)
+#   OURS_GK_ROUNDS=sorted         round certification of zkSketch's GK leaf (exp_compose
+#                                 EXP_GK_ROUNDS): sorted = the pre-M3 leaf, the one every stored
+#                                 gk row of zks_sketch_small.csv measured (variant gk_bandmerge2);
+#                                 stable = the M3 stable-compaction leaf (variant
+#                                 gk_bandmerge2_stable). The variant column is taken from
+#                                 exp_compose's own row, so the label names the circuit that ran
 #
 # Regeneration is staged. Every run writes into $RESULTS/sketch_run.<ts>.<pid>.tmp/
 # (gitignored). A family's canonical files are replaced only when ALL its sub-stages
@@ -85,6 +91,8 @@ MAX_LOAD="${MAX_LOAD:-8}"; WAIT_S="${WAIT_S:-1800}"
 OURS_REV="${OURS_REV:-HEAD}"
 OURS_DIR="$(realpath -m -- "${OURS_DIR:-$BASELINE_DIR/build/zks_sketch_ours}")"
 OURS_REPS="${OURS_REPS:-3}"
+OURS_GK_ROUNDS="${OURS_GK_ROUNDS:-sorted}"
+[[ $OURS_GK_ROUNDS == sorted || $OURS_GK_ROUNDS == stable ]] || { echo "OURS_GK_ROUNDS=$OURS_GK_ROUNDS must be sorted or stable" >&2; exit 2; }
 CAP_T=45m; CAP_M=150G
 declare -A SUBS=([hll]="probes grid deployed wall edge" [ss]="grid scaling large deployed"
                  [gk]="grid sweep validate probes")
@@ -325,7 +333,7 @@ ours_build() {
 run_ours() {
   local st out ncores
   st="$STAGE_ROOT/ours"
-  say "== ours: zkSketch leaves at the ZoKrates points, rev $OURS_REV, reps $OURS_REPS -> staging $st"
+  say "== ours: zkSketch leaves at the ZoKrates points, rev $OURS_REV, reps $OURS_REPS, GK rounds $OURS_GK_ROUNDS -> staging $st"
   ours_build || return 1
   ncores=$(taskset -c "$PIN_CPUS" nproc)
   out="$st/zks_sketch_small.csv"
@@ -337,12 +345,13 @@ run_ours() {
       hll) b=0; while ((1 << b < s)); do b=$((b + 1)); done; envs=(EXP_COMPOSE_FAMILY=hll "EXP_HLL_B=$b"); variant=hll_omc ;;
       ss)  ((m < 2)) && { m=2; note="m=2: ss_final_full needs an even batch >= 2 (ZoKrates k=1)"; }
            ((m % 2)) && m=$((m + 1)); envs=(EXP_COMPOSE_FAMILY=ss "EXP_SS_CAP=$s"); variant=ss_final_full ;;
-      gk)  envs=(EXP_COMPOSE_FAMILY=gk "EXP_GK_CAP=$s" "EXP_GK_S=$E"); variant=gk_bandmerge2 ;;
+      gk)  envs=(EXP_COMPOSE_FAMILY=gk "EXP_GK_CAP=$s" "EXP_GK_S=$E" "EXP_GK_ROUNDS=$OURS_GK_ROUNDS")
+           variant=gk_bandmerge2; [[ $OURS_GK_ROUNDS == stable ]] && variant=gk_bandmerge2_stable ;;
     esac
     reps=$OURS_REPS; [[ $pt == deployed ]] && reps=1
     for rep in $(seq 1 "$reps"); do
       name="zks_sketch_${fam}_${s}_${k}_r${rep}_$$.csv"
-      local cmd=(env -u ZKSKETCH_BINDING -u ZKSKETCH_STATEMENT -u EXP_ROOT_VK "${envs[@]}"
+      local cmd=(env -u ZKSKETCH_BINDING -u ZKSKETCH_STATEMENT -u EXP_ROOT_VK -u EXP_GK_ROUNDS "${envs[@]}"
                  "EXP_COMPOSE_N=$m" "EXP_COMPOSE_BATCHES=$m" EXP_COMPOSE_MODE=forest EXP_COMPOSE_EXEC=sim
                  EXP_DATASET=aol "EXP_COMPOSE_CORES=$ncores" "EXP_OUT=$name"
                  taskset -c "$PIN_CPUS" /usr/bin/time -f "TIME %e %M" -o "$st/$name.time"
@@ -370,6 +379,11 @@ if os.path.exists(src):
     r = next(csv.DictReader(open(src)))
     row.update(shape=r["shape"], prove_ms=r["total_time_ms"], verify_ms=r["verify_ms"],
                proof_bytes=r["proof_bytes"], peak_rss_mb=r["peak_rss_mb"], status=r["status"])
+    # GK: label the row with the circuit exp_compose actually built (its own `variant`,
+    # gk_bandmerge2 or gk_bandmerge2_stable); revisions before M3 write gk_bandmerge2.
+    if fam == "gk" and r.get("variant"):
+        assert r["variant"] in ("gk_bandmerge2", "gk_bandmerge2_stable"), r["variant"]
+        row["variant"] = r["variant"]
     assert r["t"] == "1" and r["m"] == m and r["exec"] == "sim", r
     os.remove(src)
 else:
