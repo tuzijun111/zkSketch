@@ -3,8 +3,10 @@
 #   zk-Analytics side: their CM driver at CM_TOPK_SLOTS=1 (cyc/ shipped, which also embeds
 #   the CM noroot guest of ../cm_noroot, after `cm_noroot/gen_upstream.sh --check` confirms
 #   its verbatim copy still matches the clone) and our HLL, SS, GK, Bloom and KMV ports (†),
-#   each --locked into $BASELINE_DIR/build/... Every aggregation guest of the root variants
-#   (designed / noroot, see ../README.md "Six-sketch comparison") must exist afterwards.
+#   each --locked into $BASELINE_DIR/build/... GK is built twice: the matched port
+#   (../gk_matched, zkSketch's GK rule in their pipeline, the default of the comparison) and
+#   the textbook port (../gk, the labelled reference). Every aggregation guest of the root
+#   variants (designed / noroot, see ../README.md "Six-sketch comparison") must exist afterwards.
 #   zkSketch side: exp_compose (release, --locked) in this checkout's target/.
 # Usage: build.sh [all|zka|zks]   (default all). Needs the zk-Analytics clone first:
 #   scripts/baselines/fetch_baselines.sh zka
@@ -41,6 +43,7 @@ b_cyc()   { source "$Z/common.sh"; BASELINE_DIR="$BASELINE_DIR" "$Z/cm_noroot/ge
 b_hll()   { source "$Z/hll/hll_common.sh"; build_hll; }
 b_ss()    { source "$Z/spacesaving/common_ss.sh"; build_ss --bin ss; }
 b_gk()    { source "$Z/gk/common_gk.sh"; build_gk; }
+b_gkm()   { source "$Z/gk_matched/common_gk_matched.sh"; build_gk_matched; }
 b_bloom() { source "$Z/bloom/bloom_common.sh"; build_fam; }
 b_kmv()   { source "$Z/kmv/kmv_common.sh"; build_fam; }
 b_zks()   { cd "$ZKS" && CARGO_TARGET_DIR="$ZKS/target" cargo build --release --locked --example exp_compose; }
@@ -57,10 +60,11 @@ if [[ $WHAT != zks ]]; then
   step hll "$EB/hll/release/hll" b_hll
   step ss "$EB/zka-ss/release/ss" b_ss
   step gk "$EB/zka-gk/release/gk" b_gk
+  step gk_matched "$EB/zka-gk-matched/release/gk_matched" b_gkm
   step bloom "$EB/zka-bloom/release/bloom" b_bloom
   step kmv "$EB/zka-kmv/release/kmv" b_kmv
   for b in "$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-ss/release/ss" "$EB/zka-gk/release/gk" \
-           "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv"; do
+           "$EB/zka-gk-matched/release/gk_matched" "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv"; do
     [[ -x $b ]] || FAIL+=("missing:$b")
   done
   # The guests of the root variants (the drivers embed them; a missing file means the
@@ -68,6 +72,7 @@ if [[ $WHAT != zks ]]; then
   elf() { echo "$EB/$1/riscv-guest/$2/$3/riscv32im-risc0-zkvm-elf/release/$3"; }
   for g in "cyc-t1 aggregator-methods aggr_cm" "cyc-t1 zka-cm-noroot-methods aggr_cm_noroot" \
            "hll zka-hll-methods hll_aggr_root" "zka-ss ss-methods aggr_ss_rootvar" "zka-gk gk-methods aggr_gk_root" \
+           "zka-gk-matched gk-matched-methods aggr_gkm" "zka-gk-matched gk-matched-methods querier_gkm" \
            "zka-bloom zka-bloom-methods bloom_aggr_root" "zka-kmv zka-kmv-methods kmv_aggr_root"; do
     read -r t mc gn <<< "$g"
     [[ -s $(elf "$t" "$mc" "$gn") ]] || FAIL+=("missing-guest:$(elf "$t" "$mc" "$gn")")

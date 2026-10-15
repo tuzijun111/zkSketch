@@ -55,6 +55,15 @@ state_commit, with journal_eq_native and variants_agree true. The CSV's first 18
 those of the previous version; `variant` and `root_construction` are appended (for the
 committed set, dropping the two gives the previous output byte for byte).
 
+GK on the zk-Analytics side: the rows of a `run_all.sh` run come from the MATCHED port
+(../gk_matched, SIX_ZKA_GK=matched: zkSketch's own GK batch rule inside their pipeline; its
+driver rows say algorithm=bm2): those rows are labelled system 'zk-Analytics arch. (port †,
+zkSketch GK rule)' and their `note` names the GK configuration; when a zkSketch GK CSV is
+present its capacity, s and leaf size are checked against the port's (a mismatch is reported
+on stderr and in `note`). Rows of the textbook port (../gk, SIX_ZKA_GK=textbook, and the
+committed 2026-10-09 set) keep the system name 'zk-Analytics arch. (port †)'; in a new run
+their `note` says they are textbook GK, a reference (the committed set's output is unchanged).
+
 Verify protocol (both sides): `verify_ms` = the best of 5 in-process verify calls of the same
 proof (zk-Analytics: their drivers' loop; zkSketch: EXP_VERIFY_REPEATS=5). Deserialisation is
 excluded on both sides and reported separately (`decode_ms`). `verify_first_ms` / `verify_median_ms`
@@ -216,6 +225,8 @@ def emit(**kw):
 
 
 def note_for(fam, system):
+    if fam == 'gk' and system.startswith('zk-Analytics'):
+        return GK_NOTE
     if fam == 'hll' and system.startswith('zkSketch'):
         if (M, T) == (2048, 8):
             return ('NOT like-for-like: zkSketch certifies the raw HLL estimator (no small-range / linear-counting '
@@ -319,9 +330,50 @@ CM_REF_NOTE = ('reference, not the headline: their shipped CM aggregation (aggr_
 
 
 def ref_note(f, var):
+    if f == 'gk':
+        return GK_NOTE
     return CM_REF_NOTE if (f, var) == ('cm', 'designed') else ''
 
 prove = attach_jobs(ZKA)
+
+
+def gk_algorithm():
+    """('bm2', (capacity, m_sub, s, implementation, steps)) when the zk-Analytics GK rows come from
+    the matched port (driver column algorithm=bm2), else ('textbook', None)."""
+    rs = [r for r in rows(f'{ZKA}_gk_exec.csv') + rows(f'{ZKA}_gk_qexec.csv') + prove['gk'] if r.get('algorithm')]
+    algos = {r['algorithm'] for r in rs}
+    if len(algos) > 1:
+        sys.exit(f'{ZKA} gk: rows of several GK algorithms ({sorted(algos)}) in one results directory')
+    if algos == {'bm2'}:
+        cfgs = {(r['capacity'], r['m_sub'], r['s'], r['implementation'], r['steps']) for r in rs}
+        if len(cfgs) > 1:
+            sys.exit(f'{ZKA} gk: rows of several matched-GK configurations {sorted(cfgs)} in one results directory')
+        return 'bm2', cfgs.pop()
+    return 'textbook', None
+
+
+GK_ALGO, GK_CFG = gk_algorithm()
+if GK_ALGO == 'bm2':
+    _cap, _msub, _s, _impl, _steps = GK_CFG
+    ZKA_NAME['gk'] = 'zk-Analytics arch. (port †, zkSketch GK rule)'
+    GK_NOTE = (f'same GK algorithm as zkSketch: its batch rule (two-sided band-merge apply_batch2) in their pipeline; '
+               f'capacity {_cap}, s {_s}, {_steps} step(s) of {_msub} records per epoch (zkSketch leaf size), state '
+               f'carried across epochs, guest implementation {_impl}')
+    for _pfx, _, _, _ in ZKS_SETS:
+        for _r in rows(f'{_pfx}_gk.csv')[:1]:
+            _m = re.fullmatch(r'cap(\d+)_s(\d+)', _r.get('shape', ''))
+            _zks = (_m.group(1), _r.get('m'), _m.group(2)) if _m else None
+            if _zks != (_cap, _msub, _s):
+                print(f'WARNING {ZKA} gk: the matched port ran capacity/m_sub/s = {_cap}/{_msub}/{_s} but '
+                      f'{_pfx}_gk.csv is shape {_r.get("shape")} with leaf m={_r.get("m")}: NOT the same configuration',
+                      file=sys.stderr)
+                GK_NOTE += (f'; CONFIG MISMATCH: the zkSketch GK run used {_r.get("shape")} with {_r.get("m")}-record '
+                            f'leaves')
+elif A.zks:
+    GK_NOTE = ("textbook Greenwald-Khanna (summary rebuilt per epoch, query-time merge): NOT zkSketch's algorithm "
+               "(its two-sided band-merge batch rule); a reference, not like for like")
+else:
+    GK_NOTE = ''   # the committed 2026-10-09 set: output unchanged
 for f in FAMS:
     for r in prove[f]:
         r['_est'] = False
@@ -695,7 +747,8 @@ if A.zks:
         print(f'no zkSketch CSV for: {" ".join(MISSING)}', file=sys.stderr)
 
 order = {f: i for i, f in enumerate(FAMS)}
-sys_order = {'zk-Analytics': 0, 'zk-Analytics arch. (port †)': 0, 'zkSketch': 1, 'zkSketch (zk feature)': 2}
+sys_order = {'zk-Analytics': 0, 'zk-Analytics arch. (port †)': 0, 'zk-Analytics arch. (port †, zkSketch GK rule)': 0,
+             'zkSketch': 1, 'zkSketch (zk feature)': 2}
 run_order = {'main': 0, 'vt': 1, 'r2': 0, 'zk': 0, 'r1': 3}
 # Rows of one variant stay together (update rows first, then accept rows per variant); with a
 # single variant (the committed set: legacy update / accept rows, '-' query rows) this is the

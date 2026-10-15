@@ -1,0 +1,21 @@
+[package]
+name = "gk-matched-host"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "gk_matched"
+path = "src/main.rs"
+
+[dependencies]
+gk-matched-core = { path = "../core" }
+gk-bm2-core = { path = "../../gk_bm2/core" }
+gk-matched-methods = { path = "../methods" }
+aggregator-core = { path = "../../.zka/aggregator/core" }
+zkvm-common = { path = "../../.zka/zkvm-common" }
+risc0-zkvm = "3"
+serde = "1"
+bincode = "1"
+# The zkSketch checkout this directory lives in: its native apply_batch2, gk_vals_of,
+# GK leaf circuit and GK decoder are the reference the guests are checked against.
+zksketch = { path = "../../../../.." }

@@ -1,5 +1,12 @@
 # Greenwald-Khanna in zk-Analytics' architecture (†)
 
+> **Reference only since 2026-10-15.** This is textbook GK, a different algorithm from the
+> one zkSketch certifies (its two-sided band-merge batch rule). The six-sketch comparison
+> now runs zkSketch's own rule in zk-Analytics' pipeline on their side (`../gk_matched`,
+> `SIX_ZKA_GK=matched`, the default), so both sides compute the same function; this port
+> stays as the labelled reference (`SIX_ZKA_GK=textbook`) and is the GK of the committed
+> 2026-10-09 rows.
+
 zk-Analytics (Zhu et al., SIGCOMM '26; clone at `d4a5a9a`) ships no quantile
 summary with a rank guarantee. Its histogram keeps per-key log2 bins and answers
 only P90 (see `../README.md`, "Shipped-structure arm"). This directory builds

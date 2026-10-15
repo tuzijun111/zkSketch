@@ -643,8 +643,17 @@ six sketches: Count-Min (3 x 1024), HyperLogLog (b = 14), SpaceSaving / Misra-Gr
 (1,024 counters), Greenwald-Khanna (eps = 1/51), Bloom (7 x 2^14) and KMV
 (k = 1,024), over the same AOL records (`data/aol.keys`, tracked in git, so there is
 nothing to download). zk-Analytics ships only Count-Min. **For the other five
-sketches the zk-Analytics side is our plain textbook per-record code inside their
-per-epoch RISC Zero pipeline (marked † in every table), not zk-Analytics code.**
+sketches the zk-Analytics side is our code inside their per-epoch RISC Zero pipeline
+(marked † in every table), not zk-Analytics code: plain textbook per-record HLL,
+SpaceSaving, Bloom and KMV, and for Greenwald-Khanna zkSketch's own GK algorithm.**
+GK is the one sketch where "the same sketch" leaves the algorithm open (zkSketch
+certifies a two-sided band-merge batch rule, textbook GK is per-record INSERT /
+COMPRESS rebuilt per epoch), so a run puts zkSketch's rule, with zkSketch's capacity,
+s and leaf size and the state carried from epoch to epoch, on the zk-Analytics side too
+(`scripts/baselines/zka/gk_matched`, `SIX_ZKA_GK=matched`, the default since
+2026-10-15): both sides compute the same function and return the same answer, and the GK
+comparison prices the same work. Textbook GK stays as a labelled reference
+(`SIX_ZKA_GK=textbook`; the committed 2026-10-09 rows are textbook).
 Per sketch it reports update proving (per epoch and for the whole stream), query
 proving after n = 1, 2, 4, 8 epochs, the verifier's work and bytes to accept one
 answer, peak memory, and answers vs exact. Both systems run on the same machine, one
@@ -760,7 +769,7 @@ then query proving), followed by the list of result files. With `GATE_WAIT_S=0` 
 | step | what it does | time | peak RAM | disk |
 |---|---|---|---|---|
 | `check` | tools and versions, RAM, cores, disk, dataset, builds | seconds | - | - |
-| `build` | clones zk-Analytics (5 MB); builds the 6 zk-Analytics-side drivers (their CM, which also embeds the CM `noroot` guest; our † ports, each with its `designed` / `noroot` guest) and zkSketch's `exp_compose` | about 7-8 min on the 32-core reference machine, including the first-time download of crates, the pinned forks and zk-Analytics (a cold build with an empty cargo cache took 7 min 16 s: the six zk-Analytics-side drivers 5 min 10 s, `exp_compose` 2 min 5 s); much faster when nothing changed | 1.8 GB for `exp_compose` (zk-Analytics side not measured) | ~13 GB under `$BASELINE_DIR/build`, ~0.3 GB in `target/` |
+| `build` | clones zk-Analytics (5 MB); builds the 7 zk-Analytics-side drivers (their CM, which also embeds the CM `noroot` guest; our † ports, each with its `designed` / `noroot` guest; GK twice: the matched port and the textbook reference) and zkSketch's `exp_compose` | about 7-8 min on the 32-core reference machine, including the first-time download of crates, the pinned forks and zk-Analytics (a cold build with an empty cargo cache took 7 min 16 s: the six zk-Analytics-side drivers 5 min 10 s, `exp_compose` 2 min 5 s); much faster when nothing changed | 1.8 GB for `exp_compose` (zk-Analytics side not measured) | ~13 GB under `$BASELINE_DIR/build`, ~0.3 GB in `target/` |
 | `quick` | zkSketch: 7 runs at N = 512 (2 batches of 256). zk-Analytics: executor for all six (`noroot`, plus `designed` for the Count-Min reference and the root-work table), 4 real proofs (`cm:aggr:0:noroot`, `kmv:aggr:0:noroot`, `gk:query:1:<v>`, `bloom:query:1:key:<k>`), the other 24 of 28 planned jobs ESTIMATED (their shipped Count-Min among them: 14 segments of 2^20 cycles at 256 records, about 7 min if proved) | about 9-11 min here (zkSketch 6.5-8 min, zk-Analytics executor ~10 s, the 4 proofs ~2 min) | ~9.2 GiB (one r0vm proof; zkSketch runs up to 8.5 GiB) | < 1 MB |
 | `full` | zkSketch: 7 runs at N = 16,384 (8 batches of 2,048). zk-Analytics: executor (`noroot`, plus `designed` for the reference), then 42 proofs: aggregation epochs 0 and 7 of every family as `noroot` (12), queries at n = 1, 2, 4, 8, Bloom with an inserted and an absent key (28), and their shipped Count-Min at epochs 0 and 7 as the reference (2, last) | about 3 h 15 min of running, an ESTIMATE: zkSketch's 7 runs ~30-40 min (the reference run's non-ZK build took ~10 min; the default ZK build is slower, GK alone took 14 min here, see Notes), the zk-Analytics executor ~2 min, and the 42 proofs about 2 h 35 min, from segment counts x ~30 s per segment of 2^20 cycles (the rate of the reference run): the 12 `noroot` aggregation proofs 150 segments (147 x 2^20 padded cycles), ~74 min; the 2 Count-Min reference proofs 48 segments, ~24 min (the same guest took 712 and 713 s in the 2026-10-09 reference run); the 28 queries ~58 min, as in that run. Plus the quiet-machine waits (1 h 17 min for 47 jobs in the reference run, so about 1 h 20 min for 49; see Notes). `SIX_ZKA_CM_REF=0`: 40 proofs, about 2 h 50 min in all; `SIX_ZKA_ROOTS=designed,noroot`: 52 proofs (the 12 `designed` ones add 176 segments, ~88 min), about 4 h 15 min | zkSketch GK run 59 GiB (ZK build; see Notes); r0vm ~9.2 GiB per proof; one job at a time | < 100 MB |
 
@@ -825,6 +834,8 @@ cycles, and 19-37% below for proofs of at most 2^18 (fixed overhead).
 | `GATE_MAX_LOAD`, `GATE_MAX_BUSY` | CPUs / 8 (2 below 16 CPUs), 4 | "quiet": 1-minute load <= `GATE_MAX_LOAD`, fewer than `GATE_MAX_BUSY` busy cores, and no `r0vm`, `exp_compose`, `cargo` or `rustc` of any user |
 | `SIX_ZKA_ROOTS` | `noroot` | the zk-Analytics aggregation variants executed and proved (any comma list of `designed`, `noroot`, `legacy`); `full` proves 12 aggregation jobs per variant + the 28 queries (+ 2 for the Count-Min reference): 42 at the defaults; `designed,noroot` gives the earlier 52-job plan |
 | `SIX_ZKA_CM_REF` | `1` | `1`: also prove their shipped Count-Min aggregation (`cm:aggr:0:designed`, `cm:aggr:7:designed`) as the reference, and execute `designed` for all six (executor only, cheap: the reference's cycle counts and the root-work table); skipped when `SIX_ZKA_ROOTS` already has `designed` or `legacy` (the same Count-Min guest). `0`: neither (`full`: 40 jobs) |
+| `SIX_ZKA_GK` | `matched` | the zk-Analytics side's GK: `matched` = zkSketch's GK rule in their pipeline (same algorithm both sides); `textbook` = textbook Greenwald-Khanna, the reference (needed with `SIX_ZKA_ROOTS=legacy`) |
+| `SIX_ZKA_GK_IMPL` | `fast` | implementation of the matched GK guest (`fast` = the efficient data-dependent one, the steelman; `fixed_linear`, `literal` for sensitivity; same state) |
 | `SIX_QUICK_PROVE` | `cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key` | the jobs `quick` proves for real (`jobs.py --select` selectors; `cm:aggr:0` would select every planned variant of that epoch, the reference included) |
 | `SIX_ALLOW_STALE` | unset | `1` lets `quick` / `full` use binaries older than their sources (see Notes) |
 | `TMPDIR` | `/tmp` | zkSketch's worker runs from a copy there and binds a unix socket: it must allow exec and be at most 60 characters long, else the scripts use `/tmp` |
@@ -871,7 +882,7 @@ Notes:
 - After switching the Rust toolchain, `run_all.sh build` recompiles everything next
   to the old artifacts (another ~13 GB; `check` does not notice a toolchain switch,
   and the old builds stay usable). To reclaim the space, delete the old builds first,
-  from the repository root: `rm -rf ~/ext-baselines/build/{cyc-t1,hll,zka-ss,zka-gk,zka-bloom,zka-kmv} target`
+  from the repository root: `rm -rf ~/ext-baselines/build/{cyc-t1,hll,zka-ss,zka-gk,zka-gk-matched,zka-bloom,zka-kmv} target`
   (with `BASELINE_DIR` set, use that instead of `~/ext-baselines`).
 - If cargo fails to fetch the pinned Plonky3 forks (`failed to authenticate`), retry
   with `CARGO_NET_GIT_FETCH_WITH_CLI=true scripts/baselines/zka/six/run_all.sh build`
@@ -881,7 +892,8 @@ Notes:
   0 .. SIX_CORES-1 must be allowed (`run_all.sh check` tests the latter).
 - The reference numbers in `scripts/baselines/zka/README.md` (2026-10-09) are the
   `legacy` zk-Analytics variant (CM with its roots, SS with a samples-pattern root, GK with a
-  per-tuple root, HLL / Bloom / KMV without), neither `designed` nor `noroot`; they were
+  per-tuple root, HLL / Bloom / KMV without), neither `designed` nor `noroot`, and their GK is
+  the textbook port, not zkSketch's rule; they were
   measured before zkSketch's default build became zero-knowledge; `full` measures
   the zero-knowledge build, which costs zkSketch more. At this shape it is much
   heavier for GK: one GK run of the default build here (2026-10-12, on a shared,

@@ -43,13 +43,21 @@
 #   SIX_ZKA_CM_REF 1 (default): also prove their shipped CM aggregation (cm:aggr:<0|7>:designed) as a
 #                  reference, and execute designed for all six (executor only); skipped when
 #                  SIX_ZKA_ROOTS already has designed or legacy (the same CM guest). 0: off (full: 40 jobs)
+#   SIX_ZKA_GK     matched (default) | textbook: the zk-Analytics side's GK. matched = zkSketch's own
+#                  GK rule (the two-sided band-merge apply_batch2, capacity SIX_GK_CAP, s = 51, one step
+#                  per zkSketch leaf, the state carried across epochs) inside their pipeline
+#                  (../gk_matched): the same algorithm on both sides. textbook = textbook
+#                  Greenwald-Khanna rebuilt per epoch (../gk), a different algorithm, kept as a
+#                  labelled reference; SIX_ZKA_ROOTS=legacy needs it (the committed rows are textbook)
+#   SIX_ZKA_GK_IMPL  fast (default) | fixed_linear | literal: the matched GK guest's implementation of
+#                  the one transition (same state; fast = the efficient data-dependent one, the steelman)
 #   SIX_QUICK_PROVE  quick: the jobs proved for real, as jobs.py --select selectors
 #                  (default cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key: CM and
 #                  KMV noroot at epoch 0, the GK query and the Bloom absent-key query at n = 1)
 #   SIX_ALLOW_STALE=1  let quick/full use binaries older than their sources (refused by default;
 #                  `run_all.sh build` refreshes them)
-# quick and full use fixed run shapes: SIX_M, SIX_T, SIX_N, SIX_GK_CAP and SIX_QNS are ignored
-# here (they apply to the individual six/*.sh scripts).
+# quick and full use fixed run shapes: SIX_M, SIX_T, SIX_N, SIX_GK_CAP, SIX_GK_MSUB and SIX_QNS are
+# ignored here (they apply to the individual six/*.sh scripts).
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZKS="$(cd "$HERE6/../../../.." && pwd)"
@@ -62,7 +70,7 @@ KEYS=$ZKS/data/aol.keys
 KEYS_MD5=01dd7d5c8a73
 EB=$BASELINE_DIR/build
 ZKA_BINS=("$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-ss/release/ss" "$EB/zka-gk/release/gk"
-          "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv")
+          "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv" "$EB/zka-gk-matched/release/gk_matched")
 ZKS_BIN=$ZKS/target/release/examples/exp_compose
 TAGS=(cm hll ss gk bloom bloom_absent kmv)
 QUICK_PROVE_DEFAULT=cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key
@@ -75,6 +83,12 @@ roots_ok() {  # roots_ok <list>: a comma list of distinct designed|noroot|legacy
 }
 cm_ref_on() {  # cm_ref_on <roots> <cm_ref>: their shipped CM is planned as a reference
   [[ $2 == 1 && ,$1, != *,designed,* && ,$1, != *,legacy,* ]]
+}
+gk_knobs_ok() {  # gk_knobs_ok <zka_gk> <impl> <roots>: "" if fine, else why not
+  case $1 in matched|textbook) ;; *) echo "SIX_ZKA_GK=$1: matched or textbook"; return ;; esac
+  [[ $2 =~ ^(fast|fixed_linear|literal)$ ]] || { echo "SIX_ZKA_GK_IMPL=$2: fast, fixed_linear or literal"; return; }
+  [[ $1 == textbook || ,$3, != *,legacy,* ]] ||
+    echo "SIX_ZKA_ROOTS=$3 has legacy (the committed 2026-10-09 guests, whose GK is the textbook port): set SIX_ZKA_GK=textbook with it"
 }
 plan_counts() {  # plan_counts <roots> <cm_ref>: "<total> <aggregation> <reference>" jobs of full
   local nr na nref=0
@@ -221,8 +235,8 @@ check_repo() {
   else info "zk-Analytics not fetched yet ($BASELINE_DIR/zka): run_all.sh build fetches it"; fi
   local b nb=0
   for b in "${ZKA_BINS[@]}"; do [[ -x $b ]] && nb=$((nb + 1)); done
-  if (( nb == ${#ZKA_BINS[@]} )); then ok "zk-Analytics side built (6 drivers under $EB)"
-  else info "zk-Analytics side: $nb of 6 drivers built under $EB -- run_all.sh build"; fi
+  if (( nb == ${#ZKA_BINS[@]} )); then ok "zk-Analytics side built (${#ZKA_BINS[@]} drivers under $EB: their CM, our 5 ports, and GK twice: matched + textbook)"
+  else info "zk-Analytics side: $nb of ${#ZKA_BINS[@]} drivers built under $EB -- run_all.sh build"; fi
   for b in $(no_root_bins); do warn "$b was built before the root variants (no --root) -- run_all.sh build (quick/full refuse it)"; done
   local roots=${SIX_ZKA_ROOTS:-noroot} cmref=${SIX_ZKA_CM_REF:-1} pc
   if ! roots_ok "$roots"; then
@@ -233,6 +247,11 @@ check_repo() {
     read -r -a pc <<< "$(plan_counts "$roots" "$cmref")"
     info "zk-Analytics aggregation root variants: SIX_ZKA_ROOTS=$roots, SIX_ZKA_CM_REF=$cmref (full proves ${pc[1]} aggregation + 28 query$( (( pc[2] )) && echo " + ${pc[2]} CM reference (their shipped CM)") = ${pc[0]} jobs)"
   fi
+  local zgk=${SIX_ZKA_GK:-matched} zgi=${SIX_ZKA_GK_IMPL:-fast} why
+  why=$(gk_knobs_ok "$zgk" "$zgi" "$roots")
+  if [[ -n $why ]]; then miss "$why" "unset SIX_ZKA_GK / SIX_ZKA_GK_IMPL (defaults matched / fast)"
+  elif [[ $zgk == matched ]]; then info "zk-Analytics GK: SIX_ZKA_GK=matched, zkSketch's GK rule in their pipeline (the same algorithm on both sides), implementation $zgi"
+  else info "zk-Analytics GK: SIX_ZKA_GK=textbook, textbook Greenwald-Khanna (NOT zkSketch's algorithm: a reference)"; fi
   if [[ -x $ZKS_BIN ]]; then ok "zkSketch exp_compose built ($ZKS_BIN)"; else info "zkSketch exp_compose not built yet -- run_all.sh build"; fi
   for b in $(stale_builds); do warn "$b is older than its sources -- run_all.sh build refreshes it (quick/full refuse stale builds)"; done
   local v dropped=()
@@ -257,7 +276,7 @@ stale_builds() {
   local z=$ZKS/scripts/baselines/zka i src bin
   local -a pairs=("$z/cyc" "${ZKA_BINS[0]}" "$z/cm_noroot" "${ZKA_BINS[0]}" "$z/hll" "${ZKA_BINS[1]}"
                   "$z/spacesaving" "${ZKA_BINS[2]}" "$z/gk" "${ZKA_BINS[3]}" "$z/bloom" "${ZKA_BINS[4]}"
-                  "$z/kmv" "${ZKA_BINS[5]}")
+                  "$z/kmv" "${ZKA_BINS[5]}" "$z/gk_matched" "${ZKA_BINS[6]}" "$z/gk_bm2/core" "${ZKA_BINS[6]}")
   for ((i = 0; i < ${#pairs[@]}; i += 2)); do
     src=${pairs[i]}; bin=${pairs[i + 1]}
     [[ -x $bin ]] || continue
@@ -313,6 +332,11 @@ write_manifest() {  # write_manifest <mode>
     echo "started=$(date -Is)"
     echo "N=$SIX_N M=$SIX_M T=$SIX_T gk_cap=$SIX_GK_CAP query_points=$SIX_QNS aggr_epochs=0,$((SIX_T - 1)) cores=$SIX_CORES"
     echo "zka_roots=$SIX_ZKA_ROOTS (aggregation root variants executed and planned) zka_cm_ref=$SIX_ZKA_CM_REF ($(if cm_ref_on "$SIX_ZKA_ROOTS" "$SIX_ZKA_CM_REF"; then echo "their shipped CM planned as a reference; designed also executed"; else echo "no separate CM reference"; fi))"
+    if [[ $SIX_ZKA_GK == matched ]]; then
+      echo "zka_gk=matched (zkSketch's GK rule in their pipeline: capacity $SIX_GK_CAP, s 51, m_sub $SIX_M = 1 apply_batch2 step per epoch, implementation $SIX_ZKA_GK_IMPL)"
+    else
+      echo "zka_gk=textbook (textbook Greenwald-Khanna, NOT zkSketch's algorithm: a reference)"
+    fi
     local ncpu; ncpu=$(grep -c '^cpu[0-9]' /proc/stat)   # gate.sh's default GATE_MAX_LOAD
     echo "verify_repeats=${EXP_VERIFY_REPEATS:-5} gate: GATE_WAIT_S=${GATE_WAIT_S:-1800} GATE_MAX_LOAD=${GATE_MAX_LOAD:-$(( ncpu >= 16 ? ncpu / 8 : 2 ))} GATE_MAX_BUSY=${GATE_MAX_BUSY:-4}"
     echo "zksketch=$(git -C "$ZKS" rev-parse HEAD 2>/dev/null) changed_files=$(git -C "$ZKS" status --porcelain 2>/dev/null | wc -l) checkout=$ZKS"
@@ -378,7 +402,8 @@ summary() {  # summary <mode> <rc>
 
 load_shape() {  # load_shape <mode>: export the run shape for the child scripts
   local v given=()
-  for v in SIX_M SIX_T SIX_N SIX_GK_CAP SIX_QNS; do [[ -n ${!v:-} ]] && given+=("$v=${!v}"); done
+  for v in SIX_M SIX_T SIX_N SIX_GK_CAP SIX_GK_MSUB SIX_QNS; do [[ -n ${!v:-} ]] && given+=("$v=${!v}"); done
+  unset SIX_GK_MSUB   # = SIX_M (six_common.sh): one zkSketch leaf per epoch in both fixed shapes
   if (( ${#given[@]} )); then
     echo "note: run_all.sh $1 uses its fixed run shape; ignoring ${given[*]} (those apply to the individual six/*.sh scripts)" >&2
   fi
@@ -393,6 +418,9 @@ load_shape() {  # load_shape <mode>: export the run shape for the child scripts
   export SIX_ZKA_ROOTS=${SIX_ZKA_ROOTS:-noroot} SIX_ZKA_CM_REF=${SIX_ZKA_CM_REF:-1}
   roots_ok "$SIX_ZKA_ROOTS" || die "SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS must be a comma list of distinct designed, noroot, legacy"
   [[ $SIX_ZKA_CM_REF == [01] ]] || die "SIX_ZKA_CM_REF=$SIX_ZKA_CM_REF must be 0 or 1"
+  export SIX_ZKA_GK=${SIX_ZKA_GK:-matched} SIX_ZKA_GK_IMPL=${SIX_ZKA_GK_IMPL:-fast}
+  local why; why=$(gk_knobs_ok "$SIX_ZKA_GK" "$SIX_ZKA_GK_IMPL" "$SIX_ZKA_ROOTS")
+  [[ -z $why ]] || die "$why"
   EXEC_ROOTS=$SIX_ZKA_ROOTS
   if cm_ref_on "$SIX_ZKA_ROOTS" "$SIX_ZKA_CM_REF"; then EXEC_ROOTS+=,designed; fi
   export SIX_ZKS_PREFIX=six_zksketch SIX_ZKA_PREFIX=six_zka
@@ -469,6 +497,7 @@ cmd_full() {
 full run plan (dry run; nothing is executed)
   RESULTS=${RESULTS:-$ZKS/results/six/full-<YYYYmmdd-HHMMSS>}  BASELINE_DIR=$BASELINE_DIR
   shape: N=$SIX_N = T=$SIX_T x M=$SIX_M, GK cap $SIX_GK_CAP, zkSketch cores $SIX_CORES, gate wait <= ${GATE_WAIT_S}s per timed job
+  zk-Analytics GK: SIX_ZKA_GK=$SIX_ZKA_GK$( [[ $SIX_ZKA_GK == matched ]] && echo " (zkSketch's GK rule in their pipeline, capacity $SIX_GK_CAP, one apply_batch2 step per $SIX_M-record epoch, implementation $SIX_ZKA_GK_IMPL)" || echo " (textbook Greenwald-Khanna: a reference, not zkSketch's algorithm)")
   1. zkSketch, 7 timed runs:   SIX_M=$SIX_M SIX_T=$SIX_T SIX_GK_CAP=$SIX_GK_CAP SIX_CORES=$SIX_CORES $HERE6/run_zks.sh ${TAGS[*]}
   2. zk-Analytics executor:    SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS SIX_ZKA_CM_REF=$SIX_ZKA_CM_REF $HERE6/run_zka.sh exec
                                (aggregation epochs 0..$((SIX_T - 1)) of all six under root variants $EXEC_ROOTS;

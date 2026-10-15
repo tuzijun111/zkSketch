@@ -2,6 +2,10 @@
 # zk-Analytics side of the six-sketch comparison (their CM + our ports of HLL, SS, GK,
 # Bloom, KMV in their per-epoch architecture), AOL, SIX_T epochs x SIX_M records, batches of 8
 # (paper configuration, the defaults: 8 epochs x 2,048 records).
+# GK (SIX_ZKA_GK, six_common.sh): matched (default) = ../gk_matched, zkSketch's GK rule in their
+# pipeline (state carried from epoch to epoch; --capacity SIX_GK_CAP --m-sub SIX_GK_MSUB --s 51
+# --impl SIX_ZKA_GK_IMPL; root variants designed / noroot / pertuple, no legacy); textbook =
+# ../gk, textbook Greenwald-Khanna, the labelled reference (and the committed 2026-10-09 rows).
 #
 #   run_zka.sh exec             executor only: aggregation epochs 0..T-1 of every family, once per
 #                               root variant of SIX_ZKA_ROOTS (default noroot), plus designed when
@@ -16,7 +20,8 @@
 #                               job = <fam>:aggr:<epoch>[:<variant>] | <fam>:query:<n>[:<arg>]
 #                               variant = designed | noroot | legacy (also ss: buckets1024, perkey;
 #                               gk: pertuple), passed to the driver as --root; omitted = legacy (the
-#                               guests of the committed 2026-10-09 run, the drivers' default).
+#                               guests of the committed 2026-10-09 run, the drivers' default; the
+#                               matched GK has no legacy guest: its jobs need a variant).
 #                               Query proofs take no variant (query guests read no root).
 #                               (gk query arg = rank value; bloom query arg = first|key:<u32>)
 #                               `jobs.py` prints the job list (42 jobs at the defaults).
@@ -61,6 +66,8 @@ declare -A BIN=(
   [bloom]=$EB/zka-bloom/release/bloom
   [kmv]=$EB/zka-kmv/release/kmv
 )
+# the zk-Analytics GK of this run: the matched port by default (six_common.sh, SIX_ZKA_GK)
+[[ $SIX_ZKA_GK == matched ]] && BIN[gk]=$EB/zka-gk-matched/release/gk_matched
 for f in "${!BIN[@]}"; do [[ -x ${BIN[$f]} ]] || six_die "missing ${BIN[$f]} -- run scripts/baselines/zka/six/build.sh zka (BASELINE_DIR=$BASELINE_DIR)"; done
 [[ -s $KEYS ]] || six_die "missing $KEYS (it is tracked in git; re-checkout data/aol.keys)"
 
@@ -81,6 +88,7 @@ provenance() {
   echo "# $1 $(date -Is) host=$(hostname) nproc=$(nproc) load=[$(cut -d' ' -f1-3 /proc/loadavg)]"
   echo "# zka=$(git -C "$ZKA" rev-parse --short=12 HEAD) r0vm=$(r0vm --version 2>/dev/null) keys md5=$(md5sum < "$KEYS" | cut -c1-12) M=$M T=$T"
   echo "# zkSketch=$(git -C "$WT" rev-parse --short=9 HEAD) dirty_files=$(git -C "$WT" status --porcelain | wc -l) build_dir=$EB"
+  echo "# $(six_gk_desc) gk_driver=${BIN[gk]}"
   elf_md5s
 }
 
@@ -90,6 +98,9 @@ common() {
     cm)    COMMON=(--family cm --epoch-size "$M" --batch 8 --keys "$KEYS") ;;
     ss)    COMMON=(--capacity 1024 --epoch-size "$M" --batch 8 --keys "$KEYS") ;;
     bloom) COMMON=(--epoch-size "$M" --batch 8 --keys "$KEYS" --absent 10000) ;;
+    gk)    COMMON=(--epoch-size "$M" --batch 8 --keys "$KEYS")
+           [[ $SIX_ZKA_GK == matched ]] &&
+             COMMON+=(--capacity "$SIX_GK_CAP" --m-sub "$SIX_GK_MSUB" --s 51 --impl "$SIX_ZKA_GK_IMPL") ;;
     *)     COMMON=(--epoch-size "$M" --batch 8 --keys "$KEYS") ;;
   esac
 }
@@ -97,7 +108,8 @@ common() {
 # root_ok <fam> <variant>: a --root value the family's aggregation driver can prove
 root_ok() {
   case $2 in
-    designed|noroot|legacy) return 0 ;;
+    legacy) [[ $1 != gk || $SIX_ZKA_GK == textbook ]] ;;   # the matched GK has no legacy guest
+    designed|noroot) return 0 ;;
     buckets1024|perkey) [[ $1 == ss ]] ;;
     pertuple) [[ $1 == gk ]] ;;
     *) return 1 ;;
@@ -125,7 +137,7 @@ job_args() {
     *) return 1 ;;
   esac
 }
-check_jobs() { local j; for j in "$@"; do job_args "$j" || six_die "bad job '$j' (fam:aggr:<epoch 0..$((T-1))>[:designed|noroot|legacy; ss also buckets1024|perkey, gk also pertuple] | fam:query:<n 1..$T>, no variant; gk:query:<n>:<rank value>, bloom:query:<n>[:first|key:<k>])"; done; }
+check_jobs() { local j; for j in "$@"; do job_args "$j" || six_die "bad job '$j' (fam:aggr:<epoch 0..$((T-1))>[:designed|noroot|legacy; ss also buckets1024|perkey, gk also pertuple; the matched gk (SIX_ZKA_GK=matched) has no legacy, so its aggregation jobs name designed|noroot|pertuple] | fam:query:<n 1..$T>, no variant; gk:query:<n>:<rank value>, bloom:query:<n>[:first|key:<k>])"; done; }
 
 NFAIL=0
 failed() {  # failed <what>

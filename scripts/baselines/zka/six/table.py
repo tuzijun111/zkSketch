@@ -31,7 +31,13 @@ construction and executor cycles.
 The committed 2026-10-09 set is the `legacy` variant (CM their shipped roots, SS samples
 pattern with 64 buckets, GK per-tuple root, HLL / Bloom / KMV none). For it the tables of
 the previous version are printed unchanged; added are the variant note at the top, the
-"Update proofs side by side" table and the root-variant table at the end.
+"Update proofs side by side" table and the root-variant table at the end, and the GK label.
+
+GK: the zk-Analytics GK rows of a run with SIX_ZKA_GK=matched (the default since 2026-10-15)
+run zkSketch's own GK batch rule in their pipeline (assemble.py names their system '... zkSketch
+GK rule'): the GK row is labelled "same rule both sides" and a line under the run line gives
+the configuration. Otherwise (the committed set, SIX_ZKA_GK=textbook) the zk-Analytics GK is
+textbook Greenwald-Khanna, a different algorithm: the row is labelled "zkA: textbook GK".
 """
 import argparse
 import csv
@@ -55,6 +61,11 @@ FAMS = ['cm', 'hll', 'ss', 'gk', 'bloom', 'kmv']
 NAME = {'cm': 'Count-Min 3x1024', 'hll': 'HLL b=14 † ‡', 'ss': 'SS / MG s=1,024 † §', 'gk': 'GK eps=1/51 †',
         'bloom': 'Bloom 7x2^14 †', 'kmv': 'KMV k=1,024 †'}
 LEGACY = any((r['system'], r['run']) == ('zkSketch', 'r2') for r in rows)
+# GK: zkSketch's own rule on the zk-Analytics side (the matched port) or textbook GK (a reference)
+GK_ROWS = [r for r in rows if r['family'] == 'gk' and r['system'].startswith('zk-Analytics')]
+GK_MATCHED = any('zkSketch GK rule' in r['system'] for r in GK_ROWS)
+NAME['gk'] = 'GK eps=1/51 † (same rule both sides)' if GK_MATCHED else 'GK eps=1/51 † (zkA: textbook GK)'
+GK_NOTE = next((r['note'] for r in GK_ROWS if r.get('note')), '')
 if LEGACY:
     ZKS = ('zkSketch', 'r2')
 else:
@@ -219,6 +230,12 @@ if not LEGACY:
         print(f'_`est` = ESTIMATED zk-Analytics prove time, NOT proved in this run: {est[0]}. Verify time and bytes '
               f'of an estimated receipt are the mean of the measured ones; ratios built on an estimate are marked '
               f'too._\n')
+    if GK_ROWS:
+        print(f'_GK, zk-Analytics side: {GK_NOTE or ("textbook Greenwald-Khanna, not zkSketch" + chr(39) + "s algorithm")}._\n')
+else:
+    print("_GK, zk-Analytics side of this set: textbook Greenwald-Khanna (scripts/baselines/zka/gk), NOT zkSketch's "
+          "GK rule; since 2026-10-15 the comparison runs zkSketch's own rule on that side (scripts/baselines/zka/"
+          "gk_matched, SIX_ZKA_GK=matched)._\n")
 
 # ------------------------------------------------------------------ raw executor / profile CSVs (zk-Analytics side)
 RD = A.raw or os.path.dirname(os.path.abspath(A.csv))
@@ -256,6 +273,11 @@ def phase_split(fam, var):
             return int(r['user_cycles']), int(ph['read']), int(ph['chain']), 'measured (profiling marks)'
         return None
     sp = None
+    if fam == 'gk':  # the matched GK guest carries its own profiling marks (prof column)
+        r = exec_e0(fam, var)
+        if r is not None and '=' in r.get('prof', ''):
+            ph = dict(kv.split('=') for kv in r['prof'].split(';'))
+            return int(r['user_cycles']), int(ph['read']), int(ph['chain']), 'measured (profiling marks)'
     if fam == 'ss':
         for r in rd(f'{ZP}_prof_ss.csv'):
             if r['mode'] == 'aggr' and r['epoch_index'] == '0':

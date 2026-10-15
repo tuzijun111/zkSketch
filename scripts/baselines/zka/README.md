@@ -26,8 +26,8 @@ scripts write to `results/six/` at the repository root, never into `results/` he
 | `RESULTS` | `results/` next to the scripts | where CSVs and logs are written (`six/` scripts: `<repo>/results/six/...`; they refuse a directory holding tracked files) |
 | `CM_TOPK_SLOTS` | per script | zk-Analytics top-k heap slots, a build-time constant |
 
-`ourcm/`, `zksq/`, `ss_mg/` and `gk_bm2/` build against the zkSketch checkout
-they sit in, so a worktree measures its own sources.
+`ourcm/`, `zksq/`, `ss_mg/`, `gk_bm2/` and `gk_matched/` build against the zkSketch
+checkout they sit in, so a worktree measures its own sources.
 
 | Script | Proves | Writes to `$RESULTS` | Measures |
 |---|---|---|---|
@@ -45,7 +45,8 @@ they sit in, so a worktree measures its own sources.
 | `kmv/run_exec.sh` | no (`PROVE=1`: yes) | `zka_kmv_exec.csv` (`PROVE=1`: `zka_kmv_prove.csv`) + `.log` | OUR KMV / bottom-k guests (†) in their architecture: per-epoch aggregation and query-time bottom-k union, plus the `kmv_query_words` sensitivity (see "Bloom filter and KMV guests") |
 | `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 | `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
-| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~9-11 min, `full` ~3 h 15 min (estimate) plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †) at 8 x 2,048 AOL records: update proving per epoch (zk-Analytics `noroot`, the headline; their shipped CM as a reference), query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
+| `gk_matched/gk_matched_check.sh` | no (`CERTIFY=1`: zkSketch's GK leaf and decoder proofs) | `zka_gk_matched_{check,aggr,certify}.csv` + `zka_gk_matched_check.log` | zkSketch's GK rule inside zk-Analytics' pipeline (the six-sketch GK default): equivalence with zkSketch's native chain, its leaf circuit and its decoder at configs (384, 128) and (768, 512) (see "GK with zkSketch's algorithm in their pipeline") |
+| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~9-11 min, `full` ~3 h 15 min (estimate) plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †; GK = zkSketch's own GK rule in their pipeline, `gk_matched/`) at 8 x 2,048 AOL records: update proving per epoch (zk-Analytics `noroot`, the headline; their shipped CM as a reference), query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -66,8 +67,8 @@ Don't run them next to another job of yours.
   `aggr_cm_noroot` and the validation twin `aggr_cm_twin`, with a lock derived from
   `hll/guests/Cargo.lock`. See "Root variants" under "Six-sketch comparison".
 - Other build locations: `build/ourcm`, `build/zksq`, `build/shaccel`,
-  `build/zka-ss-mg`, `build/zka-gk-bm2`, `build/zka-bloom` and `build/zka-kmv`
-  under `$BASELINE_DIR`;
+  `build/zka-ss-mg`, `build/zka-gk-bm2`, `build/zka-gk-matched`, `build/zka-bloom`
+  and `build/zka-kmv` under `$BASELINE_DIR`;
   `nb-target-<T>` (`accuracy.sh native`) and `zka/target` (`a234.sh`,
   `compare.sh`) inside the clone's directory. `compare.sh` S1/S2 and
   `our_query.sh` Q1 build zkSketch's `exp_compose` in this checkout's `target/`.
@@ -780,10 +781,17 @@ accuracy checks. Rows: `results/zka_{bloom,kmv}_validation.csv` (26 and 18 rows,
 
 zkSketch against zk-Analytics (Zhu et al., SIGCOMM '26; RISC Zero zkVM; clone at
 `d4a5a9a`) on six sketches, on one small, identical workload. zk-Analytics ships only
-Count-Min. **For HLL, SpaceSaving, GK, Bloom and KMV the zk-Analytics side is our
+Count-Min. **For HLL, SpaceSaving, Bloom and KMV the zk-Analytics side is our
 plain textbook per-record code in their per-epoch pipeline with query-time merge
-(the ports above, marked †), not zk-Analytics code.** The matched-rule guests
-(`ss_mg/`, `gk_bm2/`) are not used here.
+(the ports above, marked †), not zk-Analytics code. For GK it is zkSketch's own GK
+algorithm in their pipeline (`gk_matched/`, †; since 2026-10-15, `SIX_ZKA_GK=matched`,
+the default):** both sides then run the same function, zkSketch's two-sided band-merge
+batch rule with zkSketch's capacity, s and leaf size, the state carried from epoch to
+epoch, so the GK comparison prices the same work. Textbook GK (`gk/`, a summary rebuilt
+per epoch plus a query-time merge, a different algorithm) stays as a labelled reference
+(`SIX_ZKA_GK=textbook`); the committed 2026-10-09 rows below are textbook. See "GK with
+zkSketch's algorithm in their pipeline". The other matched-rule guests (`ss_mg/`,
+`gk_bm2/`) are not used here (`gk_matched/` reuses `gk_bm2/`'s transition code).
 
 > **Zero knowledge.** RISC Zero succinct receipts are zero-knowledge. zkSketch now
 > builds with zero knowledge ON by default (Cargo feature `zk`, default since
@@ -831,7 +839,7 @@ plain textbook per-record code in their per-epoch pipeline with query-time merge
   | Count-Min | their `aggr_cm` / `querier-guest-cm`, 3 x 1024, `CM_TOPK_SLOTS=1` | `cm` (omc leaf), `EXP_D=3 EXP_W=1024` | point count of the heaviest key of the queried prefix (their `Estimate` target rule; zkSketch `EXP_QUERY_KEY_MODE=hot`; ties to the smaller key on both sides; the same key on both sides at each n: 3,011,223,745 for n <= 5, 3,780,053,395 for n >= 6) |
   | HyperLogLog | `hll/` †, b = 14 | `hll` (omc), `EXP_HLL_B=14` | cardinality |
   | SpaceSaving / Misra-Gries | `spacesaving/` †, SpaceSaving s = 1,024 per epoch, sum-and-truncate merge | `ss` (certified MG), `EXP_SS_CAP=1024` (MG with s counters ~ SpaceSaving with s+1) | top-1: theirs `topk --limit 1` (key, count, error); ours the top-1 mass (`c = 1`, count only, no key). This is the closest pair the two query sets allow |
-  | Greenwald-Khanna | `gk/` †, eps = 1/51, COMPRESS every 25 records | `gk` (band-merge), `EXP_GK_CAP=2048 EXP_GK_S=51` | rank of the same value on both sides: the most frequent 21-bit value of the prefix (zkSketch `EXP_QUERY_KEY_MODE=hot`; 1,810,625 for n <= 5, 985,491 for n >= 6), passed to theirs as `--rank-value` |
+  | Greenwald-Khanna | `gk_matched/` † (default, `SIX_ZKA_GK=matched`): zkSketch's band-merge rule, `--capacity $SIX_GK_CAP --s 51 --m-sub $SIX_GK_MSUB` (= 2048 / 51 / 2048: one `apply_batch2` step per epoch), state carried across epochs, guest implementation `fast`. Reference (`SIX_ZKA_GK=textbook`, and the committed rows): `gk/` †, textbook GK, eps = 1/51, COMPRESS every 25 records | `gk` (band-merge), `EXP_GK_CAP=2048 EXP_GK_S=51` | rank of the same value on both sides: the most frequent 21-bit value of the prefix (zkSketch `EXP_QUERY_KEY_MODE=hot`; 1,810,625 for n <= 5, 985,491 for n >= 6), passed to theirs as `--rank-value`; the matched port answers with zkSketch's decoder estimator on the latest state |
   | Bloom (partitioned) | `bloom/` †, k = 7 x W = 2^14 | `bloom`, `EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14` | membership of the same two keys per n: an inserted key (the first record of batch n; zkSketch `first`, theirs `--probe first`) and an absent key (zkSketch `EXP_QUERY_KEY_MODE=absent`, a second zkSketch run; the key it drew is passed to theirs as `--probe key:<k>`) |
   | KMV / bottom-k | `kmv/` †, k = 1,024, 64-bit hash | `kmv`, `EXP_KMV_K=1024`, 27-bit hash | distinct count |
 
@@ -944,6 +952,12 @@ byte-identical to the previous build. The cell -> bucket map, per family:
 | HLL | 2^14 one-byte registers (array) | fixed partition: register i -> i / 256 (64 contiguous groups of 256) | the 256 register bytes in index order |
 | Bloom | 3,584 32-bit filter words = 14,336 bytes (array) | fixed partition: byte i -> i / 224 (64 contiguous groups of 56 words, 1,792 bits) | the 224 bytes in index order |
 | GK | the n tuples of the value-ordered summary (array) | fixed partition: tuple i -> i * 64 / n | the group's tuples (v, g, delta, big-endian) in index order |
+| GK, matched (`gk_matched/`, the default since 2026-10-15) | the k active tuples of zkSketch's state (array) | fixed partition: tuple i -> i * 64 / k | the group's tuples (e, g, g°, Delta, Delta°, t, big-endian) in index order |
+
+The matched GK guest `aggr_gkm` has `designed`, `noroot` and `pertuple` (one guest, the
+variant read before the input, as `aggr_gk_root`) and **no `legacy`**: `legacy` is the
+committed textbook-GK guest, so `SIX_ZKA_ROOTS` with `legacy` needs `SIX_ZKA_GK=textbook`
+(`six_common.sh` and `run_all.sh` refuse the combination).
 
 Leaves are tagged `ZKA_PORT_<FAM>_BUCKET_V1` (ours; cf. their `TAG_BUCKET_LEAF`). Query
 guests read no root, so query proofs do not depend on the variant (the drivers refuse
@@ -1073,7 +1087,22 @@ scripts/baselines/zka/six/run_all.sh quick   # smoke test of the whole pipeline 
 scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~3 h 15 min (estimate) + gate waits
 scripts/baselines/zka/six/run_all.sh full --dry-run   # the plan and the 42 jobs, nothing run
 SIX_ZKA_ROOTS=designed,noroot scripts/baselines/zka/six/run_all.sh full   # the earlier two-variant plan, 52 jobs
+SIX_ZKA_GK=textbook scripts/baselines/zka/six/run_all.sh full   # textbook GK on the zk-Analytics side (the reference)
 ```
+
+GK on the zk-Analytics side (`six_common.sh`): `SIX_ZKA_GK=matched` (default) runs
+`gk_matched/` with zkSketch's capacity `SIX_GK_CAP`, s = 51 and leaf size `SIX_GK_MSUB`
+(default `SIX_M`: one `apply_batch2` step per epoch, as zkSketch's `SIX_M`-record leaves),
+implementation `SIX_ZKA_GK_IMPL` (`fast`, the default; `fixed_linear`, `literal` for
+sensitivity); `SIX_ZKA_GK=textbook` runs `gk/`. To match a zkSketch GK run with smaller
+leaves than the zk-Analytics epoch (a memory-matched forest), run the two sides separately
+with the same capacity, e.g. zkSketch `SIX_M=128 SIX_T=16 SIX_GK_CAP=384 run_zks.sh gk` and
+zk-Analytics `SIX_M=2048 SIX_T=1 SIX_GK_CAP=384 SIX_GK_MSUB=128 run_zka.sh exec`
+(`run_zks.sh` always uses `SIX_M` as its leaf size, and `assemble.py` wants one `(M, T)`).
+`assemble.py` names the matched rows' system `zk-Analytics arch. (port †, zkSketch GK
+rule)`, puts the configuration in their `note` and warns when it differs from the zkSketch
+GK CSV's capacity, s or leaf size; `table.py` labels the GK row "same rule both sides"
+(textbook: "zkA: textbook GK").
 
 Every `quick` / `full` writes a fresh `results/six/<mode>-<YYYYmmdd-HHMMSS>/` at the
 repository root (git-ignored; `RESULTS=...` to choose; never this directory):
@@ -1106,7 +1135,8 @@ scripts/baselines/zka/six/build.sh          # both sides, not timed; exits 1 if 
 scripts/baselines/zka/six/run_zks.sh        # zkSketch, 7 timed runs: cm hll ss gk bloom bloom_absent kmv
 scripts/baselines/zka/six/run_zka.sh exec   # zk-Analytics executor: all 8 aggregation epochs of every family,
                                             # noroot (SIX_ZKA_ROOTS, default noroot) + designed (SIX_ZKA_CM_REF=1)
-scripts/baselines/zka/six/prof_exec.sh      # executor only: SS / GK guest phase profile (legacy profiling twins)
+scripts/baselines/zka/six/prof_exec.sh      # executor only: SS (and textbook-GK) guest phase profile (legacy profiling
+                                            # twins); the matched GK carries its profile in its exec rows
 # the 42 zk-Analytics jobs (--roots noroot --cm-ref 1 are the defaults); the GK rank values and Bloom
 # absent keys are read from this run's zkSketch logs (QLOG_KEY lines) and cross-checked
 # against a native re-derivation:
@@ -1439,9 +1469,11 @@ zkS = zkSketch. Ratios are zkA / zkS.
     SpaceSaving with s + 1.
   - *GK.* Same value domain on both sides (`key & 0x1FFFFF`, 21 bits) and the same
     rank value. Ours is the two-sided band-merge summary (s = 51, capacity 2,048)
-    and releases the bracket midpoint; theirs is per-epoch textbook GK
-    (eps = 1/51) combined at query time and releases an estimate with certified
-    bounds.
+    and releases the bracket midpoint; theirs, in these committed rows, is per-epoch
+    textbook GK (eps = 1/51) combined at query time and releases an estimate with
+    certified bounds: a different algorithm. Since 2026-10-15 a `six/run_all.sh` run
+    puts zkSketch's own rule on their side instead (`gk_matched/`), and both sides
+    then return the same answer (see "GK with zkSketch's algorithm in their pipeline").
   - *Bloom.* Same partitioned shape (7 x 2^14 bits); different hash functions and
     seeds (theirs FNV-1a + splitmix64 with their 3 CM seeds and 4 constants of ours;
     ours Poseidon2 routing), so false-positive sets differ. Both answered all 8 probes
@@ -1449,8 +1481,9 @@ zkS = zkSketch. Ratios are zkA / zkS.
   - *KMV.* k = 1,024 on both sides; hash width 27 bits (ours, Poseidon2) vs 64 bits
     (theirs), so estimates differ by the hash draw (std err ~ 1/sqrt(k-2) = 3.1%).
 - **† ports are ours.** zk-Analytics ships only Count-Min. The HLL, SS, GK, Bloom and
-  KMV rows on their side are our textbook per-record code in their per-epoch
-  pipeline, not zk-Analytics code (see the sections above). The GK driver's query
+  KMV rows on their side are our code in their per-epoch pipeline, not zk-Analytics
+  code (see the sections above): textbook per-record algorithms, except GK in a run
+  with `SIX_ZKA_GK=matched` (the default since 2026-10-15), which is zkSketch's GK rule. The GK driver's query
   `--prove` path was added for this comparison (`gk/host/src/main.rs`; the proved
   journal is asserted equal to the native output, as for aggregation).
 - **Build provenance.** zk-Analytics-side binaries were built with the commands of
@@ -1895,3 +1928,97 @@ commit and transition are guest probes in **user cycles**:
 - **Not hiding, not a pipeline.** The commitments are unsalted. Each run is one
   transition: linking `Com_new` to the next `Com_old`, verifying receipts and
   answering queries are not measured.
+
+## GK with zkSketch's algorithm in their pipeline (`gk_matched/`, ours †): the six-sketch GK default
+
+**Why.** For a fair comparison both systems must run the same GK *algorithm*, not two
+different summaries with the same eps. `gk/` (textbook Greenwald-Khanna: per-record
+INSERT / band COMPRESS, a summary rebuilt every epoch, a k-way COMBINE at query time) is a
+different function from the one zkSketch certifies, and `gk_bm2/` runs zkSketch's function
+but outside their pipeline (no Event batches, no batch chain, no epoch link). `gk_matched/`
+is both at once: zk-Analytics' aggregation and query pipeline, step for step as the other
+ports, with zkSketch's GK batch rule as the summary update. Since 2026-10-15 it is the
+zk-Analytics GK of `six/` (`SIX_ZKA_GK=matched`, the default); `gk/` is the labelled
+reference (`SIX_ZKA_GK=textbook`). Full detail: `gk_matched/README.md`.
+
+### What is the same, what is theirs, what is ours
+
+| | zkSketch (`exp_compose`, GK forest) | zk-Analytics side (`gk_matched/`) |
+|---|---|---|
+| records | AOL `key & 0x1FFFFF`, B per paper batch | the same records, B per epoch, as their Events (`key_id`, `value`, `ts`), batches of 8 |
+| GK function | `apply_batch2` once per m_sub-record leaf, from the previous leaf's state (`GkbParams { capacity, m_sub, s = 51 }`) | the same `apply_batch2` chain: B / m_sub steps per epoch from the carried state (`gk_bm2/core`, unchanged) |
+| state carried | leaf boundary commitments, chained by the forest | `state_commit` in their epoch chain link; the next epoch's guest checks its input state against it |
+| capacity overflow | the leaf circuit refuses to prove | the guest panics (no receipt); the driver exits 3 first |
+| query | decoder proof: rank(v) by `native_estimate`, midpoint of [r_min, r_max] | query guest: their chain-link check, the latest state opened against the last link, the same estimator |
+| commitments | Poseidon2, hiding (salted) | unsalted SHA-256 (their pattern), over the parameters, n and the active tuples |
+| framework | zkSketch's proof forest | their batch-chain check (verbatim), Event deserialisation, flatten, epoch link (`EpochChainLink`) |
+
+### Equivalence (`results/20261015-m1/` holds the files)
+
+- **Guest = zkSketch's native chain, tuple by tuple.** `gk_matched --mode check` at
+  (capacity, m_sub) = (384, 128) [16 steps per 2,048-record epoch], (768, 512) [4 steps]
+  and (2048, 2048) [1 step], epochs 0 and 1, AOL, all three implementations (`fast`,
+  `fixed_linear`, `literal`): 18 rows, each with the guest's emitted state equal to
+  zkSketch's `apply_batch2` chain in all 7 fields of every row, n and the parameters,
+  `journal_eq_native=true`, and the query guest's bounds equal to zkSketch's
+  `Gk2State::rank_interval` on its own chain.
+- **Guest = what zkSketch's leaf circuit certifies.** `gk_matched --mode certify` proved
+  zkSketch's GK leaf, built as `exp_compose` builds it (hiding commitments), for every
+  leaf of epochs 0 and 1: 32 leaves at (384, 128) (90 s per epoch) and 8 at (768, 512)
+  (74 s per epoch, 16.9 GB peak RSS). Every leaf's exposed initial / final commitment equals
+  Com of zkSketch's native chain, each epoch's last leaf exposes Com(S) of the state the
+  zk-Analytics guest computed, and zkSketch's GK decoder proved on that state at the hot
+  value answers what the query guest answers: 1,778 / 3,539 at (384, 128), 1,780 / 3,551
+  at (768, 512) (rank(1,810,625) after 2,048 / 4,096 records; exact 1,789 / 3,569).
+- **`exp_compose` runs agree.** The 2026-10-14 memory-matched forests
+  (`results/memmatch-20261014/runs/`) answered 1,778 (`gk-m128-cap384-t16`, leaf 16),
+  1,780 (`gk-m512-cap{64,128}-t4`, leaf 4) and 1,786 (`gk-m2048-cap2048-t1`) for the same
+  query after the same 2,048 records: the query guest's answers at those configurations.
+  Over eight carried epochs the committed `six_zksketch{,_r2}_gk` runs (capacity 2,048,
+  8 x 2,048) answered 1,786, 3,557, 5,274, 7,095, 8,916, 5,877, 6,915, 7,927 at n = 1..8,
+  and the matched query guest gives the same eight answers. A fresh six-harness smoke test
+  at 2 x 256 records (cap 512) gave 171 / 330 on both sides.
+- **Native unit tests** (6): the chain at four configurations, carried-state binding
+  (tampered state, wrong previous link, missing state, changed configuration, fake
+  genesis are refused), overflow = panic in all implementations (capacity 16, where
+  zkSketch's native code truncates silently), the estimator, the root variants, and the
+  query's one-unbroken-chain rule (a genesis restart, which their link check accepts, and
+  a stale state are refused).
+
+### Executor results, one 2,048-record AOL epoch (noroot, `fast`; `results/20261015-m1/`)
+
+| zk-Analytics GK | epoch | user cycles | segments (padded 2^20) | Event read | batch chain | GK update | everything else | MODELED (30.1 s/seg) |
+|---|---|---|---|---|---|---|---|---|
+| matched, (384, 128), 16 steps | 0 | 11,879,811 | 13 | 7,605,762 | 2,245,157 | 1,841,333 | 187,559 | 391 s |
+| matched, (384, 128) | 1 | 11,983,830 | 13 | 7,714,746 | 2,245,656 | 1,826,401 | 197,027 | 391 s |
+| matched, (768, 512), 4 steps | 0 | 11,047,353 | 12 | 7,605,762 | 2,245,157 | 987,878 | 208,556 | 361 s |
+| matched, (768, 512) | 1 | 11,174,793 | 12 | 7,705,746 | 2,245,656 | 1,004,059 | 219,332 | 361 s |
+| matched, (2048, 2048), 1 step | 0 | 10,872,657 | 12 | 7,605,762 | 2,245,157 | 737,882 | 283,856 | 361 s |
+| textbook (`gk/`, memmatch 2026-10-14) | 0 | 12,862,178 | 14 | | | | | 421 s |
+
+- The epoch costs about the same with either GK: 83-91% of the user cycles are their
+  framework (Event deserialisation and the batch-chain check), identical in every port.
+  zkSketch's rule is slightly cheaper in their pipeline than textbook GK (0.98M-1.84M vs
+  about 3M user cycles for the summary at 2,048 records), so the matched baseline is a
+  little FASTER than the textbook one: 13 / 12 segments instead of 14, i.e. a
+  zk-Analytics estimate of 391 / 361 s instead of 398.5 s at k_s = 30.07 s, which tightens
+  the 10x threshold for zkSketch accordingly (39.1 s at (384, 128), 36.1 s at (768, 512)).
+  These are executor counts; the real proof is M1's measurement.
+- Implementations (check rows, epoch 0, user cycles / segments): (384, 128) `fast` 11.92M /
+  13, `fixed_linear` 16.71M / 18, `literal` 30.36M / 37; (768, 512) 11.12M / 12, 14.85M / 16,
+  25.37M / 31. Check rows carry +38k cycles for emitting the state.
+- The carried state costs about 0.1M cycles to read (compact: the 48-53 active tuples, not
+  the `capacity` rows) and about 15k to commit.
+
+### Caveats
+
+- **Their pipeline, our port (†).** zk-Analytics ships no rank-guaranteed quantile summary;
+  the GK update is zkSketch's (from `gk_bm2/core`), the rest is their code or pattern.
+- **Data-dependent.** `fast` exploits the data (active prefix, early stop), as a zkVM
+  programmer would; zkSketch's circuit is oblivious. `fixed_linear` is the fixed schedule.
+- **Leaf size.** A six run uses `SIX_M` for both (one step per epoch). A zkSketch forest
+  with smaller leaves (`SIX_M=128`, 16 leaves per 2,048 records) is matched by running the
+  zk-Analytics side at `SIX_M=2048 SIX_GK_MSUB=128` with the same `SIX_GK_CAP`.
+- **Accuracy columns are native checks** of the state (exact rank inside [lo, hi] for every
+  distinct value covered; certified half-width vs eps N), not guest work: 37 / 77 at
+  (384, 128) against eps N = 40.2 / 80.3.

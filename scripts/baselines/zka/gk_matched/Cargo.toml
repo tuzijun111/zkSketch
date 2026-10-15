@@ -1,0 +1,14 @@
+# Host-side workspace: the matched-GK core library, the methods crate that embeds the
+# guest ELFs, and the host driver. The guests live in their own workspace (guests/) so
+# they resolve from a lock seeded from ../gk/guests/Cargo.lock and
+# ../gk_bm2/guests/Cargo.lock (risc0-zkvm 3.0.5, as the other zka guests), while the
+# host resolves from a lock seeded from ../gk/Cargo.lock and ../gk_bm2/Cargo.lock
+# (risc0-zkvm 3.0.6, zk-Analytics' host crates, and the zkSketch crate this directory
+# sits in, path dependency, for the native reference and the leaf-proof check).
+[workspace]
+members = ["core", "methods", "host"]
+exclude = ["guests"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3

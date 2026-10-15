@@ -8,6 +8,22 @@
 #   SIX_N       records in all = SIX_M x SIX_T  (default 16384)
 #   SIX_QNS     query points n of the zk-Analytics side (default: powers of two <= T)
 #   SIX_GK_CAP  zkSketch GK capacity            (default 2048)
+#   SIX_ZKA_GK  matched (default) | textbook: the zk-Analytics side's GK. matched = our port
+#               of zkSketch's GK rule (two-sided band-merge, apply_batch2) in their pipeline
+#               (../gk_matched): the SAME algorithm as the zkSketch side, with zkSketch's
+#               capacity SIX_GK_CAP, s = 51 and leaf size SIX_GK_MSUB, the state carried from
+#               epoch to epoch. textbook = Greenwald-Khanna 2001 rebuilt per epoch with a
+#               query-time merge (../gk): a DIFFERENT algorithm, kept as a labelled reference
+#               (the committed 2026-10-09 rows are textbook).
+#   SIX_GK_MSUB records per zkSketch GK leaf (default SIX_M, the zkSketch side's batch). The
+#               matched zk-Analytics GK applies each SIX_M-record epoch as SIX_M / SIX_GK_MSUB
+#               successive apply_batch2 steps: exactly zkSketch's leaves. Set it only to match
+#               a zkSketch GK run with smaller leaves than SIX_M (a memory-matched forest, e.g.
+#               zkSketch SIX_M=128 SIX_T=16 SIX_GK_CAP=384 against zk-Analytics SIX_M=2048
+#               SIX_T=1 SIX_GK_MSUB=128 SIX_GK_CAP=384); run_zks.sh always uses SIX_M.
+#   SIX_ZKA_GK_IMPL  fast (default) | fixed_linear | literal: the matched GK guest's
+#               implementation of the one transition (same state; fast = the efficient
+#               data-dependent one a zkVM programmer would write, the steelman).
 #   SIX_CORES   zkSketch EXP_COMPOSE_CORES      (default: physical cores, at most 32)
 #   SIX_ZKA_ROOTS  root variants of the zk-Analytics aggregation proofs, a comma list of
 #               designed | noroot | legacy (default noroot, the headline): the variants
@@ -59,6 +75,30 @@ SIX_ZKA_CM_REF=${SIX_ZKA_CM_REF:-1}
 six_cm_ref_on() { [[ $SIX_ZKA_CM_REF == 1 && ,$SIX_ZKA_ROOTS, != *,designed,* && ,$SIX_ZKA_ROOTS, != *,legacy,* ]]; }
 SIX_ZKA_EXEC_ROOTS=$SIX_ZKA_ROOTS   # the variants `run_zka.sh exec` executes
 if six_cm_ref_on; then SIX_ZKA_EXEC_ROOTS+=,designed; fi
+SIX_ZKA_GK=${SIX_ZKA_GK:-matched}
+[[ $SIX_ZKA_GK == matched || $SIX_ZKA_GK == textbook ]] || six_die "SIX_ZKA_GK=$SIX_ZKA_GK must be matched or textbook"
+SIX_GK_MSUB=${SIX_GK_MSUB:-$SIX_M}
+SIX_ZKA_GK_IMPL=${SIX_ZKA_GK_IMPL:-fast}
+if [[ $SIX_ZKA_GK == matched ]]; then
+  six_is_uint "$SIX_GK_MSUB" && six_is_uint "$SIX_GK_CAP" && (( SIX_GK_MSUB > 0 && SIX_GK_CAP > 0 )) ||
+    six_die "SIX_GK_MSUB=$SIX_GK_MSUB / SIX_GK_CAP=$SIX_GK_CAP must be positive integers"
+  (( SIX_M % SIX_GK_MSUB == 0 )) ||
+    six_die "SIX_GK_MSUB=$SIX_GK_MSUB must divide SIX_M=$SIX_M (each epoch is SIX_M / SIX_GK_MSUB zkSketch leaves)"
+  (( (SIX_GK_CAP + SIX_GK_MSUB) % 2 == 0 )) ||
+    six_die "SIX_GK_CAP + SIX_GK_MSUB = $((SIX_GK_CAP + SIX_GK_MSUB)) is odd: zkSketch's GK leaf needs an even table"
+  [[ $SIX_ZKA_GK_IMPL =~ ^(fast|fixed_linear|literal)$ ]] ||
+    six_die "SIX_ZKA_GK_IMPL=$SIX_ZKA_GK_IMPL must be fast, fixed_linear or literal"
+  [[ ,$SIX_ZKA_EXEC_ROOTS, != *,legacy,* ]] ||
+    six_die "SIX_ZKA_ROOTS has legacy, the committed 2026-10-09 guests, whose GK is the TEXTBOOK port: set SIX_ZKA_GK=textbook with it (the matched GK has designed and noroot)"
+fi
+# six_gk_desc: one line naming the zk-Analytics GK of this configuration (logs, manifest)
+six_gk_desc() {
+  if [[ $SIX_ZKA_GK == matched ]]; then
+    echo "zka_gk=matched (zkSketch's GK rule bm2 in their pipeline: capacity $SIX_GK_CAP, s 51, m_sub $SIX_GK_MSUB = $((SIX_M / SIX_GK_MSUB)) apply_batch2 step(s) per $SIX_M-record epoch, implementation $SIX_ZKA_GK_IMPL)"
+  else
+    echo "zka_gk=textbook (Greenwald-Khanna 2001 per epoch + query-time merge: NOT zkSketch's algorithm; reference)"
+  fi
+}
 
 six_phys_cores() {  # distinct (socket, core) pairs
   local n

@@ -1,0 +1,7 @@
+# Guest workspace. Cargo.lock here was seeded from ../../gk/guests/Cargo.lock (itself
+# seeded from the zk-Analytics clone's Cargo.lock at d4a5a9a) and
+# ../../gk_bm2/guests/Cargo.lock, so the guests build against the same risc0-zkvm
+# (3.0.5), sha2, serde, hashbrown and bytemuck as the other zka guests.
+[workspace]
+members = ["aggr", "query"]
+resolver = "2"

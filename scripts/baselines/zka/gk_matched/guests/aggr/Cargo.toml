@@ -1,0 +1,9 @@
+[package]
+name = "aggr_gkm"
+version = "0.1.0"
+edition = "2021"
+
+# zk-Analytics' aggregation pipeline around zkSketch's GK batch rule (see ../../core).
+[dependencies]
+risc0-zkvm = { version = "3", default-features = false }
+gk-matched-core = { path = "../../core", default-features = false }

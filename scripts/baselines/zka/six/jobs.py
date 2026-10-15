@@ -33,6 +33,11 @@ own record of what it probed) and cross-checked against the derivation above, if
 The inserted Bloom key needs no argument: `first` is the first record of batch n on
 both sides.
 
+The plan does not depend on which zk-Analytics GK runs (`run_zka.sh` picks it: the matched
+port of zkSketch's GK rule by default, SIX_ZKA_GK=matched, or the textbook reference): both
+answer rank(v) at the same v. The matched port has no `legacy` aggregation guest, so with
+--roots legacy its gk:aggr jobs are refused by run_zka.sh (use SIX_ZKA_GK=textbook).
+
 --select keeps only the jobs equal to a selector or starting with '<selector>:', e.g.
 `cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key` (`cm:aggr:0` selects
 every planned variant of that epoch, the CM reference included); a selector that matches no
