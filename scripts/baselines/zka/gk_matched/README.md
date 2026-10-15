@@ -65,7 +65,13 @@ its decoder proves step 3's answer.
 - **Implementation** (`--impl`, `SIX_ZKA_GK_IMPL`). One function, four implementations,
   all tested tuple-equal to zkSketch's chain here (and the three from `../gk_bm2/core`
   there too):
-  - `tuned` (default, the steelman: what a zkVM programmer would write;
+  - `literal` (**the default and the baseline**, since 2026-10-15): zkSketch's native
+    `apply_batch2` statement for statement, i.e. zkSketch's GK algorithm as its original
+    code. The zkVM side must run the algorithm, not a program re-engineered with
+    zkSketch's circuit-design insights; the three below are our rewrites (all compact the
+    survivors instead of re-sorting, the observation behind zkSketch's planned
+    stable-compaction circuit) and are sensitivity rows only.
+  - `tuned` (our efficient rewrite; the default during M1 rounds 2-3;
     `core/src/lib.rs` `apply_epoch_tuned`): `fast`'s data-dependent schedule (merge the
     sorted fresh values into the sorted old actives, fuse over the active prefix only,
     compact instead of re-sorting, stop after the first round that changes nothing)
@@ -83,8 +89,8 @@ its decoder proves step 3's answer.
     `tuned`'s 12 (11.5 x 2^20) at config A, a real proof of 392.7 s instead of 352.4 s.
     It was the default until 2026-10-15 (round 2 of M1) and stays for comparison.
   - `fixed_linear` (zkSketch's fixed schedule: every row of the capacity + m_sub table,
-    every one of the ceil(log2(capacity + m_sub)) rounds) and `literal` (zkSketch's
-    native code statement for statement), for sensitivity.
+    every one of the ceil(log2(capacity + m_sub)) rounds, with in-place compaction), for
+    sensitivity.
 - **State encoding.** zkSketch's state is `capacity` rows: the active tuples, a
   value-sorted prefix, padded with identical dummies (a circuit's fixed table). This side
   stores, ships, hashes and carries only the *compact words*: capacity, m_sub, s, n, the

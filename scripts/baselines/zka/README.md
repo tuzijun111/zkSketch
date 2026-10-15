@@ -46,7 +46,7 @@ checkout they sit in, so a worktree measures its own sources.
 | `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 | `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
 | `gk_matched/gk_matched_check.sh` | no (`CERTIFY=1`: zkSketch's GK leaf and decoder proofs) | `zka_gk_matched_{check,aggr,certify}.csv` + `zka_gk_matched_check.log` | zkSketch's GK rule inside zk-Analytics' pipeline (the six-sketch GK default): equivalence with zkSketch's native chain, its leaf circuit and its decoder at configs (384, 128) and (768, 512) (see "GK with zkSketch's algorithm in their pipeline") |
-| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~9-11 min, `full` ~3 h 15 min (estimate) plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †; GK = zkSketch's own GK rule in their pipeline, `gk_matched/`) at 8 x 2,048 AOL records: update proving per epoch (zk-Analytics `noroot`, the headline; their shipped CM as a reference), query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
+| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~9-11 min, `full` ~3 h 30 min (estimate) plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †; GK = zkSketch's own GK rule in their pipeline, `gk_matched/`) at 8 x 2,048 AOL records: update proving per epoch (zk-Analytics `noroot`, the headline; their shipped CM as a reference), query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -1084,7 +1084,7 @@ top-level README, "Reproducing the zkSketch vs zk-Analytics comparison"):
 scripts/baselines/zka/six/run_all.sh check   # prerequisites; exit 1 + the fix if anything blocking is missing
 scripts/baselines/zka/six/run_all.sh build   # fetch zk-Analytics @ d4a5a9a into $BASELINE_DIR; build both sides
 scripts/baselines/zka/six/run_all.sh quick   # smoke test of the whole pipeline (N = 512 = 2 x 256), ~9-11 min
-scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~3 h 15 min (estimate) + gate waits
+scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~3 h 30 min (estimate) + gate waits
 scripts/baselines/zka/six/run_all.sh full --dry-run   # the plan and the 42 jobs, nothing run
 SIX_ZKA_ROOTS=designed,noroot scripts/baselines/zka/six/run_all.sh full   # the earlier two-variant plan, 52 jobs
 SIX_ZKA_GK=textbook scripts/baselines/zka/six/run_all.sh full   # textbook GK on the zk-Analytics side (the reference)
@@ -1093,8 +1093,10 @@ SIX_ZKA_GK=textbook scripts/baselines/zka/six/run_all.sh full   # textbook GK on
 GK on the zk-Analytics side (`six_common.sh`): `SIX_ZKA_GK=matched` (default) runs
 `gk_matched/` with zkSketch's capacity `SIX_GK_CAP`, s = 51 and leaf size `SIX_GK_MSUB`
 (default `SIX_M`: one `apply_batch2` step per epoch, as zkSketch's `SIX_M`-record leaves),
-implementation `SIX_ZKA_GK_IMPL` (`tuned`, the default, the steelman; `fast`,
-`fixed_linear`, `literal` for sensitivity); `SIX_ZKA_GK=textbook` runs `gk/`. To match a zkSketch GK run with smaller
+implementation `SIX_ZKA_GK_IMPL` (`literal`, the default since 2026-10-15: zkSketch's GK
+algorithm as its original code, `apply_batch2` statement for statement; `tuned`, `fast`,
+`fixed_linear` are our rewrites of it, which compact survivors instead of re-sorting (the
+idea of zkSketch's planned stable-compaction circuit), so they are sensitivity rows only); `SIX_ZKA_GK=textbook` runs `gk/`. To match a zkSketch GK run with smaller
 leaves than the zk-Analytics epoch (a memory-matched forest: zkSketch held to the 8 GiB
 cap; zk-Analytics' own proof of the epoch peaks at about 9.2 GiB, see "zk-Analytics' own
 memory" under the matched GK results), run the two sides separately with the same
@@ -1177,13 +1179,17 @@ cycles (30.07 s per 2^20 padded cycles over the 12 aggregation proofs of the mea
 not measured: the 12 `noroot` aggregation proofs are 150 segments (147 x 2^20 padded
 cycles), about 74 min; the 2 CM reference proofs are 48 segments, about 24 min (the same
 ELF took 712 and 713 s in the measured run); the 28 queries took 58 min in the measured
-run. So the default 42 proofs take about 2 h 35 min, 40 with `SIX_ZKA_CM_REF=0` about
-2 h 10 min, and the 52 of `SIX_ZKA_ROOTS=designed,noroot` about 3 h 40 min (its 12
+run. The GK figure in the 150 segments is the textbook GK's; the matched GK with its
+default `literal` implementation (zkSketch's `apply_batch2` as written) needs about 29.25 +
+30.0 x 2^20 padded cycles for its two aggregation proofs at (2048, 2048), about 33 more
+segments, ~17 min more. So the default 42 proofs take about 2 h 50 min, 40 with
+`SIX_ZKA_CM_REF=0` about 2 h 25 min, and the 52 of `SIX_ZKA_ROOTS=designed,noroot` about
+3 h 55 min (its 12
 `designed` aggregation proofs are 176 segments, ~88 min; the 12 legacy proofs of the
 measured run were also 176 segments, 174 x 2^20 padded cycles; CM is the same ELF), against the measured 2 h 25 min
 for the 40 legacy proofs. With zkSketch's 7 runs (~30-40 min on the zero-knowledge build)
-and the executor, `full` runs about 3 h 15 min at the defaults (2 h 50 min without the
-reference, 4 h 15 min with `designed,noroot`), plus the gate waits.
+and the executor, `full` runs about 3 h 30 min at the defaults (3 h 5 min without the
+reference, 4 h 30 min with `designed,noroot`), plus the gate waits.
 
 Knobs (environment): `BASELINE_DIR`, `RESULTS`, `SIX_CORES` (zkSketch cores;
 default: physical cores, at most 32); `SIX_ZKA_ROOTS` (zk-Analytics aggregation variants
@@ -1996,8 +2002,15 @@ reference (`SIX_ZKA_GK=textbook`). Full detail: `gk_matched/README.md`.
 
 ### Executor results, one 2,048-record AOL epoch (noroot; `results/20261015-m1/`)
 
-`tuned` is the headline (the default since round 2 of M1, 2026-10-15); `fast` was the
-default before and is kept for comparison (see "Implementations" below). `read` is their
+**Correction (2026-10-15, after M1): the baseline is `literal`, not `tuned`.** The
+zk-Analytics side must run zkSketch's GK *algorithm* as its original code, not a program
+re-engineered with zkSketch's circuit-design insights. `tuned` (the default during M1
+rounds 2-3, and the 352 / 336 s real proofs below) and `fast` compact the survivors instead
+of re-sorting, the observation behind zkSketch's planned stable-compaction circuit, so
+they stay only as labelled sensitivity rows. `literal` at B = 2,048 is 37 segments
+(38.8M padded cycles) at (384, 128) and 31 segments (32.0M) at (768, 512): about 1,133 s
+and 933 s at the 30.6 s per 2^20 padded cycles of the real `tuned` proofs (estimates; a
+real `literal` proof takes 16-19 min). `read` is their
 Event deserialisation plus, from epoch 1 on, the carried state's words (see Caveats).
 
 | zk-Analytics GK | impl | epoch | user cycles | segments (padded, x 2^20) | read (Events + carried state) | batch chain | GK update | everything else | MODELED (padded x 30.07 s) |

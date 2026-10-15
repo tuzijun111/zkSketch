@@ -13,7 +13,7 @@
 #                               the paper configuration: N = 16,384 = 8 x 2,048, zkSketch 7 runs,
 #                               zk-Analytics executor + 42 proofs (aggregation epochs 0 and 7 of every
 #                               family, noroot: 12; 28 queries; their shipped CM at epochs 0 and 7 as a
-#                               reference: 2; about 3 h 15 min plus gate waits, an estimate). --dry-run
+#                               reference: 2; about 3 h 30 min plus gate waits, an estimate). --dry-run
 #                               prints the plan and runs nothing; the GK rank values and Bloom absent
 #                               keys are then derived natively, or read from DIR's zkSketch logs with
 #                               --from-logs (the real run reads this run's logs)
@@ -49,8 +49,9 @@
 #                  (../gk_matched): the same algorithm on both sides. textbook = textbook
 #                  Greenwald-Khanna rebuilt per epoch (../gk), a different algorithm, kept as a
 #                  labelled reference; SIX_ZKA_ROOTS=legacy needs it (the committed rows are textbook)
-#   SIX_ZKA_GK_IMPL  tuned (default) | fast | fixed_linear | literal: the matched GK guest's implementation
-#                  of the one transition (same state; tuned = the efficient data-dependent one, the steelman)
+#   SIX_ZKA_GK_IMPL  literal (default) | tuned | fast | fixed_linear: the matched GK guest's implementation
+#                  of the one transition (same state; literal = zkSketch's apply_batch2 code as written, the
+#                  baseline; the others are our rewrites, sensitivity only)
 #   SIX_QUICK_PROVE  quick: the jobs proved for real, as jobs.py --select selectors
 #                  (default cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key: CM and
 #                  KMV noroot at epoch 0, the GK query and the Bloom absent-key query at n = 1)
@@ -247,9 +248,9 @@ check_repo() {
     read -r -a pc <<< "$(plan_counts "$roots" "$cmref")"
     info "zk-Analytics aggregation root variants: SIX_ZKA_ROOTS=$roots, SIX_ZKA_CM_REF=$cmref (full proves ${pc[1]} aggregation + 28 query$( (( pc[2] )) && echo " + ${pc[2]} CM reference (their shipped CM)") = ${pc[0]} jobs)"
   fi
-  local zgk=${SIX_ZKA_GK:-matched} zgi=${SIX_ZKA_GK_IMPL:-tuned} why
+  local zgk=${SIX_ZKA_GK:-matched} zgi=${SIX_ZKA_GK_IMPL:-literal} why
   why=$(gk_knobs_ok "$zgk" "$zgi" "$roots")
-  if [[ -n $why ]]; then miss "$why" "unset SIX_ZKA_GK / SIX_ZKA_GK_IMPL (defaults matched / tuned)"
+  if [[ -n $why ]]; then miss "$why" "unset SIX_ZKA_GK / SIX_ZKA_GK_IMPL (defaults matched / literal)"
   elif [[ $zgk == matched ]]; then info "zk-Analytics GK: SIX_ZKA_GK=matched, zkSketch's GK rule in their pipeline (the same algorithm on both sides), implementation $zgi"
   else info "zk-Analytics GK: SIX_ZKA_GK=textbook, textbook Greenwald-Khanna (NOT zkSketch's algorithm: a reference)"; fi
   if [[ -x $ZKS_BIN ]]; then ok "zkSketch exp_compose built ($ZKS_BIN)"; else info "zkSketch exp_compose not built yet -- run_all.sh build"; fi
@@ -418,7 +419,7 @@ load_shape() {  # load_shape <mode>: export the run shape for the child scripts
   export SIX_ZKA_ROOTS=${SIX_ZKA_ROOTS:-noroot} SIX_ZKA_CM_REF=${SIX_ZKA_CM_REF:-1}
   roots_ok "$SIX_ZKA_ROOTS" || die "SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS must be a comma list of distinct designed, noroot, legacy"
   [[ $SIX_ZKA_CM_REF == [01] ]] || die "SIX_ZKA_CM_REF=$SIX_ZKA_CM_REF must be 0 or 1"
-  export SIX_ZKA_GK=${SIX_ZKA_GK:-matched} SIX_ZKA_GK_IMPL=${SIX_ZKA_GK_IMPL:-tuned}
+  export SIX_ZKA_GK=${SIX_ZKA_GK:-matched} SIX_ZKA_GK_IMPL=${SIX_ZKA_GK_IMPL:-literal}
   local why; why=$(gk_knobs_ok "$SIX_ZKA_GK" "$SIX_ZKA_GK_IMPL" "$SIX_ZKA_ROOTS")
   [[ -z $why ]] || die "$why"
   EXEC_ROOTS=$SIX_ZKA_ROOTS
@@ -521,7 +522,7 @@ EOF
   write_manifest full
   echo "full run (paper configuration) -> $RESULTS"
   echo "  zkSketch 7 runs + zk-Analytics executor (root variants $EXEC_ROOTS) + the planned proofs (42 at the"
-  echo "  defaults: expect ~3 h 15 min of running, an estimate, plus gate waits; GATE_WAIT_S=$GATE_WAIT_S per timed job)"
+  echo "  defaults: expect ~3 h 30 min of running, an estimate, plus gate waits; GATE_WAIT_S=$GATE_WAIT_S per timed job)"
   local rc=0 plan
   # zkSketch or executor failures stop the run (fix and start again); a failed proof does not:
   # the remaining proofs still run, the table shows '-' for it, and the exit status is 1.

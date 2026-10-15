@@ -21,10 +21,12 @@
 #               a zkSketch GK run with smaller leaves than SIX_M (a memory-matched forest, e.g.
 #               zkSketch SIX_M=128 SIX_T=16 SIX_GK_CAP=384 against zk-Analytics SIX_M=2048
 #               SIX_T=1 SIX_GK_MSUB=128 SIX_GK_CAP=384); run_zks.sh always uses SIX_M.
-#   SIX_ZKA_GK_IMPL  tuned (default) | fast | fixed_linear | literal: the matched GK guest's
-#               implementation of the one transition (same state; tuned = the efficient
-#               data-dependent one a zkVM programmer would write, the steelman: fast's
-#               schedule without its per-step fixed costs; the others for sensitivity).
+#   SIX_ZKA_GK_IMPL  literal (default) | tuned | fast | fixed_linear: the matched GK guest's
+#               implementation of the one transition (same state). literal = zkSketch's GK
+#               algorithm as its original code (apply_batch2 statement for statement): the
+#               baseline. tuned / fast / fixed_linear are our rewrites of it (they compact the
+#               survivors instead of re-sorting, the insight of zkSketch's planned stable-
+#               compaction circuit), kept as labelled sensitivity rows only.
 #   SIX_CORES   zkSketch EXP_COMPOSE_CORES      (default: physical cores, at most 32)
 #   SIX_ZKA_ROOTS  root variants of the zk-Analytics aggregation proofs, a comma list of
 #               designed | noroot | legacy (default noroot, the headline): the variants
@@ -79,7 +81,7 @@ if six_cm_ref_on; then SIX_ZKA_EXEC_ROOTS+=,designed; fi
 SIX_ZKA_GK=${SIX_ZKA_GK:-matched}
 [[ $SIX_ZKA_GK == matched || $SIX_ZKA_GK == textbook ]] || six_die "SIX_ZKA_GK=$SIX_ZKA_GK must be matched or textbook"
 SIX_GK_MSUB=${SIX_GK_MSUB:-$SIX_M}
-SIX_ZKA_GK_IMPL=${SIX_ZKA_GK_IMPL:-tuned}
+SIX_ZKA_GK_IMPL=${SIX_ZKA_GK_IMPL:-literal}
 if [[ $SIX_ZKA_GK == matched ]]; then
   six_is_uint "$SIX_GK_MSUB" && six_is_uint "$SIX_GK_CAP" && (( SIX_GK_MSUB > 0 && SIX_GK_CAP > 0 )) ||
     six_die "SIX_GK_MSUB=$SIX_GK_MSUB / SIX_GK_CAP=$SIX_GK_CAP must be positive integers"

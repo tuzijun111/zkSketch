@@ -731,7 +731,7 @@ fn parse_root() -> (&'static str, GkmRoot) {
 fn parse_impls(default_all: bool) -> Vec<GkmImpl> {
     match arg_str("--impl").as_deref() {
         None if default_all => GkmImpl::ALL.to_vec(),
-        None => vec![GkmImpl::Tuned],
+        None => vec![GkmImpl::Literal], // zkSketch's apply_batch2 as written: the baseline
         Some("all") => GkmImpl::ALL.to_vec(),
         Some(list) => list
             .split(',')
