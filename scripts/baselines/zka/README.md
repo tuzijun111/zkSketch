@@ -1202,7 +1202,12 @@ reference and `designed` executed for all six; `0` off; `jobs.py` takes `--cm-re
 the zkSketch GK leaf's round certification, passed to `exp_compose` as `EXP_GK_ROUNDS`; both
 prove the same `apply_batch2` rule, commitments and decoder with different leaf/merge/root VKs,
 the run's CSV records it in `variant` and `gk_rounds`, and `run_all.sh` keeps it for `quick` /
-`full` and writes it to the manifest; `sorted` reproduces the pre-M3 rows). The run shape `SIX_M`, `SIX_T` (records per epoch,
+`full` and writes it to the manifest; `sorted` reproduces the pre-M3 rows); `SIX_BLOOM_VARIANT`
+(`omc` | `packed`, default `omc`: the zkSketch Bloom leaf, passed to `exp_compose` as
+`EXP_BLOOM_VARIANT`; `packed` is the M2 packed-byte leaf, `src/sketch/bloom_packed.rs`, which
+proves the same filter and answers with different leaf/decode/merge/root VKs and commitment family
+7, and needs `7 x SIX_M < 2^16`; the run's CSV records it in `variant`, `bloom_omc` |
+`bloom_packed`, and `run_all.sh` writes it to the manifest). The run shape `SIX_M`, `SIX_T` (records per epoch,
 epochs; `N = M x T`), `SIX_GK_CAP` and `SIX_QNS` (query points) applies only to the
 individual `six/*.sh` scripts (`jobs.py` takes `--m`, `--t`, `--qns`): `run_all.sh
 quick` / `full` use their fixed shapes and say so when these are set. The run

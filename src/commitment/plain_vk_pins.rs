@@ -530,3 +530,94 @@ fn stable_gk_vks_are_pinned() {
     );
     assert_ne!(rv_h.commitment, rv.commitment, "the Hiding and Plain stable roots differ");
 }
+
+/// The packed-byte Bloom family (M2, `crate::sketch::bloom_packed`,
+/// commitment family 7) at the test shape (k = 3, log_w = 7, batch = 4), in
+/// BOTH commitment modes: the no-op leaf VK per layout [Boundary, Interval]
+/// (one construction: no binding switch), the membership decoder's VK, and
+/// the leaf and forest(2) root VKs derived the way the auditor does, from
+/// public parameters only (`dist_compose`'s `derive_dist_leaf_vk` /
+/// `derive_dist_root_vk` for `StreamFamily::BloomPacked`, Interval layout).
+/// Every packed VK differs from the bit-array Bloom family's (whose pins in
+/// [`plain_noop_leaf_vks_are_pinned`] / [`plain_decode_vks_are_pinned`] are
+/// unchanged). Recorded on branch m2-bloom-packed (2026-10-16).
+#[test]
+fn packed_bloom_vks_are_pinned() {
+    use crate::decode::bloom_packed::bloom_packed_decode_vk_commit;
+    use crate::experiments::dist_compose::{derive_dist_leaf_vk, derive_dist_root_vk};
+    use crate::experiments::stream_compose::{StreamFamily, StreamMode, StreamShape};
+    use crate::recursion::recursive::noop_leaf::bloom_packed_noop_leaf_commit;
+    use crate::sketch::bloom_packed::BloomPackedParams;
+    use crate::sketch::gk_bandmerge::GkRounds;
+    // [mode Plain, Hiding] x ([leaf Boundary, leaf Interval, decoder, root forest(2)]).
+    #[cfg(not(feature = "zk"))]
+    const PINS: [[Pin; 4]; 2] = [
+        [
+            (0xcbe5_929e_8f6d_dfe8, 0x350d_ccf6_ad34_e07e),
+            (0x6dfc_a9d7_afa7_b9e3, 0xe526_805c_7832_9425),
+            (0xb177_3267_8699_5639, 0x12c4_2587_8ff4_98d0),
+            (0x54c0_18cc_9c04_5b9c, 0x7823_b4a3_1073_6c15),
+        ],
+        [
+            (0x1a16_43e0_d610_c946, 0x90fd_d9e4_6576_d545),
+            (0x6e03_81e9_1bce_39cd, 0x2841_57ac_3d76_9bd2),
+            (0x1fb3_4e19_cf62_df61, 0xcea5_536a_493b_c716),
+            (0x0c3a_9c26_e280_851f, 0x7823_b4a3_1073_6c15),
+        ],
+    ];
+    // The `zk` build (see the module docs).
+    #[cfg(feature = "zk")]
+    const PINS: [[Pin; 4]; 2] = [
+        [
+            (0xa78d_9702_a60c_f396, 0x2887_4d41_4c81_6560),
+            (0xf3af_6ecf_e4a5_8578, 0x53a2_6e52_53e9_b7e3),
+            (0xcf6f_9b40_07a0_410f, 0xa548_c3cd_fdd9_eb82),
+            (0x4cf2_c46a_bc31_eca8, 0x358c_91bc_2c1a_13f9),
+        ],
+        [
+            (0x5bb5_e5fd_76ae_91c7, 0xe8b3_cc58_63a0_dd8b),
+            (0xb949_1182_0615_2737, 0xb4fe_86c7_72f9_f4fc),
+            (0x5628_015d_e188_0f58, 0x3f91_64de_f4ce_a658),
+            (0xa33e_9cd5_7115_c9a9, 0x358c_91bc_2c1a_13f9),
+        ],
+    ];
+
+    let bp = BloomPackedParams { k: BLOOM.k, log_w: BLOOM.log_w, batch: BLOOM.batch };
+    let sh = StreamShape {
+        d: 4,
+        w: 8,
+        b: 4,
+        capacity: 4,
+        gk_s: 2,
+        bloom_k: BLOOM.k,
+        bloom_log_w: BLOOM.log_w,
+        kmv_k: 4,
+        gk_rounds: GkRounds::SortedCopy,
+    };
+    let fam = StreamFamily::BloomPacked;
+    let mut got = [[(0u64, 0u64); 4]; 2];
+    for (mi, mode) in [CommitMode::Plain, CommitMode::Hiding].into_iter().enumerate() {
+        for e in EXPOSES {
+            got[mi][ei(e)] = of_proof(&bloom_packed_noop_leaf_commit(bp, e, mode));
+            let omc = of_proof(&crate::recursion::recursive::noop_leaf::bloom_omc_noop_leaf_commit(BLOOM, e, mode));
+            assert_ne!(got[mi][ei(e)].0, omc.0, "{mode:?} {e:?}: the packed leaf VK differs from bloom_omc's");
+        }
+        got[mi][2] = of_vk(&bloom_packed_decode_vk_commit(bp, mode));
+        assert_ne!(got[mi][2].0, of_vk(&bloom_decode_vk_commit(BLOOM, mode)).0, "{mode:?}: decoder VKs differ");
+        let lv = derive_dist_leaf_vk(fam, &sh, BLOOM.batch, mode);
+        assert_eq!(
+            fingerprint(&lv.commitment, lv.shape.as_ref().expect("leaf shape")),
+            got[mi][ei(Expose::Interval)],
+            "{mode:?}: the auditor's derived leaf VK is the Interval no-op leaf's"
+        );
+        let rv = derive_dist_root_vk(fam, &sh, BLOOM.batch, StreamMode::Forest, 2, 1, mode);
+        got[mi][3] = fingerprint(&rv.commitment, rv.shape.as_ref().expect("root shape"));
+    }
+    eprintln!("bloom packed pins [Plain, Hiding] x [leaf Boundary, leaf Interval, decoder, root2]: {got:#018x?}");
+    for (mi, mode) in ["Plain", "Hiding"].into_iter().enumerate() {
+        for (j, what) in ["leaf Boundary", "leaf Interval", "decoder", "forest(2) root"].into_iter().enumerate() {
+            check(&format!("bloom packed {mode} {what}"), got[mi][j], PINS[mi][j]);
+        }
+    }
+    assert_ne!(got[0][3], got[1][3], "the Hiding and Plain packed roots differ");
+}

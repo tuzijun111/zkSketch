@@ -13,6 +13,7 @@
 //! | ss     | certified         | `prove_ss_full_exposed`        |
 //! | gk     | bandmerge2        | `prove_gkb2_exposed`           |
 //! | bloom  | omc               | `build_bloom_omc_leaf_expose`  |
+//! | bloom  | packed (B1, M2)   | `build_bloom_packed_leaf_commit` |
 //! | kmv    | kmv (bottom-`k`)  | `build_kmv_leaf_commit`        |
 //!
 //! (The first four are the measured families; the Bloom filter, a generality
@@ -108,6 +109,7 @@ use rayon::ThreadPoolBuilder;
 use crate::commitment::hiding::{CommitFamily, CommitMode, SaltBb};
 use crate::config::Val;
 use crate::decode::bloom::{bloom_query_input, prove_bloom_query, prove_bloom_query_commit};
+use crate::decode::bloom_packed::prove_bloom_packed_query_commit;
 use crate::decode::countmin::{prove_cm_decode, prove_cm_decode_commit, CmDecodeParams};
 use crate::decode::gk_bandmerge::{prove_gk2_decode, prove_gk2_decode_commit, Gkb2DecodeParams};
 use crate::decode::hyperloglog::{
@@ -129,6 +131,9 @@ use p3_recursion::RecursionOutput;
 use crate::sketch::bloom_omc::{
     bloom_empty, bloom_insert, build_bloom_omc_leaf_commit, commit_bloom, commit_bloom_with,
     BloomOmcParams,
+};
+use crate::sketch::bloom_packed::{
+    build_bloom_packed_leaf_commit, commit_packed_with, packed_empty, packed_insert, BloomPackedParams,
 };
 use crate::sketch::countmin::{CountMinState, CountMinUpdate};
 use crate::sketch::countmin_omc::{build_countmin_omc_leaf_commit, countmin_omc_advance, CmOmcParams};
@@ -192,6 +197,14 @@ pub enum StreamFamily {
     /// `2^log_w` bits ([`StreamShape::bloom_k`] / [`StreamShape::bloom_log_w`]).
     /// BabyBear only: there is no Goldilocks Bloom leaf.
     BloomOmc,
+    /// The SAME partitioned Bloom filter with its state packed 8 bits per
+    /// byte (design B1, milestone M2; `crate::sketch::bloom_packed`):
+    /// per-access timestamped memory checking over bytes, split-at-bit OR,
+    /// commitment family 7. Bit-for-bit the filter and the answers of
+    /// [`Self::BloomOmc`], with its own leaf / decode / merge / root VKs.
+    /// Selected by the token `bloom_packed`, or by `bloom` under
+    /// `EXP_BLOOM_VARIANT=packed` ([`bloom_variant_from_env`]).
+    BloomPacked,
     /// KMV / bottom-`k` distinct counting (`crate::sketch::kmv`): the `k`
     /// smallest distinct 27-bit key hashes, a verified sorted reduction of
     /// `S_{t-1} ⊎ B_t` ([`StreamShape::kmv_k`]); its query is the
@@ -215,6 +228,7 @@ impl StreamFamily {
             "hll_gl" | "hll_omc_gl" | "hyperloglog_gl" => Some(Self::HllOmcGl),
             "cm_gl" | "cm_omc_gl" | "countmin_gl" => Some(Self::CmOmcGl),
             "bloom" | "bloom_omc" | "bloomfilter" | "bloom_filter" => Some(Self::BloomOmc),
+            "bloom_packed" | "bloompacked" | "bloom_b1" => Some(Self::BloomPacked),
             "kmv" | "kmv_sketch" | "bottom_k" | "bottomk" => Some(Self::KmvSketch),
             _ => None,
         }
@@ -230,6 +244,7 @@ impl StreamFamily {
             Self::HllOmcGl => "hll_omc_gl",
             Self::CmOmcGl => "cm_omc_gl",
             Self::BloomOmc => "bloom_omc",
+            Self::BloomPacked => "bloom_packed",
             Self::KmvSketch => "kmv",
         }
     }
@@ -246,6 +261,7 @@ impl StreamFamily {
             Self::HllOmcGl => "hll_gl",
             Self::CmOmcGl => "cm_gl",
             Self::BloomOmc => "bloom",
+            Self::BloomPacked => "bloom",
             Self::KmvSketch => "kmv",
         }
     }
@@ -275,6 +291,28 @@ impl StreamFamily {
             Self::CmOmcGl => Self::CmOmc,
             other => other,
         }
+    }
+}
+
+/// The Bloom leaf the harness's `bloom` family token selects while the M2
+/// packed leaf is under review: the bit-array `omc` leaf.
+pub const HARNESS_DEFAULT_BLOOM_VARIANT: StreamFamily = StreamFamily::BloomOmc;
+
+/// The Bloom leaf variant a `bloom` family token selects:
+/// `EXP_BLOOM_VARIANT=omc|packed` (unset or empty =
+/// [`HARNESS_DEFAULT_BLOOM_VARIANT`]). The explicit tokens `bloom_omc` and
+/// `bloom_packed` ignore it. A PUBLIC parameter (the two variants prove the
+/// same filter under different leaf, decode and root VKs and commitment
+/// families); the CSV `variant` column records it. A bad value panics.
+pub fn bloom_variant_from_env() -> StreamFamily {
+    match std::env::var("EXP_BLOOM_VARIANT") {
+        Err(_) => HARNESS_DEFAULT_BLOOM_VARIANT,
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "" => HARNESS_DEFAULT_BLOOM_VARIANT,
+            "omc" | "bits" => StreamFamily::BloomOmc,
+            "packed" | "b1" | "bytes" => StreamFamily::BloomPacked,
+            other => panic!("EXP_BLOOM_VARIANT={other}: omc | packed"),
+        },
     }
 }
 
@@ -349,6 +387,21 @@ impl StreamShape {
     /// `(bloom_k, bloom_log_w, m)` is not a valid Bloom leaf shape.
     pub fn check_bloom(&self, m: usize) -> Result<BloomOmcParams, String> {
         let p = BloomOmcParams { k: self.bloom_k, log_w: self.bloom_log_w, batch: m };
+        p.check()?;
+        Ok(p)
+    }
+
+    /// The packed Bloom leaf / query parameters at batch size `m` (the same
+    /// `(bloom_k, bloom_log_w)` filter as [`Self::bloom_params`]). Panics on a
+    /// bad shape; see [`Self::check_bloom_packed`].
+    pub fn bloom_packed_params(&self, m: usize) -> BloomPackedParams {
+        self.check_bloom_packed(m).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`Self::bloom_packed_params`] without the panic (adds the packed
+    /// leaf's `k·m < 2^16` timestamp bound to the bit-array leaf's checks).
+    pub fn check_bloom_packed(&self, m: usize) -> Result<BloomPackedParams, String> {
+        let p = BloomPackedParams { k: self.bloom_k, log_w: self.bloom_log_w, batch: m };
         p.check()?;
         Ok(p)
     }
@@ -614,6 +667,8 @@ enum QueryState<'a> {
     Gk(&'a Gk2State, u32),
     /// The filter bits, its shape (`batch` ignored) and the probe key.
     Bloom(&'a [u8], BloomOmcParams, u64),
+    /// The packed filter's bytes, its shape (`batch` ignored) and the key.
+    BloomPacked(&'a [u8], BloomPackedParams, u64),
     /// The KMV state (its capacity is `state.k`); keyless.
     Kmv(&'a KmvState),
 }
@@ -632,7 +687,7 @@ fn prove_query_at(
         let key = match &q {
             QueryState::Cm(_, k) => format!("cm_key={k}"),
             QueryState::Gk(_, v) => format!("gk_value={v}"),
-            QueryState::Bloom(_, _, k) => format!("bloom_key={k}"),
+            QueryState::Bloom(_, _, k) | QueryState::BloomPacked(_, _, k) => format!("bloom_key={k}"),
             QueryState::Ss(_, c) => format!("ss_c={c}"),
             QueryState::Hll(_, b) => format!("hll_b={b}"),
             QueryState::Kmv(s) => format!("kmv_k={}", s.k),
@@ -741,6 +796,18 @@ fn prove_query_at(
                 )
             }
         },
+        QueryState::BloomPacked(words, params, key) => {
+            // Plain: the salt is ignored (the plain commitment).
+            let salt = if mode.is_hiding() {
+                salt_of(CommitFamily::BloomPacked, &|| words.iter().all(|&x| x == 0))
+            } else {
+                SaltBb::ZERO
+            };
+            (
+                prove_bloom_packed_query_commit(params, words, key, mode, &salt),
+                commit_packed_with(&params, words, mode, &salt),
+            )
+        }
         QueryState::Kmv(state) => {
             let params = KmvDecodeParams { k: state.k, release: id };
             match mode {
@@ -1236,6 +1303,26 @@ fn prove_queries_only(
                 }
             }
         }
+        StreamFamily::BloomPacked => {
+            let params = shape.bloom_packed_params(batches[0].len());
+            let mut words = packed_empty(&params);
+            let mut freq: BTreeMap<u64, u64> = BTreeMap::new();
+            for (bi, batch) in batches.iter().enumerate() {
+                let keys = bloom_keys_of(batch);
+                packed_insert(&mut words, &params, &keys);
+                if track_freq {
+                    for &k in &keys {
+                        *freq.entry(k).or_insert(0) += 1;
+                    }
+                }
+                if query_due(bi) {
+                    let key =
+                        select_query_key(query_key_mode, &freq, batch[0] as u64, (bi + 1) as u64, 0xFFFF_FFFF);
+                    let (dp, c) = prove_query_at(QueryState::BloomPacked(&words, params, key), bi + 1, commit);
+                    record_query(&mut queries, bi + 1, &dp, c, leaf_finals[bi], Some(bloom_query(key)), decode_vk);
+                }
+            }
+        }
         StreamFamily::KmvSketch => {
             let params = shape.kmv_params(batches[0].len());
             let mut state = KmvState::empty(params.k);
@@ -1571,6 +1658,43 @@ fn prove_leaves(
                         0xFFFF_FFFF,
                     );
                     let (dp, c) = prove_query_at(QueryState::Bloom(&bits, params, key), bi + 1, commit);
+                    record_query(&mut queries, bi + 1, &dp, c, leaf_final, Some(bloom_query(key)), decode_vk);
+                }
+            }
+            e
+        }
+        StreamFamily::BloomPacked => {
+            let params = shape.bloom_packed_params(m);
+            let mut words = packed_empty(&params);
+            let e = commit_packed_with(&params, &words, mode, &SaltBb::ZERO);
+            let mut freq: BTreeMap<u64, u64> = BTreeMap::new();
+            for (bi, batch) in batches.iter().enumerate() {
+                // The same record mapping as the bit-array leaf.
+                let keys = bloom_keys_of(batch);
+                let t = bi as u64 + 1;
+                let mut l = build_bloom_packed_leaf_commit(params, composition_expose(), mode);
+                let leaf = if commit.is_hiding() {
+                    l.prove_epoch_commit(t, &words, &keys, &commit.openings(cf, t))
+                } else {
+                    l.prove_epoch_at(t, &words, &keys)
+                };
+                let leaf_final = leaf.final_commit.0;
+                push(leaf.output, leaf.initial_commit.0, leaf_final);
+                packed_insert(&mut words, &params, &keys);
+                if track_freq {
+                    for &k in &keys {
+                        *freq.entry(k).or_insert(0) += 1;
+                    }
+                }
+                if query_due(bi) {
+                    let key = select_query_key(
+                        query_key_mode,
+                        &freq,
+                        batch[0] as u64,
+                        (bi + 1) as u64,
+                        0xFFFF_FFFF,
+                    );
+                    let (dp, c) = prove_query_at(QueryState::BloomPacked(&words, params, key), bi + 1, commit);
                     record_query(&mut queries, bi + 1, &dp, c, leaf_final, Some(bloom_query(key)), decode_vk);
                 }
             }
@@ -2506,7 +2630,7 @@ mod tests {
         let (sh, m) = (shape(), 4usize);
         for commit in both_modes() {
             let tag = commit.label();
-            for fam in [StreamFamily::CmOmc, StreamFamily::BloomOmc, StreamFamily::KmvSketch] {
+            for fam in [StreamFamily::CmOmc, StreamFamily::BloomOmc, StreamFamily::BloomPacked, StreamFamily::KmvSketch] {
                 let batches: Vec<Vec<u32>> =
                     (0..3u32).map(|i| (1..=4).map(|k| k * 5 + i * 11).collect()).collect();
                 let Some(mut audit) = QueryAudit::new(fam, &sh, m, commit.mode()) else {
@@ -2676,11 +2800,56 @@ mod tests {
     /// assembles from the workers' bytes) against the published log.
     #[test]
     fn bloom_query_replay_matches_sim_and_binds() {
+        bloom_query_replay_matches_sim_and_binds_in(StreamFamily::BloomOmc);
+    }
+
+    /// [`bloom_query_replay_matches_sim_and_binds`] for the packed-byte leaf
+    /// (M2).
+    #[test]
+    fn bloom_packed_query_replay_matches_sim_and_binds() {
+        bloom_query_replay_matches_sim_and_binds_in(StreamFamily::BloomPacked);
+    }
+
+    /// M2: the packed and bit-array Bloom variants answer EVERY query of the
+    /// same stream identically (same filter), for every query-key mode,
+    /// while their exposed commitments differ (different state encodings and
+    /// commitment families).
+    #[test]
+    fn bloom_variants_answer_identically() {
+        use p3_field::PrimeCharacteristicRing;
+        let sh = shape();
+        let base: Vec<u32> = (1..=40).map(|k| k * 7919 + 13).collect();
+        let commit = ProverCommit::plain();
+        let vk_omc = crate::decode::bloom::bloom_decode_vk_commit(sh.bloom_params(4), CommitMode::Plain);
+        let vk_packed =
+            crate::decode::bloom_packed::bloom_packed_decode_vk_commit(sh.bloom_packed_params(4), CommitMode::Plain);
+        let (mut ones, mut zeros) = (0, 0);
+        for mode in [QueryKeyMode::First, QueryKeyMode::UniformStream, QueryKeyMode::Absent, QueryKeyMode::Hot] {
+            let run = |fam: StreamFamily, vk: &DecodeVk| {
+                let (batches, query_at, _, _) = build_query_schedule_batches(&base, 30, 4, 4, fam);
+                prove_leaves(fam, sh, &batches, &query_at, mode, &commit, Some(vk)).2
+            };
+            let (a, b) = (run(StreamFamily::BloomOmc, &vk_omc), run(StreamFamily::BloomPacked, &vk_packed));
+            assert_eq!(a.len(), b.len());
+            assert!(!a.is_empty());
+            for (qa, qb) in a.iter().zip(&b) {
+                let (sa, sb) = (qa.statement.expect("pinned"), qb.statement.expect("pinned"));
+                assert_eq!(qa.at_leaf, qb.at_leaf, "{mode:?}");
+                assert_eq!(sa.query, sb.query, "{mode:?}: the same probe key");
+                assert_eq!(sa.answer, sb.answer, "{mode:?} at leaf {}: the same answer", qa.at_leaf);
+                assert_ne!(sa.commit, sb.commit, "different state commitments");
+                if sa.answer[0] == Val::ONE { ones += 1 } else { zeros += 1 }
+            }
+        }
+        assert!(ones > 0 && zeros > 0, "members and non-members both probed ({ones} / {zeros})");
+    }
+
+    fn bloom_query_replay_matches_sim_and_binds_in(fam: StreamFamily) {
         if std::env::var("EXP_ROOT_VK").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "derive") {
             eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
             return;
         }
-        let (sh, m, fam) = (shape(), 4usize, StreamFamily::BloomOmc);
+        let (sh, m) = (shape(), 4usize);
         for commit in both_modes() {
             let Some(mut audit) = QueryAudit::new(fam, &sh, m, commit.mode()) else {
                 eprintln!("skipped: binding off under a legacy opt-in");

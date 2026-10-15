@@ -111,6 +111,12 @@ pub fn genesis_commit_bb(pp: &PublicParams) -> [Val; 8] {
             use crate::sketch::bloom_omc::{bloom_empty, commit_bloom_with};
             commit_bloom_with(&bloom_empty(&s.bloom_params(pp.m)), mode, zero)
         }
+        // Genesis Com(0^{M_w}; 0), family 7.
+        StreamFamily::BloomPacked => {
+            use crate::sketch::bloom_packed::{commit_packed_with, packed_empty};
+            let p = s.bloom_packed_params(pp.m);
+            commit_packed_with(&p, &packed_empty(&p), mode, zero)
+        }
         StreamFamily::KmvSketch => {
             use crate::sketch::kmv::{commit_kmv_state_with, KmvState};
             commit_kmv_state_with(&KmvState::empty(s.kmv_params(pp.m).k), mode, zero)
@@ -702,6 +708,12 @@ impl QueryAudit {
             // The membership circuit has one (bound) construction; it does
             // not depend on the binding, nor on the batch size.
             StreamFamily::BloomOmc => bloom_decode_vk_commit(shape.bloom_params(m), commit_mode),
+            // The packed membership circuit (M2): derived from (k, log_w) and
+            // the commitment mode only.
+            StreamFamily::BloomPacked => crate::decode::bloom_packed::bloom_packed_decode_vk_commit(
+                shape.bloom_packed_params(m),
+                commit_mode,
+            ),
             // The distinct-count decoder depends on `k` only (not on the
             // batch size); `Legacy` builds the Semantic decoder.
             StreamFamily::KmvSketch => {

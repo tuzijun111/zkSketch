@@ -5,7 +5,8 @@
 #   batches of SIX_M, a query after every batch (n = 1..T), default (hiding) commitments.
 #   Paper configuration (the defaults): 32 cores, N = 16,384, m = 2,048 (t = 8).
 # Usage: run_zks.sh [tag ...]   (default: cm hll ss gk bloom bloom_absent kmv)
-# Env (see six_common.sh for RESULTS, SIX_M, SIX_T, SIX_N, SIX_GK_CAP, SIX_GK_ROUNDS, SIX_CORES; gate.sh for GATE_*):
+# Env (see six_common.sh for RESULTS, SIX_M, SIX_T, SIX_N, SIX_GK_CAP, SIX_GK_ROUNDS, SIX_BLOOM_VARIANT,
+#   SIX_CORES; gate.sh for GATE_*):
 #   ZKS_BIN          exp_compose binary (default: this checkout's target/release/examples/exp_compose;
 #                    build it in THIS checkout: exp_compose finds data/ and results/ through the
 #                    checkout it was compiled in)
@@ -61,8 +62,8 @@ FAM[cm]=cm;            KM[cm]=hot;      ENVS[cm]="EXP_D=3 EXP_W=1024"
 FAM[hll]=hll;          KM[hll]=first;   ENVS[hll]="EXP_HLL_B=14"
 FAM[ss]=ss;            KM[ss]=first;    ENVS[ss]="EXP_SS_CAP=1024"
 FAM[gk]=gk;            KM[gk]=hot;      ENVS[gk]="EXP_GK_CAP=$SIX_GK_CAP EXP_GK_S=51 EXP_GK_ROUNDS=$SIX_GK_ROUNDS"
-FAM[bloom]=bloom;      KM[bloom]=first; ENVS[bloom]="EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14"
-FAM[bloom_absent]=bloom; KM[bloom_absent]=absent; ENVS[bloom_absent]="EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14"
+FAM[bloom]=bloom;      KM[bloom]=first; ENVS[bloom]="EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=$SIX_BLOOM_VARIANT"
+FAM[bloom_absent]=bloom; KM[bloom_absent]=absent; ENVS[bloom_absent]="EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=$SIX_BLOOM_VARIANT"
 FAM[kmv]=kmv;          KM[kmv]=first;   ENVS[kmv]="EXP_KMV_K=1024"
 
 # Ctrl-C / TERM: stop the running exp_compose (rss_tree.sh stops its process group) and exit.

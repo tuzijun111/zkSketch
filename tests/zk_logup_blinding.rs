@@ -434,3 +434,88 @@ fn stable_gk_leaf_sums(expose: Expose, mode: zksketch::commitment::hiding::Commi
         assert_eq!(fresh, 0, "non-zk control: the sums are a deterministic function of the witness");
     }
 }
+
+/// Two proofs of one witness: every revealed LogUp sum of a multi-member bus
+/// is fresh (zk) or repeated (non-zk control), every bus sums to zero, a
+/// one-member bus reveals 0, one revealed sum per global interaction.
+fn assert_sums_fresh(
+    pa: &BatchStarkProof<Sc>,
+    pb: &BatchStarkProof<Sc>,
+    lookups: &[p3_lookup::Lookups<Val>],
+    label: &str,
+) {
+    assert_eq!(buses(pa), buses(pb), "{label}: same circuit, same interactions");
+    let (mut fresh, mut repeated, mut total) = (0, 0, 0);
+    for (bus, members) in buses(pa) {
+        for p in [pa, pb] {
+            let sum = members
+                .iter()
+                .fold(Challenge::ZERO, |acc, &(i, g)| acc + p.proof.global_lookup_data[i][g].cumulative_sum);
+            assert_eq!(sum, Challenge::ZERO, "{label}: bus {bus}: revealed sums must balance");
+        }
+        for &(i, g) in &members {
+            let (ca, cb) = (pa.proof.global_lookup_data[i][g].cumulative_sum, pb.proof.global_lookup_data[i][g].cumulative_sum);
+            total += 1;
+            if members.len() == 1 {
+                assert_eq!((ca, cb), (Challenge::ZERO, Challenge::ZERO), "{label}: bus {bus}: a one-member bus reveals 0");
+            } else if ca == cb {
+                repeated += 1;
+            } else {
+                fresh += 1;
+            }
+        }
+    }
+    for (i, lds) in pa.proof.global_lookup_data.iter().enumerate() {
+        let globals = lookups[i].iter().filter(|l| matches!(l.kind, p3_lookup::Kind::Global(_))).count();
+        assert_eq!(lds.len(), globals, "{label}: instance {i}: one revealed sum per global interaction");
+    }
+    println!("{label}: global interactions {total}, fresh {fresh}, repeated {repeated} (zk = {ZK})");
+    assert!(total > 2, "{label}: the circuit has global interactions");
+    if ZK {
+        assert_eq!(repeated, 0, "{label}: zk: every multi-member-bus sum is masked afresh per proof");
+        assert!(fresh > 0);
+    } else {
+        assert_eq!(fresh, 0, "{label}: non-zk control: the sums are a deterministic function of the witness");
+    }
+}
+
+/// G-zk for the M2 packed-byte Bloom leaf (k = 3, log_w = 7, batch 8, a
+/// non-empty prior, a repeated key and a dummy slot) in its standalone form
+/// (`Expose::None`, plain commitments) and its DEPLOYED form (Interval,
+/// Hiding, the honest openings of leaf `t = 2`), and for its membership
+/// query (Hiding): two proofs of one witness each.
+#[test]
+fn packed_bloom_leaf_and_query_revealed_sums_are_fresh_and_zero_sum_per_bus() {
+    use zksketch::commitment::hiding::{CommitFamily, CommitMode, Openings, SaltSeed, rho_state_bb};
+    use zksketch::decode::bloom_packed::prove_bloom_packed_query_commit;
+    use zksketch::sketch::bloom_packed::{
+        BloomPackedParams, build_bloom_packed_leaf_commit, packed_empty, packed_insert,
+    };
+    let p = BloomPackedParams { k: 3, log_w: 7, batch: 8 };
+    let keys: Vec<u64> = (0..20u64).map(|i| (i ^ 7).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(17)).collect();
+    let mut prior = packed_empty(&p);
+    packed_insert(&mut prior, &p, &keys[..12]);
+    let mut batch = keys[12..18].to_vec();
+    batch.push(batch[0]);
+    let seed = SaltSeed::for_tests(2026);
+    for (expose, mode) in [(Expose::None, CommitMode::Plain), (Expose::Interval, CommitMode::Hiding)] {
+        let mut leaf = build_bloom_packed_leaf_commit(p, expose, mode);
+        let (a, b) = if mode.is_hiding() {
+            let open = Openings::for_leaf(&seed, CommitFamily::BloomPacked, 2);
+            (leaf.prove_epoch_commit(2, &prior, &batch, &open), leaf.prove_epoch_commit(2, &prior, &batch, &open))
+        } else {
+            (leaf.prove_epoch_at(2, &prior, &batch), leaf.prove_epoch_at(2, &prior, &batch))
+        };
+        assert_eq!(a.final_commit.0, b.final_commit.0, "same witness: same commitments");
+        let lookups = &a.output.1.prover_data.common.lookups;
+        assert_sums_fresh(&a.output.0, &b.output.0, lookups, &format!("packed bloom leaf ({expose:?}, {mode:?})"));
+    }
+    let mut state = prior.clone();
+    packed_insert(&mut state, &p, &batch);
+    let salt = rho_state_bb(&seed, CommitFamily::BloomPacked, 2);
+    let qa = prove_bloom_packed_query_commit(p, &state, batch[1], CommitMode::Hiding, &salt);
+    let qb = prove_bloom_packed_query_commit(p, &state, batch[1], CommitMode::Hiding, &salt);
+    assert_eq!(qa.answer, 1);
+    let lookups = &qa.output.1.prover_data.common.lookups;
+    assert_sums_fresh(&qa.output.0, &qb.output.0, lookups, "packed bloom query (Hiding)");
+}

@@ -139,6 +139,10 @@ use crate::sketch::bloom_omc::{
     build_bloom_omc_leaf_commit, commit_bloom, commit_bloom_with,
     BloomOmcLeafCircuit, BloomOmcParams,
 };
+use crate::sketch::bloom_packed::{
+    build_bloom_packed_leaf_commit, commit_packed, commit_packed_with, packed_batch_commit,
+    packed_batch_commit_with, packed_empty, packed_insert, BloomPackedLeafCircuit, BloomPackedParams,
+};
 use crate::sketch::countmin::{CountMinParams, CountMinState};
 use crate::sketch::countmin_omc::{
     build_countmin_omc_leaf_commit, countmin_omc_advance, countmin_omc_batch_commit,
@@ -258,6 +262,9 @@ pub enum WireState {
     /// The `M = k·2^log_w` filter bits, packed 8 per byte (LSB first): the
     /// state is bits, so this is what a deployment ships.
     Bloom { k: u32, log_w: u32, cells: u32, packed: Vec<u8> },
+    /// The packed Bloom filter's `M_w = k·2^log_w/8` state bytes (the same
+    /// bytes as `Bloom`'s `packed`).
+    BloomPacked { k: u32, log_w: u32, words: Vec<u8> },
     /// KMV: the capacity `k` and the active values (ascending, distinct, at
     /// most `k`; the sentinel tail is implicit).
     Kmv { k: u32, vals: Vec<u32> },
@@ -273,6 +280,8 @@ enum FamState {
     Gk(Gk2State),
     /// The filter's parameters (shape + batch slots) and its `M` bits.
     Bloom(BloomOmcParams, Vec<u8>),
+    /// The packed filter's parameters and its `M_w` bytes.
+    BloomPacked(BloomPackedParams, Vec<u8>),
     /// The KMV leaf parameters (`k` + batch slots) and the state.
     Kmv(KmvParams, KmvState),
 }
@@ -300,6 +309,10 @@ impl FamState {
                 let p = shape.bloom_params(m);
                 Self::Bloom(p, bloom_empty(&p))
             }
+            StreamFamily::BloomPacked => {
+                let p = shape.bloom_packed_params(m);
+                Self::BloomPacked(p, packed_empty(&p))
+            }
             StreamFamily::KmvSketch => {
                 let p = shape.kmv_params(m);
                 Self::Kmv(p, KmvState::empty(p.k))
@@ -323,6 +336,7 @@ impl FamState {
             Self::Ss(state) => *state = apply_batch_ss_full(state, &ss_updates_of(batch)).0,
             Self::Gk(state) => *state = apply_batch2(state, &gk_vals_of(batch)),
             Self::Bloom(p, bits) => bloom_insert(bits, p, &bloom_keys_of(batch)),
+            Self::BloomPacked(p, words) => packed_insert(words, p, &bloom_keys_of(batch)),
             Self::Kmv(_, state) => *state = kmv_advance_records(state, &kmv_records_of(batch)),
         }
     }
@@ -335,6 +349,7 @@ impl FamState {
             Self::Ss(state) => commit_ss_state(state).0,
             Self::Gk(state) => commit_gk2_state(state).0,
             Self::Bloom(_, bits) => commit_bloom(bits),
+            Self::BloomPacked(p, words) => commit_packed(p, words),
             Self::Kmv(_, state) => commit_kmv_state(state),
         }
     }
@@ -352,6 +367,7 @@ impl FamState {
                 Self::Ss(state) => commit_ss_state_with(state, mode, salt).0,
                 Self::Gk(state) => commit_gk2_state_with(state, mode, salt).0,
                 Self::Bloom(_, bits) => commit_bloom_with(bits, mode, salt),
+                Self::BloomPacked(p, words) => commit_packed_with(p, words, mode, salt),
                 Self::Kmv(_, state) => commit_kmv_state_with(state, mode, salt),
             },
         }
@@ -369,6 +385,7 @@ impl StreamFamily {
             StreamFamily::SsCertified => CommitFamily::SpaceSaving,
             StreamFamily::GkBandmerge2 => CommitFamily::GreenwaldKhanna,
             StreamFamily::BloomOmc => CommitFamily::Bloom,
+            StreamFamily::BloomPacked => CommitFamily::BloomPacked,
             StreamFamily::KmvSketch => CommitFamily::Kmv,
             other => unreachable!("base_family() is a BabyBear family, got {other:?}"),
         }
@@ -400,6 +417,8 @@ pub(crate) fn batch_commits(
             }
             // `m` record slots: the real keys, then canonical dummies.
             StreamFamily::BloomOmc => bloom_batch_commit(m, &bloom_keys_of(b)),
+            // The same record slots (Plain: the same value as BloomOmc's).
+            StreamFamily::BloomPacked => packed_batch_commit(m, &bloom_keys_of(b)),
             // `m` record slots, each pad slot the canonical dummy in place.
             StreamFamily::KmvSketch => kmv_batch_commit(m, &kmv_records_of(b)),
             _ => unreachable!("gl families use batch_commits_gl"),
@@ -461,6 +480,8 @@ pub(crate) fn batch_commits_with(
                 }
                 // `m` record slots: the real keys, then canonical dummies.
                 StreamFamily::BloomOmc => bloom_batch_commit_with(m, &bloom_keys_of(b), mode, &salt),
+                // Family 7: the salt `commit.batch_salt(BloomPacked, t)`.
+                StreamFamily::BloomPacked => packed_batch_commit_with(m, &bloom_keys_of(b), mode, &salt),
                 // `m` record slots, each pad slot the canonical dummy in place.
                 StreamFamily::KmvSketch => kmv_batch_commit_with(m, &kmv_records_of(b), mode, &salt),
                 _ => unreachable!("gl families use batch_commits_gl_with"),
@@ -657,6 +678,9 @@ impl FamState {
             (FamLeafCircuit::Ss(l), Self::Ss(state)) => prove!(l, state.clone(), ss_updates_of(batch)),
             (FamLeafCircuit::Gk(l), Self::Gk(state)) => prove!(l, state.clone(), gk_vals_of(batch)),
             (FamLeafCircuit::Bloom(l), Self::Bloom(_, bits)) => prove!(l, bits, &bloom_keys_of(batch)),
+            (FamLeafCircuit::BloomPacked(l), Self::BloomPacked(_, words)) => {
+                prove!(l, words, &bloom_keys_of(batch))
+            }
             // KMV takes the record sequence (pad slots are in-place dummies).
             (FamLeafCircuit::Kmv(l), Self::Kmv(_, state)) => {
                 let records = kmv_records_of(batch);
@@ -684,6 +708,7 @@ impl FamState {
             Self::Ss(_) => CommitFamily::SpaceSaving,
             Self::Gk(_) => CommitFamily::GreenwaldKhanna,
             Self::Bloom(..) => CommitFamily::Bloom,
+            Self::BloomPacked(..) => CommitFamily::BloomPacked,
             Self::Kmv(..) => CommitFamily::Kmv,
         }
     }
@@ -721,6 +746,9 @@ impl FamState {
                     cells: bits.len() as u32,
                     packed,
                 }
+            }
+            Self::BloomPacked(p, words) => {
+                WireState::BloomPacked { k: p.k as u32, log_w: p.log_w as u32, words: words.clone() }
             }
             Self::Kmv(p, state) => WireState::Kmv { k: p.k as u32, vals: state.vals.clone() },
         }
@@ -771,6 +799,12 @@ impl FamState {
                 let bits: Vec<u8> = (0..cells).map(|i| (packed[i / 8] >> (i % 8)) & 1).collect();
                 Self::Bloom(p, bits)
             }
+            WireState::BloomPacked { k, log_w, words } => {
+                let p = BloomPackedParams { k: *k as usize, log_w: *log_w as usize, batch: m };
+                p.validate();
+                assert_eq!(words.len(), p.m_words(), "packed bloom wire state bytes");
+                Self::BloomPacked(p, words.clone())
+            }
             WireState::Kmv { k, vals } => {
                 let p = KmvParams { k: *k as usize, batch: m };
                 p.validate();
@@ -797,6 +831,7 @@ enum FamLeafCircuit {
     Ss(SsFullLeafCircuit),
     Gk(Gkb2LeafCircuit),
     Bloom(BloomOmcLeafCircuit),
+    BloomPacked(BloomPackedLeafCircuit),
     Kmv(KmvLeafCircuit),
 }
 
@@ -840,6 +875,10 @@ impl FamLeafCircuit {
             // One (bound) construction: no binding switch.
             StreamFamily::BloomOmc => {
                 Self::Bloom(build_bloom_omc_leaf_commit(shape.bloom_params(m), expose, mode))
+            }
+            // The packed-byte leaf (M2): one construction, no binding switch.
+            StreamFamily::BloomPacked => {
+                Self::BloomPacked(build_bloom_packed_leaf_commit(shape.bloom_packed_params(m), expose, mode))
             }
             // `Legacy` builds the Semantic KMV leaf (there is no pre-fix one).
             StreamFamily::KmvSketch => {
@@ -1059,7 +1098,7 @@ impl FamStateGl {
                     params: CountMinParams { d, w },
                 })
             }
-            WireState::Bloom { .. } => {
+            WireState::Bloom { .. } | WireState::BloomPacked { .. } => {
                 panic!("the Bloom filter has no Goldilocks leaf (BabyBear engine only)")
             }
             WireState::Kmv { .. } => {
@@ -4361,6 +4400,7 @@ mod tests {
                 FamState::Bloom(p, bits) => crate::sketch::bloom_omc::build_bloom_omc_leaf_expose(*p, expose)
                     .prove_epoch_at(1, bits, &bloom_keys_of(&batch))
                     .output,
+                FamState::BloomPacked(..) => unreachable!("the packed Bloom leaf post-dates B2 (no pre-B2 leaf)"),
                 // Always passes: `build_kmv_leaf_expose` is
                 // `build_kmv_leaf_commit(.., Plain)` on this branch, so this
                 // arm only checks the harness dispatch. The pre-B2 KMV guard
@@ -4481,6 +4521,27 @@ mod tests {
     fn dist_root_vk_derivable_bloom_omc() {
         for commit in both_modes() {
             assert_dist_root_vk_derivable(StreamFamily::BloomOmc, &commit);
+        }
+    }
+
+    /// M2: the auditor's derivation from public parameters reproduces a real
+    /// dist forest's root VK over packed Bloom leaves (both commitment
+    /// modes), and the packed leaf / root VKs differ from the bit-array
+    /// leaf's (the variant is a public parameter the derivation must see).
+    #[test]
+    fn dist_root_vk_derivable_bloom_packed() {
+        for commit in both_modes() {
+            assert_dist_root_vk_derivable(StreamFamily::BloomPacked, &commit);
+        }
+        let (m, t, machines) = (4, 3, 2);
+        for mode in [CommitMode::Plain, CommitMode::Hiding] {
+            let sh = shape();
+            let a = derive_dist_root_vk(StreamFamily::BloomPacked, &sh, m, StreamMode::Forest, t, machines, mode);
+            let b = derive_dist_root_vk(StreamFamily::BloomOmc, &sh, m, StreamMode::Forest, t, machines, mode);
+            assert_ne!(a.commitment, b.commitment, "{mode:?}: the two Bloom variants have different root VKs");
+            let la = derive_dist_leaf_vk(StreamFamily::BloomPacked, &sh, m, mode);
+            let lb = derive_dist_leaf_vk(StreamFamily::BloomOmc, &sh, m, mode);
+            assert_ne!(la.commitment, lb.commitment, "{mode:?}: different leaf VKs");
         }
     }
 
@@ -4942,6 +5003,35 @@ mod tests {
     #[test]
     fn hiding_end_to_end_bloom_omc() {
         assert_hiding_end_to_end(StreamFamily::BloomOmc);
+    }
+
+    #[test]
+    fn hiding_end_to_end_bloom_packed() {
+        assert_hiding_end_to_end(StreamFamily::BloomPacked);
+    }
+
+    /// M2: the packed wire state is the filter's bytes (exact round trip),
+    /// the SAME bytes the bit-array family ships for the same stream, and the
+    /// two variants' plaintext replays hold the same filter.
+    #[test]
+    fn bloom_packed_wire_state_round_trips_and_matches_bloom_omc() {
+        let sh = shape();
+        let m = 4;
+        let mut packed = FamState::empty(StreamFamily::BloomPacked, &sh, m);
+        let mut bits = FamState::empty(StreamFamily::BloomOmc, &sh, m);
+        for b in [[3u32, 9, PAD_KEY, PAD_KEY], [11, 3, 77, 1000]] {
+            packed.advance(&sh, &b);
+            bits.advance(&sh, &b);
+        }
+        let (WireState::BloomPacked { words, .. }, WireState::Bloom { packed: bytes, .. }) = (packed.encode(), bits.encode())
+        else {
+            panic!("bloom wire states")
+        };
+        assert_eq!(words, bytes, "the packed state is the bit array's bytes");
+        let back = FamState::decode(&packed.encode(), m);
+        assert_eq!(back.commit(&sh), packed.commit(&sh), "exact round trip");
+        assert_ne!(packed.commit(&sh), bits.commit(&sh), "different state encodings, different commitments");
+        assert_eq!(packed.commit_family(), CommitFamily::BloomPacked);
     }
 
     #[test]
@@ -5578,6 +5668,27 @@ mod tests {
     /// against a log published under another seed.
     #[test]
     fn inproc_workers_ship_certificates_that_bind_queries_both_modes() {
+        inproc_workers_bind_queries(&[
+            (StreamFamily::CmOmc, StreamMode::PerBatch, 2),
+            (StreamFamily::HllOmc, StreamMode::Chain, 1),
+            (StreamFamily::BloomOmc, StreamMode::Forest, 2),
+            (StreamFamily::GkBandmerge2, StreamMode::Forest, 2),
+            (StreamFamily::KmvSketch, StreamMode::Chain, 1),
+        ]);
+    }
+
+    /// [`inproc_workers_ship_certificates_that_bind_queries_both_modes`] for
+    /// the packed-byte Bloom family (M2): forest on two machines and the
+    /// chain, both commitment modes.
+    #[test]
+    fn inproc_workers_bind_packed_bloom_queries_both_modes() {
+        inproc_workers_bind_queries(&[
+            (StreamFamily::BloomPacked, StreamMode::Forest, 2),
+            (StreamFamily::BloomPacked, StreamMode::PerBatch, 2),
+        ]);
+    }
+
+    fn inproc_workers_bind_queries(cases: &[(StreamFamily, StreamMode, usize)]) {
         if root_vk_overridden() {
             eprintln!("skipped: EXP_ROOT_VK overrides the derived VK");
             return;
@@ -5586,13 +5697,7 @@ mod tests {
         let base: Vec<u32> = (1..=10).map(|k| k * 7 + 1).collect();
         let other = ProverCommit::hiding(SaltSeed::for_tests(26));
         for commit in both_modes() {
-            for (family, mode, machines) in [
-                (StreamFamily::CmOmc, StreamMode::PerBatch, 2),
-                (StreamFamily::HllOmc, StreamMode::Chain, 1),
-                (StreamFamily::BloomOmc, StreamMode::Forest, 2),
-                (StreamFamily::GkBandmerge2, StreamMode::Forest, 2),
-                (StreamFamily::KmvSketch, StreamMode::Chain, 1),
-            ] {
+            for &(family, mode, machines) in cases {
                 let tag = format!("{family:?} {mode:?} {}", commit.label());
                 let (batches, query_at, _, _) =
                     crate::experiments::stream_compose::build_query_schedule_batches(&base, 10, 4, 3, family);

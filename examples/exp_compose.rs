@@ -63,7 +63,17 @@
 //!        `EXP_BLOOM_LOGW` (bits per slice `W = 2^logw`, default 14, `7..=20`)
 //!        — the deployed `M = 7·2^14` filter (~1% FPR at 12k keys). The CSV
 //!        shape reads `k{k}_logw{logw}`. There is no Goldilocks Bloom leaf
-//!        (`bloom_gl` is rejected).
+//!        (`bloom_gl` is rejected). `EXP_BLOOM_VARIANT=omc|packed` picks the
+//!        leaf the `bloom` token runs (M2): `omc` = the bit-array leaf (one
+//!        field element per bit; the default), `packed` = the packed-byte B1
+//!        leaf (`zksketch::sketch::bloom_packed`: per-access timestamped
+//!        memory checking over bytes, commitment family 7, `k·m < 2^16`).
+//!        Both prove the same filter and answer every query identically; the
+//!        leaf / decode / merge / root VKs differ. The explicit tokens
+//!        `bloom_omc` / `bloom_packed` ignore the switch. It is a public
+//!        parameter: the CSV `variant` (`bloom_omc` / `bloom_packed`) and
+//!        env.json (`bloom_variant`) record it, and with `m` they pin the leaf
+//!        circuit the auditor re-derives the VKs of.
 //! - kmv: `EXP_KMV_K` (capacity `k` = the number of smallest distinct 27-bit
 //!        key hashes kept, default 1024) — needs `k` a multiple of 4 in
 //!        `4..=32768` and `k + m < 2^24` (a bad value exits 2 with the
@@ -326,7 +336,7 @@ fn shape_str(family: StreamFamily, s: &StreamShape) -> String {
         StreamFamily::GkBandmerge2 | StreamFamily::GkBandmerge2Gl => {
             format!("cap{}_s{}", s.capacity, s.gk_s)
         }
-        StreamFamily::BloomOmc => format!("k{}_logw{}", s.bloom_k, s.bloom_log_w),
+        StreamFamily::BloomOmc | StreamFamily::BloomPacked => format!("k{}_logw{}", s.bloom_k, s.bloom_log_w),
         StreamFamily::KmvSketch => format!("k{}", s.kmv_k),
     }
 }
@@ -554,7 +564,15 @@ fn main() {
         .split(',')
         .filter_map(|s| {
             let s = s.trim();
-            let f = StreamFamily::parse(s);
+            // `bloom` runs the leaf EXP_BLOOM_VARIANT picks (M2); the
+            // explicit `bloom_omc` / `bloom_packed` tokens ignore it.
+            let f = StreamFamily::parse(s).map(|f| {
+                if f == StreamFamily::BloomOmc && s.eq_ignore_ascii_case("bloom") {
+                    zksketch::experiments::stream_compose::bloom_variant_from_env()
+                } else {
+                    f
+                }
+            });
             if f.is_none() && !s.is_empty() {
                 if s.to_ascii_lowercase().starts_with("bloom") {
                     eprintln!(
@@ -672,6 +690,21 @@ fn main() {
             }
         }
     }
+    // The packed Bloom leaf also needs k·m < 2^16 (16-bit timestamps).
+    if families.contains(&StreamFamily::BloomPacked) {
+        println!("bloom: variant=packed (EXP_BLOOM_VARIANT; leaf zksketch::sketch::bloom_packed, family 7)");
+        for &m in &batches_m {
+            if let Err(e) = shape.check_bloom_packed(m) {
+                eprintln!(
+                    "bad packed Bloom shape (EXP_BLOOM_K={}, EXP_BLOOM_LOGW={}, m={m}): {e}",
+                    shape.bloom_k, shape.bloom_log_w
+                );
+                std::process::exit(2);
+            }
+        }
+    } else if families.contains(&StreamFamily::BloomOmc) {
+        println!("bloom: variant=omc (EXP_BLOOM_VARIANT)");
+    }
     // Likewise a bad KMV capacity (k a multiple of 4 in 4..=2^15, k + m < 2^24).
     if families.contains(&StreamFamily::KmvSketch) {
         for &m in &batches_m {
@@ -761,6 +794,15 @@ fn main() {
             ("salt_seed", commit.seed_label().into()),
             // GK round certification (EXP_GK_ROUNDS=sorted|stable, M3).
             ("gk_rounds", shape.gk_rounds.label().into()),
+            // Bloom leaf variant the `bloom` token runs (EXP_BLOOM_VARIANT, M2).
+            (
+                "bloom_variant",
+                match zksketch::experiments::stream_compose::bloom_variant_from_env() {
+                    StreamFamily::BloomPacked => "packed",
+                    _ => "omc",
+                }
+                .into(),
+            ),
         ],
     );
 

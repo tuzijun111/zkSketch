@@ -181,7 +181,9 @@
 #   (commit = plain|hiding, salt_seed = env|os|n/a: plonky3 only;
 #    pcs = hiding|nonhiding, logup_mask = on|off: the plonky3 binary's proof
 #    system, hiding/on under the default zk build; gk_rounds = sorted|stable
-#    for the GK band-merge leaf (EXP_GK_ROUNDS, M3), n/a for other families)
+#    for the GK band-merge leaf (EXP_GK_ROUNDS, M3), n/a for other families;
+#    the Bloom leaf variant is the `variant` column, bloom_omc | bloom_packed,
+#    picked by EXP_BLOOM_VARIANT=omc|packed for the `bloom` token, M2)
 #   (procs: total_time_ms = measured end-to-end wall (witness pass → root);
 #    leafgen_ms = real parallel slice-phase wall; merge_ms = cross-machine
 #    composition wall; proof_bytes/verify_ms are Θ(t) for per_batch vs O(1)

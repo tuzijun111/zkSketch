@@ -97,7 +97,9 @@
 //! byte witnesses instead of hint-decomposed range checks.
 //!
 //! **Changes from the 2026-10-14 prototype** (`latex/redesign_20261014/b1out`;
-//! same relation, cheaper gadgets; see `docs` in the M2 report):
+//! same relation, cheaper gadgets; at k = 7, W = 2^14, m = 1,024 the ALU
+//! table falls from 245,257 rows (0.936 of 2^18) to 185,353 (0.707), every
+//! table keeping its padded height):
 //! byte pins are direct RangeAir lookups (`add_range`, which forces the
 //! three higher coefficients to zero and the base one into `[0,256)`, 0 ALU
 //! ops) instead of `add_range_bits(x, 8)` (2 ALU ops each); every multi-byte

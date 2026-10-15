@@ -35,7 +35,9 @@
 //! ```
 //!
 //! Knobs:
-//! * `E0_FAMILY` (`cm,hll,ss,gk,bloom`), `E0_M` (`4096,8192,16384`).
+//! * `E0_FAMILY` (`cm,hll,ss,gk,bloom`, plus `bloom_packed`: the M2
+//!   packed-byte Bloom leaf, `zksketch::sketch::bloom_packed`, whose merges
+//!   `E0_MERGE` also probes), `E0_M` (`4096,8192,16384`).
 //! * Geometry (paper defaults): `EXP_D`=7, `EXP_W`=16384 (CM), `EXP_HLL_B`=14,
 //!   `EXP_SS_CAP`=16384, `EXP_GK_CAP`=2048, `EXP_GK_S`=73, `EXP_BLOOM_K`=7,
 //!   `EXP_BLOOM_LOGW`=14.
@@ -92,6 +94,9 @@ use zksketch::recursion::recursive::timing;
 use zksketch::sketch::Sketch;
 use zksketch::sketch::bind::{Binding, default_binding};
 use zksketch::sketch::bloom_omc::{BloomOmcLeafCircuit, BloomOmcParams, bloom_empty, build_bloom_omc_leaf_commit};
+use zksketch::sketch::bloom_packed::{
+    BloomPackedLeafCircuit, BloomPackedParams, build_bloom_packed_leaf_commit, packed_empty,
+};
 use zksketch::sketch::countmin::{CountMinParams, CountMinUpdate};
 use zksketch::sketch::countmin_omc::{CmOmcLeafCircuit, CmOmcParams, build_countmin_omc_leaf_commit};
 use zksketch::sketch::countmin_v9::CountMinV9;
@@ -160,7 +165,7 @@ impl Geometry {
             "hll" => format!("b={}", self.hll_b),
             "ss" => format!("cap={}", self.ss_cap),
             "gk" => format!("cap={} s={}", self.gk_cap, self.gk_s),
-            "bloom" => format!("k={} log_w={}", self.bloom_k, self.bloom_log_w),
+            "bloom" | "bloom_packed" => format!("k={} log_w={}", self.bloom_k, self.bloom_log_w),
             _ => unreachable!(),
         }
     }
@@ -169,6 +174,7 @@ impl Geometry {
 fn variant(fam: &str) -> &'static str {
     match fam {
         "cm" | "hll" | "bloom" => "omc",
+        "bloom_packed" => "packed",
         "ss" => "certified",
         // EXP_GK_ROUNDS (M3): the round certification is part of the variant.
         "gk" => match default_gk_rounds() {
@@ -193,6 +199,7 @@ enum Leaf {
     Ss(SsFullLeafCircuit, SsFullParams),
     Gk(Gkb2LeafCircuit, GkbParams),
     Bloom(BloomOmcLeafCircuit, BloomOmcParams),
+    BloomPacked(BloomPackedLeafCircuit, BloomPackedParams),
 }
 
 impl Leaf {
@@ -225,7 +232,11 @@ impl Leaf {
                 let p = BloomOmcParams { k: g.bloom_k, log_w: g.bloom_log_w, batch: m };
                 Leaf::Bloom(build_bloom_omc_leaf_commit(p, expose, mode), p)
             }
-            _ => panic!("unknown family {fam} (cm|hll|ss|gk|bloom)"),
+            "bloom_packed" => {
+                let p = BloomPackedParams { k: g.bloom_k, log_w: g.bloom_log_w, batch: m };
+                Leaf::BloomPacked(build_bloom_packed_leaf_commit(p, expose, mode), p)
+            }
+            _ => panic!("unknown family {fam} (cm|hll|ss|gk|bloom|bloom_packed)"),
         }
     }
 
@@ -278,6 +289,13 @@ impl Leaf {
                     leaf.prove_epoch_at(t, &bloom_empty(p), &[]).output.0
                 }
             }
+            Leaf::BloomPacked(leaf, p) => {
+                if leaf.commit_mode().is_hiding() {
+                    leaf.prove_epoch_public_zero(t, &packed_empty(p), &[]).output.0
+                } else {
+                    leaf.prove_epoch_at(t, &packed_empty(p), &[]).output.0
+                }
+            }
         }
     }
 
@@ -293,6 +311,7 @@ impl Leaf {
             Leaf::Ss(l, _) => l.commit_mode().is_hiding(),
             Leaf::Gk(l, _) => l.commit_mode().is_hiding(),
             Leaf::Bloom(l, _) => l.commit_mode().is_hiding(),
+            Leaf::BloomPacked(l, _) => l.commit_mode().is_hiding(),
         };
         if !hiding {
             return self.prove_noop(t);
@@ -323,6 +342,10 @@ impl Leaf {
             Leaf::Bloom(leaf, p) => {
                 let o = Openings::for_leaf(seed, CommitFamily::Bloom, t);
                 leaf.prove_epoch_commit(t, &bloom_empty(p), &[], &o).output.0
+            }
+            Leaf::BloomPacked(leaf, p) => {
+                let o = Openings::for_leaf(seed, CommitFamily::BloomPacked, t);
+                leaf.prove_epoch_commit(t, &packed_empty(p), &[], &o).output.0
             }
         }
     }

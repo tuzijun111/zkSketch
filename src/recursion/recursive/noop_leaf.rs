@@ -320,6 +320,24 @@ pub fn bloom_omc_noop_leaf_commit(
         .0
 }
 
+/// The packed-byte Bloom leaf's no-op (M2, `crate::sketch::bloom_packed`):
+/// the empty filter `0^{M_w}` and an all-dummy batch at batch index 1, all
+/// three commitments opened with the public zero salt (so it exposes
+/// `init == final = Com(0^{M_w}; 0)`, family 7 under `Hiding`). The state,
+/// records, splits, salts and index are witnesses, so its VK is that of every
+/// real packed leaf of the same `(k, log_w, batch)`, layout and mode.
+pub fn bloom_packed_noop_leaf_commit(
+    params: crate::sketch::bloom_packed::BloomPackedParams,
+    expose: Expose,
+    mode: crate::commitment::hiding::CommitMode,
+) -> Proof {
+    use crate::sketch::bloom_packed::{build_bloom_packed_leaf_commit, packed_empty};
+    build_bloom_packed_leaf_commit(params, expose, mode)
+        .prove_epoch_public_zero(1, &packed_empty(&params), &[])
+        .output
+        .0
+}
+
 /// KMV / bottom-`k` leaf with an explicit statement ([`Expose`]) and
 /// binding: the empty state and an all-dummy batch (dummies never change the
 /// state, so the leaf exposes `initial == final`). An Interval no-op leaf is

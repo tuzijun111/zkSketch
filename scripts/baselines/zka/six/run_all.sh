@@ -331,7 +331,7 @@ write_manifest() {  # write_manifest <mode>
     echo "# six-sketch comparison run manifest"
     echo "mode=$1"
     echo "started=$(date -Is)"
-    echo "N=$SIX_N M=$SIX_M T=$SIX_T gk_cap=$SIX_GK_CAP gk_rounds=${SIX_GK_ROUNDS:-stable} query_points=$SIX_QNS aggr_epochs=0,$((SIX_T - 1)) cores=$SIX_CORES"
+    echo "N=$SIX_N M=$SIX_M T=$SIX_T gk_cap=$SIX_GK_CAP gk_rounds=${SIX_GK_ROUNDS:-stable} bloom_variant=${SIX_BLOOM_VARIANT:-omc} query_points=$SIX_QNS aggr_epochs=0,$((SIX_T - 1)) cores=$SIX_CORES"
     echo "zka_roots=$SIX_ZKA_ROOTS (aggregation root variants executed and planned) zka_cm_ref=$SIX_ZKA_CM_REF ($(if cm_ref_on "$SIX_ZKA_ROOTS" "$SIX_ZKA_CM_REF"; then echo "their shipped CM planned as a reference; designed also executed"; else echo "no separate CM reference"; fi))"
     if [[ $SIX_ZKA_GK == matched ]]; then
       echo "zka_gk=matched (zkSketch's GK rule in their pipeline: capacity $SIX_GK_CAP, s 51, m_sub $SIX_M = 1 apply_batch2 step per epoch, implementation $SIX_ZKA_GK_IMPL)"
@@ -499,7 +499,7 @@ full run plan (dry run; nothing is executed)
   RESULTS=${RESULTS:-$ZKS/results/six/full-<YYYYmmdd-HHMMSS>}  BASELINE_DIR=$BASELINE_DIR
   shape: N=$SIX_N = T=$SIX_T x M=$SIX_M, GK cap $SIX_GK_CAP (rounds ${SIX_GK_ROUNDS:-stable}), zkSketch cores $SIX_CORES, gate wait <= ${GATE_WAIT_S}s per timed job
   zk-Analytics GK: SIX_ZKA_GK=$SIX_ZKA_GK$( [[ $SIX_ZKA_GK == matched ]] && echo " (zkSketch's GK rule in their pipeline, capacity $SIX_GK_CAP, one apply_batch2 step per $SIX_M-record epoch, implementation $SIX_ZKA_GK_IMPL)" || echo " (textbook Greenwald-Khanna: a reference, not zkSketch's algorithm)")
-  1. zkSketch, 7 timed runs:   SIX_M=$SIX_M SIX_T=$SIX_T SIX_GK_CAP=$SIX_GK_CAP SIX_GK_ROUNDS=${SIX_GK_ROUNDS:-stable} SIX_CORES=$SIX_CORES $HERE6/run_zks.sh ${TAGS[*]}
+  1. zkSketch, 7 timed runs:   SIX_M=$SIX_M SIX_T=$SIX_T SIX_GK_CAP=$SIX_GK_CAP SIX_GK_ROUNDS=${SIX_GK_ROUNDS:-stable} SIX_BLOOM_VARIANT=${SIX_BLOOM_VARIANT:-omc} SIX_CORES=$SIX_CORES $HERE6/run_zks.sh ${TAGS[*]}
   2. zk-Analytics executor:    SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS SIX_ZKA_CM_REF=$SIX_ZKA_CM_REF $HERE6/run_zka.sh exec
                                (aggregation epochs 0..$((SIX_T - 1)) of all six under root variants $EXEC_ROOTS;
                                Bloom/KMV pipelines with queries at n = $SIX_QNS, the query rows once)
