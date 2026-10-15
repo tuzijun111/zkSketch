@@ -1080,6 +1080,13 @@ pub(crate) struct PackedWitness {
     pub(crate) final_words: Vec<Val>,
     pub(crate) ft: Vec<Val>,
     pub(crate) sigma: Vec<usize>,
+    /// Test-only forgeries: private inputs replaced after the witness is
+    /// laid out (`(index, value)`, e.g. an extension-valued state byte), and
+    /// the byte state whose commitment the forger claims as `Com(S_t)`.
+    #[cfg(test)]
+    pub(crate) priv_patch: Vec<(usize, Challenge)>,
+    #[cfg(test)]
+    pub(crate) claim_final: Option<Vec<Val>>,
 }
 
 impl PairWit {
@@ -1179,6 +1186,10 @@ pub(crate) fn epoch_witness(p: &BloomPackedParams, initial: &[u8], keys: &[u64])
         final_words: words.iter().map(|&w| Val::from_u64(w)).collect(),
         ft: last.iter().map(|&t| Val::from_u64(t)).collect(),
         sigma: Vec::new(),
+        #[cfg(test)]
+        priv_patch: Vec::new(),
+        #[cfg(test)]
+        claim_final: None,
     };
     let unmatched = wit.match_sigma();
     assert_eq!(unmatched, 0, "honest memory-checking matching must exist");
@@ -1297,8 +1308,11 @@ impl BloomPackedLeafCircuit {
                 .collect()
         };
         let initial_commit = hiding::commit_flat_bb(mode, CommitKind::State, FAMILY, &openings.init, &flat(&wit.initial));
-        let final_commit =
-            hiding::commit_flat_bb(mode, CommitKind::State, FAMILY, &openings.final_, &flat(&wit.final_words));
+        #[cfg(test)]
+        let claimed = wit.claim_final.as_ref().unwrap_or(&wit.final_words);
+        #[cfg(not(test))]
+        let claimed = &wit.final_words;
+        let final_commit = hiding::commit_flat_bb(mode, CommitKind::State, FAMILY, &openings.final_, &flat(claimed));
         let batch_commit = packed_batch_commit_with(p.batch, keys, mode, &openings.batch);
         self.circuit
             .update_permute_witnesses(&[wit.sigma.clone()])
@@ -1334,6 +1348,10 @@ impl BloomPackedLeafCircuit {
         }
         for pr in &wit.pairs {
             private_inputs.extend(pr.w.iter().map(|&x| base(x)));
+        }
+        #[cfg(test)]
+        for &(i, v) in &wit.priv_patch {
+            private_inputs[i] = v;
         }
         let t_w = std::time::Instant::now();
         let traces = {

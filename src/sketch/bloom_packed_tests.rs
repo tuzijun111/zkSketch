@@ -668,6 +668,92 @@ fn attack_noncanonical_split() {
     assert_attack("A7 x + p", PackedChecks { canon: false, ..PackedChecks::ALL }, &ks, wit, &honest);
 }
 
+/// `X^k` in the challenge field.
+fn xpow(k: u64) -> Challenge {
+    Challenge::from_basis_coefficients_slice(&[Val::ZERO, Val::ONE, Val::ZERO, Val::ZERO]).unwrap().exp_u64(k)
+}
+
+/// A6 (extension-valued new-state byte): for a touched word `u = 3l` (the
+/// first byte of limb `l`, `l mod 4 < 3`) claim `N'_u = N_u + δ·X` with
+/// `δ = ft_u` and `ft'_u = 0`. The final read `u + N'·X + ft'·X²` is still
+/// the true `(u, N_u, ft_u)`, but the packed commitment absorbs `δ·X` into
+/// limb `l + 1`: `Com(S_t)` is the commitment of the byte state with word
+/// `3(l + 1)` raised by `δ` — a different, well-formed state. Control: the
+/// new-state byte pins removed.
+#[test]
+fn attack_extension_valued_new_byte() {
+    let (init, ks, _honest) = attack_input();
+    let mut wit = epoch_witness(&P, &init, &ks);
+    let mw = P.m_words();
+    let u = (0..mw)
+        .step_by(3)
+        .find(|&u| {
+            let l = u / 3;
+            let ft = wit.ft[u].as_canonical_u64();
+            let nxt = 3 * (l + 1);
+            ft >= 1 && l % 4 < 3 && nxt < mw && wit.final_words[nxt].as_canonical_u64() + ft < 256
+        })
+        .expect("a touched first-of-limb word");
+    let delta = wit.ft[u];
+    let nxt = 3 * (u / 3 + 1);
+    // Private inputs (Plain): O (mw), N (mw), ft bytes (2 per word).
+    let n_u = Challenge::from(wit.final_words[u]) + Challenge::from(delta) * xpow(1);
+    wit.priv_patch = vec![(mw + u, n_u), (2 * mw + 2 * u, Challenge::ZERO), (2 * mw + 2 * u + 1, Challenge::ZERO)];
+    let mut claim = wit.final_words.clone();
+    claim[nxt] += delta;
+    wit.claim_final = Some(claim.clone());
+    let control = run_forged(PackedChecks { n_pin: false, ..PackedChecks::ALL }, &ks, wit.clone(), false);
+    let claim_bytes: Vec<u8> = claim.iter().map(|x| x.as_canonical_u64() as u8).collect();
+    let honest_commit = commit_packed(&P, &expected(&P, &init, &ks));
+    assert_ne!(commit_packed(&P, &claim_bytes), honest_commit);
+    assert!(matches!(control, Verdict::Accepted(_)), "A6 control: {control:?}");
+    let deployed = run_forged(PackedChecks::ALL, &ks, wit, false);
+    eprintln!("A6 N_u + δX (claims word {nxt} + {delta}): control accepted; deployed leaf: {deployed:?}");
+    assert!(matches!(deployed, Verdict::Prover | Verdict::Verifier), "A6: {deployed:?}");
+}
+
+/// A11 (extension-valued final timestamp): two untouched words `u, u'` with
+/// different bytes swap their final values, and each final timestamp is the
+/// extension element `((u' − u)/W)·X²` (`X^4 = W`), which moves the final
+/// read's ADDRESS coordinate: the reads `(u', O_{u'}, 0)` and `(u, O_u, 0)`
+/// still consume the two init writes, while `Com(S_t)` commits the swapped
+/// bytes. Control: the final-timestamp byte lookups removed.
+#[test]
+fn attack_final_timestamp_transplant() {
+    let (init, ks, honest) = attack_input();
+    let mut wit = epoch_witness(&P, &init, &ks);
+    let mw = P.m_words();
+    let untouched: Vec<usize> = (0..mw).filter(|&u| wit.ft[u] == Val::ZERO).collect();
+    let (u, v) = untouched
+        .iter()
+        .flat_map(|&a| untouched.iter().map(move |&b| (a, b)))
+        .find(|&(a, b)| a < b && init[a] != init[b])
+        .expect("two untouched words with different bytes");
+    let w = xpow(4); // X^4 = W (a base element)
+    let shift = |from: usize, to: usize| -> Challenge {
+        (Challenge::from_u64(to as u64) - Challenge::from_u64(from as u64)) * w.inverse() * xpow(2)
+    };
+    wit.final_words[u] = Val::from_u8(init[v]);
+    wit.final_words[v] = Val::from_u8(init[u]);
+    // Final read of u consumes v's init write and vice versa.
+    wit.sigma[u] = v;
+    wit.sigma[v] = u;
+    wit.priv_patch = vec![
+        (2 * mw + 2 * u, shift(u, v)),
+        (2 * mw + 2 * u + 1, Challenge::ZERO),
+        (2 * mw + 2 * v, shift(v, u)),
+        (2 * mw + 2 * v + 1, Challenge::ZERO),
+    ];
+    let control = run_forged(PackedChecks { ft_range: false, ..PackedChecks::ALL }, &ks, wit.clone(), false);
+    match &control {
+        Verdict::Accepted(fin) => assert_ne!(fin, &honest, "A11 control: the swapped state is wrong"),
+        other => panic!("A11 control not accepted: {other:?}"),
+    }
+    let deployed = run_forged(PackedChecks::ALL, &ks, wit, false);
+    eprintln!("A11 ft transplant (swap words {u}, {v}): control accepted; deployed leaf: {deployed:?}");
+    assert!(matches!(deployed, Verdict::Prover | Verdict::Verifier), "A11: {deployed:?}");
+}
+
 /// Memory-checking forgeries no permutation can match: (A3) a pair reads the
 /// INITIAL value of a word an earlier pair of the batch wrote, (A5) a final
 /// word differs from the last write (an untouched word flipped). The
