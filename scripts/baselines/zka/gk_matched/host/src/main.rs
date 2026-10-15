@@ -1437,10 +1437,15 @@ mod tests {
         for ep in &eps {
             let mut qs: Vec<u32> = ep.state.tuples.iter().filter(|t| t.active == 1).flat_map(|t| [t.e.saturating_sub(1), t.e, t.e + 1]).collect();
             qs.extend([0, 1, 1 << 20, VALUE_MASK]);
+            // the query guest ranks over the active rows only; it must agree with the padded table
+            let padded = gk_matched_core::from_compact_words(&compact_words(&ep.state));
+            let act: Vec<bm2::Tuple> = ep.state.tuples.iter().copied().filter(|t| t.active == 1).collect();
             for q in qs {
                 let (lo, hi, est) = gkm_rank(&ep.state, q);
                 assert_eq!((lo, hi), ep.zk_state.rank_interval(q), "q={q}");
                 assert_eq!(est, ep.zk_state.rank(q), "q={q}");
+                assert_eq!(gk_matched_core::gkm_rank_rows(&act, q), (lo, hi, est), "active rows, q={q}");
+                assert_eq!(gkm_rank(&padded, q), (lo, hi, est), "padded, q={q}");
             }
         }
     }

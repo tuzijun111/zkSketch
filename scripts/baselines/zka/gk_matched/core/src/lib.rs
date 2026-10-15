@@ -949,7 +949,15 @@ pub fn process_gkm_aggr_marked<F: FnMut(Mark)>(
 /// Dummies have e = E_MAX > q for every q < 2^21, so they never count.
 /// Returns (r_min, r_max, estimate).
 pub fn gkm_rank(s: &State, q: u32) -> (u64, u64, u64) {
-    let tuples = &s.tuples;
+    gkm_rank_rows(&s.tuples, q)
+}
+
+/// [`gkm_rank`] over any prefix-closed row set: the full capacity table, or only its
+/// active rows. Both give the same result, because a dummy has e = E_MAX > q (never
+/// counted) and g = Delta = 0 (a dummy successor adds 0, as "no successor" does).
+/// The query guest calls it on the active rows only, so its cost does not grow
+/// with the unused capacity.
+pub fn gkm_rank_rows(tuples: &[Tuple], q: u32) -> (u64, u64, u64) {
     let cap = tuples.len();
     let mut k = 0usize;
     let mut p_i = 0u64;
@@ -1039,8 +1047,12 @@ pub fn run_gkm_query(input: &GkmQueryInput) -> GkmQueryOutput {
     let chain_final_hash = last.final_chain_hash;
     let state_commits: Vec<[u8; 32]> = input.epoch_chain_links.iter().map(|link| link.state_commit).collect();
 
-    let state = from_compact_words(&input.state_words);
-    let (lo, hi, estimate) = gkm_rank(&state, input.value);
+    // Rank over the compact (active) rows; padding them to `capacity` dummies first, as
+    // from_compact_words does, would only add rows that cannot change the answer.
+    let state = bm2::state_from_words(&input.state_words);
+    assert!(state.tuples.len() <= state.params.capacity, "compact state has more rows than its capacity");
+    assert!(state.tuples.iter().all(|t| t.active == 1), "compact state holds a non-active row");
+    let (lo, hi, estimate) = gkm_rank_rows(&state.tuples, input.value);
     GkmQueryOutput {
         chain_prev_hash,
         chain_final_hash,
