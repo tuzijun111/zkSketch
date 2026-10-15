@@ -63,6 +63,16 @@
 //! | `S = cap + 1`, each check alone | — (`α^L_cap = 0` alone; mass alone) | WitnessChecks / PermuteBus |
 //! | committed final not `α ⊙ R` | final binding | WitnessChecks |
 //! | union liveness hint forged | — (`force_nz` is unconditional) | WitnessChecks |
+//! | *round 2:* union equal values out of `t` order | union order (tiebreak) | Range |
+//! | *round 2:* non-boolean `is_fresh` (`Δ` doubled / shrunk) | `is_fresh` boolean | ALU AIR (BoolCheck) |
+//! | *round 2:* batch liveness hint forged | — (`force_nz` is unconditional) | WitnessChecks |
+//! | *round 2:* `cond = 1` on a dead pair (probe: no wrong state) | threshold range (control certifies the HONEST state) | Range |
+//!
+//! Round 2 also re-runs EVERY attack against the deployed layout (`Interval`
+//! statement + `Hiding` commitments, the config-B leaf's circuit;
+//! `g1_attacks_on_the_deployed_layout*`, both shapes) and the core attacks at
+//! the deployed shape itself (cap 768, m 512, `#[ignore]`d:
+//! `g1_attacks_at_the_deployed_shape`).
 //!
 //! Findings recorded by the probes: `cond_bool` is implied by `lt_bool` and
 //! the destination binding (a `cond = 2` forgery, which passes the 24-bit
@@ -71,8 +81,10 @@
 //! honest witnesses (a WitnessChecks creator gap of that combination only),
 //! so it is never used as a control.
 //!
-//! Run: `cargo test --release --lib -- gk_bandmerge::stable_attacks::` (~35 s;
-//! `g1_attacks_at_a_second_shape` repeats every attack at cap 16, m 8).
+//! Run: `cargo test --release --lib -- gk_bandmerge::stable_attacks::` (a few
+//! minutes; `g1_attacks_at_a_second_shape` repeats every attack at cap 16,
+//! m 8, and `g1_attacks_on_the_deployed_layout*` repeat them on the
+//! Interval + Hiding leaf).
 
 use super::*;
 use std::any::Any;
@@ -86,6 +98,7 @@ use p3_circuit::ops::{
 use p3_circuit::{AluOpKind, Circuit, CircuitError, NpoTypeId, Op, WitnessId};
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
 
+use crate::commitment::hiding::SaltSeed;
 use crate::sketch::forge::catch_msg;
 use crate::sketch::forge_permute::forge_permute_outputs;
 
@@ -130,12 +143,59 @@ fn row8(t: &Gk2Tuple) -> [Val; 8] {
         Val::ZERO,
     ]
 }
-/// Plain `Com` over committed-layout rows (= `commit_gk2_state` on tuples).
-fn com(rows: &[[Val; 8]]) -> [Val; 8] {
-    MyHash::new(make_perm()).hash_iter(rows.iter().flatten().copied())
+thread_local! {
+    /// The statement layout and commitment mode of the attacked leaf (per
+    /// test thread): `Boundary` + `Plain` unless a test sets the deployed
+    /// `Interval` + `Hiding` ([`on_deployed_layout`]).
+    static MODE: std::cell::Cell<(Expose, CommitMode)> =
+        const { std::cell::Cell::new((Expose::Boundary, CommitMode::Plain)) };
 }
+fn mode() -> (Expose, CommitMode) {
+    MODE.with(|c| c.get())
+}
+/// Run `f` with the attacked leaves on the deployed layout: `Interval`
+/// statement, `Hiding` commitments (secret salts), ZK proofs. Restores the
+/// previous layout afterwards, also on a panic.
+fn on_deployed_layout<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore((Expose, CommitMode));
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            MODE.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(MODE.with(|c| c.replace((Expose::Interval, CommitMode::Hiding))));
+    f()
+}
+/// Batch index `t` of the attacked leaf (the `Interval` statement's
+/// `lo = hi = t`; `t ≥ 2`, so the init opens a secret salt too).
+const LEAF_T: u64 = 3;
+/// The attacked leaf's commitment openings under `Hiding` (ignored under
+/// `Plain`): the honest PRF salts of leaf [`LEAF_T`] of a test history.
+fn openings() -> Openings {
+    static O: std::sync::OnceLock<Openings> = std::sync::OnceLock::new();
+    *O.get_or_init(|| Openings::for_leaf(&SaltSeed::for_tests(0xA77AC), CommitFamily::GreenwaldKhanna, LEAF_T))
+}
+/// `Com` over committed-layout rows under the attacked leaf's mode (`Plain`:
+/// `commit_gk2_state` on tuples; `Hiding`: the salted commitment of `kind`).
+fn com_with(rows: &[[Val; 8]], kind: CommitKind, salt: &SaltBb) -> [Val; 8] {
+    let flat: Vec<Val> = rows.iter().flatten().copied().collect();
+    commit_flat_bb(mode().1, kind, CommitFamily::GreenwaldKhanna, salt, &flat)
+}
+/// `Com(S_{t-1}; ρ^S_{t-1})` of an init table.
+fn com_init(rows: &[[Val; 8]]) -> [Val; 8] {
+    com_with(rows, CommitKind::State, &openings().init)
+}
+/// `Com(S_t; ρ^S_t)` of a final table.
+fn com_final(rows: &[[Val; 8]]) -> [Val; 8] {
+    com_with(rows, CommitKind::State, &openings().final_)
+}
+/// `Com(B_t; ρ^B_t)` of a batch table.
+fn com_batch(rows: &[[Val; 8]]) -> [Val; 8] {
+    com_with(rows, CommitKind::Batch, &openings().batch)
+}
+/// `Com(S_t)` of a state (as the attacked leaf's final).
 fn com_state(s: &Gk2State) -> [Val; 8] {
-    commit_gk2_state(s).0
+    com_final(&s.tuples.iter().map(row8).collect::<Vec<_>>())
 }
 /// Mass `Σ (g₁ + g₂ + 1)` of the live rows of a committed table (the field
 /// sum, as the circuit's check sees it).
@@ -172,6 +232,8 @@ struct Attack {
     is_fresh: HashMap<usize, Val>,
     /// Union liveness inverse hints `1/(E_MAX − e)` overridden.
     e_inv: HashMap<usize, Val>,
+    /// Batch liveness inverse hints `1/(E_MAX − e_j)` overridden.
+    e_inv_batch: HashMap<usize, Val>,
     lt: HashMap<(usize, usize), Val>,
     cond: HashMap<(usize, usize), Val>,
     /// Output liveness `α'` of round `r` at position `p`.
@@ -203,6 +265,7 @@ impl Attack {
             union_patch: Vec::new(),
             is_fresh: HashMap::new(),
             e_inv: HashMap::new(),
+            e_inv_batch: HashMap::new(),
             lt: HashMap::new(),
             cond: HashMap::new(),
             alive: HashMap::new(),
@@ -245,6 +308,8 @@ struct Sim {
     forged: Vec<(usize, Vec<Challenge>)>,
     final8: Vec<[Val; 8]>,
     final_commit: [Val; 8],
+    init_commit: [Val; 8],
+    batch_commit: [Val; 8],
     union_rows: Vec<[Val; 6]>,
     alpha0: Vec<Val>,
     is_fresh: Vec<Val>,
@@ -296,7 +361,9 @@ fn simulate(a: &Attack) -> Sim {
         .map(|r| *a.e_inv.get(&r).unwrap_or(&inv0(e_max - uraw[r][0])))
         .collect();
     let alpha0: Vec<Val> = (0..total).map(|r| (e_max - uraw[r][0]) * e_inv_union[r]).collect();
-    let e_inv_batch: Vec<Val> = a.fresh.iter().map(|f| inv0(e_max - f[0])).collect();
+    let e_inv_batch: Vec<Val> = (0..m)
+        .map(|j| *a.e_inv_batch.get(&j).unwrap_or(&inv0(e_max - a.fresh[j][0])))
+        .collect();
     let de_inv: Vec<Val> = (0..total - 1).map(|r| inv0(uraw[r + 1][0] - uraw[r][0])).collect();
     // is_fresh = [N_{t-1} + 1 ≤ t] ⟺ N_{t-1} − t "negative"
     let is_fresh: Vec<Val> = (0..total)
@@ -426,15 +493,20 @@ fn simulate(a: &Attack) -> Sim {
             })
             .collect()
     });
-    let final_commit = com(&final8);
+    let final_commit = com_final(&final8);
+    let init_commit = com_init(&a.init);
+    let batch_commit = com_batch(&a.fresh);
 
     let mut public: Vec<Challenge> = Vec::new();
-    for c in [com(&a.init), final_commit, com(&a.fresh)] {
+    for c in [init_commit, final_commit, batch_commit] {
         public.extend(pack_commit_to_challenge(&crate::commitment::CountMinCommit(c)));
     }
     public.push(emb(a.theta));
     public.push(emb(a.n_prev));
     public.push(emb(a.n_t));
+    if mode().0.is_interval() {
+        public.push(emb(fv(LEAF_T)));
+    }
 
     let tab = |rows: &[[Val; 8]]| -> Vec<Challenge> {
         rows.iter()
@@ -442,6 +514,10 @@ fn simulate(a: &Attack) -> Sim {
             .collect()
     };
     let mut private: Vec<Challenge> = Vec::new();
+    if mode().1.is_hiding() {
+        // the 9 salt Challenges come first (`pack_opened_stable`)
+        private.extend(openings().private_inputs());
+    }
     private.extend(tab(&a.init));
     private.extend(tab(&final8));
     private.extend(tab(&a.fresh));
@@ -470,6 +546,8 @@ fn simulate(a: &Attack) -> Sim {
         forged,
         final8,
         final_commit,
+        init_commit,
+        batch_commit,
         union_rows: uraw,
         alpha0,
         is_fresh,
@@ -857,21 +935,33 @@ fn attempt(leaf: &Gkb2LeafCircuit, sim: &Sim, tools: &Tools) -> Verdict {
             .prove_all_tables(&traces, &leaf.circuit_prover_data)
             .map_err(|e| format!("prove: {e:?}"))?;
         leaf.prover.verify_all_tables(&proof).map_err(|e| format!("verify: {e:?}"))?;
+        // Boundary: `init ‖ final` (16); Interval: `init ‖ final ‖ idx ‖ H` (28).
+        let want = if mode().0.is_interval() { 28 } else { 16 };
         let pv = proof
             .non_primitives
             .iter()
             .map(|e| &e.public_values)
-            .find(|v| v.len() == 16)
+            .find(|v| v.len() == want)
             .cloned()
             .ok_or_else(|| "no exposed (init, final)".to_string())?;
         Ok(pv)
     });
     match res {
-        Ok(Ok(pv)) => Verdict::Accepted {
-            init: std::array::from_fn(|i| pv[i]),
-            final_: std::array::from_fn(|i| pv[8 + i]),
-            splits,
-        },
+        Ok(Ok(pv)) => {
+            // An accepted proof exposes the simulated statement: its init and,
+            // under Interval, `idx = (t, t, 0, 0)` and `H = H(TAG_LEAF, t, Com(B_t))`.
+            assert_eq!(&pv[..8], &sim.init_commit[..], "accepted proof exposes the simulated Com(S_{{t-1}})");
+            if pv.len() == 28 {
+                assert_eq!(&pv[16..20], &[fv(LEAF_T), fv(LEAF_T), Val::ZERO, Val::ZERO], "Interval idx");
+                let h = statement::leaf_digest::<Val>(&statement::hash_bb, 4, LEAF_T, &sim.batch_commit);
+                assert_eq!(&pv[20..28], &h[..], "Interval digest H(TAG_LEAF, t, Com(B_t))");
+            }
+            Verdict::Accepted {
+                init: std::array::from_fn(|i| pv[i]),
+                final_: std::array::from_fn(|i| pv[8 + i]),
+                splits,
+            }
+        }
         Ok(Err(e)) => Verdict::Rejected(e),
         Err(p) => Verdict::Rejected(format!("prover panicked: {p}")),
     }
@@ -914,11 +1004,13 @@ fn checks_without(off: &[&str]) -> StableChecks {
     c
 }
 
-/// The StableCompact leaf (Boundary statement, Plain commitments, Semantic
-/// binding) with `checks`.
+/// The StableCompact leaf (Semantic binding; the layout and commitment mode
+/// of [`mode`]: Boundary + Plain, or the deployed Interval + Hiding) with
+/// `checks`.
 fn leaf(params: GkbParams, checks: StableChecks) -> Gkb2LeafCircuit {
     with_stable_checks(checks, || {
-        build_gkb2_leaf_rounds(params, Expose::Boundary, Binding::Semantic, CommitMode::Plain, GkRounds::StableCompact)
+        let (expose, commit) = mode();
+        build_gkb2_leaf_rounds(params, expose, Binding::Semantic, commit, GkRounds::StableCompact)
     })
 }
 
@@ -1101,7 +1193,7 @@ fn attack_pipeline_is_transparent_on_honest_witnesses() {
             Verdict::Accepted { final_, splits, init } => {
                 assert_eq!(splits, 0, "honest witness needs no split");
                 assert_eq!(final_, sc.honest_final());
-                assert_eq!(init, com_state(&sc.init));
+                assert_eq!(init, com_init(&a.init));
             }
             other => panic!("honest witness through the forging tools must verify: {other:?}"),
         }
@@ -2189,11 +2281,224 @@ fn g1_probe_union_liveness_hint_forged() {
     eprintln!("[G-sound] union liveness hint forged (live row declared dead): deployed REJECTED: {why}");
 }
 
-/// The attacks again at a second shape (`cap 16, m 8, s 4`: `T = 24`,
-/// `L_f = 5`), so no verdict depends on one table size.
+// ══════════════════════════════════════════════════════════════════════
+// H. Round 2 (independent attacker): the gaps of round 1
+// ══════════════════════════════════════════════════════════════════════
+
+/// `x ∈ [0, 2^24)`, as the leaf's 24-bit range checks see a field element.
+fn in24(x: Val) -> bool {
+    can(x) < 1 << 24
+}
+
+/// Whether every forced-comparison witness the leaf range-checks at 24 bits
+/// — `is_fresh`, and every round's `lt` and `α_b`-gated `cond` — lies in
+/// `[0, 2^24)` for the simulated values (`w = dm1 − b·(2·dm1 + 1)`,
+/// [`force_le_dm1`]): the witness a control leaf without the targeted check
+/// must accept.
+fn comparisons_in_range(a: &Attack, s: &Sim) -> bool {
+    let w = |dm1: Val, b: Val| in24(dm1 - b * (dm1 + dm1 + Val::ONE));
+    s.union_rows.iter().zip(&s.is_fresh).all(|(r, &f)| w(a.n_prev - r[5], f))
+        && s.rounds.iter().all(|rd| {
+            (0..rd.lt.len()).all(|j| {
+                let dm1t = rd.cur[2 * j + 1][5] - rd.cur[2 * j][5];
+                let dm1c = rd.u_minus_theta[j] * rd.alive_in[2 * j + 1];
+                w(dm1t, rd.lt[j]) && w(dm1c, rd.cond[j])
+            })
+        })
+}
+
+/// **Non-boolean freshness flag** (the `fresh_bool` check, which round 1
+/// left without an attack). The 24-bit test `is_fresh = [N_{t-1}+1 ≤ t]`
+/// alone admits, on a fresh row at distance `d = t − N_{t-1} ≥ 1`, every
+/// `v = (d + w)/(2d − 1)` with `w ∈ [0, 2^24)` (the test's witness is then
+/// exactly `w`), and neighbour-init gives that row `Δ₁ = v·(g₁ + Δ₁)` of its
+/// right neighbour and `Δ₂ = v·(g₂ + Δ₂)` of its left one. The fresh count
+/// `Σ is_fresh = #active(B_t)` is restored on the LAST union row (dead,
+/// `t = 0`), which takes `1 − v`: its own test witness `N_{t-1} −
+/// (1−v)(2N_{t-1}+1)` must be a 24-bit integer too, and its `Δ`s are never
+/// read (its right neighbour does not exist, and liveness gates every
+/// threshold test and merge of a dead row). Two forgeries:
+///
+/// * **inflated** — `v = 2` (`w = 3d − 2`; the dead row takes `−1`, witness
+///   `3N_{t-1} + 1`): the fresh row's uncertainty doubled;
+/// * **shrunk** — `v = (d + w)/(2d − 1) < 1` (`w ≤ d − 2`), chosen so both
+///   `Δ`s stay integers: the fresh row's uncertainty UNDER-stated, so its
+///   later fusions run against a smaller `Δ` than `apply_batch2`'s and the
+///   certified rank interval is narrower than the truth.
+///
+/// Both keep every other range witness in range and certify a final other
+/// than `apply_batch2`'s. Control: the leaf without `assert_bool(is_fresh)`
+/// proves them. Deployed: the BoolCheck AIR.
 #[test]
-fn g1_attacks_at_a_second_shape() {
-    SHAPE.with(|c| c.set(GkbParams { capacity: 16, batch: 8, s: 4 }));
+fn g1_attack_fresh_non_boolean() {
+    let total = params().capacity + params().batch;
+    for shrink in [false, true] {
+        let label = if shrink {
+            "is_fresh non-boolean: a fresh row's Δ shrunk"
+        } else {
+            "is_fresh non-boolean: a fresh row's Δ doubled"
+        };
+        let (sc, (f, a)) = find(label, params(), 2, 1 << 12, |sc, hs| {
+            let c = total - 1;
+            if hs.alpha0[c] != Val::ZERO {
+                return None;
+            }
+            let base = sc.honest(true);
+            let np = can(base.n_prev);
+            let cur0 = &hs.rounds[0].cur;
+            for f in 0..total {
+                if hs.alpha0[f] != Val::ONE || hs.is_fresh[f] != Val::ONE {
+                    continue;
+                }
+                // honest neighbour-init sums feeding row f (rows right of f
+                // and left of f are untouched by the forgery)
+                let b1 = if f + 1 < total { hs.union_rows[f + 1][1] + cur0[f + 1][3] } else { Val::ZERO };
+                let b2 = if f >= 1 { hs.union_rows[f - 1][2] + cur0[f - 1][4] } else { Val::ZERO };
+                let d = can(hs.union_rows[f][5]) - np;
+                let ws: Vec<u64> = if shrink { (0..d.saturating_sub(1)).collect() } else { vec![3 * d - 2] };
+                for w in ws {
+                    let v = fv(d + w) * fv(2 * d - 1).inverse();
+                    let (d1, d2) = (v * b1, v * b2);
+                    let (h1, h2) = (cur0[f][3], cur0[f][4]);
+                    if v == Val::ONE || !in24(d1) || !in24(d2) || (d1, d2) == (h1, h2) {
+                        continue;
+                    }
+                    if shrink && (can(d1) > can(h1) || can(d2) > can(h2)) {
+                        continue;
+                    }
+                    let dm1c = base.n_prev; // the dead row: N_{t-1} − 0
+                    if !in24(dm1c - (Val::ONE - v) * (dm1c + dm1c + Val::ONE)) {
+                        continue;
+                    }
+                    let mut a = base.clone();
+                    a.is_fresh.insert(f, v);
+                    a.is_fresh.insert(c, Val::ONE - v);
+                    let Ok(s) = catch_msg(|| simulate(&a)) else { continue };
+                    assert_eq!((s.rounds[0].cur[f][3], s.rounds[0].cur[f][4]), (d1, d2));
+                    if comparisons_in_range(&a, &s) && s.final_commit != sc.honest_final() {
+                        return Some((f, a));
+                    }
+                }
+            }
+            None
+        });
+        let (hs, s) = (simulate(&sc.honest(true)), simulate(&a));
+        let (h, g) = (&hs.rounds[0].cur[f], &s.rounds[0].cur[f]);
+        eprintln!(
+            "[G-sound] {label}: union row {f} (t − N_prev = {}), is_fresh = {}, (Δ₁, Δ₂) {:?} -> {:?}",
+            can(h[5] - a.n_prev),
+            can(a.is_fresh[&f]),
+            (can(h[3]), can(h[4])),
+            (can(g[3]), can(g[4]))
+        );
+        duel(label, params(), &["fresh_bool"], &a, &Tools::default(), &a, &Tools::default(), sc.honest_final());
+    }
+}
+
+/// **Equal values out of arrival order in the union** (the `t` tiebreak of
+/// the union order, which round 1's out-of-order attack — two rows of
+/// DIFFERENT value — never reaches). Two adjacent live union rows holding
+/// the same value are swapped, so the newer one comes first: `e` stays
+/// non-decreasing (the 22-bit difference test sees `0`), and only the
+/// tiebreak `is_de_zero·(t_{r+1} − t_r) ∈ [0, 2^24)` objects. Neighbour-init
+/// and the pairing then run on a table `finish_bm2` never builds, and the
+/// final lists the equal-value representatives out of arrival order.
+/// Control: the leaf without the union order proves it. Deployed: Range
+/// lookup on the wrapped tiebreak.
+#[test]
+fn g1_attack_union_tiebreak() {
+    let total = params().capacity + params().batch;
+    let (sc, a) = find("two adjacent live union rows of equal value", params(), 2, 1 << 3, |sc, hs| {
+        let base = sc.honest(true);
+        let comb: Vec<[Val; 8]> = base.init.iter().chain(base.fresh.iter()).copied().collect();
+        let mut src: Vec<usize> = (0..total).collect();
+        src.sort_by_key(|&i| (can(comb[i][0]), can(comb[i][5])));
+        let cands: Vec<usize> = (0..total - 1)
+            .filter(|&r| {
+                let (x, y) = (&hs.union_rows[r], &hs.union_rows[r + 1]);
+                hs.alpha0[r + 1] == Val::ONE && x[0] == y[0] && x[5] != y[5]
+            })
+            .collect();
+        first_wrong(sc, &cands, |r| {
+            let mut a = sc.honest(true);
+            let mut s2 = src.clone();
+            s2.swap(r, r + 1);
+            a.union_src = Some(s2);
+            a
+        })
+        .map(|(_, a)| a)
+    });
+    let s = simulate(&a);
+    assert!(
+        s.union_rows.windows(2).all(|w| can(w[0][0]) <= can(w[1][0])),
+        "the forged union is still value-sorted (only the tiebreak is broken)"
+    );
+    duel(
+        "union: equal values out of arrival (t) order",
+        params(),
+        &["union_order"],
+        &a,
+        &Tools::default(),
+        &a,
+        &Tools::default(),
+        sc.honest_final(),
+    );
+}
+
+/// **Batch liveness hint forged**: the inverse hint of the last live batch
+/// row set to 0, declaring that record absent (`#active(B_t)` one short, so
+/// a record would vanish from `N_t`). Like the union liveness hint,
+/// `force_nz` has no switch (`x·(1 − x·x⁻¹) = 0` is unconditional), so this
+/// is rejection-only: the deployed leaf rejects the split trace on the
+/// WitnessChecks bus; the same leaf accepts the honest witness through the
+/// same tools.
+#[test]
+fn g1_probe_batch_liveness_hint_forged() {
+    let (sc, j) = find("a live batch row", params(), 2, 1 << 12, |sc, _| sc.batch.len().checked_sub(1));
+    let mut a = sc.honest(true);
+    a.e_inv_batch.insert(j, Val::ZERO);
+    let why = reject_only("batch liveness hint forged", params(), StableChecks::ALL, &sc.honest(true), &a, &Tools::split());
+    eprintln!("[G-sound] batch liveness hint forged (live batch row {j} declared absent): deployed REJECTED: {why}");
+}
+
+/// **`cond` forged on a dead pair** (the review fix that gates the threshold
+/// test by `α_b`, `dm1c = α_b·(S − 1 − θ)`): on a pair whose right row is
+/// dead the gated test reads `dm1c = 0`, so `cond = 1` has witness `−1` and
+/// the deployed leaf rejects it (Range lookup). The gate carries no
+/// soundness weight of its own — `merge = cond·α_b` is gated again — so the
+/// leaf WITHOUT the threshold range test accepts `cond = 1` there and
+/// certifies exactly the honest state: the gate only keeps stale dead fields
+/// from making honest witnesses unprovable. Probe (no wrong state exists).
+#[test]
+fn g1_probe_dead_pair_cond() {
+    let (sc, (r, j)) = find("a pair with a dead right row", params(), 2, 1 << 12, |_, hs| {
+        hs.rounds
+            .iter()
+            .enumerate()
+            .find_map(|(r, rd)| (0..rd.cond.len()).find(|&j| rd.alive_in[2 * j + 1] == Val::ZERO).map(|j| (r, j)))
+    });
+    let mut a = sc.honest(true);
+    a.cond.insert((r, j), Val::ONE);
+    let s = simulate(&a);
+    assert_eq!(s.final_commit, sc.honest_final(), "cond on a dead pair changes nothing (merge = cond·α_b)");
+    match attempt(&leaf(params(), checks_without(&["cond_range"])), &s, &Tools::default()) {
+        Verdict::Accepted { final_, .. } => assert_eq!(final_, sc.honest_final(), "the ungated leaf certifies the honest state"),
+        other => panic!("dead-pair cond: the leaf without the threshold test must accept it: {other:?}"),
+    }
+    let why = reject_only("dead-pair cond = 1", params(), StableChecks::ALL, &sc.honest(true), &a, &Tools::default());
+    eprintln!(
+        "[G-sound] probe cond = 1 on a dead pair (round {r}, pair {j}): without cond_range ACCEPTED the HONEST state; deployed REJECTED: {why}"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// I. Every attack again: a second shape, the deployed layout, the deployed shape
+// ══════════════════════════════════════════════════════════════════════
+
+/// Every attack and probe of this suite, in sequence, at the current
+/// [`SHAPE`] and [`MODE`] (the `S = cap + 1` attack uses its own shape).
+fn run_every_attack() {
+    attack_pipeline_is_transparent_on_honest_witnesses();
     g1_attack_compaction_reorder_survivors();
     g1_attack_compaction_survivor_to_tail_dead_kept();
     g1_attack_liveness_survivor_dropped_folded_row_resurrected();
@@ -2204,18 +2509,114 @@ fn g1_attacks_at_a_second_shape() {
     g1_attack_fusion_over_budget_merge();
     g1_attack_fusion_under_merge();
     g1_attack_fusion_both_directions();
+    g1_probe_cond_bool_is_implied();
     g1_attack_forged_survivor_update();
     g1_attack_cross_op_trade_union_to_last_round();
     g1_attack_union_half_repairing();
     g1_attack_union_out_of_order();
+    g1_attack_union_tiebreak();
     g1_attack_init_t_after_n_prev();
     g1_attack_poisoned_dummy();
     g1_attack_crafted_huge_g_init();
     g1_attack_init_e_beyond_e_max();
     g1_attack_is_fresh_swapped();
+    g1_attack_fresh_non_boolean();
     g1_attack_theta();
     g1_attack_wrong_n_prev();
     g1_attack_forged_arrival_positions();
+    g1_attack_capacity_plus_one();
     g1_attack_final_not_bound();
     g1_probe_union_liveness_hint_forged();
+    g1_probe_batch_liveness_hint_forged();
+    g1_probe_dead_pair_cond();
+}
+
+/// The attacks again at a second shape (`cap 16, m 8, s 4`: `T = 24`,
+/// `L_f = 5`), so no verdict depends on one table size.
+#[test]
+fn g1_attacks_at_a_second_shape() {
+    SHAPE.with(|c| c.set(GkbParams { capacity: 16, batch: 8, s: 4 }));
+    run_every_attack();
+}
+
+/// **Every attack against the DEPLOYED layout** (round 2): the tests above
+/// attack the `Boundary` + `Plain` leaf, a different circuit (VK) from the
+/// one the harness runs. Here each control and each attacked leaf is the
+/// `Interval` statement with `Hiding` commitments (secret salts of leaf
+/// [`LEAF_T`]; the forged witness carries them as its first private inputs,
+/// and every commitment is the salted one), the configuration of config B.
+/// An accepted proof must expose the simulated `(init, final, idx = (t, t),
+/// H(TAG_LEAF, t, Com(B_t)))`; every verdict must be the same as on the
+/// Plain leaf: each control certifies its wrong state, the deployed leaf
+/// rejects each forgery in the AIR / LogUp / range argument.
+#[test]
+fn g1_attacks_on_the_deployed_layout() {
+    on_deployed_layout(run_every_attack);
+}
+
+/// [`g1_attacks_on_the_deployed_layout`] at the second shape (`cap 16, m 8,
+/// s 4`).
+#[test]
+fn g1_attacks_on_the_deployed_layout_at_a_second_shape() {
+    SHAPE.with(|c| c.set(GkbParams { capacity: 16, batch: 8, s: 4 }));
+    on_deployed_layout(run_every_attack);
+}
+
+/// **The attacks at the deployed shape** (config B leaf: cap 768, m 512,
+/// s 51, `T = 1280`, `L_f = 11`) on the deployed layout (`Interval` +
+/// `Hiding`, ZK), each with its control at that shape, in two parts of
+/// ~5 min each (~5.4 GB peak): this one the compaction / liveness / fusion /
+/// union-order / freshness / θ / final-binding attacks,
+/// [`g1_attacks_at_the_deployed_shape_part2`] the rest. Only the cross-op
+/// trade stays at the small shapes (its search simulates `O(m·T)` forged
+/// unions; the checks it meets are the same circuit code at every shape).
+/// `cargo test --release --lib -- --ignored stable_attacks::g1_attacks_at_the_deployed_shape`.
+#[test]
+#[ignore = "config-B shape (cap 768, m 512): minutes and ~5 GB per proof; run explicitly"]
+fn g1_attacks_at_the_deployed_shape() {
+    SHAPE.with(|c| c.set(GkbParams { capacity: 768, batch: 512, s: 51 }));
+    on_deployed_layout(|| {
+        attack_pipeline_is_transparent_on_honest_witnesses();
+        g1_attack_compaction_reorder_survivors();
+        g1_attack_compaction_survivor_to_tail_dead_kept();
+        g1_attack_liveness_survivor_dropped_folded_row_resurrected();
+        g1_attack_liveness_non_boolean_hint();
+        g1_attack_fusion_wrong_direction_bit();
+        g1_attack_fusion_over_budget_merge();
+        g1_attack_fusion_under_merge();
+        g1_attack_fusion_both_directions();
+        g1_attack_union_out_of_order();
+        g1_attack_union_tiebreak();
+        g1_attack_is_fresh_swapped();
+        g1_attack_fresh_non_boolean();
+        g1_attack_theta();
+        g1_attack_final_not_bound();
+    });
+}
+
+/// Part 2 of [`g1_attacks_at_the_deployed_shape`]: the forged survivor
+/// update, the duplicate, the non-boolean `lt`, the union half re-pairing,
+/// the crafted inits, `N` and arrival positions, `S = cap + 1` (its own
+/// shape) and the probes, at cap 768, m 512 on the deployed layout.
+#[test]
+#[ignore = "config-B shape (cap 768, m 512): minutes and ~5 GB per proof; run explicitly"]
+fn g1_attacks_at_the_deployed_shape_part2() {
+    SHAPE.with(|c| c.set(GkbParams { capacity: 768, batch: 512, s: 51 }));
+    on_deployed_layout(|| {
+        g1_attack_compaction_duplicate_survivor();
+        g1_attack_fusion_under_merge_non_boolean_lt();
+        g1_probe_cond_bool_is_implied();
+        g1_attack_forged_survivor_update();
+        g1_attack_union_half_repairing();
+        g1_attack_init_t_after_n_prev();
+        g1_attack_poisoned_dummy();
+        g1_attack_crafted_huge_g_init();
+        g1_attack_init_e_beyond_e_max();
+        g1_attack_wrong_n_prev();
+        g1_attack_forged_arrival_positions();
+        g1_attack_capacity_plus_one();
+        g1_probe_union_liveness_hint_forged();
+        g1_probe_batch_liveness_hint_forged();
+        g1_probe_dead_pair_cond();
+    });
 }
