@@ -21,6 +21,7 @@
 //! the bottom-`k` distinct-count estimate.
 
 pub mod bloom;
+pub mod bloom_packed;
 pub mod countmin;
 pub mod gk_bandmerge;
 pub mod greenwald_khanna;

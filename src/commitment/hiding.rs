@@ -428,6 +428,9 @@ pub enum CommitFamily {
     Bloom = 5,
     /// KMV / bottom-`k` distinct counting ([`crate::sketch::kmv`]).
     Kmv = 6,
+    /// The packed-byte Bloom filter ([`crate::sketch::bloom_packed`], M2):
+    /// the same filter as [`Self::Bloom`], committed as bytes.
+    BloomPacked = 7,
 }
 
 impl CommitFamily {
@@ -1115,13 +1118,14 @@ mod tests {
     };
     use p3_poseidon2_circuit_air::BabyBearD4Width16;
 
-    const FAMILIES: [CommitFamily; 6] = [
+    const FAMILIES: [CommitFamily; 7] = [
         CommitFamily::CountMin,
         CommitFamily::HyperLogLog,
         CommitFamily::SpaceSaving,
         CommitFamily::GreenwaldKhanna,
         CommitFamily::Bloom,
         CommitFamily::Kmv,
+        CommitFamily::BloomPacked,
     ];
 
     #[test]
@@ -1133,7 +1137,7 @@ mod tests {
         assert_eq!(&TAG_STATE.to_be_bytes()[4..], b"STAT");
         assert_eq!(&TAG_BATCH.to_be_bytes()[4..], b"BATC");
         let ids: Vec<u64> = FAMILIES.iter().map(|f| f.id()).collect();
-        assert_eq!(ids, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(ids, vec![1, 2, 3, 4, 5, 6, 7]);
     }
 
     /// (7) The PRF: deterministic, `ρ^S_0` is the public zero, and distinct

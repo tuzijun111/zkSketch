@@ -7,6 +7,7 @@
 
 pub mod bind;
 pub mod bloom_omc;
+pub mod bloom_packed;
 pub mod countmin;
 pub mod countmin_c_merkle;
 pub mod countmin_final;
