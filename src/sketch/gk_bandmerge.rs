@@ -8638,3 +8638,9 @@ mod stable_tests {
         }
     }
 }
+
+/// G-sound: trace-level forgeries against the StableCompact leaf, each with a
+/// positive control (`gk_stable_attacks.rs`).
+#[cfg(test)]
+#[path = "gk_stable_attacks.rs"]
+mod stable_attacks;
