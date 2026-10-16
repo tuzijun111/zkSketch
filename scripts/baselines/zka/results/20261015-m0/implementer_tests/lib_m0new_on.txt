@@ -1,0 +1,18 @@
+# 2026-10-15T02:00:02+08:00 tag=m0new_on switches=on load=5.60 13.19 19.70 head=d4e66a9 dirty=9
+# filters: m0_ --nocapture
+test recursion::recursive::expose_forest::tests::m0_merge_cache_admission_keeps_small_subtrees ... ok
+test recursion::recursive::expose_forest::tests::m0_merge_cache_misses_same_shape_other_vk ... ok
+M0 push t=1 leaf_prep_handles_in_cascade=0 holds_prover_data=false
+M0 push t=2 leaf_prep_handles_in_cascade=0 holds_prover_data=false
+M0 push t=3 leaf_prep_handles_in_cascade=0 holds_prover_data=false
+M0 push t=4 leaf_prep_handles_in_cascade=0 holds_prover_data=false
+M0 push t=1 leaf_prep_handles_in_cascade=1 holds_prover_data=true
+M0 push t=2 leaf_prep_handles_in_cascade=0 holds_prover_data=true
+M0 push t=3 leaf_prep_handles_in_cascade=1 holds_prover_data=true
+test recursion::recursive::interval_tests::m0_merge_cache_hits_verify_against_derived_vk ... ok
+M0 push t=4 leaf_prep_handles_in_cascade=0 holds_prover_data=true
+test recursion::recursive::interval_tests::m0_cascade_over_noop_leaves_holds_no_prover_data ... ok
+test experiments::dist_compose::tests::m0_query_auditor_derives_the_fresh_root_vk ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 827 filtered out; finished in 113.38s
+real	1m53.535s
+exit=0

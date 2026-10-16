@@ -1,0 +1,5 @@
+label=bloom_B1 tag=bloom m=256 T=8 cap=2048 ab=B
+start=2026-10-15T06:53:15+08:00 load="13.51 23.41 22.90" memavail_gib=440.0
+head=3fd232e4a bin_md5=38c33b46bc13
+
+end=2026-10-15T06:57:01+08:00 rc=0 load="25.40 25.33 23.86"

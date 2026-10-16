@@ -1,0 +1,36 @@
+# 2026-10-15T02:03:12+08:00 tag=off_vk switches=off load=42.49 30.13 25.33 head=d4e66a9 dirty=9
+# filters: plain_vk_pins dist_root_vk_derivable inproc_workers_ hiding_end_to_end_cm_omc hiding_end_to_end_gk_bandmerge2 hiding_end_to_end_bloom_omc derived_root_vks_match cm_query_prefix_certified_by_live_peaks cm_honest_forest_chain_dist m0_ audit:: procs_query_replay
+EXP_EXIT_BEFORE_AUDIT=0
+EXP_FOREST_RETAIN_PREP=1
+EXP_MALLOC_TRIM=0
+EXP_MERGE_CACHE=0
+test experiments::audit::tests::auditor_source_names_no_prover_secret ... ok
+test recursion::recursive::expose_forest::tests::m0_merge_cache_admission_keeps_small_subtrees ... ok
+test recursion::recursive::expose_forest::tests::m0_merge_cache_misses_same_shape_other_vk ... ok
+test recursion::recursive::interval_tests::m0_merge_cache_hits_verify_against_derived_vk ... ok
+test recursion::recursive::expose_forest::tests::derived_root_vks_match_real_hll ... ok
+test commitment::plain_vk_pins::plain_kmv_vks_are_pinned_through_the_commit_api ... ok
+test recursion::recursive::expose_forest::tests::derived_root_vks_match_real_cm_omc ... ok
+test experiments::dist_compose::tests::dist_root_vk_derivable_bloom_omc ... ok
+test experiments::dist_compose::tests::dist_root_vk_derivable_kmv ... ok
+test recursion::recursive::expose_forest::tests::derived_root_vks_match_real_cm_v9 ... ok
+test experiments::dist_compose::tests::dist_root_vk_derivable_cm_omc ... ok
+test experiments::dist_compose::tests::dist_root_vk_derivable_hll_omc ... ok
+test recursion::recursive::interval_tests::cm_honest_forest_chain_dist_verify_against_log ... ok
+test recursion::recursive::interval_tests::m0_cascade_over_noop_leaves_holds_no_prover_data ... ok
+test commitment::plain_vk_pins::plain_decode_vks_are_pinned ... ok
+test experiments::dist_compose::tests::m0_query_auditor_derives_the_fresh_root_vk ... ok
+test experiments::dist_compose::tests::hiding_end_to_end_bloom_omc ... ok
+test experiments::dist_compose::tests::hiding_end_to_end_gk_bandmerge2_gl ... ok
+test experiments::dist_compose::tests::hiding_end_to_end_cm_omc_gl ... ok
+test experiments::dist_compose::tests::hiding_end_to_end_gk_bandmerge2 ... ok
+test experiments::dist_compose::tests::hiding_end_to_end_cm_omc ... ok
+test commitment::plain_vk_pins::plain_noop_leaf_vks_are_pinned ... ok
+test experiments::dist_compose::tests::inproc_workers_derive_openings_from_the_wire_seed_gl ... ok
+test recursion::recursive::interval_tests::cm_query_prefix_certified_by_live_peaks ... ok
+test experiments::dist_compose::tests::procs_query_replay_binds_the_workers_leaf_finals ... ok
+test experiments::dist_compose::tests::inproc_workers_derive_openings_from_the_wire_seed_bb ... ok
+test experiments::dist_compose::tests::inproc_workers_ship_certificates_that_bind_queries_both_modes ... ok
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 805 filtered out; finished in 1828.77s
+real	30m29.020s
+exit=0

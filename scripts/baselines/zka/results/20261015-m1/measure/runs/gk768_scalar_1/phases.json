@@ -1,0 +1,139 @@
+{
+ "run": "gk768_scalar_1",
+ "ab": "B",
+ "phases": {
+  "vk": {
+   "dur_s": 23.64199995994568,
+   "peak_comb": 16473.0,
+   "at_coord": 16473.0,
+   "at_worker": 0.0,
+   "peak_coord": 16473.0,
+   "peak_worker": 0.0,
+   "peak_tree": 16485.0
+  },
+  "worker": {
+   "dur_s": 55.937000036239624,
+   "peak_comb": 16532.0,
+   "at_coord": 107.0,
+   "at_worker": 16425.0,
+   "peak_coord": 107.0,
+   "peak_worker": 16425.0,
+   "peak_tree": 16544.0
+  },
+  "exit": {
+   "dur_s": 0.15199995040893555,
+   "peak_comb": 109.0,
+   "at_coord": 109.0,
+   "at_worker": 0.0,
+   "peak_coord": 109.0,
+   "peak_worker": 0.0,
+   "peak_tree": 121.0
+  },
+  "audit": {
+   "dur_s": 7.430000066757202,
+   "peak_comb": 4548.0,
+   "at_coord": 4548.0,
+   "at_worker": 0.0,
+   "peak_coord": 4548.0,
+   "peak_worker": 0.0,
+   "peak_tree": 4560.0
+  },
+  "post_audit": null,
+  "query": {
+   "dur_s": 2.434000015258789,
+   "peak_comb": 699.0,
+   "at_coord": 699.0,
+   "at_worker": 0.0,
+   "peak_coord": 699.0,
+   "peak_worker": 0.0,
+   "peak_tree": 711.0
+  },
+  "tail": null,
+  "whole": {
+   "dur_s": 89.59999990463257,
+   "peak_comb": 16532.0,
+   "at_coord": 107.0,
+   "at_worker": 16425.0,
+   "peak_coord": 16473.0,
+   "peak_worker": 16425.0,
+   "peak_tree": 16544.0
+  }
+ },
+ "csv": {
+  "total_time_ms": "55933.657",
+  "leafgen_seq_ms": "43764.617",
+  "local_fold_ms": "7545.611",
+  "merge_total_ms": "7568.270",
+  "verify_ms": "22.733",
+  "peak_rss_mb": "16416.2",
+  "query_prove_ms": "1667.096",
+  "query_bind_ms": "43.961",
+  "proof_bytes": "803933",
+  "status": "ok"
+ },
+ "answers": [
+  [
+   "1",
+   "321"
+  ],
+  [
+   "2",
+   "900"
+  ]
+ ],
+ "keys": [
+  [
+   "1",
+   "gk_value=1242150"
+  ],
+  [
+   "2",
+   "gk_value=1810625"
+  ]
+ ],
+ "vk_derive_s": 7.2,
+ "rsstree": {
+  "main": 16454.9,
+  "desc": 16416.2,
+  "wall": 89.7
+ },
+ "worker_line": [
+  "first_index=1,merge_cache=hits=0;misses=1,finalize_merges=0,retain_prep=false,trim=Every"
+ ],
+ "memsum": [
+  "MEMSAMPLE SUMMARY peak_sum_mb=16545 at_t=73.3s [2353479(bash)=4 2353533(bash)=4 2353575(bash)=2 2355413(sleep)=2 2353536(exp_compose)=107 2354049(zks_dc_exe_2353)=16425] | per-process 2353479(bash):maxrss=4,hwm=4 2353492(bash):maxrss=2,hwm=2 2353493(bash):maxrss=2,hwm=2 2353497(wc):maxrss=3,hwm=3 2353496(sort):maxrss=2,hwm=2 2353495(grep):maxrss=3,hwm=3 2353494(lscpu):maxrss=3,hwm=3 2353513(bash):maxrss=2,hwm=2 2353518(pgrep):maxrss=4,hwm=4 2353520(bash):maxrss=2,hwm=2 2353521(sleep):maxrss=2,hwm=2 2353533(bash):maxrss=4,hwm=4 2353575(bash):maxrss=2,hwm=2 2353626(sleep):maxrss=2,hwm=2 2353536(exp_compose):maxrss=16473,hwm=16473 2353633(sleep):maxrss=2,hwm=2 2353650(sleep):maxrss=2,hwm=2 2353663(sleep):maxrss=2,hwm=2 2353671(sleep):maxrss=2,hwm=2 2353677(sleep):maxrss=2,hwm=2 2353690(sleep):maxrss=2,hwm=2 2353706(sleep):maxrss=2,hwm=2 2353719(sleep):maxrss=2,hwm=2 2353739(sleep):maxrss=2,hwm=2 2353746(sleep):maxrss=2,hwm=2 2353752(sleep):maxrss=2,hwm=2 2353759(sleep):maxrss=2,hwm=2 2353772(sleep):maxrss=2,hwm=2 2353778(sleep):maxrss=2,hwm=2 2353781(bash):maxrss=2,hwm=2 2353784(sleep):maxrss=2,hwm=2 2353792(sleep):maxrss=2,hwm=2 2353798(sleep):maxrss=2,hwm=2 2353805(sleep):maxrss=2,hwm=2 2353811(sleep):maxrss=2,hwm=2 2353817(sleep):maxrss=2,hwm=2 2353823(sleep):maxrss=2,hwm=2 2353847(bash):maxrss=2,hwm=2 2353848(bash):maxrss=2,hwm=2 2353850(sleep):maxrss=2,hwm=2 2353852(bash):maxrss=2,hwm=2 2353853(awk):maxrss=1,hwm=1 2353858(sleep):maxrss=2,hwm=2 2353865(sleep):maxrss=2,hwm=2 2353872(sleep):maxrss=2,hwm=2 2353889(sleep):maxrss=2,hwm=2 2353895(sleep):maxrss=2,hwm=2 2353903(sleep):maxrss=2,hwm=2 2353909(sleep):maxrss=2,hwm=2 2353922(sleep):maxrss=2,hwm=2 2353928(sleep):maxrss=2,hwm=2 2353941(sleep):maxrss=2,hwm=2 2353948(sleep):maxrss=2,hwm=2 2353956(sleep):maxrss=2,hwm=2 2353962(sleep):maxrss=2,hwm=2 2353975(sleep):maxrss=2,hwm=2 2353981(sleep):maxrss=2,hwm=2 2353984(bash):maxrss=2,hwm=2 2353985(bash):maxrss=2,hwm=2 2353986(cat):maxrss=1,hwm=1 2353987(sleep):maxrss=2,hwm=2 2353993(sleep):maxrss=2,hwm=2 2354000(sleep):maxrss=2,hwm=2 2354013(sleep):maxrss=2,hwm=2 2354019(sleep):maxrss=2,hwm=2 2354025(sleep):maxrss=2,hwm=2 2354031(sleep):maxrss=2,hwm=2 2354038(sleep):maxrss=2,hwm=2 2354047(sleep):maxrss=2,hwm=2 2354049(zks_dc_exe_2353):maxrss=16425,hwm=16425 2354094(sleep):maxrss=2,hwm=2 2354106(sleep):maxrss=2,hwm=2 2354118(sleep):maxrss=2,hwm=2 2354132(sleep):maxrss=2,hwm=2 2354144(sleep):maxrss=2,hwm=2 2354156(sleep):maxrss=2,hwm=2 2354168(sleep):maxrss=2,hwm=2 2354187(sleep):maxrss=2,hwm=2 2354199(sleep):maxrss=2,hwm=2 2354211(sleep):maxrss=2,hwm=2 2354223(sleep):maxrss=2,hwm=2 2354235(sleep):maxrss=2,hwm=2 2354247(sleep):maxrss=2,hwm=2 2354259(sleep):maxrss=2,hwm=2 2354271(sleep):maxrss=2,hwm=2 2354291(sleep):maxrss=2,hwm=2 2354304(sleep):maxrss=2,hwm=2 2354316(sleep):maxrss=2,hwm=2 2354346(sleep):maxrss=2,hwm=2 2354360(sleep):maxrss=2,hwm=2 2354379(sleep):maxrss=2,hwm=2 2354398(sleep):maxrss=2,hwm=2 2354412(sleep):maxrss=2,hwm=2 2354425(sleep):maxrss=2,hwm=2 2354444(sleep):maxrss=2,hwm=2 2354456(sleep):maxrss=2,hwm=2 2354468(sleep):maxrss=2,hwm=2 2354480(sleep):maxrss=2,hwm=2 2354492(sleep):maxrss=2,hwm=2 2354495(bash):maxrss=2,hwm=2 2354504(sleep):maxrss=2,hwm=2 2354505(bash):maxrss=2,hwm=2 2354516(sleep):maxrss=2,hwm=2 2354528(sleep):maxrss=2,hwm=2 2354540(sleep):maxrss=2,hwm=2 2354559(sleep):maxrss=2,hwm=2 2354585(sleep):maxrss=2,hwm=2 2354597(sleep):maxrss=2,hwm=2 2354609(sleep):maxrss=2,hwm=2 2354621(sleep):maxrss=2,hwm=2 2354645(sleep):maxrss=2,hwm=2 2354657(sleep):maxrss=2,hwm=2 2354669(sleep):maxrss=2,hwm=2 2354681(sleep):maxrss=2,hwm=2 2354700(sleep):maxrss=2,hwm=2 2354712(sleep):maxrss=2,hwm=2 2354731(sleep):maxrss=2,hwm=2 2354744(sleep):maxrss=2,hwm=2 2354756(sleep):maxrss=2,hwm=2 2354760(bash):maxrss=2,hwm=2 2354769(sleep):maxrss=2,hwm=2 2354788(sleep):maxrss=2,hwm=2 2354800(sleep):maxrss=2,hwm=2 2354812(sleep):maxrss=2,hwm=2 2354824(sleep):maxrss=2,hwm=2 2354836(sleep):maxrss=2,hwm=2 2354855(sleep):maxrss=2,hwm=2 2354868(sleep):maxrss=2,hwm=2 2354880(sleep):maxrss=2,hwm=2 2354892(sleep):maxrss=2,hwm=2 2354908(sleep):maxrss=2,hwm=2 2354920(sleep):maxrss=2,hwm=2 2354932(sleep):maxrss=2,hwm=2 2354944(sleep):maxrss=2,hwm=2 2354957(sleep):maxrss=2,hwm=2 2354969(sleep):maxrss=2,hwm=2 2354981(sleep):maxrss=2,hwm=2 2354993(sleep):maxrss=2,hwm=2 2355005(sleep):maxrss=2,hwm=2 2355025(sleep):maxrss=2,hwm=2 2355037(sleep):maxrss=2,hwm=2 2355049(sleep):maxrss=2,hwm=2 2355061(sleep):maxrss=2,hwm=2 2355073(sleep):maxrss=2,hwm=2 2355085(sleep):maxrss=2,hwm=2 2355097(sleep):maxrss=2,hwm=2 2355116(sleep):maxrss=2,hwm=2 2355130(sleep):maxrss=2,hwm=2 2355143(sleep):maxrss=2,hwm=2 2355162(sleep):maxrss=2,hwm=2 2355185(sleep):maxrss=2,hwm=2 2355204(sleep):maxrss=2,hwm=2 2355223(sleep):maxrss=2,hwm=2 2355242(sleep):maxrss=2,hwm=2 2355256(sleep):maxrss=2,hwm=2 2355269(sleep):maxrss=2,hwm=2 2355280(bash):maxrss=2,hwm=2 2355289(sleep):maxrss=2,hwm=2 2355301(sleep):maxrss=2,hwm=2 2355314(sleep):maxrss=2,hwm=2 2355327(sleep):maxrss=2,hwm=2 2355339(sleep):maxrss=2,hwm=2 2355351(sleep):maxrss=2,hwm=2 2355363(sleep):maxrss=2,hwm=2 2355375(sleep):maxrss=2,hwm=2 2355387(sleep):maxrss=2,hwm=2 2355413(sleep):maxrss=2,hwm=2 2355432(sleep):maxrss=2,hwm=2 2355444(sleep):maxrss=2,hwm=2 2355457(sleep):maxrss=2,hwm=2 2355480(sleep):maxrss=2,hwm=2 2355492(sleep):maxrss=2,hwm=2 2355504(sleep):maxrss=2,hwm=2 2355518(sleep):maxrss=2,hwm=2 2355526(bash):maxrss=2,hwm=2 2355527(awk):maxrss=5,hwm=5 2355537(sleep):maxrss=2,hwm=2 2355549(sleep):maxrss=2,hwm=2 2355568(sleep):maxrss=2,hwm=2 2355580(sleep):maxrss=2,hwm=2 2355594(sleep):maxrss=2,hwm=2 2355607(sleep):maxrss=2,hwm=2 2355627(sleep):maxrss=2,hwm=2 2355639(sleep):maxrss=2,hwm=2 2355651(sleep):maxrss=2,hwm=2 2355661(sleep):maxrss=2,hwm=2 2355667(sleep):maxrss=2,hwm=2 2355673(sleep):maxrss=2,hwm=2 2355693(sleep):maxrss=2,hwm=2 2355700(sleep):maxrss=2,hwm=2 2355706(sleep):maxrss=2,hwm=2 2355712(sleep):maxrss=2,hwm=2 2355721(sleep):maxrss=2,hwm=2 2355727(sleep):maxrss=2,hwm=2 2355733(sleep):maxrss=2,hwm=2 2355740(sleep):maxrss=2,hwm=2 2355748(sleep):maxrss=2,hwm=2 2355754(sleep):maxrss=2,hwm=2 2355755(bash):maxrss=2,hwm=2 2355760(sleep):maxrss=2,hwm=2 2355766(sleep):maxrss=2,hwm=2 2355811(sleep):maxrss=2,hwm=2 2355817(sleep):maxrss=2,hwm=2 2355823(sleep):maxrss=2,hwm=2 2355830(sleep):maxrss=2,hwm=2 2355837(sleep):maxrss=2,hwm=2\n"
+ ],
+ "meta": "label=gk768_scalar_1 tag=gk m=512 T=2 cap=768 build=scalar\nstart=2026-10-15T14:30:24+08:00 load=\"6.83 20.22 36.09\" memavail_gib=437.7\nhead=235c87be2 dirty=0 real_bin=/home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/target/release/examples/exp_compose real_bin_md5=38c33b46bc13 wrapper_md5=046ec3ef28ac\n\nend=2026-10-15T14:31:56+08:00 rc=0 load=\"23.69 22.16 35.22\"\nWINDOW n=19 others_mean=0.06 others_max=0.08 load1_mean=16.0 load1_max=25.7 me_mean=24.0\n",
+ "marks": {
+  "auditor_new": [
+   23.64,
+   16454.9,
+   103.5
+  ],
+  "root_received": [
+   79.58,
+   16454.9,
+   109.0
+  ],
+  "workers_exited": [
+   79.73,
+   16454.9,
+   109.1
+  ],
+  "audit_done": [
+   87.16,
+   16454.9,
+   123.3
+  ],
+  "before_query_phase": [
+   87.16,
+   16454.9,
+   123.3
+  ],
+  "queries_done": [
+   89.6,
+   648.4,
+   139.8
+  ]
+ }
+}

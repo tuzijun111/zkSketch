@@ -1,0 +1,8 @@
+bloom_A1   valleys=14 post_first_leaf= 1632 later: median= 3002 max= 3462 (max - post_first_leaf = +1830; median - post_first_leaf = +1370) worker_peak= 8425
+bloom_A2   valleys=14 post_first_leaf= 1508 later: median= 2954 max= 3400 (max - post_first_leaf = +1892; median - post_first_leaf = +1446) worker_peak= 8420
+bloom_B1   valleys=14 post_first_leaf= 1163 later: median= 1633 max= 3008 (max - post_first_leaf = +1845; median - post_first_leaf =  +470) worker_peak= 8171
+bloom_B2   valleys=14 post_first_leaf= 1176 later: median= 1618 max= 3017 (max - post_first_leaf = +1841; median - post_first_leaf =  +442) worker_peak= 8167
+gk_A1      valleys=17 post_first_leaf= 1168 later: median= 2400 max= 2639 (max - post_first_leaf = +1471; median - post_first_leaf = +1232) worker_peak= 6286
+gk_A2      valleys=14 post_first_leaf= 1126 later: median= 2399 max= 2640 (max - post_first_leaf = +1514; median - post_first_leaf = +1273) worker_peak= 6311
+gk_B1      valleys=25 post_first_leaf=  774 later: median= 1390 max= 2093 (max - post_first_leaf = +1319; median - post_first_leaf =  +616) worker_peak= 5097
+gk_B2      valleys=24 post_first_leaf=  698 later: median= 1356 max= 2085 (max - post_first_leaf = +1387; median - post_first_leaf =  +658) worker_peak= 5115

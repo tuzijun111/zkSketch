@@ -1,0 +1,187 @@
+{
+ "run": "bloom_B1",
+ "ab": "B",
+ "phases": {
+  "vk": {
+   "dur_s": 19.335999965667725,
+   "peak_comb": 7784.0,
+   "at_coord": 7784.0,
+   "at_worker": 0.0,
+   "peak_coord": 7784.0,
+   "peak_worker": 0.0,
+   "peak_tree": 7796.0
+  },
+  "worker": {
+   "dur_s": 114.78099989891052,
+   "peak_comb": 8295.0,
+   "at_coord": 124.0,
+   "at_worker": 8171.0,
+   "peak_coord": 124.0,
+   "peak_worker": 8171.0,
+   "peak_tree": 8307.0
+  },
+  "exit": {
+   "dur_s": 0.08700013160705566,
+   "peak_comb": 126.0,
+   "at_coord": 126.0,
+   "at_worker": 0.0,
+   "peak_coord": 126.0,
+   "peak_worker": 0.0,
+   "peak_tree": 138.0
+  },
+  "audit": {
+   "dur_s": 15.20199990272522,
+   "peak_comb": 3096.0,
+   "at_coord": 3096.0,
+   "at_worker": 0.0,
+   "peak_coord": 3096.0,
+   "peak_worker": 0.0,
+   "peak_tree": 3108.0
+  },
+  "post_audit": null,
+  "query": {
+   "dur_s": 76.56299996376038,
+   "peak_comb": 6689.0,
+   "at_coord": 6689.0,
+   "at_worker": 0.0,
+   "peak_coord": 6689.0,
+   "peak_worker": 0.0,
+   "peak_tree": 6701.0
+  },
+  "tail": null,
+  "whole": {
+   "dur_s": 226.05999994277954,
+   "peak_comb": 8295.0,
+   "at_coord": 124.0,
+   "at_worker": 8171.0,
+   "peak_coord": 7784.0,
+   "peak_worker": 8171.0,
+   "peak_tree": 8307.0
+  }
+ },
+ "csv": {
+  "total_time_ms": "114778.093",
+  "leafgen_seq_ms": "80195.482",
+  "local_fold_ms": "30654.496",
+  "merge_total_ms": "30675.662",
+  "verify_ms": "18.872",
+  "peak_rss_mb": "8183.4",
+  "query_prove_ms": "60854.835",
+  "query_bind_ms": "266.227",
+  "proof_bytes": "791111",
+  "status": "ok"
+ },
+ "answers": [
+  [
+   "1",
+   "1"
+  ],
+  [
+   "2",
+   "1"
+  ],
+  [
+   "3",
+   "1"
+  ],
+  [
+   "4",
+   "1"
+  ],
+  [
+   "5",
+   "1"
+  ],
+  [
+   "6",
+   "1"
+  ],
+  [
+   "7",
+   "1"
+  ],
+  [
+   "8",
+   "1"
+  ]
+ ],
+ "keys": [
+  [
+   "1",
+   "bloom_key=3707614330"
+  ],
+  [
+   "2",
+   "bloom_key=3236760776"
+  ],
+  [
+   "3",
+   "bloom_key=700602271"
+  ],
+  [
+   "4",
+   "bloom_key=2907156928"
+  ],
+  [
+   "5",
+   "bloom_key=3335831687"
+  ],
+  [
+   "6",
+   "bloom_key=3862034197"
+  ],
+  [
+   "7",
+   "bloom_key=2066466693"
+  ],
+  [
+   "8",
+   "bloom_key=3651107915"
+  ]
+ ],
+ "vk_derive_s": 15.0,
+ "rsstree": {
+  "main": 7800.2,
+  "desc": 8183.4,
+  "wall": 226.1
+ },
+ "worker_line": [
+  "first_index=1,merge_cache=hits=3;misses=4,finalize_merges=0,retain_prep=false,trim=Every"
+ ],
+ "memsum": [
+  "MEMSAMPLE SUMMARY peak_sum_mb=8307 at_t=120.7s [1929867(bash)=4 1929931(bash)=4 1930003(bash)=2 1934089(sleep)=2 1929934(exp_compose)=124 1930324(zks_dc_exe_1929)=8171] | per-process 1929867(bash):maxrss=4,hwm=4 1929878(bash):maxrss=2,hwm=2 1929879(bash):maxrss=2,hwm=2 1929883(wc):maxrss=3,hwm=3 1929882(sort):maxrss=2,hwm=2 1929881(grep):maxrss=3,hwm=3 1929880(lscpu):maxrss=3,hwm=3 1929899(bash):maxrss=2,hwm=2 1929920(pgrep):maxrss=4,hwm=4 1929931(bash):maxrss=4,hwm=4 1930003(bash):maxrss=2,hwm=2 1930024(sleep):maxrss=2,hwm=2 1929934(exp_compose):maxrss=7784,hwm=7800 1930031(sleep):maxrss=2,hwm=2 1930037(sleep):maxrss=2,hwm=2 1930043(sleep):maxrss=2,hwm=2 1930051(sleep):maxrss=2,hwm=2 1930064(sleep):maxrss=2,hwm=2 1930070(sleep):maxrss=2,hwm=2 1930076(sleep):maxrss=2,hwm=2 1930083(sleep):maxrss=2,hwm=2 1930086(bash):maxrss=2,hwm=2 1930089(sleep):maxrss=2,hwm=2 1930098(bash):maxrss=2,hwm=2 1930103(sleep):maxrss=2,hwm=2 1930109(sleep):maxrss=2,hwm=2 1930116(sleep):maxrss=2,hwm=2 1930122(sleep):maxrss=2,hwm=2 1930128(sleep):maxrss=2,hwm=2 1930134(sleep):maxrss=2,hwm=2 1930147(sleep):maxrss=2,hwm=2 1930160(sleep):maxrss=2,hwm=2 1930166(sleep):maxrss=2,hwm=2 1930174(sleep):maxrss=2,hwm=2 1930182(sleep):maxrss=2,hwm=2 1930188(sleep):maxrss=2,hwm=2 1930194(sleep):maxrss=2,hwm=2 1930200(sleep):maxrss=2,hwm=2 1930215(sleep):maxrss=2,hwm=2 1930221(sleep):maxrss=2,hwm=2 1930227(sleep):maxrss=2,hwm=2 1930233(sleep):maxrss=2,hwm=2 1930247(sleep):maxrss=2,hwm=2 1930253(sleep):maxrss=2,hwm=2 1930259(sleep):maxrss=2,hwm=2 1930271(sleep):maxrss=2,hwm=2 1930278(sleep):maxrss=2,hwm=2 1930285(sleep):maxrss=2,hwm=2 1930291(sleep):maxrss=2,hwm=2 1930304(sleep):maxrss=2,hwm=2 1930310(sleep):maxrss=2,hwm=2 1930316(sleep):maxrss=2,hwm=2 1930322(sleep):maxrss=2,hwm=2 1930324(zks_dc_exe_1929):maxrss=8171,hwm=8183 1930369(sleep):maxrss=2,hwm=2 1930381(sleep):maxrss=2,hwm=2 1930393(sleep):maxrss=2,hwm=2 1930405(sleep):maxrss=2,hwm=2 1930426(sleep):maxrss=2,hwm=2 1930452(sleep):maxrss=2,hwm=2 1930455(bash):maxrss=2,hwm=2 1930464(sleep):maxrss=2,hwm=2 1930476(sleep):maxrss=2,hwm=2 1930490(sleep):maxrss=2,hwm=2 1930509(sleep):maxrss=2,hwm=2 1930521(sleep):maxrss=2,hwm=2 1930533(sleep):maxrss=2,hwm=2 1930553(sleep):maxrss=2,hwm=2 1930566(sleep):maxrss=2,hwm=2 1930595(sleep):maxrss=2,hwm=2 1930632(sleep):maxrss=2,hwm=2 1930645(sleep):maxrss=2,hwm=2 1930664(sleep):maxrss=2,hwm=2 1930676(sleep):maxrss=2,hwm=2 1930688(sleep):maxrss=2,hwm=2 1930700(sleep):maxrss=2,hwm=2 1930712(sleep):maxrss=2,hwm=2 1930724(sleep):maxrss=2,hwm=2 1930736(sleep):maxrss=2,hwm=2 1930757(sleep):maxrss=2,hwm=2 1930769(sleep):maxrss=2,hwm=2 1930781(sleep):maxrss=2,hwm=2 1930793(sleep):maxrss=2,hwm=2 1930806(sleep):maxrss=2,hwm=2 1930818(sleep):maxrss=2,hwm=2 1930830(sleep):maxrss=2,hwm=2 1930849(sleep):maxrss=2,hwm=2 1930952(sleep):maxrss=2,hwm=2 1931051(sleep):maxrss=2,hwm=2 1931152(sleep):maxrss=2,hwm=2 1931350(sleep):maxrss=2,hwm=2 1931454(sleep):maxrss=2,hwm=2 1931466(sleep):maxrss=2,hwm=2 1931478(sleep):maxrss=2,hwm=2 1931491(sleep):maxrss=2,hwm=2 1931504(sleep):maxrss=2,hwm=2 1931516(sleep):maxrss=2,hwm=2 1931528(sleep):maxrss=2,hwm=2 1931540(sleep):maxrss=2,hwm=2 1931561(sleep):maxrss=2,hwm=2 1931574(sleep):maxrss=2,hwm=2 1931577(bash):maxrss=2,hwm=2 1931578(bash):maxrss=2,hwm=2 1931586(sleep):maxrss=2,hwm=2 1931598(sleep):maxrss=2,hwm=2 1931617(sleep):maxrss=2,hwm=2 1931629(sleep):maxrss=2,hwm=2 1931641(sleep):maxrss=2,hwm=2 1931655(sleep):maxrss=2,hwm=2 1931667(sleep):maxrss=2,hwm=2 1931679(sleep):maxrss=2,hwm=2 1931698(sleep):maxrss=2,hwm=2 1931713(sleep):maxrss=2,hwm=2 1931897(sleep):maxrss=2,hwm=2 1931909(sleep):maxrss=2,hwm=2 1931921(sleep):maxrss=2,hwm=2 1931933(sleep):maxrss=2,hwm=2 1931945(sleep):maxrss=2,hwm=2 1931958(sleep):maxrss=2,hwm=2 1931970(sleep):maxrss=2,hwm=2 1932005(sleep):maxrss=2,hwm=2 1932006(bash):maxrss=2,hwm=2 1932007(awk):maxrss=3,hwm=3 1932017(sleep):maxrss=2,hwm=2 1932029(sleep):maxrss=2,hwm=2 1932041(sleep):maxrss=2,hwm=2 1932061(sleep):maxrss=2,hwm=2 1932107(sleep):maxrss=2,hwm=2 1932119(sleep):maxrss=2,hwm=2 1932132(sleep):maxrss=2,hwm=2 1932177(sleep):maxrss=2,hwm=2 1932189(sleep):maxrss=2,hwm=2 1932201(sleep):maxrss=2,hwm=2 1932220(sleep):maxrss=2,hwm=2 1932239(sleep):maxrss=2,hwm=2 1932253(sleep):maxrss=2,hwm=2 1932266(sleep):maxrss=2,hwm=2 1932278(sleep):maxrss=2,hwm=2 1932291(sleep):maxrss=2,hwm=2 1932299(bash):maxrss=2,hwm=2 1932300(awk):maxrss=1,hwm=1 1932303(sleep):maxrss=2,hwm=2 1932304(bash):maxrss=2,hwm=2 1932305(awk):maxrss=1,hwm=1 1932315(sleep):maxrss=2,hwm=2 1932327(sleep):maxrss=2,hwm=2 1932348(sleep):maxrss=2,hwm=2 1932361(sleep):maxrss=2,hwm=2 1932373(sleep):maxrss=2,hwm=2 1932385(sleep):maxrss=2,hwm=2 1932397(sleep):maxrss=2,hwm=2 1932409(sleep):maxrss=2,hwm=2 1932421(sleep):maxrss=2,hwm=2 1932433(sleep):maxrss=2,hwm=2 1932445(sleep):maxrss=2,hwm=2 1932457(sleep):maxrss=2,hwm=2 1932477(sleep):maxrss=2,hwm=2 1932489(sleep):maxrss=2,hwm=2 1932515(sleep):maxrss=2,hwm=2 1932527(sleep):maxrss=2,hwm=2 1932539(sleep):maxrss=2,hwm=2 1932553(sleep):maxrss=2,hwm=2 1932565(sleep):maxrss=2,hwm=2 1932577(sleep):maxrss=2,hwm=2 1932589(sleep):maxrss=2,hwm=2 1932603(sleep):maxrss=2,hwm=2 1932622(sleep):maxrss=2,hwm=2 1932634(sleep):maxrss=2,hwm=2 1932648(sleep):maxrss=2,hwm=2 1932661(sleep):maxrss=2,hwm=2 1932680(sleep):maxrss=2,hwm=2 1932692(sleep):maxrss=2,hwm=2 1932704(sleep):maxrss=2,hwm=2 1932722(sleep):maxrss=2,hwm=2 1932734(sleep):maxrss=2,hwm=2 1932752(sleep):maxrss=2,hwm=2 1932795(sleep):maxrss=2,hwm=2 1932807(sleep):maxrss=2,hwm=2 1932819(sleep):maxrss=2,hwm=2 1932831(sleep):maxrss=2,hwm=2 1932843(sleep):maxrss=2,hwm=2 1932855(sleep):maxrss=2,hwm=2 1932867(sleep):maxrss=2,hwm=2 1932883(sleep):maxrss=2,hwm=2 1932925(sleep):maxrss=2,hwm=2 1932960(sleep):maxrss=2,hwm=2 1932972(sleep):maxrss=2,hwm=2 1932984(sleep):maxrss=2,hwm=2 1932996(sleep):maxrss=2,hwm=2 1933015(sleep):maxrss=2,hwm=2 1933027(sleep):maxrss=2,hwm=2 1933039(sleep):maxrss=2,hwm=2 1933052(sleep):maxrss=2,hwm=2 1933071(sleep):maxrss=2,hwm=2 1933083(sleep):maxrss=2,hwm=2 1933104(sleep):maxrss=2,hwm=2 1933116(sleep):maxrss=2,hwm=2 1933135(sleep):maxrss=2,hwm=2 1933147(sleep):maxrss=2,hwm=2 1933160(sleep):maxrss=2,hwm=2 1933172(sleep):maxrss=2,hwm=2 1933185(sleep):maxrss=2,hwm=2 1933197(sleep):maxrss=2,hwm=2 1933209(sleep):maxrss=2,hwm=2 1933224(sleep):maxrss=2,hwm=2 1933243(sleep):maxrss=2,hwm=2 1933255(sleep):maxrss=2,hwm=2 1933267(sleep):maxrss=2,hwm=2 1933279(sleep):maxrss=2,hwm=2 1933291(sleep):maxrss=2,hwm=2 1933294(bash):maxrss=2,hwm=2 1933295(bash):maxrss=2,hwm=2 1933303(sleep):maxrss=2,hwm=2 1933315(sleep):maxrss=2,hwm=2 1933327(sleep):maxrss=2,hwm=2 1933339(sleep):maxrss=2,hwm=2 1933402(sleep):maxrss=2,hwm=2 1933421(sleep):maxrss=2,hwm=2 1933440(sleep):maxrss=2,hwm=2 1933459(sleep):maxrss=2,hwm=2 1933471(sleep):maxrss=2,hwm=2 1933483(sleep):maxrss=2,hwm=2 1933495(sleep):maxrss=2,hwm=2 1933507(sleep):maxrss=2,hwm=2 1933519(sleep):maxrss=2,hwm=2 1933531(sleep):maxrss=2,hwm=2 1933545(sleep):maxrss=2,hwm=2 1933564(sleep):maxrss=2,hwm=2 1933565(bash):maxrss=2,hwm=2 1933566(awk):maxrss=2,hwm=2 1933576(sleep):maxrss=2,hwm=2 1933588(sleep):maxrss=2,hwm=2 1933607(sleep):maxrss=2,hwm=2 1933619(sleep):maxrss=2,hwm=2 1933631(sleep):maxrss=2,hwm=2 1933643(sleep):maxrss=2,hwm=2 1933657(sleep):maxrss=2,hwm=2 1933669(sleep):maxrss=2,hwm=2 1933682(sleep):maxrss=2,hwm=2 1933701(sleep):maxrss=2,hwm=2 1933715(sleep):maxrss=2,hwm=2 1933744(sleep):maxrss=2,hwm=2 1933773(sleep):maxrss=2,hwm=2 1933785(sleep):maxrss=2,hwm=2 1933797(sleep):maxrss=2,hwm=2 1933809(sleep):maxrss=2,hwm=2 1933812(bash):maxrss=2,hwm=2 1933821(sleep):maxrss=2,hwm=2 1933829(bash):maxrss=2,hwm=2 1933840(sleep):maxrss=2,hwm=2 1933868(sleep):maxrss=2,hwm=2 1933880(sleep):maxrss=2,hwm=2 1933899(sleep):maxrss=2,hwm=2 1933912(sleep):maxrss=2,hwm=2 1933931(sleep):maxrss=2,hwm=2 1933943(sleep):maxrss=2,hwm=2 1933955(sleep):maxrss=2,hwm=2 1933974(sleep):maxrss=2,hwm=2 1933986(sleep):maxrss=2,hwm=2 1933998(sleep):maxrss=2,hwm=2 1934017(sleep):maxrss=2,hwm=2 1934030(sleep):maxrss=2,hwm=2 1934051(sleep):maxrss=2,hwm=2 1934063(sleep):maxrss=2,hwm=2 1934075(sleep):maxrss=2,hwm=2 1934089(sleep):maxrss=2,hwm=2 1934101(sleep):maxrss=2,hwm=2 1934104(bash):maxrss=2,hwm=2 1934107(bash):maxrss=2,hwm=2 1934113(sleep):maxrss=2,hwm=2 1934116(bash):maxrss=2,hwm=2 1934125(sleep):maxrss=2,hwm=2 1934146(sleep):maxrss=2,hwm=2 1934158(sleep):maxrss=2,hwm=2 1934170(sleep):maxrss=2,hwm=2 1934182(sleep):maxrss=2,hwm=2 1934194(sleep):maxrss=2,hwm=2 1934206(sleep):maxrss=2,hwm=2 1934218(sleep):maxrss=2,hwm=2 1934230(sleep):maxrss=2,hwm=2 1934242(sleep):maxrss=2,hwm=2 1934254(sleep):maxrss=2,hwm=2 1934273(sleep):maxrss=2,hwm=2 1934285(sleep):maxrss=2,hwm=2 1934311(sleep):maxrss=2,hwm=2 1934323(sleep):maxrss=2,hwm=2 1934335(sleep):maxrss=2,hwm=2 1934350(sleep):maxrss=2,hwm=2 1934362(sleep):maxrss=2,hwm=2 1934374(sleep):maxrss=2,hwm=2 1934384(bash):maxrss=2,hwm=2 1934386(sleep):maxrss=2,hwm=2 1934399(sleep):maxrss=2,hwm=2 1934420(sleep):maxrss=2,hwm=2 1934432(sleep):maxrss=2,hwm=2 1934444(sleep):maxrss=2,hwm=2 1934456(sleep):maxrss=2,hwm=2 1934470(sleep):maxrss=2,hwm=2 1934476(sleep):maxrss=2,hwm=2 1934482(sleep):maxrss=2,hwm=2 1934501(sleep):maxrss=2,hwm=2 1934535(sleep):maxrss=2,hwm=2 1934538(bash):maxrss=2,hwm=2 1934541(sleep):maxrss=2,hwm=2 1934554(sleep):maxrss=2,hwm=2 1934560(sleep):maxrss=2,hwm=2 1934566(sleep):maxrss=2,hwm=2 1934572(sleep):maxrss=2,hwm=2 1934579(sleep):maxrss=2,hwm=2 1934585(sleep):maxrss=2,hwm=2 1934591(sleep):maxrss=2,hwm=2 1934597(sleep):maxrss=2,hwm=2 1934603(sleep):maxrss=2,hwm=2 1934625(sleep):maxrss=2,hwm=2 1934638(sleep):maxrss=2,hwm=2 1934644(sleep):maxrss=2,hwm=2 1934652(sleep):maxrss=2,hwm=2 1934659(sleep):maxrss=2,hwm=2 1934672(sleep):maxrss=2,hwm=2 1934678(sleep):maxrss=2,hwm=2 1934684(sleep):maxrss=2,hwm=2 1934698(sleep):maxrss=2,hwm=2 1934704(sleep):maxrss=2,hwm=2 1934710(sleep):maxrss=2,hwm=2 1934725(sleep):maxrss=2,hwm=2 1934732(sleep):maxrss=2,hwm=2 1934745(sleep):maxrss=2,hwm=2 1934751(sleep):maxrss=2,hwm=2 1934789(sleep):maxrss=2,hwm=2 1934795(sleep):maxrss=2,hwm=2 1934801(sleep):maxrss=2,hwm=2 1934807(sleep):maxrss=2,hwm=2 1934813(sleep):maxrss=2,hwm=2 1934828(sleep):maxrss=2,hwm=2 1934834(sleep):maxrss=2,hwm=2 1934840(sleep):maxrss=2,hwm=2 1934846(sleep):maxrss=2,hwm=2 1934853(sleep):maxrss=2,hwm=2 1934860(sleep):maxrss=2,hwm=2 1934867(sleep):maxrss=2,hwm=2 1934873(sleep):maxrss=2,hwm=2 1934879(sleep):maxrss=2,hwm=2 1934885(sleep):maxrss=2,hwm=2 1934891(sleep):maxrss=2,hwm=2 1934904(sleep):maxrss=2,hwm=2 1934924(sleep):maxrss=2,hwm=2 1934930(sleep):maxrss=2,hwm=2 1934936(sleep):maxrss=2,hwm=2 1934943(sleep):maxrss=2,hwm=2 1934950(sleep):maxrss=2,hwm=2 1934956(sleep):maxrss=2,hwm=2 1934962(sleep):maxrss=2,hwm=2 1934968(sleep):maxrss=2,hwm=2 1934983(sleep):maxrss=2,hwm=2 1934989(sleep):maxrss=2,hwm=2 1935002(sleep):maxrss=2,hwm=2 1935035(sleep):maxrss=2,hwm=2 1935048(sleep):maxrss=2,hwm=2 1935051(bash):maxrss=2,hwm=2 1935054(sleep):maxrss=2,hwm=2 1935057(bash):maxrss=2,hwm=2 1935058(bash):maxrss=2,hwm=2 1935060(sleep):maxrss=2,hwm=2 1935067(sleep):maxrss=2,hwm=2 1935071(bash):maxrss=2,hwm=2 1935072(awk):maxrss=0,hwm=0 1935076(sleep):maxrss=2,hwm=2 1935082(sleep):maxrss=2,hwm=2 1935095(sleep):maxrss=2,hwm=2 1935101(sleep):maxrss=2,hwm=2 1935108(sleep):maxrss=2,hwm=2 1935114(sleep):maxrss=2,hwm=2 1935120(sleep):maxrss=2,hwm=2 1935121(bash):maxrss=2,hwm=2 1935122(awk):maxrss=2,hwm=2 1935126(sleep):maxrss=2,hwm=2 1935127(bash):maxrss=2,hwm=2 1935128(awk):maxrss=1,hwm=1 1935132(sleep):maxrss=2,hwm=2 1935138(sleep):maxrss=2,hwm=2 1935141(bash):maxrss=2,hwm=2 1935144(sleep):maxrss=2,hwm=2 1935166(sleep):maxrss=2,hwm=2 1935179(sleep):maxrss=2,hwm=2 1935185(sleep):maxrss=2,hwm=2 1935191(sleep):maxrss=2,hwm=2 1935199(sleep):maxrss=2,hwm=2 1935212(sleep):maxrss=2,hwm=2 1935218(sleep):maxrss=2,hwm=2 1935224(sleep):maxrss=2,hwm=2 1935237(sleep):maxrss=2,hwm=2 1935243(sleep):maxrss=2,hwm=2 1935249(sleep):maxrss=2,hwm=2 1935262(sleep):maxrss=2,hwm=2 1935269(sleep):maxrss=2,hwm=2 1935284(sleep):maxrss=2,hwm=2 1935290(sleep):maxrss=2,hwm=2 1935296(sleep):maxrss=2,hwm=2 1935302(sleep):maxrss=2,hwm=2 1935308(sleep):maxrss=2,hwm=2 1935321(sleep):maxrss=2,hwm=2 1935327(sleep):maxrss=2,hwm=2 1935342(sleep):maxrss=2,hwm=2 1935348(sleep):maxrss=2,hwm=2 1935354(sleep):maxrss=2,hwm=2 1935360(sleep):maxrss=2,hwm=2 1935367(sleep):maxrss=2,hwm=2 1935373(sleep):maxrss=2,hwm=2 1935379(sleep):maxrss=2,hwm=2 1935385(sleep):maxrss=2,hwm=2 1935391(sleep):maxrss=2,hwm=2 1935397(sleep):maxrss=2,hwm=2 1935403(sleep):maxrss=2,hwm=2 1935409(sleep):maxrss=2,hwm=2 1935429(sleep):maxrss=2,hwm=2 1935435(sleep):maxrss=2,hwm=2 1935442(sleep):maxrss=2,hwm=2 1935450(sleep):maxrss=2,hwm=2 1935459(sleep):maxrss=2,hwm=2 1935482(sleep):maxrss=2,hwm=2 1935504(sleep):maxrss=2,hwm=2 1935510(sleep):maxrss=2,hwm=2 1935525(sleep):maxrss=2,hwm=2 1935531(sleep):maxrss=2,hwm=2 1935537(sleep):maxrss=2,hwm=2 1935543(sleep):maxrss=2,hwm=2 1935556(sleep):maxrss=2,hwm=2 1935562(sleep):maxrss=2,hwm=2 1935568(sleep):maxrss=2,hwm=2 1935574(sleep):maxrss=2,hwm=2 1935587(sleep):maxrss=2,hwm=2 1935593(sleep):maxrss=2,hwm=2 1935599(sleep):maxrss=2,hwm=2 1935612(sleep):maxrss=2,hwm=2 1935618(sleep):maxrss=2,hwm=2 1935624(sleep):maxrss=2,hwm=2 1935630(sleep):maxrss=2,hwm=2 1935636(sleep):maxrss=2,hwm=2 1935642(sleep):maxrss=2,hwm=2 1935649(sleep):maxrss=2,hwm=2 1935655(sleep):maxrss=2,hwm=2 1935668(sleep):maxrss=2,hwm=2 1935690(sleep):maxrss=2,hwm=2 1935696(sleep):maxrss=2,hwm=2 1935702(sleep):maxrss=2,hwm=2 1935710(sleep):maxrss=2,hwm=2 1935723(sleep):maxrss=2,hwm=2 1935729(sleep):maxrss=2,hwm=2 1935735(sleep):maxrss=2,hwm=2 1935748(sleep):maxrss=2,hwm=2 1935754(sleep):maxrss=2,hwm=2 1935763(sleep):maxrss=2,hwm=2 1935779(sleep):maxrss=2,hwm=2 1935786(sleep):maxrss=2,hwm=2 1935799(sleep):maxrss=2,hwm=2 1935805(sleep):maxrss=2,hwm=2 1935812(sleep):maxrss=2,hwm=2 1935819(sleep):maxrss=2,hwm=2 1935825(sleep):maxrss=2,hwm=2 1935831(sleep):maxrss=2,hwm=2 1935837(sleep):maxrss=2,hwm=2 1935845(sleep):maxrss=2,hwm=2 1935859(sleep):maxrss=2,hwm=2 1935865(sleep):maxrss=2,hwm=2 1935871(sleep):maxrss=2,hwm=2 1935877(sleep):maxrss=2,hwm=2 1935883(sleep):maxrss=2,hwm=2 1935889(sleep):maxrss=2,hwm=2 1935895(sleep):maxrss=2,hwm=2 1935902(sleep):maxrss=2,hwm=2 1935908(sleep):maxrss=2,hwm=2 1935914(sleep):maxrss=2,hwm=2 1935928(sleep):maxrss=2,hwm=2 1935958(sleep):maxrss=2,hwm=2 1935987(sleep):maxrss=2,hwm=2 1935990(bash):maxrss=2,hwm=2 1935991(bash):maxrss=2,hwm=2 1935993(sleep):maxrss=2,hwm=2 1935994(bash):maxrss=2,hwm=2 1935995(awk):maxrss=2,hwm=2 1935999(sleep):maxrss=2,hwm=2 1936006(sleep):maxrss=2,hwm=2 1936012(sleep):maxrss=2,hwm=2 1936031(sleep):maxrss=2,hwm=2 1936041(sleep):maxrss=2,hwm=2 1936050(sleep):maxrss=2,hwm=2 1936063(sleep):maxrss=2,hwm=2 1936070(sleep):maxrss=2,hwm=2 1936077(sleep):maxrss=2,hwm=2 1936090(sleep):maxrss=2,hwm=2 1936096(sleep):maxrss=2,hwm=2 1936102(sleep):maxrss=2,hwm=2 1936108(sleep):maxrss=2,hwm=2\n"
+ ],
+ "meta": "label=bloom_B1 tag=bloom m=256 T=8 cap=2048 ab=B\nstart=2026-10-15T06:53:15+08:00 load=\"13.51 23.41 22.90\" memavail_gib=440.0\nhead=3fd232e4a bin_md5=38c33b46bc13\n\nend=2026-10-15T06:57:01+08:00 rc=0 load=\"25.40 25.33 23.86\"\n",
+ "marks": {
+  "auditor_new": [
+   19.34,
+   7800.2,
+   116.9
+  ],
+  "root_received": [
+   134.12,
+   7800.2,
+   125.7
+  ],
+  "workers_exited": [
+   134.2,
+   7800.2,
+   125.8
+  ],
+  "audit_done": [
+   149.41,
+   7800.2,
+   135.2
+  ],
+  "before_query_phase": [
+   149.41,
+   7800.2,
+   135.2
+  ],
+  "queries_done": [
+   225.97,
+   6671.3,
+   297.6
+  ]
+ }
+}

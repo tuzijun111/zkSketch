@@ -1,0 +1,6 @@
+label=gk768x4_scalar_2 tag=gk m=512 T=4 cap=768 build=scalar
+start=2026-10-15T16:18:02+08:00 load="4.40 12.45 18.74" memavail_gib=434.5
+head=235c87be2 dirty=0 real_bin=/home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/target/release/examples/exp_compose real_bin_md5=38c33b46bc13 wrapper_md5=85738ba302b4
+
+end=2026-10-15T16:20:35+08:00 rc=0 load="26.49 19.35 20.48"
+WINDOW n=30 others_mean=1.18 others_max=1.96 load1_mean=21.5 load1_max=26.4 me_mean=24.2

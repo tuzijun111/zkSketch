@@ -1,0 +1,22 @@
+# six-sketch comparison, batch-size scaling (hll ss gk only); written by the runner, fields as run_all.sh write_manifest
+mode=batchscale (individual six/*.sh scripts, run_all.sh quick chain replicated)
+started=2026-10-13T21:11:40+08:00
+N=16384 M=8192 T=2 gk_cap=2048 query_points=1,2 aggr_epochs=0,1 cores=32 families=hll,ss,gk
+zka_roots=noroot zka_cm_ref=0 (no separate CM reference)
+verify_repeats=5 gate: GATE_WAIT_S=0 GATE_MAX_LOAD=8 GATE_MAX_BUSY=4
+zksketch=6a4d9847880191e6e34c9ff4053f72bff3c9b613 changed_files=0 checkout=/home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch
+exp_compose_md5=792368fe2c7a
+zka=d4a5a9a90f7470b4af29045ef248f724708813ad baseline_dir=/home/binbin/six-repro-verify/round-shared/home-r3cold/ext-baselines
+host=SPRL6201019991 kernel=7.0.0-34-generic cpu="AMD Ryzen Threadripper PRO 9975WX 32-Cores" nproc=64 phys_cores=32 mem_gib=559
+rustc="rustc 1.97.1 (8bab26f4f 2026-07-14)" r0vm="risc0-r0vm 3.0.6" rzup="rzup 0.5.0" python="Python 3.14.4"
+risc0_toolchains="v1.97.0-rust-x86_64-unknown-linux-gnu "
+mem_available_gib_at_start=438.5 load_at_start="20.69 23.76 13.11"
+step rc=1 seconds=9 scripts/baselines/zka/six/run_zka.sh exec
+step rc=0 seconds=1 scripts/baselines/zka/six/run_zka.sh qexec hll:query:1 hll:query:2 gk:query:1:1810625 gk:query:2:985491 ss:query:1 ss:query:2
+step rc=1 seconds=4 scripts/baselines/zka/six/prof_exec.sh
+pre-GK-8192 check 2026-10-13T21:17:42+08:00 MemAvailable_gib=436.3 (threshold 300)
+step rc=0 seconds=1352 scripts/baselines/zka/six/run_zka.sh prove hll:aggr:0:noroot gk:query:1:1810625
+zk-Analytics exec: run_zka.sh exec and prof_exec.sh exit 1 because their GK driver's native accuracy check fails at M=8192 (both epochs, aggregation and profiling twin): cert_err 161 > eps*N 160.63 (cert_over_eps_n 1.0023; max g+delta 322 > floor(2 eps N) 321); journal_eq_native and variants_agree are true and the rows (cycles) are written. The driver would refuse to PROVE gk:aggr:<e> at this shape (it proves only when the checks pass); its prove time in the tables is an ESTIMATE from executor cycles. The GK query (gk:query:1/2) passes its checks.
+assemble: standard six/assemble.py --plan; k = 31.817 s per 2^20 padded cycles from this directory's 2 proofs (hll:aggr:0:noroot 1342.206 s / 42.25 Mi padded = 31.768; gk:query:1:1810625 6.034 s / 0.125 Mi = 48.27)
+gate: zkSketch rows marked busy:load1=... = the 1-minute load average left by the preceding run of this sequence; gk:query:1 marked busy:load1=57.52 = the load left by the preceding hll r0vm proof. A foreign single-threaded process (another user, python, ~100% of one CPU, started 21:25) ran during the zkSketch GK run and the whole hll:aggr:0:noroot proof.
+finished=2026-10-13T21:56:44+08:00

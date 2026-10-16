@@ -1,0 +1,5 @@
+label=gk_Bidle2 tag=gk m=128 T=16 cap=384 ab=B
+start=2026-10-15T06:29:33+08:00 load="16.86 24.92 23.65" memavail_gib=439.9
+head=3fd232e4a bin_md5=38c33b46bc13
+EXP_MALLOC_TRIM=idle 
+end=2026-10-15T06:33:08+08:00 rc=0 load="28.03 25.85 24.22"

@@ -1,0 +1,4 @@
+run_zks.sh: 1 run(s) -> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m2/meas/runs/packed_bloom_m1024_T32/out (N=32768 m=1024 t=32 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+== zkSketch bloom (05:54:42); log /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m2/meas/runs/packed_bloom_m1024_T32/out/six_zksketch_bloom.log
+done bloom rc=0 wall=386s
+run_zks.sh: all 1 run(s) ok -> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m2/meas/runs/packed_bloom_m1024_T32/out/six_zksketch_*

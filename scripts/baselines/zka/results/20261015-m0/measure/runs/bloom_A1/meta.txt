@@ -1,0 +1,5 @@
+label=bloom_A1 tag=bloom m=256 T=8 cap=2048 ab=A
+start=2026-10-15T03:26:25+08:00 load="8.31 16.67 14.11" memavail_gib=434.9
+head=3fa3e393c bin_md5=ee43a527af87
+EXP_EXIT_BEFORE_AUDIT=0 EXP_FOREST_RETAIN_PREP=1 EXP_MALLOC_TRIM=0 EXP_MERGE_CACHE=0 
+end=2026-10-15T03:30:33+08:00 rc=0 load="24.48 22.64 17.29"

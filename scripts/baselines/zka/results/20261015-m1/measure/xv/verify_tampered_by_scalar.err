@@ -1,0 +1,6 @@
+
+thread 'main' (2292996) panicked at src/recursion/recursive/expose_forest.rs:1114:39:
+verify bound proof: Verify("InvalidOpeningArgument(InputError(CapMismatch))")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+Command exited with non-zero status 1
+TIME verify_tampered_by_scalar wall=14.34 s maxrss=4562712 KB

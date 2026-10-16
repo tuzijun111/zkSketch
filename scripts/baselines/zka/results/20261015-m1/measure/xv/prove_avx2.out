@@ -1,0 +1,3 @@
+XPROVE leaf t=1 bytes=903058 fp=a086daa3a2815d3d
+XPROVE leaf t=2 bytes=903040 fp=8dbdb3e9d32b719e
+XPROVE root t=2 merges(finalize)=0 bytes=804224 fp=84ed76f68852a7aa total 9.4 s

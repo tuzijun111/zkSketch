@@ -1,0 +1,44 @@
+# 2026-10-15T06:02:17+08:00 tag=rss_on2 switches=on target=test:m0_rss_trim load=2.56 6.13 14.58
+# head=3fd232e4af8a207992206ac76d8de37edb67ea80 tree=a294152c9389fd0ad06528aa5a3e5686660db9de index_tree=a294152c9389fd0ad06528aa5a3e5686660db9de porcelain_lines=0 (0 = the committed tree)
+# filters: --nocapture
+...
+...
+...
+   Compiling zksketch v0.1.0 (/home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch)
+    Finished `release` profile [optimized] target(s) in 21.31s
+     Running tests/m0_rss_trim.rs (target/release/deps/m0_rss_trim-8dc53967d1f6be06)
+running 1 test
+M0RSS bare+trim t=1 merges=0 rss_mb=16 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=2 merges=1 rss_mb=60 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=3 merges=0 rss_mb=60 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=4 merges=2 rss_mb=70 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=5 merges=0 rss_mb=70 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=6 merges=1 rss_mb=76 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=7 merges=0 rss_mb=76 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=8 merges=3 rss_mb=82 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim: post-first-leaf 16 MiB, worst later +66 MiB
+M0RSS bare+cache+trim t=1 merges=0 rss_mb=80 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+cache+trim t=2 merges=1 rss_mb=661 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim t=3 merges=0 rss_mb=662 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim t=4 merges=2 rss_mb=666 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim t=5 merges=0 rss_mb=666 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim t=6 merges=1 rss_mb=671 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim t=7 merges=0 rss_mb=671 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+test rss_between_proofs_returns_near_the_first_leaf_level has been running for over 60 seconds
+M0RSS bare+cache+trim t=8 merges=3 rss_mb=673 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim: post-first-leaf 80 MiB, one entry +581 MiB (t=2), worst later +12 MiB over post-first-leaf + entry
+M0RSS retain+notrim t=1 merges=0 rss_mb=357 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=2 merges=1 rss_mb=1564 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=3 merges=0 rss_mb=1564 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=4 merges=2 rss_mb=1795 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=5 merges=0 rss_mb=1795 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=6 merges=1 rss_mb=2127 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=7 merges=0 rss_mb=2127 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=8 merges=3 rss_mb=1684 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim: post-first-leaf 357 MiB, worst later +1770 MiB
+test rss_between_proofs_returns_near_the_first_leaf_level ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 102.26s
+real	2m3.668s
+user	70m3.640s
+sys	2m27.126s
+exit=0

@@ -1,0 +1,9 @@
+worker peak 8150 MiB, threshold 4890; humps found 8, expected 15 (8 leaves + 7 merges)
+  hump  1 leaf  after leaf  1     25.5-   31.2s  dur   5.8s  peak  7690 MiB
+  hump  2 leaf  after leaf  2     35.8-   41.3s  dur   5.5s  peak  7677 MiB
+  hump  3 merge after leaf  2     49.5-   56.7s  dur   7.2s  peak  8121 MiB
+  hump  4 leaf  after leaf  3     60.2-   66.8s  dur   6.7s  peak  8132 MiB
+  hump  5 leaf  after leaf  4     79.0-   85.9s  dur   6.9s  peak  8150 MiB
+  hump  6 merge after leaf  4     89.3-   96.0s  dur   6.7s  peak  8146 MiB
+  hump  7 merge after leaf  4    103.5-  109.9s  dur   6.5s  peak  8136 MiB
+  hump  8 leaf  after leaf  5    113.3-  119.7s  dur   6.5s  peak  8132 MiB

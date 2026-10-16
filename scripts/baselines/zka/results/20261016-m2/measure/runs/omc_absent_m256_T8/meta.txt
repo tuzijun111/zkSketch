@@ -1,0 +1,4 @@
+label=omc_absent_m256_T8 tag=bloom_absent variant=omc m=256 T=8
+start=2026-10-16T06:14:51+08:00 load="10.78 20.59 20.44" memavail_gib=430.7
+head=63157ed0b dirty=0 bin_md5=f03e752f6a9e
+end=2026-10-16T06:18:33+08:00 rc=0 load="23.85 23.59 21.72"

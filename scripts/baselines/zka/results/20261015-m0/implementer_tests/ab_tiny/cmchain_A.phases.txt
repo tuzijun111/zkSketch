@@ -1,0 +1,10 @@
+QLOG_PHASE,after=auditor_new,coord_hwm_mb=80.3,coord_rss_mb=80.3,unix_ms=1792003115949
+QLOG_PHASE,after=root_received,coord_hwm_mb=84.7,coord_rss_mb=84.7,unix_ms=1792003146056
+    auditor: VK derived from public parameters in 12.2s
+QLOG_PHASE,after=audit_done,coord_hwm_mb=4440.0,coord_rss_mb=234.9,unix_ms=1792003158246
+QLOG_PHASE,after=before_query_phase,coord_hwm_mb=4440.0,coord_rss_mb=235.0,unix_ms=1792003158342
+QLOG_QUERY,at_leaf=1,prove_ms=130.122,witness_ms=0.056,verify_ms=14.493,proof_bytes=547122,answer=1
+QLOG_QUERY,at_leaf=2,prove_ms=107.898,witness_ms=0.064,verify_ms=13.563,proof_bytes=547182,answer=1
+QLOG_QUERY,at_leaf=3,prove_ms=103.416,witness_ms=0.054,verify_ms=13.557,proof_bytes=547289,answer=3
+QLOG_PHASE,after=queries_done,coord_hwm_mb=4535.5,coord_rss_mb=1290.2,unix_ms=1792003190573
+results -> /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/results/m0ab_cmchain_A.csv

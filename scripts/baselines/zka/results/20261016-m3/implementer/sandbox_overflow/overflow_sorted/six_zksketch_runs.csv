@@ -1,0 +1,2 @@
+tag,family,key_mode,family_env,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,main_peak_rss_mb,desc_peak_rss_mb,commit,zks_head,features,bin_md5
+gk,gk,hot,EXP_GK_CAP=8 EXP_GK_S=51 EXP_GK_ROUNDS=sorted,2026-10-15T21:40:37+08:00,busy:load1=16.05;,0,16.05,NA,16.05,2,0,97.2,23.6,hiding,353981e0c,default:pcs=hiding;logup_mask=on,59606ea99cf5

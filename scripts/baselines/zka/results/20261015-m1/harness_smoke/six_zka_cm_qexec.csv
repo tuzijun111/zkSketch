@@ -1,0 +1,3 @@
+system,arm,mode,guest,family,query,topk_slots,histogram_slots,epochs,epoch_index,epoch_records,records,batch,value_enc,limit,distinct_keys,per_key_entries,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,journal_bytes,state_commits,journal_eq_native,result,exact,prove_s,verify_ms,receipt_bytes,s_per_segment,key_id,root_variant,root_construction,variants_agree,state_commit
+zka,shipped,query,querier_cm,cm,estimate,1,32,1,-,256,256,8,1,-,174,1,12840,845442,1048576,1,20,0.042,412,1,true,estimate=20,key=418575398 exact=20,NaN,NaN,0,NaN,aol,-,-,-,-
+zka,shipped,query,querier_cm,cm,estimate,1,32,2,-,256,512,8,1,-,365,2,25608,1676301,2097152,2,20,0.052,540,2,true,estimate=21,key=418575398 exact=20,NaN,NaN,0,NaN,aol,-,-,-,-

@@ -1,0 +1,5 @@
+run_zks.sh: 1 run(s) -> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m0/runs/bloom_B2/out (N=2048 m=256 t=8 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+gate failed for bloom: busy:load1=9.07; -- running anyway, row marked
+== zkSketch bloom (03:53:41); log /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m0/runs/bloom_B2/out/six_zksketch_bloom.log
+done bloom rc=0 wall=223s
+run_zks.sh: all 1 run(s) ok -> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m0/runs/bloom_B2/out/six_zksketch_*

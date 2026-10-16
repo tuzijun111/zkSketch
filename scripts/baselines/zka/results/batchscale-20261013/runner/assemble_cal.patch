@@ -1,0 +1,49 @@
+--- /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/scripts/baselines/zka/six/assemble.py	2026-10-13 19:24:34.903808463 +0800
++++ /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/assemble_cal.py	2026-10-13 21:03:35.022002140 +0800
+@@ -334,15 +334,28 @@
+     proved = {r['_job']['job'] for r in measured}
+     todo = [j for j in plan if j not in proved]
+     if todo:
+-        if not measured:
+-            sys.exit('--plan: no measured zk-Analytics proof in this run to calibrate the estimate from')
+-        k = sum(num(r['prove_s']) for r in measured) / sum(int(r['padded_cycles']) / 2 ** 20 for r in measured)
+-        mv = statistics.mean(num(r['verify_ms']) for r in measured)
+-        mb = statistics.mean(int(r['receipt_bytes']) for r in measured)
+-        EST_NOTE = (f'ESTIMATED (padded_cycles x k={k:.3f} s per 2^20 cycles, calibrated from {len(measured)} '
+-                    f'proof(s) of this run)')
+-        print(f'estimate: k = {k:.3f} s per 2^20 padded cycles from {len(measured)} proof(s) '
+-              f'({" ".join(sorted(proved))}); {len(todo)} job(s) estimated', file=sys.stderr)
++        if os.environ.get('CAL_K'):  # BATCHSCALE PATCH: external calibration (no proof in this directory)
++            if measured:
++                sys.exit('CAL_K given but this directory holds measured proofs; drop CAL_K')
++            k = float(os.environ['CAL_K'])
++            mv = float(os.environ['CAL_VERIFY_MS'])
++            mb = float(os.environ['CAL_RECEIPT_BYTES'])
++            CAL_SRC = os.environ['CAL_SRC']
++            EST_NOTE = f'ESTIMATED (padded_cycles x k={k:.3f} s per 2^20 cycles, calibrated from {CAL_SRC})'
++            CAL_HOW = f'mean of the {CAL_SRC}'
++            print(f'estimate: k = {k:.3f} s per 2^20 padded cycles, EXTERNAL calibration ({CAL_SRC}); '
++                  f'{len(todo)} job(s) estimated', file=sys.stderr)
++        else:
++            if not measured:
++                sys.exit('--plan: no measured zk-Analytics proof in this run to calibrate the estimate from')
++            k = sum(num(r['prove_s']) for r in measured) / sum(int(r['padded_cycles']) / 2 ** 20 for r in measured)
++            mv = statistics.mean(num(r['verify_ms']) for r in measured)
++            mb = statistics.mean(int(r['receipt_bytes']) for r in measured)
++            EST_NOTE = (f'ESTIMATED (padded_cycles x k={k:.3f} s per 2^20 cycles, calibrated from {len(measured)} '
++                        f'proof(s) of this run)')
++            CAL_HOW = f"mean of this run's {len(measured)} measured receipt(s)"
++            print(f'estimate: k = {k:.3f} s per 2^20 padded cycles from {len(measured)} proof(s) '
++                  f'({" ".join(sorted(proved))}); {len(todo)} job(s) estimated', file=sys.stderr)
+         qex = attach_jobs(ZKA, 'qexec', f'{ZKA}_qexec_jobs.csv')
+         qex_by_job = {r['_job']['job']: r for f in FAMS for r in qex[f]}
+         for job in todo:
+@@ -366,7 +379,7 @@
+                          'gate': '-', 'load1_start': '-', 'busy_cores_start': '-', 'r0vm_peak_rss_mb': ''}
+             e['_est'] = True
+             e['_est_how'] = (f"NOT proved: prove_s = {e['padded_cycles']} padded cycles / 2^20 x {k:.3f} s; "
+-                             f"verify_ms and proof_bytes = mean of this run's {len(measured)} measured receipt(s)")
++                             f"verify_ms and proof_bytes = {CAL_HOW}")
+             prove[f].append(e)
+ 
+ # verify-protocol re-proofs: VERIFY_TIMES_MS lines, in job order per family

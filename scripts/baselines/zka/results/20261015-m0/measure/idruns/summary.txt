@@ -1,0 +1,4 @@
+gk_A rc=0 vk_md5=aa12f25422fe57e8 vk_bytes=197
+gk_B rc=0 vk_md5=aa12f25422fe57e8 vk_bytes=197
+bloom_A rc=0 vk_md5=657e3dc3b028f1f4 vk_bytes=195
+bloom_B rc=0 vk_md5=657e3dc3b028f1f4 vk_bytes=195

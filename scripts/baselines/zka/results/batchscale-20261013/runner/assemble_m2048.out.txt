@@ -1,0 +1,16 @@
+CAL_K=30.073281609195405 CAL_VERIFY_MS=10.784083333333333 CAL_RECEIPT_BYTES=224854
+CAL_SRC=the 12 aggregation proofs of the committed 2026-10-09 run at M=2048 (scripts/baselines/zka/results; legacy guests; no proof in this directory)
+estimate: k = 30.073 s per 2^20 padded cycles, EXTERNAL calibration (the 12 aggregation proofs of the committed 2026-10-09 run at M=2048 (scripts/baselines/zka/results; legacy guests; no proof in this directory)); 12 job(s) estimated
+root variants: one state_commit per (family, epoch) over cm noroot; hll noroot; ss noroot; gk noroot; bloom noroot; kmv noroot (12 epochs)
+cm: no proved aggregation rows; update and accept rows skipped
+bloom: no proved aggregation rows; update and accept rows skipped
+kmv: no proved aggregation rows; update and accept rows skipped
+six_zka: no zk-Analytics rows for cm
+six_zka: no zk-Analytics rows for bloom
+six_zka: no zk-Analytics rows for kmv
+no zkSketch CSV for: six_zksketch_cm six_zksketch_bloom six_zksketch_bloom_absent six_zksketch_kmv
+PHASE six_zksketch_hll: auditor_new=hwm 7065/rss 1222 MB before_query_phase=hwm 7076/rss 1488 MB vk_derive_s=16.1 RSSTREE main=8168 worker=6991
+PHASE six_zksketch_ss: auditor_new=hwm 3851/rss 693 MB before_query_phase=hwm 4533/rss 965 MB vk_derive_s=12.6 RSSTREE main=5009 worker=5039
+PHASE six_zksketch_gk: auditor_new=hwm 59231/rss 2167 MB before_query_phase=hwm 59285/rss 2619 MB vk_derive_s=82.7 RSSTREE main=59285 worker=59204
+48 rows -> /home/binbin/zkSketch/results/six/batchscale-20261013/m2048/six_sketch_comparison.csv
+table -> /home/binbin/zkSketch/results/six/batchscale-20261013/m2048/six_sketch_table.md

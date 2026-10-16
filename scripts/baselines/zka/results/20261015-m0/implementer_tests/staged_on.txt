@@ -1,0 +1,9 @@
+ok   wave=2 cores=4 CmOmc commit=plain: 4 queries bound, 11 ctx proofs, bind 210.3 ms, root 791217 B, query proofs 2187350 B (151 s)
+ok   wave=2 cores=4 CmOmc commit=hiding: 4 queries bound, 11 ctx proofs, bind 211.2 ms, root 791328 B, query proofs 2188358 B (150 s)
+ok   wave=2 cores=4 BloomOmc commit=plain: 4 queries bound, 11 ctx proofs, bind 208.4 ms, root 791532 B, query proofs 2231115 B (127 s)
+ok   wave=2 cores=4 BloomOmc commit=hiding: 4 queries bound, 11 ctx proofs, bind 207.5 ms, root 791147 B, query proofs 2230449 B (127 s)
+ok   wave=2 cores=4 KmvSketch commit=plain: 4 queries bound, 11 ctx proofs, bind 211.1 ms, root 791875 B, query proofs 2011501 B (143 s)
+ok   wave=2 cores=4 KmvSketch commit=hiding: 4 queries bound, 11 ctx proofs, bind 211.1 ms, root 790907 B, query proofs 2012677 B (142 s)
+staged_queries: 6 runs ok
+real	13m59.236s
+exit=0

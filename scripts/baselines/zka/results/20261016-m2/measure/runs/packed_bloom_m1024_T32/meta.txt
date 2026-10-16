@@ -1,0 +1,4 @@
+label=packed_bloom_m1024_T32 tag=bloom variant=packed m=1024 T=32
+start=2026-10-16T05:54:40+08:00 load="5.68 7.80 14.07" memavail_gib=430.7
+head=63157ed0b dirty=0 bin_md5=f03e752f6a9e
+end=2026-10-16T06:01:08+08:00 rc=0 load="29.41 22.97 18.90"

@@ -1,0 +1,4 @@
+QLOG_QUERY,at_leaf=1,answer=15
+QLOG_QUERY,at_leaf=2,answer=20
+QLOG_QUERY,at_leaf=3,answer=46
+QLOG_QUERY,at_leaf=4,answer=33

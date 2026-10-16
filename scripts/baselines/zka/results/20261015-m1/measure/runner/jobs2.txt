@@ -1,0 +1,4 @@
+zks gk768x4_scalar_1 gk 512 4 768 scalar
+zks gk768x4_avx2_1   gk 512 4 768 avx2
+zks gk768x4_avx2_2   gk 512 4 768 avx2
+zks gk768x4_scalar_2 gk 512 4 768 scalar

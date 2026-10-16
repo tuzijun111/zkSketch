@@ -1,0 +1,12 @@
+[package]
+name = "anscheck"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+zksketch = { path = "/home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch" }
+
+[profile.release]
+opt-level = 2
+
+[workspace]

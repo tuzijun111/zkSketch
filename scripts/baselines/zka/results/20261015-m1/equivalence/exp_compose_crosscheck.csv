@@ -1,0 +1,23 @@
+# zkSketch exp_compose GK answers vs the matched zk-Analytics query guest (rank(v) after n x 2,048 AOL records)
+source,config(capacity/leaf m),n,leaf,v,zkSketch_exp_compose_answer,zka_matched_answer,equal
+memmatch-20261014/runs/gk-m128-cap384-t16/six_zksketch_gk.log,384/128 (zka 384/128),1,16,1810625,1778,1778,true
+memmatch-20261014/runs/gk-m512-cap128-t4/six_zksketch_gk.log,128/512 (zka 128/512),1,4,1810625,1780,1780,true
+memmatch-20261014/runs/gk-m512-cap64-t4/six_zksketch_gk.log,64/512 (zka 64/512),1,4,1810625,1780,1780,true
+memmatch-20261014/runs/gk-m2048-cap2048-t1/six_zksketch_gk.log,2048/2048 (zka 2048/2048),1,1,1810625,1786,1786,true
+six_zksketch_r2_gk.log,2048/2048 (zka 2048/2048),1,1,1810625,1786,1786,true
+six_zksketch_r2_gk.log,2048/2048 (zka 2048/2048),2,2,1810625,3557,3557,true
+six_zksketch_r2_gk.log,2048/2048 (zka 2048/2048),3,3,1810625,5274,5274,true
+six_zksketch_r2_gk.log,2048/2048 (zka 2048/2048),4,4,1810625,7095,7095,true
+six_zksketch_r2_gk.log,2048/2048 (zka 2048/2048),5,5,1810625,8916,8916,true
+six_zksketch_r2_gk.log,2048/2048 (zka 2048/2048),6,6,985491,5877,5877,true
+six_zksketch_r2_gk.log,2048/2048 (zka 2048/2048),7,7,985491,6915,6915,true
+six_zksketch_r2_gk.log,2048/2048 (zka 2048/2048),8,8,985491,7927,7927,true
+six_zksketch_gk.log,2048/2048 (zka 2048/2048),1,1,1810625,1786,1786,true
+six_zksketch_gk.log,2048/2048 (zka 2048/2048),2,2,1810625,3557,3557,true
+six_zksketch_gk.log,2048/2048 (zka 2048/2048),3,3,1810625,5274,5274,true
+six_zksketch_gk.log,2048/2048 (zka 2048/2048),4,4,1810625,7095,7095,true
+six_zksketch_gk.log,2048/2048 (zka 2048/2048),5,5,1810625,8916,8916,true
+six_zksketch_gk.log,2048/2048 (zka 2048/2048),6,6,985491,5877,5877,true
+six_zksketch_gk.log,2048/2048 (zka 2048/2048),7,7,985491,6915,6915,true
+six_zksketch_gk.log,2048/2048 (zka 2048/2048),8,8,985491,7927,7927,true
+# all equal: True

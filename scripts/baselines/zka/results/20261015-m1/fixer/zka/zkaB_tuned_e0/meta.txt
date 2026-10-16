@@ -1,0 +1,5 @@
+label=zkaB_tuned_e0 cap=768 m_sub=512 impl=tuned job=gk:aggr:0:noroot B=2048
+start=2026-10-15T16:52:37+08:00 load="22.30 35.83 24.31" memavail_gib=434.5
+head=f669c9221 dirty=0 r0vm=risc0-r0vm 3.0.6 r0vm_md5=9e13aa14c059 gk_matched_md5=c763ba4f4277
+end=2026-10-15T16:58:16+08:00 rc=0 load="54.49 51.69 35.21"
+WINDOW n=68 others_mean=1.17 others_max=2.72 load1_mean=54.2 load1_max=65.3 me_mean=48.0

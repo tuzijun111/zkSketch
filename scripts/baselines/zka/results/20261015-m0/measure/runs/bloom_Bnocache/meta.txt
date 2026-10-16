@@ -1,0 +1,5 @@
+label=bloom_Bnocache tag=bloom m=256 T=8 cap=2048 ab=B
+start=2026-10-15T04:14:06+08:00 load="7.81 18.89 20.01" memavail_gib=434.9
+head=3fa3e393c bin_md5=ee43a527af87
+EXP_MERGE_CACHE=0 
+end=2026-10-15T04:17:53+08:00 rc=0 load="22.01 21.74 21.02"

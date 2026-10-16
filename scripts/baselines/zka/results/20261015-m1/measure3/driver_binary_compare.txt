@@ -1,0 +1,23 @@
+# driver binary comparison 2026-10-15T17:43:41+08:00: 5f96d1d driver (fixer3 rebuild, md5 c763ba4f4277 = round-2 measured driver) vs e9968eb driver (md5 986c861141e6); e9968eb rebuilt again by measurer -> 986c861141e6
+# per-section md5 (objcopy --only-section), first 12 hex: 5f96d1d | e9968eb
+.interp 91476dafa5ef | 91476dafa5ef same
+.note.gnu.build-id 4f4ea4d3dbb3 | 479e40c9be2c DIFF
+.rodata 40efa96e240e | 40efa96e240e same
+.eh_frame_hdr 1684873c7a87 | 1684873c7a87 same
+.eh_frame 14e7f3de2836 | 14e7f3de2836 same
+.gcc_except_table 8a5b03816122 | 8a5b03816122 same
+.text c5d814bf7451 | c5d814bf7451 same
+.init d92ee4d12771 | d92ee4d12771 same
+.fini 7f954257b760 | 7f954257b760 same
+.tdata 83473b5dd257 | 83473b5dd257 same
+.tbss d41d8cd98f00 | d41d8cd98f00 same
+.init_array 4ae71336e44b | 4ae71336e44b same
+.fini_array 7dea362b3fac | 7dea362b3fac same
+.data.rel.ro ede7c57dd465 | ede7c57dd465 same
+.dynamic 3d8a1fcb0e59 | 3d8a1fcb0e59 same
+.got 4e1429614e6c | 4e1429614e6c same
+.data 5627732615c5 | 5627732615c5 same
+.bss d41d8cd98f00 | d41d8cd98f00 same
+# section headers (name, size) identical: yes; LOAD program headers identical: yes
+# differing bytes: 100 total; build-id note=20, .strtab (symbol names)=80, elsewhere=0
+# build IDs: 412704004433dc7d58efc6b67bb3c716b5f59bf0 vs 910bd21452c56790ded7916515ee5f478f74109d

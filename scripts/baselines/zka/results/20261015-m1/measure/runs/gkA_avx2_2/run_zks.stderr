@@ -1,0 +1,5 @@
+run_zks.sh: 1 run(s) -> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m1/meas/runs/gkA_avx2_2/out (N=2048 m=128 t=16 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+gate failed for gk: busy:load1=8.89; -- running anyway, row marked
+== zkSketch gk (14:41:19); log /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m1/meas/runs/gkA_avx2_2/out/six_zksketch_gk.log
+done gk rc=0 wall=116s
+run_zks.sh: all 1 run(s) ok -> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m1/meas/runs/gkA_avx2_2/out/six_zksketch_*

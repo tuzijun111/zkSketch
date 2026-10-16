@@ -1,0 +1,8 @@
+start 2026-10-14T14:11:53+08:00 tag=gk m=512 T=4 cap=32 dir=/home/binbin/zkSketch/results/six/memmatch-20261014/gk-m512-cap32-t4 load="24.78 25.94 25.22" memavail_gib=430.3
+run_zks.sh: 1 run(s) -> /home/binbin/zkSketch/results/six/memmatch-20261014/gk-m512-cap32-t4 (N=2048 m=512 t=4 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+gate failed for gk: busy:load1=24.78; -- running anyway, row marked
+== zkSketch gk (14:11:53); log /home/binbin/zkSketch/results/six/memmatch-20261014/gk-m512-cap32-t4/six_zksketch_gk.log
+FAILED zkSketch gk: CSV status=error -- see /home/binbin/zkSketch/results/six/memmatch-20261014/gk-m512-cap32-t4/six_zksketch_gk.log
+run_zks.sh: 1 run(s) failed: gk
+end 2026-10-14T14:12:02+08:00 rc=1
+RSSTREE,zks_gk,main_peak_rss_mb=4409.1,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=658.2,wall_s=8.3,rc=0

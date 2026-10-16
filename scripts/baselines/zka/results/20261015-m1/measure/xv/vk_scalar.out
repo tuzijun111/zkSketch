@@ -1,0 +1,3 @@
+XVK gk_384_128 leaf_vk bytes=229 fp=2cfadb51f725d46a root_vk(t=16) bytes=197 fp=586533e89433eee2 (48.0 s)
+XVK gk_768_512 leaf_vk bytes=234 fp=e318ab95e5f1ff7c root_vk(t=2) bytes=196 fp=d258ca4694628439 (43.9 s)
+XVK bloom_k7_w14_256 leaf_vk bytes=205 fp=cec2eb9451f2e9a5 root_vk(t=8) bytes=195 fp=4678973052ee6cda (26.5 s)

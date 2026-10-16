@@ -1,0 +1,4 @@
+commit,pcs,logup_mask,binding,statement,commit_mode,family,variant,site,level,geometry,m,tables,max_log_h,largest,max_rows_unpadded,max_fill,sum_rows_padded,fits_nonhiding,fits_hiding,min_headroom_rows_hiding,m_cross_hiding,m_cross_table,consistent,probe_s,hwm_mb,proof_check
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,768,7,18,alu+range,149769,0.5713,594944,true,true,16627447,120390,alu,true,0.37,204,-
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,960,7,18,alu+range,176457,0.6731,594944,true,true,16600759,120390,alu,true,0.43,268,-
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,1024,7,18,alu+range,185353,0.7071,594944,true,true,16591863,120390,alu,true,0.41,292,-

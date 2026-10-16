@@ -1,0 +1,9 @@
+n=1 N=512 v=1242150 answer=321 true_rank[<v,<=v]=[308,328] err=0 eps*N=10.04 OK
+n=2 N=1024 v=1810625 answer=900 true_rank[<v,<=v]=[791,906] err=0 eps*N=20.08 OK
+n=3 N=1536 v=1810625 answer=1354 true_rank[<v,<=v]=[1242,1357] err=0 eps*N=30.12 OK
+n=4 N=2048 v=1810625 answer=1780 true_rank[<v,<=v]=[1674,1789] err=0 eps*N=40.16 OK
+n=5 N=2560 v=1810625 answer=2224 true_rank[<v,<=v]=[2117,2232] err=0 eps*N=50.20 OK
+n=6 N=3072 v=1810625 answer=2665 true_rank[<v,<=v]=[2557,2672] err=0 eps*N=60.24 OK
+n=7 N=3584 v=1810625 answer=3120 true_rank[<v,<=v]=[3010,3125] err=0 eps*N=70.27 OK
+n=8 N=4096 v=1810625 answer=3551 true_rank[<v,<=v]=[3454,3569] err=0 eps*N=80.31 OK
+ALL_OK

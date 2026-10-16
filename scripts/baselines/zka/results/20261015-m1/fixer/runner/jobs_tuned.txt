@@ -1,0 +1,2 @@
+zka zkaA_tuned_e0 384 128 tuned
+zka zkaB_tuned_e0 768 512 tuned

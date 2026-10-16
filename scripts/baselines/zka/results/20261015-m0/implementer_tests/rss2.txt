@@ -1,0 +1,23 @@
+M0RSS bare+trim t=1 merges=0 rss_mb=16 holds_prover_data=false
+M0RSS bare+trim t=2 merges=1 rss_mb=55 holds_prover_data=false
+M0RSS bare+trim t=3 merges=0 rss_mb=55 holds_prover_data=false
+M0RSS bare+trim t=4 merges=2 rss_mb=67 holds_prover_data=false
+M0RSS bare+trim t=5 merges=0 rss_mb=67 holds_prover_data=false
+M0RSS bare+trim t=6 merges=1 rss_mb=72 holds_prover_data=false
+M0RSS bare+trim t=7 merges=0 rss_mb=72 holds_prover_data=false
+M0RSS bare+trim t=8 merges=3 rss_mb=78 holds_prover_data=false
+M0RSS bare+trim: post-first-leaf 16 MiB, worst later +63 MiB
+M0RSS retain+notrim t=1 merges=0 rss_mb=103 holds_prover_data=true
+M0RSS retain+notrim t=2 merges=1 rss_mb=1411 holds_prover_data=true
+M0RSS retain+notrim t=3 merges=0 rss_mb=1411 holds_prover_data=true
+M0RSS retain+notrim t=4 merges=2 rss_mb=1712 holds_prover_data=true
+M0RSS retain+notrim t=5 merges=0 rss_mb=1712 holds_prover_data=true
+M0RSS retain+notrim t=6 merges=1 rss_mb=2041 holds_prover_data=true
+M0RSS retain+notrim t=7 merges=0 rss_mb=2041 holds_prover_data=true
+test rss_between_proofs_returns_near_the_first_leaf_level has been running for over 60 seconds
+M0RSS retain+notrim t=8 merges=3 rss_mb=2073 holds_prover_data=true
+M0RSS retain+notrim: post-first-leaf 103 MiB, worst later +1970 MiB
+test rss_between_proofs_returns_near_the_first_leaf_level ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 71.04s
+real	1m11.173s
+exit=0

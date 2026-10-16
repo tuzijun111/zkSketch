@@ -1,0 +1,5 @@
+label=zkaB_e0 cap=768 m_sub=512 impl=fast job=gk:aggr:0:noroot B=2048
+start=2026-10-15T14:16:32+08:00 load="20.22 40.92 49.90" memavail_gib=437.5
+head=235c87be2 dirty=0 r0vm=risc0-r0vm 3.0.6 r0vm_md5=9e13aa14c059 gk_matched_md5=b18f09993e7b
+end=2026-10-15T14:22:36+08:00 rc=0 load="48.09 48.08 50.52"
+WINDOW n=72 others_mean=0.06 others_max=0.25 load1_mean=47.7 load1_max=54.6 me_mean=50.1

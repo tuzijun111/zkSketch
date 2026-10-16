@@ -1,0 +1,14 @@
+zka zkaA_e0 384 128 fast
+zka zkaB_e0 768 512 fast
+zks gkA_scalar_1   gk    128 16 384 scalar
+zks gkA_avx2_1     gk    128 16 384 avx2
+zks gk768_scalar_1 gk    512 2  768 scalar
+zks gk768_avx2_1   gk    512 2  768 avx2
+zks bloom_scalar_1 bloom 256 8  2048 scalar
+zks bloom_avx2_1   bloom 256 8  2048 avx2
+zks gkA_avx2_2     gk    128 16 384 avx2
+zks gkA_scalar_2   gk    128 16 384 scalar
+zks gk768_avx2_2   gk    512 2  768 avx2
+zks gk768_scalar_2 gk    512 2  768 scalar
+zks bloom_avx2_2   bloom 256 8  2048 avx2
+zks bloom_scalar_2 bloom 256 8  2048 scalar

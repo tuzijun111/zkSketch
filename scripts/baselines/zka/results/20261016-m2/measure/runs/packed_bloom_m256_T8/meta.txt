@@ -1,0 +1,4 @@
+label=packed_bloom_m256_T8 tag=bloom variant=packed m=256 T=8
+start=2026-10-16T06:19:33+08:00 load="9.72 19.59 20.46" memavail_gib=430.8
+head=63157ed0b dirty=0 bin_md5=f03e752f6a9e
+end=2026-10-16T06:20:54+08:00 rc=0 load="27.89 22.54 21.39"

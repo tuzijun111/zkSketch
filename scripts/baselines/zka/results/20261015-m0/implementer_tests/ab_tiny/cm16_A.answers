@@ -1,0 +1,16 @@
+QLOG_QUERY,at_leaf=1,answer=1
+QLOG_QUERY,at_leaf=2,answer=1
+QLOG_QUERY,at_leaf=3,answer=3
+QLOG_QUERY,at_leaf=4,answer=1
+QLOG_QUERY,at_leaf=5,answer=4
+QLOG_QUERY,at_leaf=6,answer=5
+QLOG_QUERY,at_leaf=7,answer=5
+QLOG_QUERY,at_leaf=8,answer=13
+QLOG_QUERY,at_leaf=9,answer=16
+QLOG_QUERY,at_leaf=10,answer=18
+QLOG_QUERY,at_leaf=11,answer=4
+QLOG_QUERY,at_leaf=12,answer=6
+QLOG_QUERY,at_leaf=13,answer=7
+QLOG_QUERY,at_leaf=14,answer=10
+QLOG_QUERY,at_leaf=15,answer=8
+QLOG_QUERY,at_leaf=16,answer=10

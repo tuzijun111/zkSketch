@@ -1,0 +1,220 @@
+# 2026-10-15T05:31:47+08:00 tag=lib_off switches=off target=lib load=2.69 6.06 14.09
+# head=f69965672200b6cf940f1eb89a7c1c80058eed13 tree=fcc5047e4719ba8d7087b9f91eee7412025b9270 index_tree=fcc5047e4719ba8d7087b9f91eee7412025b9270 porcelain_lines=0 (0 = the committed tree)
+# filters: plain_vk_pins dist_root_vk_derivable inproc_workers_ hiding_end_to_end_cm_omc hiding_end_to_end_gk_bandmerge2 hiding_end_to_end_bloom_omc derived_root_vks_match cm_query_prefix_certified_by_live_peaks cm_honest_forest_chain_dist m0_ audit:: procs_query_replay --nocapture
+EXP_EXIT_BEFORE_AUDIT=0
+EXP_FOREST_RETAIN_PREP=1
+EXP_MALLOC_TRIM=0
+EXP_MERGE_CACHE=0
+...
+    Finished `release` profile [optimized] target(s) in 0.03s
+     Running unittests src/lib.rs (target/release/deps/zksketch-810595871e67993f)
+running 28 tests
+note: KMV has no pre-fix (Legacy) circuit; Binding::Legacy builds the Semantic KMV leaf and decoder (their cost is reported under legacy)
+test experiments::audit::tests::auditor_source_names_no_prover_secret ... ok
+test experiments::metrics::tests::m0_trim_policy_values ... ok
+    auditor: VK derived from public parameters in 6.7s
+    auditor: VK derived from public parameters in 25.7s
+    auditor: VK derived from public parameters in 36.4s
+test commitment::plain_vk_pins::plain_decode_vks_are_pinned has been running for over 60 seconds
+test commitment::plain_vk_pins::plain_kmv_vks_are_pinned_through_the_commit_api has been running for over 60 seconds
+test commitment::plain_vk_pins::plain_noop_leaf_vks_are_pinned has been running for over 60 seconds
+test experiments::dist_compose::tests::dist_root_vk_derivable_bloom_omc has been running for over 60 seconds
+test experiments::dist_compose::tests::dist_root_vk_derivable_cm_omc has been running for over 60 seconds
+test experiments::dist_compose::tests::dist_root_vk_derivable_hll_omc has been running for over 60 seconds
+test experiments::dist_compose::tests::dist_root_vk_derivable_kmv has been running for over 60 seconds
+test experiments::dist_compose::tests::hiding_end_to_end_bloom_omc has been running for over 60 seconds
+test experiments::dist_compose::tests::hiding_end_to_end_cm_omc has been running for over 60 seconds
+test experiments::dist_compose::tests::hiding_end_to_end_cm_omc_gl has been running for over 60 seconds
+test experiments::dist_compose::tests::hiding_end_to_end_gk_bandmerge2 has been running for over 60 seconds
+test experiments::dist_compose::tests::hiding_end_to_end_gk_bandmerge2_gl has been running for over 60 seconds
+test experiments::dist_compose::tests::inproc_workers_derive_openings_from_the_wire_seed_bb has been running for over 60 seconds
+test experiments::dist_compose::tests::inproc_workers_derive_openings_from_the_wire_seed_gl has been running for over 60 seconds
+test experiments::dist_compose::tests::inproc_workers_ship_certificates_that_bind_queries_both_modes has been running for over 60 seconds
+test experiments::dist_compose::tests::m0_query_auditor_derives_the_fresh_root_vk has been running for over 60 seconds
+test experiments::dist_compose::tests::procs_query_replay_binds_the_workers_leaf_finals has been running for over 60 seconds
+test recursion::recursive::expose_forest::tests::derived_root_vks_match_real_cm_omc has been running for over 60 seconds
+test recursion::recursive::expose_forest::tests::derived_root_vks_match_real_cm_v9 has been running for over 60 seconds
+test recursion::recursive::expose_forest::tests::derived_root_vks_match_real_hll has been running for over 60 seconds
+test recursion::recursive::expose_forest::tests::m0_merge_cache_admission_keeps_small_subtrees has been running for over 60 seconds
+test recursion::recursive::expose_forest::tests::m0_merge_cache_misses_same_shape_other_vk has been running for over 60 seconds
+test recursion::recursive::interval_tests::cm_honest_forest_chain_dist_verify_against_log has been running for over 60 seconds
+test recursion::recursive::interval_tests::cm_query_prefix_certified_by_live_peaks has been running for over 60 seconds
+test recursion::recursive::interval_tests::m0_cascade_over_noop_leaves_holds_no_prover_data has been running for over 60 seconds
+test recursion::recursive::interval_tests::m0_merge_cache_hits_verify_against_derived_vk has been running for over 60 seconds
+    auditor: VK derived from public parameters in 38.4s
+test recursion::recursive::expose_forest::tests::m0_merge_cache_misses_same_shape_other_vk ... ok
+test recursion::recursive::expose_forest::tests::m0_merge_cache_admission_keeps_small_subtrees ... ok
+    auditor: VK derived from public parameters in 31.0s
+    auditor: VK derived from public parameters in 31.1s
+    auditor: VK derived from public parameters in 27.9s
+    auditor: VK derived from public parameters in 31.2s
+    auditor: VK derived from public parameters in 31.2s
+M0 push t=1 leaf_prep_handles_in_cascade=0 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+    auditor: VK derived from public parameters in 29.5s
+    auditor: VK derived from public parameters in 32.3s
+    auditor: VK derived from public parameters in 37.3s
+    auditor: VK derived from public parameters in 34.4s
+M0 push t=2 leaf_prep_handles_in_cascade=0 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0 push t=3 leaf_prep_handles_in_cascade=0 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+    auditor: VK derived from public parameters in 107.3s
+    auditor: VK derived from public parameters in 108.4s
+    auditor: VK derived from public parameters in 107.9s
+    auditor: VK derived from public parameters in 111.7s
+M0 push t=4 leaf_prep_handles_in_cascade=0 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+    auditor: VK derived from public parameters in 23.5s
+    auditor: VK derived from public parameters in 112.7s
+DERIVE hll forest2: derived_vk_equal=true unproved_equal=true shape_equal=true
+    auditor: VK derived from public parameters in 33.8s
+    auditor: VK derived from public parameters in 32.8s
+DERIVE cm_omc forest2: derived_vk_equal=true unproved_equal=true shape_equal=true
+DERIVE hll forest3: derived_vk_equal=true unproved_equal=true shape_equal=true
+    auditor: VK derived from public parameters in 41.6s
+DERIVE cm_v9 forest2: derived_vk_equal=true unproved_equal=true shape_equal=true
+test recursion::recursive::interval_tests::m0_merge_cache_hits_verify_against_derived_vk ... ok
+    auditor: VK derived from public parameters in 108.5s
+B2 e2e BloomOmc hiding per_batch: Ok(77.880223)
+B2 e2e BloomOmc hiding chain: Ok(31.424951)
+B2 e2e BloomOmc hiding forest: Ok(31.521026)
+    auditor: VK derived from public parameters in 107.1s
+B2 e2e GkBandmerge2Gl hiding per_batch: Ok(53.271333)
+B2 e2e GkBandmerge2Gl hiding chain: Ok(18.162127)
+B2 e2e GkBandmerge2Gl hiding forest: Ok(20.816102)
+    auditor: VK derived from public parameters in 101.9s
+B2 e2e CmOmcGl hiding per_batch: Ok(46.633010000000006)
+B2 e2e CmOmcGl hiding chain: Ok(40.178985)
+B2 e2e CmOmcGl hiding forest: Ok(22.78442)
+DERIVE cm_omc forest3: derived_vk_equal=true unproved_equal=true shape_equal=true
+DERIVE hll chain4: derived_vk_equal=true unproved_equal=true shape_equal=true
+    auditor: VK derived from public parameters in 13.5s
+B2 e2e BloomOmc other-seed log per_batch: Err("leaf audit: leaf 1 digest != H(TAG_LEAF, 1, Com(B_1)) of the log")
+B2 e2e BloomOmc other-seed log chain: Err("root boundary != the log's (Com(S_0), Com(S_T))")
+B2 e2e BloomOmc other-seed log forest: Err("root boundary != the log's (Com(S_0), Com(S_T))")
+DERIVE cm_v9 forest3: derived_vk_equal=true unproved_equal=true shape_equal=true
+M0 push t=1 leaf_prep_handles_in_cascade=0 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+    auditor: VK derived from public parameters in 24.7s
+B2 e2e GkBandmerge2Gl other-seed log per_batch: Err("leaf audit: leaf 1 digest != H(TAG_LEAF, 1, Com(B_1)) of the log")
+B2 e2e GkBandmerge2Gl other-seed log chain: Err("root boundary != the log's (Com(S_0), Com(S_T))")
+B2 e2e GkBandmerge2Gl other-seed log forest: Err("root boundary != the log's (Com(S_0), Com(S_T))")
+    auditor: VK derived from public parameters in 117.1s
+B2 e2e CmOmc hiding per_batch: Ok(77.728092)
+B2 e2e CmOmc hiding chain: Ok(28.296498)
+B2 e2e CmOmc hiding forest: Ok(26.459379000000002)
+    auditor: VK derived from public parameters in 23.4s
+B2 e2e CmOmcGl other-seed log per_batch: Err("leaf audit: leaf 1 digest != H(TAG_LEAF, 1, Com(B_1)) of the log")
+B2 e2e CmOmcGl other-seed log chain: Err("root boundary != the log's (Com(S_0), Com(S_T))")
+B2 e2e CmOmcGl other-seed log forest: Err("root boundary != the log's (Com(S_0), Com(S_T))")
+    auditor: VK derived from public parameters in 111.1s
+B2 e2e GkBandmerge2 hiding per_batch: Ok(84.31004)
+B2 e2e GkBandmerge2 hiding chain: Ok(29.659851)
+B2 e2e GkBandmerge2 hiding forest: Ok(31.940401)
+    auditor: VK derived from public parameters in 28.0s
+    auditor: VK derived from public parameters in 29.8s
+DERIVE cm_omc chain4: derived_vk_equal=true unproved_equal=true shape_equal=true
+DERIVE hll forest4: derived_vk_equal=true unproved_equal=true shape_equal=true
+DERIVE hll: dummy merges proved = 4
+test recursion::recursive::expose_forest::tests::derived_root_vks_match_real_hll ... ok
+DERIVE cm_v9 chain4: derived_vk_equal=true unproved_equal=true shape_equal=true
+    auditor: VK derived from public parameters in 26.1s
+B2 e2e CmOmc other-seed log per_batch: Err("leaf audit: leaf 1 digest != H(TAG_LEAF, 1, Com(B_1)) of the log")
+B2 e2e CmOmc other-seed log chain: Err("root boundary != the log's (Com(S_0), Com(S_T))")
+B2 e2e CmOmc other-seed log forest: Err("root boundary != the log's (Com(S_0), Com(S_T))")
+M0 push t=2 leaf_prep_handles_in_cascade=0 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0 push t=3 leaf_prep_handles_in_cascade=0 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+    auditor: VK derived from public parameters in 35.7s
+    auditor: VK derived from public parameters in 31.5s
+    auditor: VK derived from public parameters in 30.3s
+    auditor: VK derived from public parameters in 28.7s
+B2 e2e GkBandmerge2 other-seed log per_batch: Err("leaf audit: leaf 1 digest != H(TAG_LEAF, 1, Com(B_1)) of the log")
+B2 e2e GkBandmerge2 other-seed log chain: Err("root boundary != the log's (Com(S_0), Com(S_T))")
+B2 e2e GkBandmerge2 other-seed log forest: Err("root boundary != the log's (Com(S_0), Com(S_T))")
+    auditor: VK derived from public parameters in 29.9s
+test commitment::plain_vk_pins::plain_kmv_vks_are_pinned_through_the_commit_api ... ok
+    auditor: VK derived from public parameters in 28.9s
+DERIVE cm_v9 forest4: derived_vk_equal=true unproved_equal=true shape_equal=true
+DERIVE cm_v9: dummy merges proved = 4
+test recursion::recursive::expose_forest::tests::derived_root_vks_match_real_cm_v9 ... ok
+DERIVE cm_omc forest4: derived_vk_equal=true unproved_equal=true shape_equal=true
+DERIVE cm_omc: dummy merges proved = 4
+test recursion::recursive::expose_forest::tests::derived_root_vks_match_real_cm_omc ... ok
+test experiments::dist_compose::tests::dist_root_vk_derivable_hll_omc ... ok
+test experiments::dist_compose::tests::dist_root_vk_derivable_bloom_omc ... ok
+    auditor: VK derived from public parameters in 19.8s
+    auditor: VK derived from public parameters in 20.2s
+test experiments::dist_compose::tests::dist_root_vk_derivable_cm_omc ... ok
+test experiments::dist_compose::tests::dist_root_vk_derivable_kmv ... ok
+B6B cm honest: forest3 / dist(3,2) / chain3 / chain4 / forest4 accepted; dummy merges = 4
+test recursion::recursive::interval_tests::cm_honest_forest_chain_dist_verify_against_log ... ok
+    auditor: VK derived from public parameters in 0.0s
+M0 push t=4 leaf_prep_handles_in_cascade=0 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+    auditor: VK derived from public parameters in 3.8s
+    auditor: VK derived from public parameters in 72.2s
+    auditor: VK derived from public parameters in 58.2s
+    auditor: VK derived from public parameters in 60.5s
+    auditor: VK derived from public parameters in 8.5s
+    auditor: VK derived from public parameters in 48.2s
+test commitment::plain_vk_pins::plain_decode_vks_are_pinned ... ok
+    auditor: VK derived from public parameters in 51.5s
+M0 push t=1 leaf_prep_handles_in_cascade=1 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+    auditor: VK derived from public parameters in 47.9s
+test experiments::dist_compose::tests::m0_query_auditor_derives_the_fresh_root_vk ... ok
+    auditor: VK derived from public parameters in 16.0s
+M0 push t=2 leaf_prep_handles_in_cascade=0 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0 push t=3 leaf_prep_handles_in_cascade=1 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+    auditor: VK derived from public parameters in 46.5s
+B2 e2e GkBandmerge2Gl spliced batch commits per_batch: Err("leaf audit: leaf 1 digest != H(TAG_LEAF, 1, Com(B_1)) of the log")
+B2 e2e GkBandmerge2Gl spliced batch commits chain: Err("root statement rejected against the batch log: root ordered-batch digest H != the digest recomputed from the log's batch commitments under the declared bracketing")
+B2 e2e GkBandmerge2Gl spliced batch commits forest: Err("root statement rejected against the batch log: root ordered-batch digest H != the digest recomputed from the log's batch commitments under the declared bracketing")
+B2 e2e GkBandmerge2Gl plain log per_batch: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+B2 e2e GkBandmerge2Gl plain log chain: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+B2 e2e GkBandmerge2Gl plain log forest: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+test experiments::dist_compose::tests::hiding_end_to_end_gk_bandmerge2_gl ... ok
+    auditor: VK derived from public parameters in 54.3s
+B2 e2e BloomOmc spliced batch commits per_batch: Err("leaf audit: leaf 1 digest != H(TAG_LEAF, 1, Com(B_1)) of the log")
+B2 e2e BloomOmc spliced batch commits chain: Err("root statement rejected against the batch log: root ordered-batch digest H != the digest recomputed from the log's batch commitments under the declared bracketing")
+B2 e2e BloomOmc spliced batch commits forest: Err("root statement rejected against the batch log: root ordered-batch digest H != the digest recomputed from the log's batch commitments under the declared bracketing")
+B2 e2e BloomOmc plain log per_batch: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+B2 e2e BloomOmc plain log chain: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+B2 e2e BloomOmc plain log forest: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+test experiments::dist_compose::tests::hiding_end_to_end_bloom_omc ... ok
+    auditor: VK derived from public parameters in 49.3s
+B2 e2e CmOmcGl spliced batch commits per_batch: Err("leaf audit: leaf 1 digest != H(TAG_LEAF, 1, Com(B_1)) of the log")
+B2 e2e CmOmcGl spliced batch commits chain: Err("root statement rejected against the batch log: root ordered-batch digest H != the digest recomputed from the log's batch commitments under the declared bracketing")
+B2 e2e CmOmcGl spliced batch commits forest: Err("root statement rejected against the batch log: root ordered-batch digest H != the digest recomputed from the log's batch commitments under the declared bracketing")
+B2 e2e CmOmcGl plain log per_batch: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+B2 e2e CmOmcGl plain log chain: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+B2 e2e CmOmcGl plain log forest: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+test experiments::dist_compose::tests::hiding_end_to_end_cm_omc_gl ... ok
+    auditor: VK derived from public parameters in 14.3s
+    auditor: VK derived from public parameters in 48.9s
+test experiments::dist_compose::tests::inproc_workers_derive_openings_from_the_wire_seed_gl ... ok
+    auditor: VK derived from public parameters in 50.0s
+B2 e2e CmOmc spliced batch commits per_batch: Err("leaf audit: leaf 1 digest != H(TAG_LEAF, 1, Com(B_1)) of the log")
+B2 e2e CmOmc spliced batch commits chain: Err("root statement rejected against the batch log: root ordered-batch digest H != the digest recomputed from the log's batch commitments under the declared bracketing")
+B2 e2e CmOmc spliced batch commits forest: Err("root statement rejected against the batch log: root ordered-batch digest H != the digest recomputed from the log's batch commitments under the declared bracketing")
+B2 e2e CmOmc plain log per_batch: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+B2 e2e CmOmc plain log chain: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+B2 e2e CmOmc plain log forest: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+test experiments::dist_compose::tests::hiding_end_to_end_cm_omc ... ok
+test recursion::recursive::interval_tests::cm_query_prefix_certified_by_live_peaks ... ok
+    auditor: VK derived from public parameters in 47.7s
+B2 e2e GkBandmerge2 spliced batch commits per_batch: Err("leaf audit: leaf 1 digest != H(TAG_LEAF, 1, Com(B_1)) of the log")
+B2 e2e GkBandmerge2 spliced batch commits chain: Err("root statement rejected against the batch log: root ordered-batch digest H != the digest recomputed from the log's batch commitments under the declared bracketing")
+B2 e2e GkBandmerge2 spliced batch commits forest: Err("root statement rejected against the batch log: root ordered-batch digest H != the digest recomputed from the log's batch commitments under the declared bracketing")
+B2 e2e GkBandmerge2 plain log per_batch: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+B2 e2e GkBandmerge2 plain log chain: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+B2 e2e GkBandmerge2 plain log forest: Err("log Com(S_0) != the genesis anchor recomputed from public parameters")
+test experiments::dist_compose::tests::hiding_end_to_end_gk_bandmerge2 ... ok
+M0 push t=4 leaf_prep_handles_in_cascade=0 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+test commitment::plain_vk_pins::plain_noop_leaf_vks_are_pinned ... ok
+test recursion::recursive::interval_tests::m0_cascade_over_noop_leaves_holds_no_prover_data ... ok
+    auditor: VK derived from public parameters in 12.6s
+test experiments::dist_compose::tests::procs_query_replay_binds_the_workers_leaf_finals ... ok
+    auditor: VK derived from public parameters in 11.8s
+    auditor: VK derived from public parameters in 0.3s
+test experiments::dist_compose::tests::inproc_workers_derive_openings_from_the_wire_seed_bb ... ok
+test experiments::dist_compose::tests::inproc_workers_ship_certificates_that_bind_queries_both_modes ... ok
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 805 filtered out; finished in 1816.72s
+real	30m17.016s
+user	658m6.278s
+sys	20m41.550s
+exit=0

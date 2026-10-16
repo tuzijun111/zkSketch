@@ -1,0 +1,4 @@
+run_zka.sh prove: 1 job(s) -> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m1/meas2/zka/zkaA_default_e0/out (GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+== zk-Analytics prove gk:aggr:0:noroot [1/1] (17:04:55)
+done gk:aggr:0:noroot rc=0 wall=353s r0vm_rss=9390.5MB
+run_zka.sh prove: ok -> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m1/meas2/zka/zkaA_default_e0/out/six_zka_*

@@ -1,0 +1,10 @@
+# kind label m T cap rounds
+zks stB8_1  512 8 768 stable
+zks soB4_1  512 4 768 sorted
+zks stB4_1  512 4 768 stable
+zks stA16_1 128 16 384 stable
+zks soA16_1 128 16 384 sorted
+zks stA16_2 128 16 384 stable
+zks stB4_2  512 4 768 stable
+zks soB4_2  512 4 768 sorted
+zks stB8_2  512 8 768 stable

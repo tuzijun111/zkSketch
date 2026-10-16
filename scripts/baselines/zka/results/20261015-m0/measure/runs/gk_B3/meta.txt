@@ -1,0 +1,5 @@
+label=gk_B3 tag=gk m=128 T=16 cap=384 ab=B
+start=2026-10-15T04:08:56+08:00 load="11.47 19.47 19.64" memavail_gib=435.0
+head=3fa3e393c bin_md5=ee43a527af87
+
+end=2026-10-15T04:12:41+08:00 rc=0 load="27.94 24.65 21.80"

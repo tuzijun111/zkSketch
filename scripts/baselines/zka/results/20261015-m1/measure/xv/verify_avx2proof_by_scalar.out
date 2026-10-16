@@ -1,0 +1,5 @@
+XVERIFY VKs derived locally in 14.0 s
+XVERIFY leaf t=1 fp=a086daa3a2815d3d verify=Ok(()) boundary_eq_native=true
+XVERIFY leaf t=2 fp=8dbdb3e9d32b719e verify=Ok(()) boundary_eq_native=true
+XVERIFY root t=2 fp=84ed76f68852a7aa verify=ok (0.021 s) boundary_eq_native=true
+XVERIFY RESULT ALL_OK

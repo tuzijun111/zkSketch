@@ -1,0 +1,12 @@
+# probe 2026-10-16T00:43:14+08:00 head=62c20e284 dirty=0 exp_e0 md5=ee54920ac72c load=[2.19 11.41 22.70]
+probe stable cap 768 m 512 exit 0
+probe stable cap 768 m 1024 exit 0
+probe stable cap 384 m 128 exit 0
+probe sorted cap 768 m 512 exit 0
+probe sorted cap 768 m 1024 exit 0
+probe sorted cap 384 m 128 exit 0
+prove stable cap 768 m 512 start 2026-10-16T00:43:22+08:00 load=[2.17 11.25 22.59]
+prove stable cap 768 m 512 exit 0 end 2026-10-16T00:43:30+08:00 load=[4.63 11.46 22.54]
+prove stable cap 384 m 128 start 2026-10-16T00:43:30+08:00 load=[4.63 11.46 22.54]
+prove stable cap 384 m 128 exit 0 end 2026-10-16T00:43:33+08:00 load=[7.22 11.89 22.62]
+DONE

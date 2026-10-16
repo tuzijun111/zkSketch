@@ -1,0 +1,224 @@
+== gkA scalar (2 runs: gkA_scalar_1, gkA_scalar_2)
+  make_s             mean=    177.13  runs=[171.46, 182.8]
+  leaves_s           mean=     96.43  runs=[92.8, 100.06]
+  merges_s           mean=     77.34  runs=[75.25, 79.42]
+  per_leaf_s         mean=      6.03  runs=[5.8, 6.25]
+  per_merge_s        mean=      5.16  runs=[5.02, 5.29]
+  n_merges           mean=     15.00  runs=[15, 15]
+  vk_s               mean=      7.39  runs=[7.54, 7.23]
+  vk_peak            mean=   4380.00  runs=[4390.0, 4370.0]
+  worker_s           mean=    177.13  runs=[171.46, 182.8]
+  worker_peak        mean=   5200.00  runs=[5202.0, 5198.0]
+  worker_at_coord    mean=    106.00  runs=[113.0, 99.0]
+  worker_at_worker   mean=   5094.00  runs=[5089.0, 5099.0]
+  audit_s            mean=     21.32  runs=[21.62, 21.01]
+  audit_peak         mean=   4542.00  runs=[4555.0, 4529.0]
+  query_s            mean=     12.66  runs=[12.88, 12.44]
+  query_peak         mean=    424.00  runs=[430.0, 418.0]
+  qprove_s           mean=      7.96  runs=[8.18, 7.75]
+  whole_peak         mean=   5200.00  runs=[5202.0, 5198.0]
+  whole_tree         mean=   5212.00  runs=[5214.0, 5210.0]
+  wall_s             mean=    218.60  runs=[213.6, 223.6]
+  verify_ms          mean=     18.92  runs=[18.87, 18.97]
+  proof_bytes        mean= 791118.50  runs=[791169.0, 791068.0]
+== gkA avx2 (2 runs: gkA_avx2_1, gkA_avx2_2)
+  make_s             mean=     91.72  runs=[92.85, 90.58]
+  leaves_s           mean=     50.55  runs=[51.41, 49.7]
+  merges_s           mean=     38.14  runs=[38.37, 37.91]
+  per_leaf_s         mean=      3.16  runs=[3.21, 3.11]
+  per_merge_s        mean=      2.54  runs=[2.56, 2.53]
+  n_merges           mean=     15.00  runs=[15, 15]
+  vk_s               mean=      4.59  runs=[4.6, 4.58]
+  vk_peak            mean=   4324.50  runs=[4352.0, 4297.0]
+  worker_s           mean=     91.72  runs=[92.85, 90.59]
+  worker_peak        mean=   5202.00  runs=[5226.0, 5178.0]
+  worker_at_coord    mean=     74.50  runs=[75.0, 74.0]
+  worker_at_worker   mean=   5127.50  runs=[5151.0, 5104.0]
+  audit_s            mean=     12.66  runs=[12.84, 12.47]
+  audit_peak         mean=   4471.50  runs=[4443.0, 4500.0]
+  query_s            mean=      7.79  runs=[7.83, 7.76]
+  query_peak         mean=    426.50  runs=[425.0, 428.0]
+  qprove_s           mean=      4.42  runs=[4.44, 4.4]
+  whole_peak         mean=   5202.00  runs=[5226.0, 5178.0]
+  whole_tree         mean=   5214.00  runs=[5238.0, 5190.0]
+  wall_s             mean=    116.90  runs=[118.3, 115.5]
+  verify_ms          mean=     16.48  runs=[16.49, 16.48]
+  proof_bytes        mean= 790979.00  runs=[790918.0, 791040.0]
+  AVX2 factor gkA make_s: 1.931 (177.1 / 91.7)
+  AVX2 factor gkA leaves_s: 1.907 (96.4 / 50.6)
+  AVX2 factor gkA merges_s: 2.028 (77.3 / 38.1)
+  AVX2 factor gkA per_leaf_s: 1.907 (6.0 / 3.2)
+  AVX2 factor gkA per_merge_s: 2.028 (5.2 / 2.5)
+  AVX2 factor gkA vk_s: 1.609 (7.4 / 4.6)
+  AVX2 factor gkA audit_s: 1.684 (21.3 / 12.7)
+  AVX2 factor gkA query_s: 1.624 (12.7 / 7.8)
+  AVX2 factor gkA wall_s: 1.870 (218.6 / 116.9)
+  answers identical across all gkA runs: True
+== gk768 scalar (2 runs: gk768_scalar_1, gk768_scalar_2)
+  make_s             mean=     55.13  runs=[55.93, 54.34]
+  leaves_s           mean=     43.45  runs=[43.76, 43.14]
+  merges_s           mean=      7.10  runs=[7.55, 6.65]
+  per_leaf_s         mean=     21.73  runs=[21.88, 21.57]
+  per_merge_s        mean=      7.10  runs=[7.55, 6.65]
+  n_merges           mean=      1.00  runs=[1, 1]
+  vk_s               mean=     23.41  runs=[23.64, 23.18]
+  vk_peak            mean=  16449.50  runs=[16473.0, 16426.0]
+  worker_s           mean=     55.14  runs=[55.94, 54.34]
+  worker_peak        mean=  16546.50  runs=[16532.0, 16561.0]
+  worker_at_coord    mean=    107.50  runs=[107.0, 108.0]
+  worker_at_worker   mean=  16439.00  runs=[16425.0, 16453.0]
+  audit_s            mean=      7.25  runs=[7.43, 7.08]
+  audit_peak         mean=   4528.50  runs=[4548.0, 4509.0]
+  query_s            mean=      2.43  runs=[2.43, 2.42]
+  query_peak         mean=    679.00  runs=[699.0, 659.0]
+  qprove_s           mean=      1.66  runs=[1.67, 1.66]
+  whole_peak         mean=  16546.50  runs=[16532.0, 16561.0]
+  whole_tree         mean=  16558.50  runs=[16544.0, 16573.0]
+  wall_s             mean=     88.45  runs=[89.7, 87.2]
+  verify_ms          mean=     20.94  runs=[22.73, 19.15]
+  proof_bytes        mean= 803747.00  runs=[803933.0, 803561.0]
+== gk768 avx2 (2 runs: gk768_avx2_1, gk768_avx2_2)
+  make_s             mean=     28.81  runs=[28.18, 29.44]
+  leaves_s           mean=     21.80  runs=[21.01, 22.6]
+  merges_s           mean=      3.50  runs=[3.64, 3.37]
+  per_leaf_s         mean=     10.90  runs=[10.5, 11.3]
+  per_merge_s        mean=      3.50  runs=[3.64, 3.37]
+  n_merges           mean=      1.00  runs=[1, 1]
+  vk_s               mean=     13.55  runs=[13.73, 13.37]
+  vk_peak            mean=  16401.50  runs=[16367.0, 16436.0]
+  worker_s           mean=     28.81  runs=[28.18, 29.44]
+  worker_peak        mean=  16418.50  runs=[16410.0, 16427.0]
+  worker_at_coord    mean=     66.00  runs=[64.0, 68.0]
+  worker_at_worker   mean=  16352.50  runs=[16346.0, 16359.0]
+  audit_s            mean=      4.20  runs=[4.31, 4.09]
+  audit_peak         mean=   4483.00  runs=[4447.0, 4519.0]
+  query_s            mean=      1.51  runs=[1.55, 1.47]
+  query_peak         mean=    649.50  runs=[645.0, 654.0]
+  qprove_s           mean=      0.94  runs=[0.96, 0.93]
+  whole_peak         mean=  16423.00  runs=[16410.0, 16436.0]
+  whole_tree         mean=  16435.00  runs=[16422.0, 16448.0]
+  wall_s             mean=     48.30  runs=[48.0, 48.6]
+  verify_ms          mean=     15.36  runs=[16.68, 14.04]
+  proof_bytes        mean= 803737.50  runs=[803676.0, 803799.0]
+  AVX2 factor gk768 make_s: 1.914 (55.1 / 28.8)
+  AVX2 factor gk768 leaves_s: 1.993 (43.5 / 21.8)
+  AVX2 factor gk768 merges_s: 2.025 (7.1 / 3.5)
+  AVX2 factor gk768 per_leaf_s: 1.993 (21.7 / 10.9)
+  AVX2 factor gk768 per_merge_s: 2.025 (7.1 / 3.5)
+  AVX2 factor gk768 vk_s: 1.728 (23.4 / 13.6)
+  AVX2 factor gk768 audit_s: 1.728 (7.3 / 4.2)
+  AVX2 factor gk768 query_s: 1.606 (2.4 / 1.5)
+  AVX2 factor gk768 wall_s: 1.831 (88.5 / 48.3)
+  answers identical across all gk768 runs: True
+== gk768x4 scalar (2 runs: gk768x4_scalar_1, gk768x4_scalar_2)
+  make_s             mean=    110.00  runs=[110.19, 109.8]
+  leaves_s           mean=     87.68  runs=[87.8, 87.56]
+  merges_s           mean=     17.30  runs=[17.32, 17.28]
+  per_leaf_s         mean=     21.92  runs=[21.95, 21.89]
+  per_merge_s        mean=      5.77  runs=[5.77, 5.76]
+  n_merges           mean=      3.00  runs=[3, 3]
+  vk_s               mean=     23.43  runs=[23.52, 23.33]
+  vk_peak            mean=  16446.00  runs=[16418.0, 16474.0]
+  worker_s           mean=    110.00  runs=[110.2, 109.81]
+  worker_peak        mean=  17176.50  runs=[17181.0, 17172.0]
+  worker_at_coord    mean=    107.00  runs=[105.0, 109.0]
+  worker_at_worker   mean=  17069.50  runs=[17076.0, 17063.0]
+  audit_s            mean=     11.85  runs=[11.8, 11.9]
+  audit_peak         mean=   4500.50  runs=[4499.0, 4502.0]
+  query_s            mean=      4.98  runs=[5.04, 4.91]
+  query_peak         mean=    673.50  runs=[666.0, 681.0]
+  qprove_s           mean=      3.44  runs=[3.45, 3.42]
+  whole_peak         mean=  17176.50  runs=[17181.0, 17172.0]
+  whole_tree         mean=  17188.50  runs=[17193.0, 17184.0]
+  wall_s             mean=    150.50  runs=[150.8, 150.2]
+  verify_ms          mean=     18.89  runs=[18.9, 18.87]
+  proof_bytes        mean= 791355.50  runs=[791735.0, 790976.0]
+== gk768x4 avx2 (2 runs: gk768x4_avx2_1, gk768x4_avx2_2)
+  make_s             mean=     53.59  runs=[52.51, 54.68]
+  leaves_s           mean=     41.63  runs=[40.69, 42.57]
+  merges_s           mean=      8.22  runs=[8.11, 8.33]
+  per_leaf_s         mean=     10.41  runs=[10.17, 10.64]
+  per_merge_s        mean=      2.74  runs=[2.7, 2.78]
+  n_merges           mean=      3.00  runs=[3, 3]
+  vk_s               mean=     13.28  runs=[13.23, 13.34]
+  vk_peak            mean=  16355.00  runs=[16332.0, 16378.0]
+  worker_s           mean=     53.60  runs=[52.51, 54.68]
+  worker_peak        mean=  17172.00  runs=[17210.0, 17134.0]
+  worker_at_coord    mean=     67.50  runs=[69.0, 66.0]
+  worker_at_worker   mean=  17104.50  runs=[17141.0, 17068.0]
+  audit_s            mean=      6.83  runs=[6.74, 6.92]
+  audit_peak         mean=   4460.50  runs=[4446.0, 4475.0]
+  query_s            mean=      2.94  runs=[3.0, 2.88]
+  query_peak         mean=    674.50  runs=[667.0, 682.0]
+  qprove_s           mean=      1.85  runs=[1.89, 1.8]
+  whole_peak         mean=  17172.00  runs=[17210.0, 17134.0]
+  whole_tree         mean=  17184.00  runs=[17222.0, 17146.0]
+  wall_s             mean=     76.90  runs=[75.7, 78.1]
+  verify_ms          mean=     15.09  runs=[16.38, 13.81]
+  proof_bytes        mean= 791168.50  runs=[791226.0, 791111.0]
+  AVX2 factor gk768x4 make_s: 2.052 (110.0 / 53.6)
+  AVX2 factor gk768x4 leaves_s: 2.106 (87.7 / 41.6)
+  AVX2 factor gk768x4 merges_s: 2.104 (17.3 / 8.2)
+  AVX2 factor gk768x4 per_leaf_s: 2.106 (21.9 / 10.4)
+  AVX2 factor gk768x4 per_merge_s: 2.104 (5.8 / 2.7)
+  AVX2 factor gk768x4 vk_s: 1.764 (23.4 / 13.3)
+  AVX2 factor gk768x4 audit_s: 1.736 (11.9 / 6.8)
+  AVX2 factor gk768x4 query_s: 1.692 (5.0 / 2.9)
+  AVX2 factor gk768x4 wall_s: 1.957 (150.5 / 76.9)
+  answers identical across all gk768x4 runs: True
+== bloom scalar (2 runs: bloom_scalar_1, bloom_scalar_2)
+  make_s             mean=    117.21  runs=[114.6, 119.82]
+  leaves_s           mean=     81.46  runs=[79.08, 83.83]
+  merges_s           mean=     31.53  runs=[31.5, 31.57]
+  per_leaf_s         mean=     10.18  runs=[9.89, 10.48]
+  per_merge_s        mean=      4.50  runs=[4.5, 4.51]
+  n_merges           mean=      7.00  runs=[7, 7]
+  vk_s               mean=     19.57  runs=[19.29, 19.85]
+  vk_peak            mean=   7779.50  runs=[7776.0, 7783.0]
+  worker_s           mean=    117.21  runs=[114.6, 119.82]
+  worker_peak        mean=   8267.00  runs=[8257.0, 8277.0]
+  worker_at_coord    mean=    109.00  runs=[98.0, 120.0]
+  worker_at_worker   mean=   8158.00  runs=[8159.0, 8157.0]
+  audit_s            mean=     14.73  runs=[14.71, 14.76]
+  audit_peak         mean=   3110.00  runs=[3096.0, 3124.0]
+  query_s            mean=     78.49  runs=[75.23, 81.74]
+  query_peak         mean=   6667.00  runs=[6646.0, 6688.0]
+  qprove_s           mean=     61.58  runs=[59.39, 63.77]
+  whole_peak         mean=   8267.00  runs=[8257.0, 8277.0]
+  whole_tree         mean=   8279.00  runs=[8269.0, 8289.0]
+  wall_s             mean=    230.20  runs=[224.0, 236.4]
+  verify_ms          mean=     20.59  runs=[21.98, 19.19]
+  proof_bytes        mean= 791285.50  runs=[791166.0, 791405.0]
+== bloom avx2 (2 runs: bloom_avx2_1, bloom_avx2_2)
+  make_s             mean=     53.85  runs=[52.04, 55.66]
+  leaves_s           mean=     36.55  runs=[35.27, 37.83]
+  merges_s           mean=     13.95  runs=[13.55, 14.35]
+  per_leaf_s         mean=      4.57  runs=[4.41, 4.73]
+  per_merge_s        mean=      1.99  runs=[1.94, 2.05]
+  n_merges           mean=      7.00  runs=[7, 7]
+  vk_s               mean=     10.86  runs=[11.11, 10.61]
+  vk_peak            mean=   7761.00  runs=[7759.0, 7763.0]
+  worker_s           mean=     53.85  runs=[52.04, 55.66]
+  worker_peak        mean=   8242.00  runs=[8237.0, 8247.0]
+  worker_at_coord    mean=     82.00  runs=[79.0, 85.0]
+  worker_at_worker   mean=   8160.00  runs=[8158.0, 8162.0]
+  audit_s            mean=      8.71  runs=[8.57, 8.85]
+  audit_peak         mean=   3105.50  runs=[3110.0, 3101.0]
+  query_s            mean=     38.24  runs=[37.55, 38.93]
+  query_peak         mean=   6537.00  runs=[6540.0, 6534.0]
+  qprove_s           mean=     27.55  runs=[27.45, 27.64]
+  whole_peak         mean=   8242.00  runs=[8237.0, 8247.0]
+  whole_tree         mean=   8254.00  runs=[8249.0, 8259.0]
+  wall_s             mean=    111.80  runs=[109.4, 114.2]
+  verify_ms          mean=     15.25  runs=[16.37, 14.13]
+  proof_bytes        mean= 790975.00  runs=[790793.0, 791157.0]
+  AVX2 factor bloom make_s: 2.177 (117.2 / 53.8)
+  AVX2 factor bloom leaves_s: 2.229 (81.5 / 36.5)
+  AVX2 factor bloom merges_s: 2.260 (31.5 / 14.0)
+  AVX2 factor bloom per_leaf_s: 2.229 (10.2 / 4.6)
+  AVX2 factor bloom per_merge_s: 2.260 (4.5 / 2.0)
+  AVX2 factor bloom vk_s: 1.802 (19.6 / 10.9)
+  AVX2 factor bloom audit_s: 1.692 (14.7 / 8.7)
+  AVX2 factor bloom query_s: 2.053 (78.5 / 38.2)
+  AVX2 factor bloom wall_s: 2.059 (230.2 / 111.8)
+  answers identical across all bloom runs: True

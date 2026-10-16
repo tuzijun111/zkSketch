@@ -1,0 +1,8 @@
+PHASE six_zksketch_r2_cm: auditor_new=hwm 2538/rss 603 MB before_query_phase=hwm 2566/rss 673 MB vk_derive_s=8.0 RSSTREE main=2584 worker=2911
+PHASE six_zksketch_r2_hll: auditor_new=hwm 2401/rss 749 MB before_query_phase=hwm 2418/rss 770 MB vk_derive_s=7.6 RSSTREE main=3095 worker=2754
+PHASE six_zksketch_r2_ss: auditor_new=hwm 1310/rss 624 MB before_query_phase=hwm 1391/rss 682 MB vk_derive_s=6.6 RSSTREE main=1584 worker=1897
+PHASE six_zksketch_r2_gk: auditor_new=hwm 19473/rss 1136 MB before_query_phase=hwm 19473/rss 1175 MB vk_derive_s=31.7 RSSTREE main=19473 worker=19848
+PHASE six_zksketch_r2_bloom: auditor_new=hwm 5077/rss 879 MB before_query_phase=hwm 5099/rss 1026 MB vk_derive_s=11.5 RSSTREE main=5099 worker=5446
+PHASE six_zksketch_r2_bloom_absent: auditor_new=hwm 5075/rss 842 MB before_query_phase=hwm 5093/rss 868 MB vk_derive_s=11.5 RSSTREE main=5093 worker=5432
+PHASE six_zksketch_r2_kmv: auditor_new=hwm 709/rss 447 MB before_query_phase=hwm 963/rss 491 MB vk_derive_s=5.4 RSSTREE main=1380 worker=1545
+318 rows -> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m1/measure3/render/committed.csv

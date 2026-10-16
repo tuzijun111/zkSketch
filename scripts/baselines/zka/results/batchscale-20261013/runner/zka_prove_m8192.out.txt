@@ -1,0 +1,10 @@
+### 2026-10-13T21:32:59+08:00 pre-wait 80 s, load 7.65 23.47 23.44, MemAvailable 433.4 GiB
+### cmd: RESULTS=/home/binbin/zkSketch/results/six/batchscale-20261013/m8192 SIX_M=8192 SIX_T=2 GATE_WAIT_S=0 SIX_ZKA_ROOTS=noroot SIX_ZKA_CM_REF=0 scripts/baselines/zka/six/run_zka.sh prove hll:aggr:0:noroot gk:query:1:1810625
+run_zka.sh prove: 2 job(s) -> /home/binbin/zkSketch/results/six/batchscale-20261013/m8192 (GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+== zk-Analytics prove hll:aggr:0:noroot [1/2] (21:33:01)
+done hll:aggr:0:noroot rc=0 wall=1343s r0vm_rss=9429.1MB
+gate failed for gk:query:1:1810625: busy:load1=57.52; -- running anyway, marked
+== zk-Analytics prove gk:query:1:1810625 [2/2] (21:55:25)
+done gk:query:1:1810625 rc=0 wall=6s r0vm_rss=1392.4MB
+run_zka.sh prove: ok -> /home/binbin/zkSketch/results/six/batchscale-20261013/m8192/six_zka_*
+### 2026-10-13T21:55:31+08:00 rc=0

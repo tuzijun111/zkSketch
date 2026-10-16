@@ -1,0 +1,29 @@
+### 2026-10-13T21:11:22+08:00 step: scripts/baselines/zka/six/run_zka.sh exec
+exec variants ok: six_zka_cm_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+exec variants ok: six_zka_hll_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+exec variants ok: six_zka_ss_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+exec variants ok: six_zka_gk_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+exec variants ok: six_zka_bloom_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+exec variants ok: six_zka_kmv_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+run_zka.sh exec: ok -> /home/binbin/zkSketch/results/six/batchscale-20261013/m2048/six_zka_*
+### rc=0 seconds=3
+### 2026-10-13T21:11:25+08:00 plan: python3 -I scripts/baselines/zka/six/jobs.py --keys data/aol.keys --m 2048 --t 2 --qns 1,2 --aggr 0,1 --roots noroot --cm-ref 0 --select hll,ss,gk --lines > /home/binbin/zkSketch/results/six/batchscale-20261013/m2048/zka_plan.txt
+hll:aggr:0:noroot
+hll:aggr:1:noroot
+ss:aggr:0:noroot
+ss:aggr:1:noroot
+gk:aggr:0:noroot
+gk:aggr:1:noroot
+hll:query:1
+hll:query:2
+gk:query:1:1810625
+gk:query:2:1810625
+ss:query:1
+ss:query:2
+### 2026-10-13T21:11:25+08:00 step: scripts/baselines/zka/six/run_zka.sh qexec hll:query:1 hll:query:2 gk:query:1:1810625 gk:query:2:1810625 ss:query:1 ss:query:2
+run_zka.sh qexec: ok -> /home/binbin/zkSketch/results/six/batchscale-20261013/m2048/six_zka_*
+### rc=0 seconds=1
+### 2026-10-13T21:11:26+08:00 step: scripts/baselines/zka/six/prof_exec.sh
+prof_exec.sh: ok -> /home/binbin/zkSketch/results/six/batchscale-20261013/m2048/six_zka_prof_{ss,gk}.csv
+### rc=0 seconds=3
+### 2026-10-13T21:11:29+08:00 done

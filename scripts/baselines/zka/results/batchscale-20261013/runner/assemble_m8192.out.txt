@@ -1,0 +1,15 @@
+### 2026-10-13T21:56:02+08:00 python3 -I scripts/baselines/zka/six/assemble.py /home/binbin/zkSketch/results/six/batchscale-20261013/m8192 data/aol.keys --zka six_zka --zks six_zksketch --plan /home/binbin/zkSketch/results/six/batchscale-20261013/m8192/zka_plan.txt --out /home/binbin/zkSketch/results/six/batchscale-20261013/m8192/six_sketch_comparison.csv
+estimate: k = 31.817 s per 2^20 padded cycles from 2 proof(s) (gk:query:1:1810625 hll:aggr:0:noroot); 10 job(s) estimated
+root variants: one state_commit per (family, epoch) over cm noroot; hll noroot; ss noroot; gk noroot; bloom noroot; kmv noroot (12 epochs)
+cm: no proved aggregation rows; update and accept rows skipped
+bloom: no proved aggregation rows; update and accept rows skipped
+kmv: no proved aggregation rows; update and accept rows skipped
+six_zka: no zk-Analytics rows for cm
+six_zka: no zk-Analytics rows for bloom
+six_zka: no zk-Analytics rows for kmv
+no zkSketch CSV for: six_zksketch_cm six_zksketch_bloom six_zksketch_bloom_absent six_zksketch_kmv
+PHASE six_zksketch_hll: auditor_new=hwm 26711/rss 1438 MB before_query_phase=hwm 26816/rss 2019 MB vk_derive_s=38.6 RSSTREE main=26816 worker=26691
+PHASE six_zksketch_ss: auditor_new=hwm 13698/rss 1129 MB before_query_phase=hwm 13770/rss 1677 MB vk_derive_s=24.0 RSSTREE main=13770 worker=13653
+PHASE six_zksketch_gk: auditor_new=hwm 136445/rss 3452 MB before_query_phase=hwm 136522/rss 3490 MB vk_derive_s=197.8 RSSTREE main=136522 worker=136473
+48 rows -> /home/binbin/zkSketch/results/six/batchscale-20261013/m8192/six_sketch_comparison.csv
+table -> /home/binbin/zkSketch/results/six/batchscale-20261013/m8192/six_sketch_table.md

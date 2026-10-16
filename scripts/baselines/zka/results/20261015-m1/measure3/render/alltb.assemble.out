@@ -1,0 +1,5 @@
+estimate: k = 30.000 s per 2^20 padded cycles from 2 proof(s) (gk:aggr:0:noroot gk:query:1:1242150); 26 job(s) estimated
+root variants: one state_commit per (family, epoch) over cm designed/noroot; hll designed/noroot; ss designed/noroot; gk designed/noroot; bloom designed/noroot; kmv designed/noroot (12 epochs)
+no zkSketch CSV for: six_zksketch_cm six_zksketch_hll six_zksketch_ss six_zksketch_bloom six_zksketch_bloom_absent six_zksketch_kmv
+PHASE six_zksketch_gk: auditor_new=hwm 8574/rss 86 MB root_received=hwm 8574/rss 91 MB workers_exited=hwm 8574/rss 91 MB audit_done=hwm 8574/rss 125 MB before_query_phase=hwm 8574/rss 125 MB queries_done=hwm 402/rss 153 MB vk_derive_s=7.0 RSSTREE main=8574 worker=8536
+72 rows -> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m1/measure3/render/alltb/six_sketch_comparison.csv

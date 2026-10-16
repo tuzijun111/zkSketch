@@ -1,0 +1,8 @@
+start 2026-10-14T14:24:21+08:00 tag=hll m=16384 T=1 cap=2048 dir=/home/binbin/zkSketch/results/six/memmatch-20261014/hll-m16384-t1 load="38.27 33.45 28.96" memavail_gib=420.9
+run_zks.sh: 1 run(s) -> /home/binbin/zkSketch/results/six/memmatch-20261014/hll-m16384-t1 (N=16384 m=16384 t=1 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+gate failed for hll: busy:load1=38.27; -- running anyway, row marked
+== zkSketch hll (14:24:21); log /home/binbin/zkSketch/results/six/memmatch-20261014/hll-m16384-t1/six_zksketch_hll.log
+done hll rc=0 wall=234s
+run_zks.sh: all 1 run(s) ok -> /home/binbin/zkSketch/results/six/memmatch-20261014/hll-m16384-t1/six_zksketch_*
+end 2026-10-14T14:28:15+08:00 rc=0
+RSSTREE,zks_hll,main_peak_rss_mb=52728.9,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=52655.8,wall_s=234.2,rc=0

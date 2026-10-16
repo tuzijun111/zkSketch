@@ -1,0 +1,102 @@
+== omc_absent_m256_T8 (B)
+label=omc_absent_m256_T8 tag=bloom_absent variant=omc m=256 T=8
+start=2026-10-16T06:14:51+08:00 load="10.78 20.59 20.44" memavail_gib=430.7
+head=63157ed0b dirty=0 bin_md5=f03e752f6a9e
+end=2026-10-16T06:18:33+08:00 rc=0 load="23.85 23.59 21.72"
+csv: {'total_time_ms': '113691.819', 'leafgen_seq_ms': '80086.507', 'local_fold_ms': '29804.295', 'merge_total_ms': '29823.844', 'verify_ms': '18.938', 'peak_rss_mb': '8171.1', 'query_prove_ms': '58809.427', 'query_bind_ms': '259.237', 'proof_bytes': '790877', 'status': 'ok'} vk_derive_s: 14.0 rsstree: {'main': 7801.7, 'desc': 8171.1, 'wall': 221.2}
+worker: ['first_index=1,merge_cache=hits=3;misses=4,finalize_merges=0,retain_prep=false,trim=Every']
+marks (s from exp_compose start, coord_hwm, coord_rss): {'auditor_new': [18.69, 7801.7, 119.3], 'root_received': [132.38, 7801.7, 128.2], 'workers_exited': [132.46, 7801.7, 128.3], 'audit_done': [146.68, 7801.7, 139.6], 'before_query_phase': [146.68, 7801.7, 139.6], 'queries_done': [221.08, 6566.8, 239.4]}
+  vk         dur=   18.7s peak_comb=   7764 (coord 7764 + worker 0) peak_coord=7764 peak_worker=0 peak_tree=7776
+  worker     dur=  113.7s peak_comb=   8275 (coord 125 + worker 8150) peak_coord=127 peak_worker=8150 peak_tree=8287
+  exit       (no samples)
+  audit      dur=   14.2s peak_comb=   3110 (coord 3110 + worker 0) peak_coord=3110 peak_worker=0 peak_tree=3122
+  post_audit (no samples)
+  query      dur=   74.4s peak_comb=   6578 (coord 6578 + worker 0) peak_coord=6578 peak_worker=0 peak_tree=6590
+  tail       (no samples)
+  whole      dur=  221.1s peak_comb=   8275 (coord 125 + worker 8150) peak_coord=7764 peak_worker=8150 peak_tree=8287
+answers: 1:0 2:0 3:0 4:0 5:0 6:0 7:0 8:0
+== omc_bloom_m256_T8 (B)
+label=omc_bloom_m256_T8 tag=bloom variant=omc m=256 T=8
+start=2026-10-16T06:10:11+08:00 load="11.23 21.29 19.93" memavail_gib=430.6
+head=63157ed0b dirty=0 bin_md5=f03e752f6a9e
+end=2026-10-16T06:13:51+08:00 rc=0 load="27.05 24.89 21.72"
+csv: {'total_time_ms': '113706.232', 'leafgen_seq_ms': '79356.953', 'local_fold_ms': '30468.332', 'merge_total_ms': '30487.857', 'verify_ms': '18.873', 'peak_rss_mb': '8170.5', 'query_prove_ms': '57593.940', 'query_bind_ms': '260.483', 'proof_bytes': '791013', 'status': 'ok'} vk_derive_s: 14.1 rsstree: {'main': 7799.2, 'desc': 8170.5, 'wall': 219.9}
+worker: ['first_index=1,merge_cache=hits=3;misses=4,finalize_merges=0,retain_prep=false,trim=Every']
+marks (s from exp_compose start, coord_hwm, coord_rss): {'auditor_new': [18.58, 7799.2, 118.2], 'root_received': [132.29, 7799.2, 127.2], 'workers_exited': [132.38, 7799.2, 127.3], 'audit_done': [146.67, 7799.2, 136.6], 'before_query_phase': [146.67, 7799.2, 136.6], 'queries_done': [219.77, 6676.6, 313.1]}
+  vk         dur=   18.6s peak_comb=   7786 (coord 7786 + worker 0) peak_coord=7786 peak_worker=0 peak_tree=7798
+  worker     dur=  113.7s peak_comb=   8288 (coord 124 + worker 8164) peak_coord=126 peak_worker=8164 peak_tree=8300
+  exit       dur=    0.1s peak_comb=    127 (coord 127 + worker 0) peak_coord=127 peak_worker=0 peak_tree=139
+  audit      dur=   14.3s peak_comb=   3104 (coord 3104 + worker 0) peak_coord=3104 peak_worker=0 peak_tree=3116
+  post_audit (no samples)
+  query      dur=   73.1s peak_comb=   6691 (coord 6691 + worker 0) peak_coord=6691 peak_worker=0 peak_tree=6703
+  tail       (no samples)
+  whole      dur=  219.9s peak_comb=   8288 (coord 124 + worker 8164) peak_coord=7786 peak_worker=8164 peak_tree=8300
+answers: 1:1 2:1 3:1 4:1 5:1 6:1 7:1 8:1
+== packed_absent_m1024_T32 (B)
+label=packed_absent_m1024_T32 tag=bloom_absent variant=packed m=1024 T=32
+start=2026-10-16T06:02:40+08:00 load="7.53 17.31 17.26" memavail_gib=430.8
+head=63157ed0b dirty=0 bin_md5=f03e752f6a9e
+end=2026-10-16T06:09:11+08:00 rc=0 load="28.70 25.79 21.19"
+csv: {'total_time_ms': '333745.249', 'leafgen_seq_ms': '194579.572', 'local_fold_ms': '133264.869', 'merge_total_ms': '133286.476', 'verify_ms': '18.985', 'peak_rss_mb': '4835.2', 'query_prove_ms': '14793.773', 'query_bind_ms': '1619.986', 'proof_bytes': '790983', 'status': 'ok'} vk_derive_s: 23.4 rsstree: {'main': 4332.4, 'desc': 4835.2, 'wall': 388.2}
+worker: ['first_index=1,merge_cache=hits=15;misses=16,finalize_merges=0,retain_prep=false,trim=Every']
+marks (s from exp_compose start, coord_hwm, coord_rss): {'auditor_new': [6.98, 4332.4, 75.3], 'root_received': [340.74, 4332.4, 103.8], 'workers_exited': [340.79, 4332.4, 103.9], 'audit_done': [364.39, 4332.4, 124.8], 'before_query_phase': [364.39, 4332.4, 124.8], 'queries_done': [388.15, 400.9, 143.9]}
+  vk         dur=    7.0s peak_comb=   4298 (coord 4298 + worker 0) peak_coord=4298 peak_worker=0 peak_tree=4310
+  worker     dur=  333.8s peak_comb=   4940 (coord 101 + worker 4839) peak_coord=103 peak_worker=4839 peak_tree=4952
+  exit       dur=    0.0s peak_comb=    104 (coord 104 + worker 0) peak_coord=104 peak_worker=0 peak_tree=116
+  audit      dur=   23.6s peak_comb=   3117 (coord 3117 + worker 0) peak_coord=3117 peak_worker=0 peak_tree=3129
+  post_audit (no samples)
+  query      dur=   23.8s peak_comb=    420 (coord 420 + worker 0) peak_coord=420 peak_worker=0 peak_tree=432
+  tail       (no samples)
+  whole      dur=  388.2s peak_comb=   4940 (coord 101 + worker 4839) peak_coord=4298 peak_worker=4839 peak_tree=4952
+answers: 1:0 2:0 3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:0 16:0 17:0 18:0 19:0 20:0 21:0 22:0 23:0 24:0 25:0 26:0 27:0 28:0 29:0 30:0 31:0 32:0
+== packed_absent_m256_T8 (B)
+label=packed_absent_m256_T8 tag=bloom_absent variant=packed m=256 T=8
+start=2026-10-16T06:21:54+08:00 load="11.07 18.66 20.13" memavail_gib=430.9
+head=63157ed0b dirty=0 bin_md5=f03e752f6a9e
+end=2026-10-16T06:23:18+08:00 rc=0 load="18.94 19.54 20.32"
+csv: {'total_time_ms': '58437.943', 'leafgen_seq_ms': '26429.627', 'local_fold_ms': '30465.856', 'merge_total_ms': '30489.196', 'verify_ms': '18.925', 'peak_rss_mb': '3732.4', 'query_prove_ms': '3931.109', 'query_bind_ms': '256.311', 'proof_bytes': '790995', 'status': 'ok'} vk_derive_s: 14.1 rsstree: {'main': 3066.2, 'desc': 3741.1, 'wall': 83.0}
+worker: ['first_index=1,merge_cache=hits=3;misses=4,finalize_merges=0,retain_prep=false,trim=Every']
+marks (s from exp_compose start, coord_hwm, coord_rss): {'auditor_new': [4.02, 2186.7, 63.8], 'root_received': [62.46, 2186.7, 72.7], 'workers_exited': [62.49, 2186.7, 72.8], 'audit_done': [76.74, 3066.2, 95.4], 'before_query_phase': [76.74, 3066.2, 95.4], 'queries_done': [82.9, 377.5, 117.1]}
+  vk         dur=    4.0s peak_comb=   2204 (coord 2204 + worker 0) peak_coord=2204 peak_worker=0 peak_tree=2216
+  worker     dur=   58.4s peak_comb=   3806 (coord 72 + worker 3734) peak_coord=72 peak_worker=3734 peak_tree=3818
+  exit       (no samples)
+  audit      dur=   14.3s peak_comb=   3056 (coord 3056 + worker 0) peak_coord=3056 peak_worker=0 peak_tree=3068
+  post_audit (no samples)
+  query      dur=    6.2s peak_comb=    392 (coord 392 + worker 0) peak_coord=392 peak_worker=0 peak_tree=404
+  tail       (no samples)
+  whole      dur=   82.9s peak_comb=   3806 (coord 72 + worker 3734) peak_coord=3056 peak_worker=3734 peak_tree=3818
+answers: 1:0 2:0 3:0 4:0 5:0 6:0 7:0 8:0
+== packed_bloom_m1024_T32 (B)
+label=packed_bloom_m1024_T32 tag=bloom variant=packed m=1024 T=32
+start=2026-10-16T05:54:40+08:00 load="5.68 7.80 14.07" memavail_gib=430.7
+head=63157ed0b dirty=0 bin_md5=f03e752f6a9e
+end=2026-10-16T06:01:08+08:00 rc=0 load="29.41 22.97 18.90"
+csv: {'total_time_ms': '331347.256', 'leafgen_seq_ms': '192967.061', 'local_fold_ms': '132598.158', 'merge_total_ms': '132620.030', 'verify_ms': '18.985', 'peak_rss_mb': '4819.6', 'query_prove_ms': '14904.069', 'query_bind_ms': '1634.185', 'proof_bytes': '791133', 'status': 'ok'} vk_derive_s: 23.4 rsstree: {'main': 4328.0, 'desc': 4819.6, 'wall': 386.1}
+worker: ['first_index=1,merge_cache=hits=15;misses=16,finalize_merges=0,retain_prep=false,trim=Every']
+marks (s from exp_compose start, coord_hwm, coord_rss): {'auditor_new': [6.96, 4328.0, 70.0], 'root_received': [338.32, 4328.0, 98.1], 'workers_exited': [338.37, 4328.0, 98.2], 'audit_done': [362.0, 4328.0, 124.2], 'before_query_phase': [362.0, 4328.0, 124.2], 'queries_done': [385.99, 507.8, 250.5]}
+  vk         dur=    7.0s peak_comb=   4292 (coord 4292 + worker 0) peak_coord=4292 peak_worker=0 peak_tree=4304
+  worker     dur=  331.4s peak_comb=   4918 (coord 96 + worker 4822) peak_coord=96 peak_worker=4822 peak_tree=4930
+  exit       dur=    0.0s peak_comb=     98 (coord 98 + worker 0) peak_coord=98 peak_worker=0 peak_tree=110
+  audit      dur=   23.6s peak_comb=   3083 (coord 3083 + worker 0) peak_coord=3083 peak_worker=0 peak_tree=3095
+  post_audit (no samples)
+  query      dur=   24.0s peak_comb=    519 (coord 519 + worker 0) peak_coord=519 peak_worker=0 peak_tree=531
+  tail       (no samples)
+  whole      dur=  386.1s peak_comb=   4918 (coord 96 + worker 4822) peak_coord=4292 peak_worker=4822 peak_tree=4930
+answers: 1:1 2:1 3:1 4:1 5:1 6:1 7:1 8:1 9:1 10:1 11:1 12:1 13:1 14:1 15:1 16:1 17:1 18:1 19:1 20:1 21:1 22:1 23:1 24:1 25:1 26:1 27:1 28:1 29:1 30:1 31:1 32:1
+== packed_bloom_m256_T8 (B)
+label=packed_bloom_m256_T8 tag=bloom variant=packed m=256 T=8
+start=2026-10-16T06:19:33+08:00 load="9.72 19.59 20.46" memavail_gib=430.8
+head=63157ed0b dirty=0 bin_md5=f03e752f6a9e
+end=2026-10-16T06:20:54+08:00 rc=0 load="27.89 22.54 21.39"
+csv: {'total_time_ms': '55797.684', 'leafgen_seq_ms': '24724.859', 'local_fold_ms': '29492.606', 'merge_total_ms': '29513.903', 'verify_ms': '18.915', 'peak_rss_mb': '3720.4', 'query_prove_ms': '3983.224', 'query_bind_ms': '256.739', 'proof_bytes': '791580', 'status': 'ok'} vk_derive_s: 14.2 rsstree: {'main': 3070.0, 'desc': 3730.1, 'wall': 80.6}
+worker: ['first_index=1,merge_cache=hits=3;misses=4,finalize_merges=0,retain_prep=false,trim=Every']
+marks (s from exp_compose start, coord_hwm, coord_rss): {'auditor_new': [4.13, 2192.0, 68.6], 'root_received': [59.93, 2192.0, 76.7], 'workers_exited': [59.96, 2192.0, 76.8], 'audit_done': [74.27, 3063.4, 96.7], 'before_query_phase': [74.27, 3063.4, 96.7], 'queries_done': [80.56, 402.3, 145.4]}
+  vk         dur=    4.1s peak_comb=   2189 (coord 2189 + worker 0) peak_coord=2189 peak_worker=0 peak_tree=2201
+  worker     dur=   55.8s peak_comb=   3806 (coord 76 + worker 3730) peak_coord=76 peak_worker=3730 peak_tree=3818
+  exit       (no samples)
+  audit      dur=   14.3s peak_comb=   3082 (coord 3082 + worker 0) peak_coord=3082 peak_worker=0 peak_tree=3094
+  post_audit (no samples)
+  query      dur=    6.3s peak_comb=    419 (coord 419 + worker 0) peak_coord=419 peak_worker=0 peak_tree=431
+  tail       (no samples)
+  whole      dur=   80.6s peak_comb=   3806 (coord 76 + worker 3730) peak_coord=3082 peak_worker=3730 peak_tree=3818
+answers: 1:1 2:1 3:1 4:1 5:1 6:1 7:1 8:1

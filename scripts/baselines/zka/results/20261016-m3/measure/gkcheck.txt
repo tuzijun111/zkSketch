@@ -1,0 +1,58 @@
+== stB8_1
+n=1 N=512 v=1242150 answer=321 true_rank[<v,<=v]=[308,328] err=0 eps*N=10.04 OK
+n=2 N=1024 v=1810625 answer=900 true_rank[<v,<=v]=[791,906] err=0 eps*N=20.08 OK
+n=3 N=1536 v=1810625 answer=1354 true_rank[<v,<=v]=[1242,1357] err=0 eps*N=30.12 OK
+n=4 N=2048 v=1810625 answer=1780 true_rank[<v,<=v]=[1674,1789] err=0 eps*N=40.16 OK
+n=5 N=2560 v=1810625 answer=2224 true_rank[<v,<=v]=[2117,2232] err=0 eps*N=50.20 OK
+n=6 N=3072 v=1810625 answer=2665 true_rank[<v,<=v]=[2557,2672] err=0 eps*N=60.24 OK
+n=7 N=3584 v=1810625 answer=3120 true_rank[<v,<=v]=[3010,3125] err=0 eps*N=70.27 OK
+n=8 N=4096 v=1810625 answer=3551 true_rank[<v,<=v]=[3454,3569] err=0 eps*N=80.31 OK
+ALL_OK
+== stB4_1
+n=1 N=512 v=1242150 answer=321 true_rank[<v,<=v]=[308,328] err=0 eps*N=10.04 OK
+n=2 N=1024 v=1810625 answer=900 true_rank[<v,<=v]=[791,906] err=0 eps*N=20.08 OK
+n=3 N=1536 v=1810625 answer=1354 true_rank[<v,<=v]=[1242,1357] err=0 eps*N=30.12 OK
+n=4 N=2048 v=1810625 answer=1780 true_rank[<v,<=v]=[1674,1789] err=0 eps*N=40.16 OK
+ALL_OK
+== soB4_1
+n=1 N=512 v=1242150 answer=321 true_rank[<v,<=v]=[308,328] err=0 eps*N=10.04 OK
+n=2 N=1024 v=1810625 answer=900 true_rank[<v,<=v]=[791,906] err=0 eps*N=20.08 OK
+n=3 N=1536 v=1810625 answer=1354 true_rank[<v,<=v]=[1242,1357] err=0 eps*N=30.12 OK
+n=4 N=2048 v=1810625 answer=1780 true_rank[<v,<=v]=[1674,1789] err=0 eps*N=40.16 OK
+ALL_OK
+== stA16_1
+n=1 N=128 v=653749 answer=44 true_rank[<v,<=v]=[30,43] err=1 eps*N=2.51 OK
+n=2 N=256 v=1242150 answer=170 true_rank[<v,<=v]=[153,173] err=0 eps*N=5.02 OK
+n=3 N=384 v=1242150 answer=252 true_rank[<v,<=v]=[234,254] err=0 eps*N=7.53 OK
+n=4 N=512 v=1242150 answer=327 true_rank[<v,<=v]=[308,328] err=0 eps*N=10.04 OK
+n=5 N=640 v=1242150 answer=395 true_rank[<v,<=v]=[378,398] err=0 eps*N=12.55 OK
+n=6 N=768 v=1242150 answer=481 true_rank[<v,<=v]=[464,484] err=0 eps*N=15.06 OK
+n=7 N=896 v=1810625 answer=782 true_rank[<v,<=v]=[743,790] err=0 eps*N=17.57 OK
+n=8 N=1024 v=1810625 answer=896 true_rank[<v,<=v]=[791,906] err=0 eps*N=20.08 OK
+n=9 N=1152 v=1810625 answer=1002 true_rank[<v,<=v]=[899,1014] err=0 eps*N=22.59 OK
+n=10 N=1280 v=1810625 answer=1116 true_rank[<v,<=v]=[1015,1130] err=0 eps*N=25.10 OK
+n=11 N=1408 v=1810625 answer=1231 true_rank[<v,<=v]=[1130,1245] err=0 eps*N=27.61 OK
+n=12 N=1536 v=1810625 answer=1343 true_rank[<v,<=v]=[1242,1357] err=0 eps*N=30.12 OK
+n=13 N=1664 v=1810625 answer=1454 true_rank[<v,<=v]=[1352,1467] err=0 eps*N=32.63 OK
+n=14 N=1792 v=1810625 answer=1550 true_rank[<v,<=v]=[1448,1563] err=0 eps*N=35.14 OK
+n=15 N=1920 v=1810625 answer=1664 true_rank[<v,<=v]=[1561,1676] err=0 eps*N=37.65 OK
+n=16 N=2048 v=1810625 answer=1778 true_rank[<v,<=v]=[1674,1789] err=0 eps*N=40.16 OK
+ALL_OK
+== soA16_1
+n=1 N=128 v=653749 answer=44 true_rank[<v,<=v]=[30,43] err=1 eps*N=2.51 OK
+n=2 N=256 v=1242150 answer=170 true_rank[<v,<=v]=[153,173] err=0 eps*N=5.02 OK
+n=3 N=384 v=1242150 answer=252 true_rank[<v,<=v]=[234,254] err=0 eps*N=7.53 OK
+n=4 N=512 v=1242150 answer=327 true_rank[<v,<=v]=[308,328] err=0 eps*N=10.04 OK
+n=5 N=640 v=1242150 answer=395 true_rank[<v,<=v]=[378,398] err=0 eps*N=12.55 OK
+n=6 N=768 v=1242150 answer=481 true_rank[<v,<=v]=[464,484] err=0 eps*N=15.06 OK
+n=7 N=896 v=1810625 answer=782 true_rank[<v,<=v]=[743,790] err=0 eps*N=17.57 OK
+n=8 N=1024 v=1810625 answer=896 true_rank[<v,<=v]=[791,906] err=0 eps*N=20.08 OK
+n=9 N=1152 v=1810625 answer=1002 true_rank[<v,<=v]=[899,1014] err=0 eps*N=22.59 OK
+n=10 N=1280 v=1810625 answer=1116 true_rank[<v,<=v]=[1015,1130] err=0 eps*N=25.10 OK
+n=11 N=1408 v=1810625 answer=1231 true_rank[<v,<=v]=[1130,1245] err=0 eps*N=27.61 OK
+n=12 N=1536 v=1810625 answer=1343 true_rank[<v,<=v]=[1242,1357] err=0 eps*N=30.12 OK
+n=13 N=1664 v=1810625 answer=1454 true_rank[<v,<=v]=[1352,1467] err=0 eps*N=32.63 OK
+n=14 N=1792 v=1810625 answer=1550 true_rank[<v,<=v]=[1448,1563] err=0 eps*N=35.14 OK
+n=15 N=1920 v=1810625 answer=1664 true_rank[<v,<=v]=[1561,1676] err=0 eps*N=37.65 OK
+n=16 N=2048 v=1810625 answer=1778 true_rank[<v,<=v]=[1674,1789] err=0 eps*N=40.16 OK
+ALL_OK

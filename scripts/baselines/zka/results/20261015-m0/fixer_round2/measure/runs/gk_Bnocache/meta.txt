@@ -1,0 +1,5 @@
+label=gk_Bnocache tag=gk m=128 T=16 cap=384 ab=B
+start=2026-10-15T06:14:49+08:00 load="16.80 23.02 20.75" memavail_gib=438.4
+head=3fd232e4a bin_md5=38c33b46bc13
+EXP_MERGE_CACHE=0 
+end=2026-10-15T06:18:41+08:00 rc=0 load="25.37 24.45 21.87"

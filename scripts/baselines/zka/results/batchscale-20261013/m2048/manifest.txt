@@ -1,0 +1,19 @@
+# six-sketch comparison, batch-size scaling (hll ss gk only); written by the runner, fields as run_all.sh write_manifest
+mode=batchscale (individual six/*.sh scripts, run_all.sh quick chain replicated)
+started=2026-10-13T21:03:07+08:00
+N=4096 M=2048 T=2 gk_cap=2048 query_points=1,2 aggr_epochs=0,1 cores=32 families=hll,ss,gk
+zka_roots=noroot zka_cm_ref=0 (no separate CM reference)
+verify_repeats=5 gate: GATE_WAIT_S=0 GATE_MAX_LOAD=8 GATE_MAX_BUSY=4
+zksketch=6a4d9847880191e6e34c9ff4053f72bff3c9b613 changed_files=0 checkout=/home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch
+exp_compose_md5=792368fe2c7a
+zka=d4a5a9a90f7470b4af29045ef248f724708813ad baseline_dir=/home/binbin/six-repro-verify/round-shared/home-r3cold/ext-baselines
+host=SPRL6201019991 kernel=7.0.0-34-generic cpu="AMD Ryzen Threadripper PRO 9975WX 32-Cores" nproc=64 phys_cores=32 mem_gib=559
+rustc="rustc 1.97.1 (8bab26f4f 2026-07-14)" r0vm="risc0-r0vm 3.0.6" rzup="rzup 0.5.0" python="Python 3.14.4"
+risc0_toolchains="v1.97.0-rust-x86_64-unknown-linux-gnu "
+mem_available_gib_at_start=438.3 load_at_start="0.23 0.36 0.69"
+step rc=0 seconds=3 scripts/baselines/zka/six/run_zka.sh exec
+step rc=0 seconds=1 scripts/baselines/zka/six/run_zka.sh qexec hll:query:1 hll:query:2 gk:query:1:1810625 gk:query:2:1810625 ss:query:1 ss:query:2
+step rc=0 seconds=3 scripts/baselines/zka/six/prof_exec.sh
+assemble: NO zk-Analytics proof in this directory (by design); every zk-Analytics prove time is ESTIMATED = executor padded_cycles / 2^20 x k, k = 30.073281609195405 s per 2^20 padded cycles = sum(prove_s) / sum(padded_cycles / 2^20) over the 12 aggregation proofs of the committed 2026-10-09 run (scripts/baselines/zka/results/six_zka_*_prove.csv, M=2048, legacy guests); estimated receipts get the mean verify_ms 10.784 and receipt_bytes 224854 of those 12. Run with assemble_cal.py = six/assemble.py + assemble_cal.patch (env CAL_K / CAL_VERIFY_MS / CAL_RECEIPT_BYTES / CAL_SRC), then six/table.py unchanged.
+gate: rows marked busy:load1=... for ss and gk = the 1-minute load average left by the preceding zkSketch run of this sequence (no heavy process of any user was found by gate.sh; GATE_WAIT_S=0)
+finished=2026-10-13T21:56:44+08:00

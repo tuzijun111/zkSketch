@@ -1,0 +1,139 @@
+{
+ "run": "gk768_avx2_2",
+ "ab": "B",
+ "phases": {
+  "vk": {
+   "dur_s": 13.371999979019165,
+   "peak_comb": 16436.0,
+   "at_coord": 16436.0,
+   "at_worker": 0.0,
+   "peak_coord": 16436.0,
+   "peak_worker": 0.0,
+   "peak_tree": 16448.0
+  },
+  "worker": {
+   "dur_s": 29.437000036239624,
+   "peak_comb": 16427.0,
+   "at_coord": 68.0,
+   "at_worker": 16359.0,
+   "peak_coord": 68.0,
+   "peak_worker": 16359.0,
+   "peak_tree": 16439.0
+  },
+  "exit": {
+   "dur_s": 0.17100000381469727,
+   "peak_comb": 69.0,
+   "at_coord": 69.0,
+   "at_worker": 0.0,
+   "peak_coord": 69.0,
+   "peak_worker": 0.0,
+   "peak_tree": 81.0
+  },
+  "audit": {
+   "dur_s": 4.08899998664856,
+   "peak_comb": 4519.0,
+   "at_coord": 4519.0,
+   "at_worker": 0.0,
+   "peak_coord": 4519.0,
+   "peak_worker": 0.0,
+   "peak_tree": 4531.0
+  },
+  "post_audit": null,
+  "query": {
+   "dur_s": 1.4670000076293945,
+   "peak_comb": 654.0,
+   "at_coord": 654.0,
+   "at_worker": 0.0,
+   "peak_coord": 654.0,
+   "peak_worker": 0.0,
+   "peak_tree": 666.0
+  },
+  "tail": null,
+  "whole": {
+   "dur_s": 48.579999923706055,
+   "peak_comb": 16436.0,
+   "at_coord": 16436.0,
+   "at_worker": 0.0,
+   "peak_coord": 16436.0,
+   "peak_worker": 16359.0,
+   "peak_tree": 16448.0
+  }
+ },
+ "csv": {
+  "total_time_ms": "29435.454",
+  "leafgen_seq_ms": "22598.516",
+  "local_fold_ms": "3372.008",
+  "merge_total_ms": "3397.572",
+  "verify_ms": "14.041",
+  "peak_rss_mb": "16420.2",
+  "query_prove_ms": "925.178",
+  "query_bind_ms": "32.559",
+  "proof_bytes": "803799",
+  "status": "ok"
+ },
+ "answers": [
+  [
+   "1",
+   "321"
+  ],
+  [
+   "2",
+   "900"
+  ]
+ ],
+ "keys": [
+  [
+   "1",
+   "gk_value=1242150"
+  ],
+  [
+   "2",
+   "gk_value=1810625"
+  ]
+ ],
+ "vk_derive_s": 3.9,
+ "rsstree": {
+  "main": 16416.6,
+  "desc": 16420.2,
+  "wall": 48.6
+ },
+ "worker_line": [
+  "first_index=1,merge_cache=hits=0;misses=1,finalize_merges=0,retain_prep=false,trim=Every"
+ ],
+ "memsum": [
+  "MEMSAMPLE SUMMARY peak_sum_mb=16449 at_t=12.6s [2381648(bash)=4 2381705(bash)=4 2381744(bash)=2 2382025(sleep)=2 2381708(exp_compose)=16436] | per-process 2381648(bash):maxrss=4,hwm=4 2381661(bash):maxrss=2,hwm=2 2381662(bash):maxrss=2,hwm=2 2381666(wc):maxrss=3,hwm=3 2381665(sort):maxrss=2,hwm=2 2381664(grep):maxrss=3,hwm=3 2381663(lscpu):maxrss=3,hwm=3 2381682(bash):maxrss=2,hwm=2 2381694(pgrep):maxrss=4,hwm=4 2381705(bash):maxrss=5,hwm=5 2381744(bash):maxrss=2,hwm=2 2381798(sleep):maxrss=2,hwm=2 2381708(exp_compose):maxrss=16436,hwm=16436 2381812(sleep):maxrss=2,hwm=2 2381824(sleep):maxrss=2,hwm=2 2381832(sleep):maxrss=2,hwm=2 2381839(sleep):maxrss=2,hwm=2 2381853(sleep):maxrss=2,hwm=2 2381859(sleep):maxrss=2,hwm=2 2381865(sleep):maxrss=2,hwm=2 2381872(sleep):maxrss=2,hwm=2 2381878(sleep):maxrss=2,hwm=2 2381884(sleep):maxrss=2,hwm=2 2381890(sleep):maxrss=2,hwm=2 2381897(sleep):maxrss=2,hwm=2 2381903(sleep):maxrss=2,hwm=2 2381923(sleep):maxrss=2,hwm=2 2381941(bash):maxrss=2,hwm=2 2381942(bash):maxrss=2,hwm=2 2381944(sleep):maxrss=2,hwm=2 2381948(bash):maxrss=2,hwm=2 2381949(bash):maxrss=2,hwm=2 2381950(cat):maxrss=2,hwm=2 2381951(sleep):maxrss=2,hwm=2 2381952(bash):maxrss=2,hwm=2 2381953(awk):maxrss=1,hwm=1 2381957(sleep):maxrss=2,hwm=2 2381971(sleep):maxrss=2,hwm=2 2381977(sleep):maxrss=2,hwm=2 2381983(sleep):maxrss=2,hwm=2 2381989(sleep):maxrss=2,hwm=2 2382004(sleep):maxrss=2,hwm=2 2382012(sleep):maxrss=2,hwm=2 2382025(sleep):maxrss=2,hwm=2 2382031(sleep):maxrss=2,hwm=2 2382039(sleep):maxrss=2,hwm=2 2382041(zks_dc_exe_2381):maxrss=16359,hwm=16420 2382086(sleep):maxrss=2,hwm=2 2382105(sleep):maxrss=2,hwm=2 2382117(sleep):maxrss=2,hwm=2 2382129(sleep):maxrss=2,hwm=2 2382141(sleep):maxrss=2,hwm=2 2382220(sleep):maxrss=2,hwm=2 2382297(sleep):maxrss=2,hwm=2 2382381(sleep):maxrss=2,hwm=2 2382395(sleep):maxrss=2,hwm=2 2383261(bash):maxrss=2,hwm=2 2383262(cat):maxrss=1,hwm=1 2383319(sleep):maxrss=2,hwm=2 2384476(bash):maxrss=2,hwm=2 2384487(sleep):maxrss=2,hwm=2 2384515(sleep):maxrss=2,hwm=2 2384527(sleep):maxrss=2,hwm=2 2384546(sleep):maxrss=2,hwm=2 2384558(sleep):maxrss=2,hwm=2 2384572(sleep):maxrss=2,hwm=2 2384584(sleep):maxrss=2,hwm=2 2384599(sleep):maxrss=2,hwm=2 2384611(sleep):maxrss=2,hwm=2 2384630(sleep):maxrss=2,hwm=2 2384643(sleep):maxrss=2,hwm=2 2384655(sleep):maxrss=2,hwm=2 2384667(sleep):maxrss=2,hwm=2 2384679(sleep):maxrss=2,hwm=2 2384691(sleep):maxrss=2,hwm=2 2384703(sleep):maxrss=2,hwm=2 2384715(sleep):maxrss=2,hwm=2 2384734(sleep):maxrss=2,hwm=2 2384747(sleep):maxrss=2,hwm=2 2384759(sleep):maxrss=2,hwm=2 2384779(sleep):maxrss=2,hwm=2 2384858(sleep):maxrss=2,hwm=2 2384870(sleep):maxrss=2,hwm=2 2384890(sleep):maxrss=2,hwm=2 2384904(sleep):maxrss=2,hwm=2 2384916(sleep):maxrss=2,hwm=2 2384928(sleep):maxrss=2,hwm=2 2384947(sleep):maxrss=2,hwm=2 2384959(sleep):maxrss=2,hwm=2 2384962(bash):maxrss=2,hwm=2 2384971(sleep):maxrss=2,hwm=2 2384983(sleep):maxrss=2,hwm=2 2384995(sleep):maxrss=2,hwm=2 2385007(sleep):maxrss=2,hwm=2 2385019(sleep):maxrss=2,hwm=2 2385033(sleep):maxrss=2,hwm=2 2385045(sleep):maxrss=2,hwm=2 2385078(sleep):maxrss=2,hwm=2 2385091(sleep):maxrss=2,hwm=2 2385103(sleep):maxrss=2,hwm=2 2385115(sleep):maxrss=2,hwm=2 2385134(sleep):maxrss=2,hwm=2 2385146(sleep):maxrss=2,hwm=2 2385158(sleep):maxrss=2,hwm=2 2385172(sleep):maxrss=2,hwm=2 2385194(sleep):maxrss=2,hwm=2 2385207(sleep):maxrss=2,hwm=2 2385226(sleep):maxrss=2,hwm=2 2385236(sleep):maxrss=2,hwm=2 2385268(sleep):maxrss=2,hwm=2 2385275(sleep):maxrss=2,hwm=2 2385288(sleep):maxrss=2,hwm=2 2385294(sleep):maxrss=2,hwm=2 2385305(sleep):maxrss=2,hwm=2 2385341(sleep):maxrss=2,hwm=2 2385347(sleep):maxrss=2,hwm=2 2385360(sleep):maxrss=2,hwm=2 2385398(sleep):maxrss=2,hwm=2 2385405(sleep):maxrss=2,hwm=2 2385411(sleep):maxrss=2,hwm=2 2385414(awk):maxrss=1,hwm=1\n"
+ ],
+ "meta": "label=gk768_avx2_2 tag=gk m=512 T=2 cap=768 build=avx2\nstart=2026-10-15T14:48:30+08:00 load=\"13.31 18.70 23.98\" memavail_gib=434.7\nhead=235c87be2 dirty=0 real_bin=/home/binbin/six-repro-verify/round-shared/home-r3cold/target-avx2/release/examples/exp_compose real_bin_md5=beced0ce5acb wrapper_md5=e7b0b1c62d32\n\nend=2026-10-15T14:49:19+08:00 rc=0 load=\"26.90 21.52 24.66\"\nWINDOW n=10 others_mean=1.26 others_max=1.53 load1_mean=21.4 load1_max=26.9 me_mean=14.0\n",
+ "marks": {
+  "auditor_new": [
+   13.37,
+   16416.6,
+   63.9
+  ],
+  "root_received": [
+   42.81,
+   16416.6,
+   69.3
+  ],
+  "workers_exited": [
+   42.98,
+   16416.6,
+   69.4
+  ],
+  "audit_done": [
+   47.07,
+   16416.6,
+   78.7
+  ],
+  "before_query_phase": [
+   47.07,
+   16416.6,
+   78.7
+  ],
+  "queries_done": [
+   48.54,
+   602.9,
+   95.2
+  ]
+ }
+}

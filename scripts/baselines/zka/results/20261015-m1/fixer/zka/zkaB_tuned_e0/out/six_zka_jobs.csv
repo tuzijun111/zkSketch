@@ -1,0 +1,2 @@
+job,family,op,n_or_epoch,arg,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,r0vm_peak_rss_mb,main_peak_rss_mb
+gk:aggr:0:noroot,gk,aggr,0,noroot,2026-10-15T16:52:37+08:00,busy:load1=22.30;,0,22.30,NA,54.49,339,0,9394.2,16.3

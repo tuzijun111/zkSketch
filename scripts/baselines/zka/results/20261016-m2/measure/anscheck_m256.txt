@@ -1,0 +1,37 @@
+ANSCHECK m=256 T=8 stream=2048 keys distinct_inserted=1234 filter_ones=8348 of 114688
+  leaf=  1 key=3707614330 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  2 key=3236760776 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  3 key= 700602271 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  4 key=2907156928 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  5 key=3335831687 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  6 key=3862034197 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  7 key=2066466693 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  8 key=3651107915 inserted=1 omc=1 packed=1 proven=1 ok
+SUMMARY omc_bloom_m256_T8/out/six_zksketch_bloom.log: 8/8 proven answers == native bloom_omc == native packed; native ones=8, zeros=0
+  leaf=  1 key=4010659695 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  2 key=3455829011 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  3 key=  62638848 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  4 key=2391383811 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  5 key=2763294837 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  6 key= 141879795 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  7 key= 267936559 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  8 key=1608305708 inserted=0 omc=0 packed=0 proven=0 ok
+SUMMARY omc_absent_m256_T8/out/six_zksketch_bloom_absent.log: 8/8 proven answers == native bloom_omc == native packed; native ones=0, zeros=8
+  leaf=  1 key=3707614330 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  2 key=3236760776 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  3 key= 700602271 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  4 key=2907156928 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  5 key=3335831687 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  6 key=3862034197 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  7 key=2066466693 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  8 key=3651107915 inserted=1 omc=1 packed=1 proven=1 ok
+SUMMARY packed_bloom_m256_T8/out/six_zksketch_bloom.log: 8/8 proven answers == native bloom_omc == native packed; native ones=8, zeros=0
+  leaf=  1 key=4010659695 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  2 key=3455829011 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  3 key=  62638848 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  4 key=2391383811 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  5 key=2763294837 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  6 key= 141879795 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  7 key= 267936559 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  8 key=1608305708 inserted=0 omc=0 packed=0 proven=0 ok
+SUMMARY packed_absent_m256_T8/out/six_zksketch_bloom_absent.log: 8/8 proven answers == native bloom_omc == native packed; native ones=0, zeros=8

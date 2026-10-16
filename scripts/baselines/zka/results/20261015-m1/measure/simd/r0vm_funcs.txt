@@ -1,0 +1,42 @@
+total ymm lines=5065 zmm lines=0 functions_with_ymm=40
+   1573  ring_core_0_17_14__chacha20_poly1305_seal_avx2
+   1181  ring_core_0_17_14__chacha20_poly1305_open_avx2
+    431  ring_core_0_17_14__ChaCha20_ctr32_avx2
+    315  ring_core_0_17_14__aes_gcm_enc_update_vaes_avx2
+    231  ring_core_0_17_14__aes_gcm_dec_update_vaes_avx2
+    122  rand_chacha::guts::refill_wide::impl_avx2
+    104  memchr::arch::x86_64::memchr::count_raw::find_avx2
+     82  <aho_corasick::packed::teddy::builder::x86_64::SlimAVX2<4> as aho_corasick::packed::teddy::builder::SearcherT>::find
+     77  <aho_corasick::packed::teddy::builder::x86_64::SlimAVX2<4>>::new_unchecked
+     76  <aho_corasick::packed::teddy::builder::x86_64::FatAVX2<4> as aho_corasick::packed::teddy::builder::SearcherT>::find
+     69  <aho_corasick::packed::teddy::builder::x86_64::SlimAVX2<3>>::new_unchecked
+     67  <aho_corasick::packed::teddy::builder::x86_64::SlimAVX2<1>>::new_unchecked
+     61  <aho_corasick::packed::teddy::builder::x86_64::SlimAVX2<2>>::new_unchecked
+     61  <aho_corasick::packed::teddy::builder::x86_64::SlimAVX2<3> as aho_corasick::packed::teddy::builder::SearcherT>::find
+     57  <aho_corasick::packed::teddy::builder::x86_64::FatAVX2<3> as aho_corasick::packed::teddy::builder::SearcherT>::find
+     54  ring_core_0_17_14__gcm_init_vpclmulqdq_avx2
+     44  <memchr::arch::x86_64::avx2::memchr::Three>::find_raw_avx2
+     43  <aho_corasick::packed::teddy::builder::x86_64::SlimAVX2<2> as aho_corasick::packed::teddy::builder::SearcherT>::find
+     41  <aho_corasick::packed::teddy::builder::x86_64::FatAVX2<2> as aho_corasick::packed::teddy::builder::SearcherT>::find
+     40  ring_core_0_17_14__ecp_nistz256_select_w7_avx2
+     39  <aho_corasick::packed::teddy::builder::x86_64::FatAVX2<4>>::new_unchecked
+     32  ring_core_0_17_14__ecp_nistz256_select_w5_avx2
+     31  <aho_corasick::packed::teddy::builder::x86_64::FatAVX2<3>>::new_unchecked
+     31  <memchr::arch::x86_64::avx2::memchr::Two>::find_raw_avx2
+     26  <memchr::arch::x86_64::avx2::packedpair::Finder>::find_impl
+     24  <aho_corasick::packed::teddy::builder::x86_64::SlimAVX2<1> as aho_corasick::packed::teddy::builder::SearcherT>::find
+     24  <aho_corasick::packed::teddy::builder::x86_64::FatAVX2<1> as aho_corasick::packed::teddy::builder::SearcherT>::find
+     23  <aho_corasick::packed::teddy::builder::x86_64::FatAVX2<2>>::new_unchecked
+     19  <memchr::arch::x86_64::avx2::memchr::One>::find_raw_avx2
+     19  <memchr::arch::x86_64::avx2::memchr::One>::rfind_raw_avx2
+     15  <aho_corasick::packed::teddy::builder::x86_64::FatAVX2<1>>::new_unchecked
+     11  httparse::simd::avx2::match_header_value_vectored
+     10  <memchr::arch::x86_64::avx2::packedpair::Finder>::find_prefilter_impl
+      8  <memchr::arch::x86_64::avx2::packedpair::Finder>::with_pair_impl
+      8  httparse::simd::avx2::match_uri_vectored
+      6  memchr::arch::x86_64::memchr::memchr3_raw::find_avx2
+      4  memchr::arch::x86_64::memchr::memchr2_raw::find_avx2
+      2  memchr::arch::x86_64::memchr::memchr_raw::find_avx2
+      2  memchr::arch::x86_64::memchr::memrchr_raw::find_avx2
+      2  rand_chacha::guts::init_chacha::impl_avx
+by prefix: ring_core_0_17_14__chacha20_po=2754, aho_corasick=790, ring_core_0_17_14__ChaCha20_ct=431, ring_core_0_17_14__aes_gcm_enc=315, memchr=275, ring_core_0_17_14__aes_gcm_dec=231, rand_chacha=124, ring_core_0_17_14__ecp_nistz25=72, ring_core_0_17_14__gcm_init_vp=54, httparse=19

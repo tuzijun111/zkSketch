@@ -1,0 +1,8 @@
+start 2026-10-14T14:39:15+08:00 tag=bloom m=256 T=16 cap=2048 dir=/home/binbin/zkSketch/results/six/memmatch-20261014/bloom-m256-t16 load="18.66 30.53 31.73" memavail_gib=430.6
+run_zks.sh: 1 run(s) -> /home/binbin/zkSketch/results/six/memmatch-20261014/bloom-m256-t16 (N=4096 m=256 t=16 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+gate failed for bloom: busy:load1=18.66; -- running anyway, row marked
+== zkSketch bloom (14:39:15); log /home/binbin/zkSketch/results/six/memmatch-20261014/bloom-m256-t16/six_zksketch_bloom.log
+done bloom rc=0 wall=448s
+run_zks.sh: all 1 run(s) ok -> /home/binbin/zkSketch/results/six/memmatch-20261014/bloom-m256-t16/six_zksketch_*
+end 2026-10-14T14:46:43+08:00 rc=0
+RSSTREE,zks_bloom,main_peak_rss_mb=8168.0,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=8854.9,wall_s=447.6,rc=0

@@ -1,0 +1,4 @@
+label=zkaA_e0 cap=384 m_sub=128 impl=fast job=gk:aggr:0:noroot B=2048
+start=2026-10-15T13:53:45+08:00 load="32.89 38.77 31.34" memavail_gib=390.9
+head=235c87be2 dirty=0 r0vm=risc0-r0vm 3.0.6 r0vm_md5=9e13aa14c059 gk_matched_md5=b18f09993e7b
+end=2026-10-15T14:04:26+08:00 rc=130 load="94.50 96.13 68.22"

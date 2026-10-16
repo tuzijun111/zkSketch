@@ -1,0 +1,84 @@
+# committed 2026-10-09 set (scripts/baselines/zka/results), re-assembled by assemble.py at 3fd232e and at 235c87b
+assemble.py: six_sketch_comparison.csv byte-identical (a6e493c381af, 318 rows)
+table.py: 50 changed lines (diff below): the GK label and one note line
+0a1,2
+> _GK, zk-Analytics side of this set: textbook Greenwald-Khanna (scripts/baselines/zka/gk), NOT zkSketch's GK rule; since 2026-10-15 the comparison runs zkSketch's own rule on that side (scripts/baselines/zka/gk_matched, SIX_ZKA_GK=matched)._
+> 
+28,34c30,36
+< | GK eps=1/51 † | prove, 1 epoch (s) | 420.0 | 14.74 | 28x |
+< | GK eps=1/51 † | prove, 8 epochs (s) | 3,359.9 | 143.5 | 23x |
+< | GK eps=1/51 † | verify, 1 epoch (ms) | 10.6 | 15.7 | 0.68x |
+< | GK eps=1/51 † | verify, 8 epochs (ms) | 85.2 | 15.7 | 5.4x |
+< | GK eps=1/51 † | proof, 1 epoch (KB) | 225 | 758 | 0.30x |
+< | GK eps=1/51 † | proof, 8 epochs (KB) | 1,798 | 528 | 3.4x |
+< | GK eps=1/51 † | peak RSS (GB) | 9.2 | 19.4 | 0.47x |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | prove, 1 epoch (s) | 420.0 | 14.74 | 28x |
+> | GK eps=1/51 † (zkA: textbook GK) | prove, 8 epochs (s) | 3,359.9 | 143.5 | 23x |
+> | GK eps=1/51 † (zkA: textbook GK) | verify, 1 epoch (ms) | 10.6 | 15.7 | 0.68x |
+> | GK eps=1/51 † (zkA: textbook GK) | verify, 8 epochs (ms) | 85.2 | 15.7 | 5.4x |
+> | GK eps=1/51 † (zkA: textbook GK) | proof, 1 epoch (KB) | 225 | 758 | 0.30x |
+> | GK eps=1/51 † (zkA: textbook GK) | proof, 8 epochs (KB) | 1,798 | 528 | 3.4x |
+> | GK eps=1/51 † (zkA: textbook GK) | peak RSS (GB) | 9.2 | 19.4 | 0.47x |
+57c59
+< | GK eps=1/51 † | 3,360 | 143.5 | 23x | - | - | 420.0 | 14.74 | 28x | - | - | 9.2 / 19.4 / - |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | 3,360 | 143.5 | 23x | - | - | 420.0 | 14.74 | 28x | - | - | 9.2 / 19.4 / - |
+68c70
+< | GK eps=1/51 † | 225 | 1,798 | 528 | - | 15.7 | - |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | 225 | 1,798 | 528 | - | 15.7 | - |
+79c81
+< | GK eps=1/51 † | 5.93 / 0.412 / - | 9.27 / 0.401 / - | 15.63 / 0.382 / - | 27.75 / 0.360 / - | 14x | 77x | - | - |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | 5.93 / 0.412 / - | 9.27 / 0.401 / - | 15.63 / 0.382 / - | 27.75 / 0.360 / - | 14x | 77x | - | - |
+91c93
+< | GK eps=1/51 † | 0.399 / - | 0.397 / - | 0.376 / - | 0.366 / - |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | 0.399 / - | 0.397 / - | 0.376 / - | 0.366 / - |
+103c105
+< | GK eps=1/51 † | **22.1** / 38.1 | 33.0 / **29.8** | **42.6** / 48.3 | 52.4 / **28.8** | 63.9 / **47.3** | 74.6 / **42.7** | 85.2 / **61.3** | 94.9 / **28.7** |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | **22.1** / 38.1 | 33.0 / **29.8** | **42.6** / 48.3 | 52.4 / **28.8** | 63.9 / **47.3** | 74.6 / **42.7** | 85.2 / **61.3** | 94.9 / **28.7** |
+115c117
+< | GK eps=1/51 † | **449** / 1,281 | **674** / 1,090 | **899** / 1,848 | 1,124 / **1,052** | **1,349** / 1,810 | **1,574** / 1,618 | **1,798** / 2,376 | 2,024 / **1,052** |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | **449** / 1,281 | **674** / 1,090 | **899** / 1,848 | 1,124 / **1,052** | **1,349** / 1,810 | **1,574** / 1,618 | **1,798** / 2,376 | 2,024 / **1,052** |
+127c129
+< | GK eps=1/51 † | - | - | - | - | - | - | - | - |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | - | - | - | - | - | - | - | - |
+139c141
+< | GK eps=1/51 † | - | - | - | - | - | - | - | - |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | - | - | - | - | - | - | - | - |
+151c153
+< | GK eps=1/51 † | - | - | 17.2 / 16.2 / 16.1 | 22.2 / 22.1 / 22.0 | 0.74 | - |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | - | - | 17.2 / 16.2 / 16.1 | 22.2 / 22.1 / 22.0 | 0.74 | - |
+162c164
+< | GK eps=1/51 † | 1.4 | 2.3 | 4.6 | 9.1 | 1.5 / 1.5 (1.5) | - |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | 1.4 | 2.3 | 4.6 | 9.1 | 1.5 / 1.5 (1.5) | - |
+182,185c184,187
+< | GK eps=1/51 † | 1 | 1789 [1750..1829] | 1786 | - | 1789 |
+< | GK eps=1/51 † | 2 | 3595 [3518..3672] | 3557 | - | 3569 |
+< | GK eps=1/51 † | 4 | 7150 [7014..7287] | 7095 | - | 7115 |
+< | GK eps=1/51 † | 8 | 7985 [7718..8253] | 7927 | - | 7967 |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | 1 | 1789 [1750..1829] | 1786 | - | 1789 |
+> | GK eps=1/51 † (zkA: textbook GK) | 2 | 3595 [3518..3672] | 3557 | - | 3569 |
+> | GK eps=1/51 † (zkA: textbook GK) | 4 | 7150 [7014..7287] | 7095 | - | 7115 |
+> | GK eps=1/51 † (zkA: textbook GK) | 8 | 7985 [7718..8253] | 7927 | - | 7967 |
+206c208
+< | GK eps=1/51 † | 142.2 / 143.5 | 14.59 / 14.74 | 2.96 / 3.09 |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | 142.2 / 143.5 | 14.59 / 14.74 | 2.96 / 3.09 |
+217c219
+< | GK eps=1/51 † | 13,405,908 | not profiled | not profiled | - | no six_zka_prof_* rows in this results directory | - | - | - |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | 13,405,908 | not profiled | not profiled | - | no six_zka_prof_* rows in this results directory | - | - | - |
+228c230
+< | GK eps=1/51 † | pertuple | 13,405,908 (14) |
+---
+> | GK eps=1/51 † (zkA: textbook GK) | pertuple | 13,405,908 (14) |

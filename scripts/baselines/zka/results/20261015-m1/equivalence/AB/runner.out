@@ -1,0 +1,20 @@
+== native unit tests
+test tests::overflow_is_a_hard_error ... ok
+test tests::query_needs_one_unbroken_chain ... ok
+test tests::carried_state_is_bound ... ok
+test tests::rank_equals_zksketch_decoder ... ok
+test tests::variants_and_marks ... ok
+test tests::chain_equals_zksketch_configs ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+[run ] config A: gk_matched --mode check --epochs 2 --capacity 384 --m-sub 128 --epoch-size 2048 --keys /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/data/aol.keys
+[run ] config B: gk_matched --mode check --epochs 2 --capacity 768 --m-sub 512 --epoch-size 2048 --keys /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/data/aol.keys
+-> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m1/sbx_check/AB/zka_gk_matched_check.csv
+[run ] config A: gk_matched --mode aggr --epoch-index 0 --root noroot --capacity 384 --m-sub 128 --epoch-size 2048 --keys /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/data/aol.keys
+[run ] config A: gk_matched --mode aggr --epoch-index 1 --root noroot --capacity 384 --m-sub 128 --epoch-size 2048 --keys /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/data/aol.keys
+[run ] config B: gk_matched --mode aggr --epoch-index 0 --root noroot --capacity 768 --m-sub 512 --epoch-size 2048 --keys /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/data/aol.keys
+[run ] config B: gk_matched --mode aggr --epoch-index 1 --root noroot --capacity 768 --m-sub 512 --epoch-size 2048 --keys /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/data/aol.keys
+-> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m1/sbx_check/AB/zka_gk_matched_aggr.csv
+[run ] config A: gk_matched --mode certify --epochs 2 --capacity 384 --m-sub 128 --epoch-size 2048 --keys /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/data/aol.keys
+[run ] config B: gk_matched --mode certify --epochs 2 --capacity 768 --m-sub 512 --epoch-size 2048 --keys /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/data/aol.keys
+-> /tmp/claude-1005/-home-binbin-zkSketch/5e529f7b-5eee-44f8-93ee-26cc1c5b0675/scratchpad/m1/sbx_check/AB/zka_gk_matched_certify.csv
+gk_matched_check.sh: ok

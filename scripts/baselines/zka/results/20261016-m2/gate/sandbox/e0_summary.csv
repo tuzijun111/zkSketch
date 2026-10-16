@@ -1,0 +1,7 @@
+commit,pcs,logup_mask,binding,statement,commit_mode,family,variant,site,level,geometry,m,tables,max_log_h,largest,max_rows_unpadded,max_fill,sum_rows_padded,fits_nonhiding,fits_hiding,min_headroom_rows_hiding,m_cross_hiding,m_cross_table,consistent,probe_s,hwm_mb,proof_check
+0f493c1,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,256,7,17,alu+range,85765,0.6543,297984,true,true,16691451,120390,alu,true,0.16,115,-
+0f493c1,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,960,7,18,alu+range,176457,0.6731,594944,true,true,16600759,120390,alu,true,0.41,256,-
+0f493c1,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,1024,7,18,alu+range,185353,0.7071,594944,true,true,16591863,120390,alu,true,0.39,276,-
+0f493c1,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,2048,7,19,alu+range,327689,0.6250,1123328,true,true,16449527,120390,alu,true,0.78,448,-
+0f493c1,hiding,on,semantic,interval,hiding,bloom,omc,bloom_omc,leaf,k=7 log_w=14,256,7,19,alu,500226,0.9541,852992,true,true,16276990,100731,alu,true,1.18,495,-
+0f493c1,hiding,on,semantic,interval,hiding,bloom,omc,bloom_omc,leaf,k=7 log_w=14,1024,7,20,alu,624642,0.5957,1475584,true,true,16152574,100731,alu,true,1.54,725,-

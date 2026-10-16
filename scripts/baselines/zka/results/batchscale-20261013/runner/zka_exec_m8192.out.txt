@@ -1,0 +1,11 @@
+### 2026-10-13T21:16:28+08:00 step: scripts/baselines/zka/six/run_zka.sh exec
+FAILED exec gk aggr epoch 0 --root noroot (rc=1)
+FAILED exec gk aggr epoch 1 --root noroot (rc=1)
+exec variants ok: six_zka_cm_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+exec variants ok: six_zka_hll_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+exec variants ok: six_zka_ss_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+exec variants ok: six_zka_gk_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+exec variants ok: six_zka_bloom_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+exec variants ok: six_zka_kmv_exec.csv: epochs 0..1 x noroot, one state_commit per epoch
+run_zka.sh exec: 2 failure(s); see the logs in /home/binbin/zkSketch/results/six/batchscale-20261013/m8192
+### rc=1 seconds=9

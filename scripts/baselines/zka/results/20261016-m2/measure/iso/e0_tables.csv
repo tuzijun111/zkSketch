@@ -1,0 +1,22 @@
+commit,pcs,logup_mask,binding,statement,commit_mode,family,variant,site,level,geometry,m,table_idx,table,log_h,rows_padded,rows_unpadded,fill,width,prep_width,lq_nonzk,lq_zk,fits_nonhiding,fits_hiding,headroom_rows_hiding,rows_per_record,m_cross_hiding,consistent
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,768,0,const,15,32768,19723,0.6019,4,6,-,-,true,true,16757493,7.00,2394696,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,768,1,public,9,512,7,0.0137,4,2,-,-,true,true,16777209,0.00,-,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,768,2,alu,18,262144,149769,0.5713,44,33,-,-,true,true,16627447,139.00,120390,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,768,3,poseidon2_perm/baby_bear_d4_w16,12,4096,2356,0.5752,300,24,-,-,true,true,16774860,1.50,11184008,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,768,4,permute,15,32768,19712,0.6016,8,5,-,-,true,true,16757504,7.00,2394697,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,768,5,range,18,262144,142085,0.5420,5,4,-,-,true,true,16635131,110.00,151996,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,768,6,expose,9,512,1,0.0020,28,14,-,-,true,true,16777215,0.00,-,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,960,0,const,15,32768,21067,0.6429,4,6,-,-,true,true,16756149,7.00,2394696,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,960,1,public,9,512,7,0.0137,4,2,-,-,true,true,16777209,0.00,-,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,960,2,alu,18,262144,176457,0.6731,44,33,-,-,true,true,16600759,139.00,120390,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,960,3,poseidon2_perm/baby_bear_d4_w16,12,4096,2644,0.6455,300,24,-,-,true,true,16774572,1.50,11184008,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,960,4,permute,15,32768,21056,0.6426,8,5,-,-,true,true,16756160,7.00,2394697,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,960,5,range,18,262144,163205,0.6226,5,4,-,-,true,true,16614011,110.00,151996,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,960,6,expose,9,512,1,0.0020,28,14,-,-,true,true,16777215,0.00,-,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,1024,0,const,15,32768,21515,0.6566,4,6,-,-,true,true,16755701,7.00,2394696,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,1024,1,public,9,512,7,0.0137,4,2,-,-,true,true,16777209,0.00,-,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,1024,2,alu,18,262144,185353,0.7071,44,33,-,-,true,true,16591863,139.00,120390,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,1024,3,poseidon2_perm/baby_bear_d4_w16,12,4096,2740,0.6689,300,24,-,-,true,true,16774476,1.50,11184008,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,1024,4,permute,15,32768,21504,0.6562,8,5,-,-,true,true,16755712,7.00,2394697,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,1024,5,range,18,262144,170245,0.6494,5,4,-,-,true,true,16606971,110.00,151996,true
+63157ed,hiding,on,semantic,interval,hiding,bloom_packed,packed,bloom_packed,leaf,k=7 log_w=14,1024,6,expose,9,512,1,0.0020,28,14,-,-,true,true,16777215,0.00,-,true

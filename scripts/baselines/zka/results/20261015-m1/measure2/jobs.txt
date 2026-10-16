@@ -1,0 +1,2 @@
+zka zkaA_default_e0 384 128 default
+zka zkaB_default_e0 768 512 default

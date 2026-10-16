@@ -1,0 +1,9 @@
+start 2026-10-14T14:03:22+08:00 M=16384 dir=/home/binbin/zkSketch/results/six/memmatch-20261014/zka-m16384 load="17.31 25.85 24.52" memavail_gib=430.6
+exec variants ok: six_zka_cm_exec.csv: epochs 0..0 x noroot,designed, one state_commit per epoch
+exec variants ok: six_zka_hll_exec.csv: epochs 0..0 x noroot,designed, one state_commit per epoch
+exec variants ok: six_zka_ss_exec.csv: epochs 0..0 x noroot,designed, one state_commit per epoch
+exec variants ok: six_zka_gk_exec.csv: epochs 0..0 x noroot,designed, one state_commit per epoch
+exec variants ok: six_zka_bloom_exec.csv: epochs 0..0 x noroot,designed, one state_commit per epoch
+exec variants ok: six_zka_kmv_exec.csv: epochs 0..0 x noroot,designed, one state_commit per epoch
+run_zka.sh exec: ok -> /home/binbin/zkSketch/results/six/memmatch-20261014/zka-m16384/six_zka_*
+end 2026-10-14T14:03:38+08:00 rc=0

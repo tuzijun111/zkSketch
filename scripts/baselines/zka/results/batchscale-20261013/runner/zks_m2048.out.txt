@@ -1,0 +1,13 @@
+### 2026-10-13T21:03:11+08:00 cmd: RESULTS=/home/binbin/zkSketch/results/six/batchscale-20261013/m2048 SIX_M=2048 SIX_T=2 SIX_GK_CAP=2048 GATE_WAIT_S=0 SIX_ZKA_ROOTS=noroot SIX_ZKA_CM_REF=0 EXP_VERIFY_REPEATS=5 scripts/baselines/zka/six/run_zks.sh hll ss gk
+### MemAvailable 438.3 GiB load 0.29 0.37 0.69
+run_zks.sh: 3 run(s) -> /home/binbin/zkSketch/results/six/batchscale-20261013/m2048 (N=4096 m=2048 t=2 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+== zkSketch hll (21:03:13); log /home/binbin/zkSketch/results/six/batchscale-20261013/m2048/six_zksketch_hll.log
+done hll rc=0 wall=91s
+gate failed for ss: busy:load1=27.33; -- running anyway, row marked
+== zkSketch ss (21:04:45); log /home/binbin/zkSketch/results/six/batchscale-20261013/m2048/six_zksketch_ss.log
+done ss rc=0 wall=48s
+gate failed for gk: busy:load1=22.79; -- running anyway, row marked
+== zkSketch gk (21:05:33); log /home/binbin/zkSketch/results/six/batchscale-20261013/m2048/six_zksketch_gk.log
+done gk rc=0 wall=341s
+run_zks.sh: all 3 run(s) ok -> /home/binbin/zkSketch/results/six/batchscale-20261013/m2048/six_zksketch_*
+### 2026-10-13T21:11:14+08:00 rc=0

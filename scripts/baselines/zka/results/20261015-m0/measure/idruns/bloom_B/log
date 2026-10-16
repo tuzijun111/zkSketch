@@ -1,0 +1,72 @@
+# 2026-10-15T04:33:33+08:00 load=12.05 20.33 21.22 head=3fa3e393c ab=B 
+Stream compose (plonky3) — N=2048 datasets=["aol"] families=["bloom_omc"] modes=["forest"] m=[256] cores=[32] machines=[1] exec=procs commit=hiding salt_seed=os pcs=hiding logup_mask=on (avail=64) MIXED: query every 1 batch(es) key_mode=first
+procs engine: one pinned OS process per machine (numactl/taskset, disjoint physical cores), all cross-machine data over serialized sockets; the chain runs sequentially on ONE machine (folds in place), forest composes in-place on the leaf machines. Communication bytes are measured; the comm_model_ms column uses EXP_NET_MBPS=200Mb/s + EXP_NET_RTT_MS=0.2ms.
+-- dataset=aol (1048576 keys) --
+QLOG_PHASE,after=auditor_new,coord_hwm_mb=7794.6,coord_rss_mb=111.3,unix_ms=1792010032099
+QLOG_WORKER,first_index=1,merge_cache=hits=3;misses=4,retain_prep=false,trim=true
+QLOG_PHASE,after=root_received,coord_hwm_mb=7794.6,coord_rss_mb=120.3,unix_ms=1792010149518
+QLOG_PHASE,after=workers_exited,coord_hwm_mb=7794.6,coord_rss_mb=120.4,unix_ms=1792010149630
+    auditor: VK derived from public parameters in 14.3s
+QLOG_ROOTV,repeats=5,first_ms=19.275,best_ms=18.911
+QLOG_PHASE,after=audit_done,coord_hwm_mb=7794.6,coord_rss_mb=129.3,unix_ms=1792010164152
+QLOG_PHASE,after=before_query_phase,coord_hwm_mb=7794.6,coord_rss_mb=129.3,unix_ms=1792010164152
+QLOG_KEY,at_leaf=1,bloom_key=3707614330
+QLOG_MEMSTART,at_leaf=1,hwm_reset=true,rss_start_mb=130.0
+QLOG_QUERY,at_leaf=1,prove_ms=7584.710,witness_ms=71.400,verify_ms=19.997,proof_bytes=829008,answer=1
+QLOG_MEM,at_leaf=1,query_hwm_mb=6506.3,rss_end_mb=1566.3
+QLOG_VERIFY,at_leaf=1,decode_verify_ms=19.997;19.892;19.809;19.821;19.764
+QLOG_KEY,at_leaf=2,bloom_key=3236760776
+QLOG_MEMSTART,at_leaf=2,hwm_reset=true,rss_start_mb=152.2
+QLOG_QUERY,at_leaf=2,prove_ms=7508.928,witness_ms=54.523,verify_ms=20.012,proof_bytes=828931,answer=1
+QLOG_MEM,at_leaf=2,query_hwm_mb=6536.5,rss_end_mb=1789.0
+QLOG_VERIFY,at_leaf=2,decode_verify_ms=20.012;19.865;19.818;19.785;19.779
+QLOG_KEY,at_leaf=3,bloom_key=700602271
+QLOG_MEMSTART,at_leaf=3,hwm_reset=true,rss_start_mb=183.3
+QLOG_QUERY,at_leaf=3,prove_ms=7348.355,witness_ms=63.474,verify_ms=20.143,proof_bytes=829365,answer=1
+QLOG_MEM,at_leaf=3,query_hwm_mb=6563.8,rss_end_mb=1880.4
+QLOG_VERIFY,at_leaf=3,decode_verify_ms=20.143;19.940;19.861;19.927;19.808
+QLOG_KEY,at_leaf=4,bloom_key=2907156928
+QLOG_MEMSTART,at_leaf=4,hwm_reset=true,rss_start_mb=210.4
+QLOG_QUERY,at_leaf=4,prove_ms=7355.325,witness_ms=58.289,verify_ms=20.352,proof_bytes=828956,answer=1
+QLOG_MEM,at_leaf=4,query_hwm_mb=6586.9,rss_end_mb=1903.8
+QLOG_VERIFY,at_leaf=4,decode_verify_ms=20.352;19.940;19.846;19.818;19.806
+QLOG_KEY,at_leaf=5,bloom_key=3335831687
+QLOG_MEMSTART,at_leaf=5,hwm_reset=true,rss_start_mb=234.1
+QLOG_QUERY,at_leaf=5,prove_ms=7474.170,witness_ms=57.157,verify_ms=19.977,proof_bytes=829353,answer=1
+QLOG_MEM,at_leaf=5,query_hwm_mb=6610.6,rss_end_mb=1959.4
+QLOG_VERIFY,at_leaf=5,decode_verify_ms=19.977;19.903;19.818;19.806;19.750
+QLOG_KEY,at_leaf=6,bloom_key=3862034197
+QLOG_MEMSTART,at_leaf=6,hwm_reset=true,rss_start_mb=257.8
+QLOG_QUERY,at_leaf=6,prove_ms=7433.937,witness_ms=54.408,verify_ms=20.085,proof_bytes=828730,answer=1
+QLOG_MEM,at_leaf=6,query_hwm_mb=6643.4,rss_end_mb=1992.1
+QLOG_VERIFY,at_leaf=6,decode_verify_ms=20.085;19.890;19.802;19.790;19.782
+QLOG_KEY,at_leaf=7,bloom_key=2066466693
+QLOG_MEMSTART,at_leaf=7,hwm_reset=true,rss_start_mb=282.2
+QLOG_QUERY,at_leaf=7,prove_ms=7488.498,witness_ms=55.470,verify_ms=19.925,proof_bytes=828910,answer=1
+QLOG_MEM,at_leaf=7,query_hwm_mb=6668.0,rss_end_mb=2016.6
+QLOG_VERIFY,at_leaf=7,decode_verify_ms=19.925;19.874;19.863;19.845;19.908
+QLOG_KEY,at_leaf=8,bloom_key=3651107915
+QLOG_MEMSTART,at_leaf=8,hwm_reset=true,rss_start_mb=306.6
+QLOG_QUERY,at_leaf=8,prove_ms=7413.236,witness_ms=59.980,verify_ms=19.998,proof_bytes=828605,answer=1
+QLOG_MEM,at_leaf=8,query_hwm_mb=6693.0,rss_end_mb=2041.9
+QLOG_VERIFY,at_leaf=8,decode_verify_ms=19.998;19.897;19.806;19.774;19.720
+QLOG_BIND,at_leaf=1,ctx_proofs=1,intervals=1-1,interval_bytes=847825,bind_ms=21.251
+QLOG_BINDV,at_leaf=1,decode_ms=0.738,verify_ms=20.508;20.398;20.441;20.460;20.429,check_ms=0.004
+QLOG_BIND,at_leaf=2,ctx_proofs=1,intervals=1-2,interval_bytes=791461,bind_ms=19.438
+QLOG_BINDV,at_leaf=2,decode_ms=0.572,verify_ms=18.858;18.908;18.896;18.878;18.871,check_ms=0.008
+QLOG_BIND,at_leaf=3,ctx_proofs=2,intervals=1-2;3-3,interval_bytes=791461;848111,bind_ms=40.474
+QLOG_BINDV,at_leaf=3,decode_ms=0.572|0.610,verify_ms=18.858;18.908;18.896;18.878;18.871|20.425;20.410;20.421;20.441;20.437,check_ms=0.009
+QLOG_BIND,at_leaf=4,ctx_proofs=1,intervals=1-4,interval_bytes=790966,bind_ms=19.392
+QLOG_BINDV,at_leaf=4,decode_ms=0.565,verify_ms=18.809;18.784;18.820;18.848;18.871,check_ms=0.018
+QLOG_BIND,at_leaf=5,ctx_proofs=2,intervals=1-4;5-5,interval_bytes=790966;847897,bind_ms=40.457
+QLOG_BINDV,at_leaf=5,decode_ms=0.565|0.613,verify_ms=18.809;18.784;18.820;18.848;18.871|20.454;20.427;20.443;20.424;20.416,check_ms=0.017
+QLOG_BIND,at_leaf=6,ctx_proofs=2,intervals=1-4;5-6,interval_bytes=790966;791371,bind_ms=38.761
+QLOG_BINDV,at_leaf=6,decode_ms=0.565|0.567,verify_ms=18.809;18.784;18.820;18.848;18.871|18.799;18.859;18.808;18.820;18.835,check_ms=0.020
+QLOG_BIND,at_leaf=7,ctx_proofs=3,intervals=1-4;5-6;7-7,interval_bytes=790966;791371;848241,bind_ms=59.758
+QLOG_BINDV,at_leaf=7,decode_ms=0.565|0.567|0.616,verify_ms=18.809;18.784;18.820;18.848;18.871|18.799;18.859;18.808;18.820;18.835|20.380;20.399;20.465;20.439;20.426,check_ms=0.021
+QLOG_BIND,at_leaf=8,ctx_proofs=1,intervals=1-8,interval_bytes=791393,bind_ms=19.475
+QLOG_BINDV,at_leaf=8,decode_ms=0.574,verify_ms=18.871;18.887;18.841;18.891;18.834,check_ms=0.029
+QLOG_PHASE,after=queries_done,coord_hwm_mb=6693.0,coord_rss_mb=331.8,unix_ms=1792010239197
+  bloom_omc     k7_logw14  m=256  t=8   [forest   ] cores=32 mach=1 procs=1 total=117.42s (wpass=0.02s leaf=117.39s merge=32.1s [fold 32.1s + xmerge 0.00s]) verify=0.019s proof=772.8KB comm=772.8KB/1 msgs (200Mbps model 33.0ms) rss=8162MB | q=8 /query: 7450.9ms prove, 809.6KB, 1.6 ctx, bind 32.4ms
+results -> /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/results/id_bloom_B.csv
+# end 2026-10-15T04:37:19+08:00 rc=0

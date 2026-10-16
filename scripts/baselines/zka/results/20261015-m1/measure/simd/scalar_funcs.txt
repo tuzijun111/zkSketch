@@ -1,0 +1,3 @@
+total ymm lines=121 zmm lines=0 functions_with_ymm=1
+    121  chacha20::backends::avx2::rng_inner::<chacha20::R12, chacha20::variants::Legacy>
+by prefix: chacha20=121

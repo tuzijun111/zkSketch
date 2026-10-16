@@ -1,0 +1,5 @@
+label=bloom_Bidle1 tag=bloom m=256 T=8 cap=2048 ab=B
+start=2026-10-15T06:19:41+08:00 load="12.48 20.85 20.79" memavail_gib=440.1
+head=3fd232e4a bin_md5=38c33b46bc13
+EXP_MALLOC_TRIM=idle 
+end=2026-10-15T06:23:22+08:00 rc=0 load="32.42 27.86 23.72"

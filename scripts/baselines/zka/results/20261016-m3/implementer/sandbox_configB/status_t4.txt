@@ -1,0 +1,3 @@
+start 2026-10-15T21:35:26+08:00 T=4 rounds=stable load="4.37 20.75 27.98" memavail_gib=432.0
+end 2026-10-15T21:36:37+08:00 rc=0 load="24.99 23.50 28.41"
+RSSTREE,zks_gk,main_peak_rss_mb=4516.6,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=5093.5,wall_s=68.1,rc=0

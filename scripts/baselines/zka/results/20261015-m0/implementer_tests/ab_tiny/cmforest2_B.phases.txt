@@ -1,0 +1,12 @@
+QLOG_PHASE,after=auditor_new,coord_hwm_mb=79.6,coord_rss_mb=27.8,unix_ms=1792003297087
+QLOG_PHASE,after=root_received,coord_hwm_mb=79.6,coord_rss_mb=37.1,unix_ms=1792003327309
+QLOG_PHASE,after=workers_exited,coord_hwm_mb=79.6,coord_rss_mb=37.3,unix_ms=1792003327326
+    auditor: VK derived from public parameters in 11.9s
+QLOG_PHASE,after=audit_done,coord_hwm_mb=4448.2,coord_rss_mb=72.6,unix_ms=1792003339238
+QLOG_PHASE,after=before_query_phase,coord_hwm_mb=4448.2,coord_rss_mb=72.6,unix_ms=1792003339238
+QLOG_QUERY,at_leaf=1,prove_ms=131.078,witness_ms=0.065,verify_ms=14.348,proof_bytes=547079,answer=1
+QLOG_QUERY,at_leaf=2,prove_ms=119.510,witness_ms=0.070,verify_ms=13.601,proof_bytes=547015,answer=1
+QLOG_QUERY,at_leaf=3,prove_ms=119.493,witness_ms=0.060,verify_ms=13.560,proof_bytes=547034,answer=3
+QLOG_QUERY,at_leaf=4,prove_ms=124.662,witness_ms=0.068,verify_ms=13.552,proof_bytes=546873,answer=1
+QLOG_PHASE,after=queries_done,coord_hwm_mb=80.3,coord_rss_mb=74.6,unix_ms=1792003339966
+results -> /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/results/m0ab_cmforest2_B.csv

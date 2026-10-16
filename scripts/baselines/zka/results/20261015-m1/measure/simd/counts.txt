@@ -1,0 +1,3 @@
+target/exp_compose md5=38c33b46bc13 insns=1408534 %ymm=121 %zmm=0 %xmm=92486 vpmuludq_ymm=0 plain_ymm_grep=17759
+target-avx2/exp_compose md5=beced0ce5acb insns=1412135 %ymm=86093 %zmm=0 %xmm=58024 vpmuludq_ymm=7535 plain_ymm_grep=104207
+.risc0/r0vm md5=9e13aa14c059 insns=6888627 %ymm=5065 %zmm=0 %xmm=648579 vpmuludq_ymm=0 plain_ymm_grep=5213

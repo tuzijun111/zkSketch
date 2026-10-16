@@ -1,0 +1,8 @@
+### 2026-10-13T21:17:42+08:00 cmd: RESULTS=/home/binbin/zkSketch/results/six/batchscale-20261013/m8192 SIX_M=8192 SIX_T=2 SIX_GK_CAP=2048 GATE_WAIT_S=0 SIX_ZKA_ROOTS=noroot SIX_ZKA_CM_REF=0 EXP_VERIFY_REPEATS=5 scripts/baselines/zka/six/run_zks.sh gk
+### MemAvailable 436.3 GiB load 9.21 22.90 16.97
+run_zks.sh: 1 run(s) -> /home/binbin/zkSketch/results/six/batchscale-20261013/m8192 (N=16384 m=8192 t=2 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+gate failed for gk: busy:load1=9.21; -- running anyway, row marked
+== zkSketch gk (21:17:42); log /home/binbin/zkSketch/results/six/batchscale-20261013/m8192/six_zksketch_gk.log
+done gk rc=0 wall=808s
+run_zks.sh: all 1 run(s) ok -> /home/binbin/zkSketch/results/six/batchscale-20261013/m8192/six_zksketch_*
+### 2026-10-13T21:31:10+08:00 rc=0

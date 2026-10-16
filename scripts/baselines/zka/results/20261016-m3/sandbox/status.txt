@@ -1,0 +1,17 @@
+sorted cap 384 m 128 exit 0
+sorted cap 768 m 256 exit 0
+sorted cap 768 m 512 exit 0
+sorted cap 384 m 1024 exit 0
+sorted cap 768 m 1024 exit 0
+stable cap 384 m 128 exit 0
+stable cap 768 m 256 exit 0
+stable cap 768 m 512 exit 0
+stable cap 384 m 1024 exit 0
+stable cap 768 m 1024 exit 0
+ 20:10:08 up 16 days,  9:57, 23 users,  load average: 2.21, 5.07, 4.25
+prove stable cap 768 m 512 exit 0
+ 20:10:16 up 16 days,  9:57, 23 users,  load average: 6.94, 5.99, 4.55
+prove stable cap 384 m 128 exit 0
+ 20:10:19 up 16 days,  9:57, 23 users,  load average: 6.94, 5.99, 4.55
+prove sorted cap 384 m 128 exit 0
+DONE

@@ -1,0 +1,17 @@
+commit,pcs,logup_mask,binding,statement,commit_mode,family,variant,site,level,geometry,m,tables,max_log_h,largest,max_rows_unpadded,max_fill,sum_rows_padded,fits_nonhiding,fits_hiding,min_headroom_rows_hiding,m_cross_hiding,m_cross_table,consistent,probe_s,hwm_mb,proof_check
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2,gk_bandmerge2,leaf,cap=384 s=51,128,8,18,alu+range,212491,0.8106,591872,true,true,16564725,-,-,true,0.63,319,-
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2,gk_bandmerge2,leaf,cap=768 s=51,256,8,19,alu+range,467269,0.8912,1182720,true,true,16309947,-,-,true,1.55,731,-
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2,gk_bandmerge2,leaf,cap=768 s=51,512,8,20,alu+range,634878,0.6055,2233344,true,true,16142338,-,-,true,2.16,932,-
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2,gk_bandmerge2,leaf,cap=384 s=51,1024,8,20,alu+range,693534,0.6614,2362368,true,true,16083682,-,-,true,2.46,1011,-
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2,gk_bandmerge2,leaf,cap=768 s=51,1024,8,20,alu+range,885630,0.8446,2364416,true,true,15891586,-,-,true,3.32,1275,-
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2_stable,gk_bandmerge2_stable,leaf,cap=384 s=51,128,8,17,alu,74116,0.5655,231424,true,true,16703100,-,-,true,0.18,107,-
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2_stable,gk_bandmerge2_stable,leaf,cap=768 s=51,256,8,18,alu,160259,0.6113,461824,true,true,16616957,-,-,true,0.45,238,-
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2_stable,gk_bandmerge2_stable,leaf,cap=768 s=51,512,8,18,alu,213635,0.8150,529408,true,true,16563581,-,-,true,0.60,300,-
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2_stable,gk_bandmerge2_stable,leaf,cap=384 s=51,1024,8,18,alu,230851,0.8806,658432,true,true,16546365,-,-,true,0.67,328,-
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2_stable,gk_bandmerge2_stable,leaf,cap=768 s=51,1024,8,19,alu,296323,0.5652,922624,true,true,16480893,-,-,true,0.91,428,-
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2_stable,gk_bandmerge2_stable,leaf,cap=768 s=51,512,8,18,alu,213635,0.8150,529408,true,true,16563581,-,-,true,0.60,301,ok
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2_stable,gk_bandmerge2_stable,leaf,cap=384 s=51,128,8,17,alu,74116,0.5655,231424,true,true,16703100,-,-,true,0.20,107,ok
+4f4d7c0,hiding,on,semantic,interval,hiding,gk,bandmerge2,gk_bandmerge2,leaf,cap=384 s=51,128,8,18,alu+range,212491,0.8106,591872,true,true,16564725,-,-,true,0.61,318,ok
+62c20e2,hiding,on,semantic,interval,hiding,gk,bandmerge2_stable,gk_bandmerge2_stable,leaf,cap=768 s=51,512,8,18,alu,218691,0.8342,529408,true,true,16558525,-,-,true,0.63,311,-
+62c20e2,hiding,on,semantic,interval,hiding,gk,bandmerge2_stable,gk_bandmerge2_stable,leaf,cap=768 s=51,1024,8,19,alu,302787,0.5775,922624,true,true,16474429,-,-,true,0.96,434,-
+62c20e2,hiding,on,semantic,interval,hiding,gk,bandmerge2_stable,gk_bandmerge2_stable,leaf,cap=384 s=51,128,8,17,alu,76036,0.5801,231424,true,true,16701180,-,-,true,0.19,109,-

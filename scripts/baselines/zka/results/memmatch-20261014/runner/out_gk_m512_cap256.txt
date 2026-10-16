@@ -1,0 +1,8 @@
+start 2026-10-14T13:37:16+08:00 tag=gk m=512 T=2 cap=256 dir=/home/binbin/zkSketch/results/six/memmatch-20261014/gk-m512-cap256 load="17.80 26.12 17.13" memavail_gib=427.2
+run_zks.sh: 1 run(s) -> /home/binbin/zkSketch/results/six/memmatch-20261014/gk-m512-cap256 (N=1024 m=512 t=2 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+gate failed for gk: busy:load1=17.80; -- running anyway, row marked
+== zkSketch gk (13:37:16); log /home/binbin/zkSketch/results/six/memmatch-20261014/gk-m512-cap256/six_zksketch_gk.log
+done gk rc=0 wall=72s
+run_zks.sh: all 1 run(s) ok -> /home/binbin/zkSketch/results/six/memmatch-20261014/gk-m512-cap256/six_zksketch_*
+end 2026-10-14T13:38:28+08:00 rc=0
+RSSTREE,zks_gk,main_peak_rss_mb=8665.4,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=8572.7,wall_s=72.3,rc=0

@@ -1,0 +1,8 @@
+start 2026-10-14T14:19:56+08:00 tag=cm m=16384 T=1 cap=2048 dir=/home/binbin/zkSketch/results/six/memmatch-20261014/cm-m16384-t1 load="40.10 29.88 26.76" memavail_gib=430.0
+run_zks.sh: 1 run(s) -> /home/binbin/zkSketch/results/six/memmatch-20261014/cm-m16384-t1 (N=16384 m=16384 t=1 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+gate failed for cm: busy:load1=40.10; -- running anyway, row marked
+== zkSketch cm (14:19:56); log /home/binbin/zkSketch/results/six/memmatch-20261014/cm-m16384-t1/six_zksketch_cm.log
+done cm rc=0 wall=255s
+run_zks.sh: all 1 run(s) ok -> /home/binbin/zkSketch/results/six/memmatch-20261014/cm-m16384-t1/six_zksketch_*
+end 2026-10-14T14:24:11+08:00 rc=0
+RSSTREE,zks_cm,main_peak_rss_mb=58989.9,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=58909.8,wall_s=254.9,rc=0

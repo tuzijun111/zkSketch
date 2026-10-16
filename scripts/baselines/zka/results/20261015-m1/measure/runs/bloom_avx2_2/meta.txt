@@ -1,0 +1,6 @@
+label=bloom_avx2_2 tag=bloom m=256 T=8 cap=2048 build=avx2
+start=2026-10-15T15:30:53+08:00 load="5.15 14.91 25.74" memavail_gib=430.2
+head=235c87be2 dirty=0 real_bin=/home/binbin/six-repro-verify/round-shared/home-r3cold/target-avx2/release/examples/exp_compose real_bin_md5=beced0ce5acb wrapper_md5=550d0ce65567
+
+end=2026-10-15T15:32:50+08:00 rc=0 load="16.83 15.50 24.65"
+WINDOW n=23 others_mean=4.04 others_max=4.23 load1_mean=10.0 load1_max=15.2 me_mean=12.4

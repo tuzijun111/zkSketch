@@ -1,0 +1,1 @@
+gk_bm2: GK CAPACITY OVERFLOW at epoch 0: GK capacity overflow: 32 survivors > capacity 8 at N_t = 64 (batch 64); the step would lose a survivor, which is a hard error: declare a larger capacity (s' >= 2s·ln(N/s+2)+2); a failed run (exit 3), no row is written

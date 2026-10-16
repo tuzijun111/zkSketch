@@ -1,0 +1,8 @@
+start 2026-10-14T13:30:52+08:00 tag=kmv m=8192 T=2 cap=2048 dir=/home/binbin/zkSketch/results/six/memmatch-20261014/kmv-m8192 load="20.37 19.99 10.19" memavail_gib=431.1
+run_zks.sh: 1 run(s) -> /home/binbin/zkSketch/results/six/memmatch-20261014/kmv-m8192 (N=16384 m=8192 t=2 cores=32; GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 GATE_WAIT_S=0 (cpus=64))
+gate failed for kmv: busy:load1=20.37; -- running anyway, row marked
+== zkSketch kmv (13:30:52); log /home/binbin/zkSketch/results/six/memmatch-20261014/kmv-m8192/six_zksketch_kmv.log
+done kmv rc=0 wall=70s
+run_zks.sh: all 1 run(s) ok -> /home/binbin/zkSketch/results/six/memmatch-20261014/kmv-m8192/six_zksketch_*
+end 2026-10-14T13:32:02+08:00 rc=0
+RSSTREE,zks_kmv,main_peak_rss_mb=8433.4,r0vm_peak_rss_mb=0.0,desc_peak_rss_mb=8404.7,wall_s=69.4,rc=0

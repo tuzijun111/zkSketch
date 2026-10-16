@@ -1,0 +1,6 @@
+label=gk768x4_avx2_1 tag=gk m=512 T=4 cap=768 build=avx2
+start=2026-10-15T16:13:57+08:00 load="13.45 17.60 21.62" memavail_gib=434.5
+head=235c87be2 dirty=0 real_bin=/home/binbin/six-repro-verify/round-shared/home-r3cold/target-avx2/release/examples/exp_compose real_bin_md5=beced0ce5acb wrapper_md5=e73d53b0fe4d
+
+end=2026-10-15T16:15:14+08:00 rc=0 load="20.70 18.17 21.46"
+WINDOW n=15 others_mean=1.16 others_max=1.37 load1_mean=13.2 load1_max=19.6 me_mean=14.5

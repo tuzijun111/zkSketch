@@ -1,0 +1,2 @@
+tag,family,key_mode,family_env,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,main_peak_rss_mb,desc_peak_rss_mb,commit,zks_head,features,bin_md5
+kmv,kmv,first,EXP_KMV_K=1024,2026-10-14T14:16:50+08:00,busy:load1=15.73;,0,15.73,NA,27.55,66,0,15307.7,15189.0,hiding,b391842af,default:pcs=hiding;logup_mask=on,792368fe2c7a

@@ -1,0 +1,11 @@
+QLOG_PHASE,after=auditor_new,coord_hwm_mb=87.0,coord_rss_mb=87.0,unix_ms=1792002995425
+QLOG_PHASE,after=root_received,coord_hwm_mb=92.0,coord_rss_mb=92.0,unix_ms=1792003032202
+    auditor: VK derived from public parameters in 10.0s
+QLOG_PHASE,after=audit_done,coord_hwm_mb=3011.4,coord_rss_mb=242.0,unix_ms=1792003042259
+QLOG_PHASE,after=before_query_phase,coord_hwm_mb=3011.4,coord_rss_mb=242.2,unix_ms=1792003042376
+QLOG_QUERY,at_leaf=1,prove_ms=155.201,witness_ms=0.177,verify_ms=14.104,proof_bytes=557804,answer=1
+QLOG_QUERY,at_leaf=2,prove_ms=148.278,witness_ms=0.140,verify_ms=13.968,proof_bytes=557910,answer=1
+QLOG_QUERY,at_leaf=3,prove_ms=152.848,witness_ms=0.147,verify_ms=14.014,proof_bytes=557942,answer=1
+QLOG_QUERY,at_leaf=4,prove_ms=146.371,witness_ms=0.135,verify_ms=14.052,proof_bytes=557789,answer=1
+QLOG_PHASE,after=queries_done,coord_hwm_mb=3152.5,coord_rss_mb=1131.9,unix_ms=1792003068808
+results -> /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/results/m0ab_bloom_A.csv

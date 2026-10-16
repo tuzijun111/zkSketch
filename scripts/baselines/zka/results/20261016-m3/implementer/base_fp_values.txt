@@ -1,0 +1,9 @@
+BASE fingerprints: [
+    0x7479190eeb29aadb,
+    0xa98db5824b843597,
+    0xf0c4b6eccad46be4,
+    0xde9630a81eb5b895,
+    0xb3ea443548366dc0,
+    0x6bd7834408ab6d20,
+    0x71eb2dace5dfd04d,
+    0xb009e636ad224b83,

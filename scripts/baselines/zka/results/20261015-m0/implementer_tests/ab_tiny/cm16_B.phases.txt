@@ -1,0 +1,25 @@
+QLOG_PHASE,after=auditor_new,coord_hwm_mb=77.9,coord_rss_mb=26.8,unix_ms=1792004648482
+QLOG_WORKER,first_index=1,merge_cache=hits=7;misses=8,retain_prep=false,trim=true
+QLOG_PHASE,after=root_received,coord_hwm_mb=77.9,coord_rss_mb=41.1,unix_ms=1792004857990
+QLOG_PHASE,after=workers_exited,coord_hwm_mb=77.9,coord_rss_mb=41.3,unix_ms=1792004858002
+    auditor: VK derived from public parameters in 21.6s
+QLOG_PHASE,after=audit_done,coord_hwm_mb=4468.6,coord_rss_mb=103.5,unix_ms=1792004879622
+QLOG_PHASE,after=before_query_phase,coord_hwm_mb=4468.6,coord_rss_mb=103.5,unix_ms=1792004879622
+QLOG_QUERY,at_leaf=1,prove_ms=134.736,witness_ms=0.062,verify_ms=14.583,proof_bytes=547244,answer=1
+QLOG_QUERY,at_leaf=2,prove_ms=134.261,witness_ms=0.070,verify_ms=14.813,proof_bytes=547068,answer=1
+QLOG_QUERY,at_leaf=3,prove_ms=114.052,witness_ms=0.070,verify_ms=14.364,proof_bytes=547104,answer=3
+QLOG_QUERY,at_leaf=4,prove_ms=104.634,witness_ms=0.068,verify_ms=13.626,proof_bytes=547399,answer=1
+QLOG_QUERY,at_leaf=5,prove_ms=107.378,witness_ms=0.055,verify_ms=13.671,proof_bytes=547029,answer=4
+QLOG_QUERY,at_leaf=6,prove_ms=106.897,witness_ms=0.072,verify_ms=13.646,proof_bytes=547129,answer=5
+QLOG_QUERY,at_leaf=7,prove_ms=106.726,witness_ms=0.062,verify_ms=13.619,proof_bytes=547102,answer=5
+QLOG_QUERY,at_leaf=8,prove_ms=109.613,witness_ms=0.073,verify_ms=13.634,proof_bytes=547067,answer=13
+QLOG_QUERY,at_leaf=9,prove_ms=104.838,witness_ms=0.081,verify_ms=13.580,proof_bytes=547250,answer=16
+QLOG_QUERY,at_leaf=10,prove_ms=106.172,witness_ms=0.052,verify_ms=13.559,proof_bytes=547510,answer=18
+QLOG_QUERY,at_leaf=11,prove_ms=104.115,witness_ms=0.063,verify_ms=13.606,proof_bytes=547092,answer=4
+QLOG_QUERY,at_leaf=12,prove_ms=113.620,witness_ms=0.063,verify_ms=13.701,proof_bytes=547251,answer=6
+QLOG_QUERY,at_leaf=13,prove_ms=102.257,witness_ms=0.073,verify_ms=13.604,proof_bytes=546990,answer=7
+QLOG_QUERY,at_leaf=14,prove_ms=106.835,witness_ms=0.061,verify_ms=13.592,proof_bytes=547145,answer=10
+QLOG_QUERY,at_leaf=15,prove_ms=104.811,witness_ms=0.063,verify_ms=13.612,proof_bytes=547138,answer=8
+QLOG_QUERY,at_leaf=16,prove_ms=111.769,witness_ms=0.065,verify_ms=13.627,proof_bytes=546878,answer=10
+QLOG_PHASE,after=queries_done,coord_hwm_mb=111.0,coord_rss_mb=107.0,unix_ms=1792004882313
+results -> /home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/results/m0ab_cm16_B.csv

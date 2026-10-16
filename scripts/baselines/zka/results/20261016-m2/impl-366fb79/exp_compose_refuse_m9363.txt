@@ -1,0 +1,2 @@
+bloom: variant=packed (EXP_BLOOM_VARIANT; leaf zksketch::sketch::bloom_packed, family 7)
+bad packed Bloom shape (EXP_BLOOM_K=7, EXP_BLOOM_LOGW=14, m=9363): k·batch = 65541 must be below 2^16 (16-bit timestamps; batch ≤ 9362 at k = 7)

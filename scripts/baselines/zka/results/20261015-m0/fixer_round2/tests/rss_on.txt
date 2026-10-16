@@ -1,0 +1,43 @@
+# 2026-10-15T04:59:31+08:00 tag=rss_on switches=on target=test:m0_rss_trim load=2.34 2.86 7.03
+# head=f69965672200b6cf940f1eb89a7c1c80058eed13 tree=fcc5047e4719ba8d7087b9f91eee7412025b9270 index_tree=fcc5047e4719ba8d7087b9f91eee7412025b9270 porcelain_lines=0 (0 = the committed tree)
+# filters: --nocapture
+...
+...
+...
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running tests/m0_rss_trim.rs (target/release/deps/m0_rss_trim-8dc53967d1f6be06)
+running 1 test
+M0RSS bare+trim t=1 merges=0 rss_mb=16 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=2 merges=1 rss_mb=53 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=3 merges=0 rss_mb=54 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=4 merges=2 rss_mb=73 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=5 merges=0 rss_mb=73 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=6 merges=1 rss_mb=82 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=7 merges=0 rss_mb=82 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim t=8 merges=3 rss_mb=84 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+trim: post-first-leaf 16 MiB, worst later +68 MiB
+M0RSS bare+cache+trim t=1 merges=0 rss_mb=82 peaks_hold_prover_data=false holds_prover_data=false cache_entries=0
+M0RSS bare+cache+trim t=2 merges=1 rss_mb=669 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim t=3 merges=0 rss_mb=669 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim t=4 merges=2 rss_mb=674 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim t=5 merges=0 rss_mb=674 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim t=6 merges=1 rss_mb=678 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim t=7 merges=0 rss_mb=678 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+test rss_between_proofs_returns_near_the_first_leaf_level has been running for over 60 seconds
+M0RSS bare+cache+trim t=8 merges=3 rss_mb=689 peaks_hold_prover_data=false holds_prover_data=true cache_entries=1
+M0RSS bare+cache+trim: post-first-leaf 82 MiB, one entry +587 MiB (t=2), worst later +20 MiB over post-first-leaf + entry
+M0RSS retain+notrim t=1 merges=0 rss_mb=374 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=2 merges=1 rss_mb=1680 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=3 merges=0 rss_mb=1680 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=4 merges=2 rss_mb=1496 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=5 merges=0 rss_mb=1496 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=6 merges=1 rss_mb=1825 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=7 merges=0 rss_mb=1825 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim t=8 merges=3 rss_mb=1849 peaks_hold_prover_data=true holds_prover_data=true cache_entries=0
+M0RSS retain+notrim: post-first-leaf 374 MiB, worst later +1475 MiB
+test rss_between_proofs_returns_near_the_first_leaf_level ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 102.87s
+real	1m43.021s
+user	69m22.511s
+sys	2m30.529s
+exit=0

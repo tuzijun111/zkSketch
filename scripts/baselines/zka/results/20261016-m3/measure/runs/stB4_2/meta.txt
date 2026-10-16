@@ -1,0 +1,6 @@
+label=stB4_2 tag=gk m=512 T=4 cap=768 rounds=stable build=scalar
+start=2026-10-16T01:03:47+08:00 load="13.05 20.48 21.86" memavail_gib=428.7
+head=62c20e284 dirty=0 real_bin=/home/binbin/six-repro-verify/round-shared/home-r3cold/zkSketch/target/release/examples/exp_compose real_bin_md5=cfdce387e772 wrapper_md5=ce575fc3beb1
+
+end=2026-10-16T01:04:56+08:00 rc=0 load="29.60 23.94 22.97"
+WINDOW n=14 others_mean=1.11 others_max=1.44 load1_mean=23.6 load1_max=29.6 me_mean=22.1

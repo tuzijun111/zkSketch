@@ -1,0 +1,67 @@
+ANSCHECK m=1024 T=32 stream=32768 keys distinct_inserted=16308 filter_ones=72197 of 114688
+  leaf=  1 key=3707614330 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  2 key=3335831687 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  3 key=1678145471 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  4 key=2015699946 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  5 key= 698336668 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  6 key=1660139944 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  7 key=2723383943 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  8 key=3979502742 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf=  9 key=3693447467 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 10 key=3127122676 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 11 key=1605112780 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 12 key= 833518674 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 13 key=1234954299 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 14 key=3637467956 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 15 key=3115843992 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 16 key= 355141942 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 17 key=1627419582 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 18 key=3133910143 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 19 key=1790817213 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 20 key=3289352724 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 21 key=3690922666 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 22 key=3460731962 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 23 key= 981801772 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 24 key=1013920287 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 25 key=3874874537 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 26 key=1812444598 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 27 key=1289964548 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 28 key=1264462215 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 29 key=2245070624 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 30 key= 543227345 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 31 key=4262966691 inserted=1 omc=1 packed=1 proven=1 ok
+  leaf= 32 key=2558073735 inserted=1 omc=1 packed=1 proven=1 ok
+SUMMARY packed_bloom_m1024_T32/out/six_zksketch_bloom.log: 32/32 proven answers == native bloom_omc == native packed; native ones=32, zeros=0
+  leaf=  1 key=4010659695 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  2 key=3455829011 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  3 key=  62638848 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  4 key=2391383811 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  5 key=2763294837 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  6 key= 141879795 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  7 key= 267936559 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  8 key=1608305708 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf=  9 key=1659801083 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 10 key=2203052854 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 11 key=3066784800 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 12 key=1132162917 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 13 key=4165967065 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 14 key=1142266537 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 15 key=4036839598 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 16 key=2322009342 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 17 key=2882819632 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 18 key= 511840882 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 19 key=2575028165 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 20 key=1827855636 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 21 key=2036805622 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 22 key=3131076985 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 23 key=2157809411 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 24 key=2817436444 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 25 key=1223689181 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 26 key=4092187246 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 27 key=1970729522 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 28 key=2087599059 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 29 key=2241713321 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 30 key= 313084474 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 31 key=1786645465 inserted=0 omc=0 packed=0 proven=0 ok
+  leaf= 32 key= 818546436 inserted=0 omc=0 packed=0 proven=0 ok
+SUMMARY packed_absent_m1024_T32/out/six_zksketch_bloom_absent.log: 32/32 proven answers == native bloom_omc == native packed; native ones=0, zeros=32

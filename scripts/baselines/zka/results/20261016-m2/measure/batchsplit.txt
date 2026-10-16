@@ -1,0 +1,2 @@
+packed_bloom_m1024_T32: worker phase 331.4s; batch 1 164.4s; batch 2 161.9s; cross-batch merge + root 5.0s | CSV total 331.3s = leaves 193.0s (6.03/leaf) + merges 132.6s (4.28/merge) + other 5.8s; formula per batch 163.5s
+packed_absent_m1024_T32: worker phase 333.8s; batch 1 163.4s; batch 2 165.9s; cross-batch merge + root 4.5s | CSV total 333.7s = leaves 194.6s (6.08/leaf) + merges 133.3s (4.30/merge) + other 5.9s; formula per batch 164.7s

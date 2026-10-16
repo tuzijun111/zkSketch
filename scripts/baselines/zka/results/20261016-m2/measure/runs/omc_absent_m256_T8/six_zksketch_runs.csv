@@ -1,0 +1,2 @@
+tag,family,key_mode,family_env,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,main_peak_rss_mb,desc_peak_rss_mb,commit,zks_head,features,bin_md5
+bloom_absent,bloom,absent,EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc,2026-10-16T06:14:51+08:00,busy:load1=10.78;,0,10.78,NA,23.85,222,0,7801.7,8171.1,hiding,63157ed0b,default:pcs=hiding;logup_mask=on,f03e752f6a9e
