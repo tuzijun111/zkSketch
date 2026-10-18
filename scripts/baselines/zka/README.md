@@ -17,7 +17,8 @@ Scripts run from any directory; `common.sh` resolves locations.
 
 For the six-sketch comparison (zkSketch vs zk-Analytics on CM, HLL, SS, GK, Bloom,
 KMV) use the single entry point `six/run_all.sh` (`check`, `build`, `quick`, `full`);
-see "Six-sketch comparison (small scale)" below and the top-level README. Its
+see "Six-sketch comparison (small scale)" below, the top-level README and
+`docs/six_sketch_comparison.md` (the full guide). Its
 scripts write to `results/six/` at the repository root, never into `results/` here.
 
 | Variable | Default | Meaning |
@@ -839,7 +840,7 @@ zkSketch's algorithm in their pipeline". The other matched-rule guests (`ss_mg/`
   | Count-Min | their `aggr_cm` / `querier-guest-cm`, 3 x 1024, `CM_TOPK_SLOTS=1` | `cm` (omc leaf), `EXP_D=3 EXP_W=1024` | point count of the heaviest key of the queried prefix (their `Estimate` target rule; zkSketch `EXP_QUERY_KEY_MODE=hot`; ties to the smaller key on both sides; the same key on both sides at each n: 3,011,223,745 for n <= 5, 3,780,053,395 for n >= 6) |
   | HyperLogLog | `hll/` †, b = 14 | `hll` (omc), `EXP_HLL_B=14` | cardinality |
   | SpaceSaving / Misra-Gries | `spacesaving/` †, SpaceSaving s = 1,024 per epoch, sum-and-truncate merge | `ss` (certified MG), `EXP_SS_CAP=1024` (MG with s counters ~ SpaceSaving with s+1) | top-1: theirs `topk --limit 1` (key, count, error); ours the top-1 mass (`c = 1`, count only, no key). This is the closest pair the two query sets allow |
-  | Greenwald-Khanna | `gk_matched/` † (default, `SIX_ZKA_GK=matched`): zkSketch's band-merge rule, `--capacity $SIX_GK_CAP --s 51 --m-sub $SIX_GK_MSUB` (= 2048 / 51 / 2048: one `apply_batch2` step per epoch), state carried across epochs, guest implementation `tuned`. Reference (`SIX_ZKA_GK=textbook`, and the committed rows): `gk/` †, textbook GK, eps = 1/51, COMPRESS every 25 records | `gk` (band-merge), `EXP_GK_CAP=2048 EXP_GK_S=51 EXP_GK_ROUNDS=$SIX_GK_ROUNDS` (`SIX_GK_ROUNDS`, default `stable`: the M3 stable-compaction leaf, CSV `variant` `gk_bandmerge2_stable`, `gk_rounds` `stable`; `sorted` = the pre-M3 leaf byte for byte, `variant` `gk_bandmerge2`, which every zkSketch GK row recorded before M3, 2026-10-15, used) | rank of the same value on both sides: the most frequent 21-bit value of the prefix (zkSketch `EXP_QUERY_KEY_MODE=hot`; 1,810,625 for n <= 5, 985,491 for n >= 6), passed to theirs as `--rank-value`; the matched port answers with zkSketch's decoder estimator on the latest state |
+  | Greenwald-Khanna | `gk_matched/` † (default, `SIX_ZKA_GK=matched`): zkSketch's band-merge rule, `--capacity $SIX_GK_CAP --s 51 --m-sub $SIX_GK_MSUB` (= 2048 / 51 / 2048: one `apply_batch2` step per epoch), state carried across epochs, guest implementation `literal` (`SIX_ZKA_GK_IMPL`; `tuned` / `fast` / `fixed_linear` are sensitivity rows). Reference (`SIX_ZKA_GK=textbook`, and the committed rows): `gk/` †, textbook GK, eps = 1/51, COMPRESS every 25 records | `gk` (band-merge), `EXP_GK_CAP=2048 EXP_GK_S=51 EXP_GK_ROUNDS=$SIX_GK_ROUNDS` (`SIX_GK_ROUNDS`, default `stable`: the M3 stable-compaction leaf, CSV `variant` `gk_bandmerge2_stable`, `gk_rounds` `stable`; `sorted` = the pre-M3 leaf byte for byte, `variant` `gk_bandmerge2`, which every zkSketch GK row recorded before M3, 2026-10-15, used) | rank of the same value on both sides: the most frequent 21-bit value of the prefix (zkSketch `EXP_QUERY_KEY_MODE=hot`; 1,810,625 for n <= 5, 985,491 for n >= 6), passed to theirs as `--rank-value`; the matched port answers with zkSketch's decoder estimator on the latest state |
   | Bloom (partitioned) | `bloom/` †, k = 7 x W = 2^14 | `bloom`, `EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14` | membership of the same two keys per n: an inserted key (the first record of batch n; zkSketch `first`, theirs `--probe first`) and an absent key (zkSketch `EXP_QUERY_KEY_MODE=absent`, a second zkSketch run; the key it drew is passed to theirs as `--probe key:<k>`) |
   | KMV / bottom-k | `kmv/` †, k = 1,024, 64-bit hash | `kmv`, `EXP_KMV_K=1024`, 27-bit hash | distinct count |
 
@@ -1078,7 +1079,7 @@ What the scripts do with them:
 ### Running
 
 One entry point, from the repository root (prerequisites, times and outputs: the
-top-level README, "Reproducing the zkSketch vs zk-Analytics comparison"):
+top-level README, "Experiment 1", and the full guide `docs/six_sketch_comparison.md`):
 
 ```bash
 scripts/baselines/zka/six/run_all.sh check   # prerequisites; exit 1 + the fix if anything blocking is missing
@@ -1963,7 +1964,7 @@ reference (`SIX_ZKA_GK=textbook`). Full detail: `gk_matched/README.md`.
 | | zkSketch (`exp_compose`, GK forest) | zk-Analytics side (`gk_matched/`) |
 |---|---|---|
 | records | AOL `key & 0x1FFFFF`, B per paper batch | the same records, B per epoch, as their Events (`key_id`, `value`, `ts`), batches of 8 |
-| GK function | `apply_batch2` once per m_sub-record leaf, from the previous leaf's state (`GkbParams { capacity, m_sub, s = 51 }`) | the same `apply_batch2` chain: B / m_sub steps per epoch from the carried state (default `tuned`: `gk_matched/core` `apply_epoch_tuned`; `fast` / `fixed_linear` / `literal`: `gk_bm2/core`, unchanged) |
+| GK function | `apply_batch2` once per m_sub-record leaf, from the previous leaf's state (`GkbParams { capacity, m_sub, s = 51 }`) | the same `apply_batch2` chain: B / m_sub steps per epoch from the carried state (default `literal`, zkSketch's `apply_batch2` as written, since 2026-10-15; `tuned`: `gk_matched/core` `apply_epoch_tuned`; `fast` / `fixed_linear` / `literal`: `gk_bm2/core`, unchanged) |
 | state carried | leaf boundary commitments, chained by the forest | `state_commit` in their epoch chain link; the next epoch's guest checks its input state against it |
 | capacity overflow | the leaf circuit refuses to prove | the guest panics (no receipt); the driver exits 3 first |
 | query | decoder proof: rank(v) by `native_estimate`, midpoint of [r_min, r_max] | query guest: their chain-link check, the latest state opened against the last link, the same estimator |
@@ -2088,7 +2089,7 @@ Event deserialisation plus, from epoch 1 on, the carried state's words (see Cave
 ### Caveats
 
 - **Their pipeline, our port (†).** zk-Analytics ships no rank-guaranteed quantile summary;
-  the GK update is zkSketch's (`tuned` here, the other implementations from `gk_bm2/core`),
+  the GK update is zkSketch's (`literal` by default, `tuned` in the M1 measurements, the other implementations from `gk_bm2/core`),
   the rest is their code or pattern.
 - **The carried state departs from their architecture.** Their aggregators build each
   epoch's summary fresh and independently (one chain per aggregator; epochs can be

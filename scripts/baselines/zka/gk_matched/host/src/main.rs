@@ -22,8 +22,9 @@
 //                   B / M successive apply_batch2 steps. B must be a multiple of M, so the
 //                   steps are exactly zkSketch's leaves)
 //   --s S          (default 51; EXP_GK_S)
-//   --impl tuned|fast|fixed_linear|literal   (default tuned, the steelman; the guest's
-//                   implementation of the one transition: tuned = ../core apply_epoch_tuned,
+//   --impl tuned|fast|fixed_linear|literal   (default literal: zkSketch's apply_batch2 as
+//                   written, the baseline; the guest's implementation of the one transition:
+//                   tuned = ../core apply_epoch_tuned, our rewrite, sensitivity only;
 //                   the others ../../gk_bm2/README.md; same state, different cycles)
 // A capacity overflow is a HARD ERROR: the native reference detects it first and the
 // driver exits 3 without running a guest; the guest itself also panics on one.

@@ -57,6 +57,10 @@
 #                  KMV noroot at epoch 0, the GK query and the Bloom absent-key query at n = 1)
 #   SIX_ALLOW_STALE=1  let quick/full use binaries older than their sources (refused by default;
 #                  `run_all.sh build` refreshes them)
+#   SIX_GK_ROUNDS  stable (default) | sorted: zkSketch's GK leaf circuit (six_common.sh); honoured by quick/full
+#   SIX_BLOOM_VARIANT  packed (default) | omc: zkSketch's Bloom leaf (six_common.sh); honoured by quick/full
+#   EXP_VERIFY_REPEATS, EXP_FOREST_RETAIN_PREP, EXP_MALLOC_TRIM, EXP_EXIT_BEFORE_AUDIT, EXP_MERGE_CACHE,
+#                  EXP_MERGE_CACHE_ENTRIES  passed through to the zkSketch runs (run_zks.sh)
 # quick and full use fixed run shapes: SIX_M, SIX_T, SIX_N, SIX_GK_CAP, SIX_GK_MSUB and SIX_QNS are
 # ignored here (they apply to the individual six/*.sh scripts).
 set -uo pipefail
@@ -482,6 +486,7 @@ cmd_full() {
     shift
   done
   load_shape full
+  if (( ! dry )) && [[ -n $from ]]; then die "--from-logs / --zks-prefix apply to --dry-run only (the real run reads its own zkSketch logs)"; fi
   if (( dry )); then
     local src jobs
     if [[ -n $from ]]; then

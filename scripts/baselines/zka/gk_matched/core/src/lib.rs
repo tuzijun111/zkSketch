@@ -38,8 +38,9 @@
 //! against zkSketch's native `apply_batch2` chain tuple by tuple and against the
 //! commitments zkSketch's GK leaf circuit exposes (`../host`, `--mode check|certify`).
 //!
-//! Four implementations of the one transition are selectable (`GkmImpl`). `Tuned`
-//! (the default, the steelman) is defined here: `Fast`'s data-dependent schedule run as
+//! Four implementations of the one transition are selectable (`GkmImpl`). The default
+//! is `Literal` (zkSketch's code statement for statement: the baseline, since
+//! 2026-10-15). `Tuned` (our rewrite, a sensitivity row) is defined here: `Fast`'s data-dependent schedule run as
 //! one loop over the epoch's steps, without `Fast`'s per-step fixed costs (see
 //! [`apply_epoch_tuned`]). `Fast` (a data-dependent schedule a zkVM may use, one
 //! `apply_batch2_fast` call per step), `FixedLinear` (zkSketch's fixed schedule,
@@ -278,8 +279,9 @@ pub enum GkmImpl {
     Literal,
     /// [`apply_epoch_tuned`]: `Fast`'s schedule as one loop over the epoch's steps (the
     /// compact active prefix carried from step to step, the canonical check once per
-    /// epoch, a radix sort sized to the batch, buffers allocated once). The default: the
-    /// efficient implementation a zkVM programmer would write, the steelman.
+    /// epoch, a radix sort sized to the batch, buffers allocated once). Our rewrite with
+    /// zkSketch's circuit-design insight (compact survivors instead of re-sorting): a
+    /// sensitivity row, not the baseline (`Literal` is the default).
     Tuned,
 }
 

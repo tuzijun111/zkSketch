@@ -1,10 +1,10 @@
 //! **Streaming proof-composition comparison** — the three §Streaming-Proof-
 //! Composition modes (**per-batch chain**, **recursive linear chain**,
-//! **streaming forest**) over four sketch families, each pinned to one leaf
-//! variant: cm/omc, hll/omc, ss/certified, gk/bandmerge2 — plus the Bloom
-//! filter (bloom/omc, opt-in via `EXP_COMPOSE_FAMILY=bloom`, BabyBear only)
-//! and the KMV / bottom-`k` distinct-count sketch (kmv, opt-in via
-//! `EXP_COMPOSE_FAMILY=kmv`, BabyBear only).
+//! **streaming forest**) over six sketch families, each pinned to one leaf
+//! variant: cm/omc, hll/omc, ss/certified, gk/bandmerge2 (stable compaction),
+//! plus the Bloom filter (bloom/packed by default, opt-in via
+//! `EXP_COMPOSE_FAMILY=bloom`, BabyBear only) and the KMV / bottom-`k`
+//! distinct-count sketch (kmv, opt-in via `EXP_COMPOSE_FAMILY=kmv`, BabyBear only).
 //!
 //! Fixes a total stream size `N`, derives `t = ⌈N/m⌉` leaves per batch size `m`,
 //! draws keys from a chosen dataset, and for each (family, mode, cores,
@@ -65,9 +65,10 @@
 //!        shape reads `k{k}_logw{logw}`. There is no Goldilocks Bloom leaf
 //!        (`bloom_gl` is rejected). `EXP_BLOOM_VARIANT=omc|packed` picks the
 //!        leaf the `bloom` token runs (M2): `omc` = the bit-array leaf (one
-//!        field element per bit; the default), `packed` = the packed-byte B1
+//!        field element per bit; the pre-M2 leaf), `packed` = the packed-byte B1
 //!        leaf (`zksketch::sketch::bloom_packed`: per-access timestamped
-//!        memory checking over bytes, commitment family 7, `k·m < 2^16`).
+//!        memory checking over bytes, commitment family 7, `k·m < 2^16`; the
+//!        default since M2, `HARNESS_DEFAULT_BLOOM_VARIANT`).
 //!        Both prove the same filter and answer every query identically; the
 //!        leaf / decode / merge / root VKs differ. The explicit tokens
 //!        `bloom_omc` / `bloom_packed` ignore the switch. It is a public
@@ -829,7 +830,7 @@ fn main() {
         // Amortized-per-query headline (Σ query_* / n_queries; 0 when no queries).
         "query_prove_ms_avg", "query_verify_ms_avg", "query_proof_bytes_avg",
         "query_ctx_verifies_avg",
-        // Split+pad accounting under EXP_COMPOSE_QUERY_EVERY_UPDATES: leaves
+        // Split+pad accounting under EXP_COMPOSE_QUERY_EVERY_OPS: leaves
         // sealed early (padded) so a query could bind mid-batch, and the total
         // no-op pad records — the "query at any point" premium. 0 when the
         // query grid is batch-aligned.

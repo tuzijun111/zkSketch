@@ -27,7 +27,7 @@
 # Retired modes (e3 e4 e5real e6 e7 e9 e10 inputfold casestudy) are no longer
 # dispatched here — each was superseded by one of the surfaces above; asking
 # for one prints what replaced it and the direct cargo command (the runner
-# sources stay in examples/). See README.md §Running the experiments.
+# sources stay in examples/). See docs/experiments.md (Running the experiments).
 #
 # The driver runs the plonky3 (STARK) and plonky2 (SNARK) runners and merges
 # their rows into one combined CSV under results/ (with a `backend` column),
@@ -117,7 +117,7 @@
 #
 # Partial vs whole dataset: each runner consumes a small key slice (testing
 # default). Fetch more (`python3 scripts/fetch_datasets.py`, raise *_MAX_KEYS)
-# and raise EXP_M for larger runs. See README.md §Reproducing the paper's results.
+# and raise EXP_M for larger runs. See docs/experiments.md (Reproducing the paper's results).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -127,11 +127,11 @@ OUT_CSV="${EXP_OUT:-${2:-}}"
 
 # Retired modes: print what superseded them + the direct command, then exit.
 # The runner sources stay in examples/ (and plonky2/examples/) so the old
-# measurements remain reproducible; see README.md §Running the experiments.
+# measurements remain reproducible; see docs/experiments.md (Running the experiments).
 retired() { # $1 mode, $2 superseded-by, $3 direct command
   echo "'$1' was retired from this driver — superseded by $2."
   echo "Still runnable directly:  $3"
-  echo "Details: README.md §Running the experiments"
+  echo "Details: docs/experiments.md (Running the experiments)"
   exit 2
 }
 case "$EXPERIMENT" in

@@ -8,7 +8,7 @@
 # recursive linear chain, and streaming forest — over four sketch families, each
 # pinned to one leaf variant:
 #     cm → omc, hll → omc, ss → certified, gk → bandmerge2,
-# plus the opt-in Bloom filter (bloom → omc) and KMV / bottom-k distinct-count
+# plus the opt-in Bloom filter (bloom → packed bytes by default; EXP_BLOOM_VARIANT=omc for the bit-array leaf) and KMV / bottom-k distinct-count
 # sketch (kmv), both plonky3/BabyBear only.
 #
 # For a stream of N records cut into t = ceil(N/m) batches, each cell reports the

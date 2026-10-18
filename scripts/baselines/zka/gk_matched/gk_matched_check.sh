@@ -6,7 +6,7 @@
 #   2. --mode check for each configuration: every epoch < EPOCHS and implementation, the
 #      guest's emitted state == zkSketch's chain tuple by tuple, journal == native, the query
 #      guest's rank bounds == zkSketch's rank_interval on the hot value
-#   3. --mode aggr (noroot, tuned: the driver's default implementation) at every epoch < EPOCHS:
+#   3. --mode aggr (noroot, literal: the driver's default implementation) at every epoch < EPOCHS:
 #      the measurement-shaped row
 #   4. CERTIFY=1: --mode certify, zkSketch's own GK leaf circuit (as exp_compose builds it) proves
 #      every m_sub-record leaf, and each epoch's last leaf must expose Com(S) of the guest's
