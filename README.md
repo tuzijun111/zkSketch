@@ -101,7 +101,6 @@ scripts/baselines/zka/six/run_all.sh check    # OK / WARN / MISSING per item; ex
 scripts/baselines/zka/six/run_all.sh build    # clone zk-Analytics into ~/ext-baselines; build both sides (~5-8 min)
 scripts/baselines/zka/six/run_all.sh quick    # smoke test of the whole pipeline at tiny scale (5-11 min)
 scripts/baselines/zka/six/run_all.sh full     # the paper configuration (hours; run it under tmux / nohup)
-scripts/baselines/zka/six/run_all.sh memmatch # the memory-matched shape of the final GK/Bloom numbers (hours; --quick: ~8 min)
 ```
 
 | step | what it does | time (32 cores) | peak RAM |
@@ -116,7 +115,7 @@ prints the plan and runs nothing. `run_all.sh assemble <dir>` re-runs only the t
 Success looks like `check: ok`, every `build` step `ok`, and `quick`/`full` ending in
 `quick: OK in ...` / `full: OK in ...` after printing the summary tables.
 
-**Outputs.** Each `quick` / `full` / `memmatch` writes a fresh, git-ignored directory
+**Outputs.** Each `quick` / `full` writes a fresh, git-ignored directory
 `results/six/<mode>-<YYYYmmdd-HHMMSS>/`:
 
 - `six_sketch_table.md`: all tables (update proofs side by side with the ratio
@@ -153,7 +152,7 @@ Notes:
   table shows `-` for it and the exit status is 1. To finish an interrupted run without
   starting over, see the full guide.
 - **Memory-matched shape.** `full` proves one zkSketch leaf per 2,048-record epoch (GK
-  capacity 2,048). `memmatch` is the shape of the final GK / Bloom numbers
+  capacity 2,048). `run_all.sh memmatch` is the shape of the final GK / Bloom numbers
   (`scripts/baselines/zka/results/{memmatch-20261014,20261016-m2,20261016-m3}/README.md`):
   zkSketch's "1 epoch" is its k leaves + k - 1 merges, its query at epoch n is the one
   after leaf n x k, and the tables add the coordinator's and the combined (worker +

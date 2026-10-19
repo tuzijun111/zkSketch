@@ -668,9 +668,12 @@ for f in FAMS:
                     how = (f'query receipt at n={n} not proved: mean of the {len(qv)} measured query receipts '
                            f'({v:.3f} ms, {b:.0f} B)')
                 est = aest or (r is not None and r['_est'])
+                parts = ['incl. ESTIMATED receipts'] if est else []
+                if r is None and A.zks:   # (the committed 2026-10-09 set: provenance as before)
+                    parts.append(f'query receipt at n={n} not proved: SAMPLED, the mean of the measured ones')
                 emit(family=f, system=sysname, run='main', operation=f'accept_n{n}{suf}', n=n,
                      verify_ms=n * mv + v, proof_bytes=round(n * mb + b), answer='', exact='',
-                     provenance='derived (incl. ESTIMATED receipts)' if est else 'derived', note=ref_note(f, var),
+                     provenance='derived' + (f' ({"; ".join(parts)})' if parts else ''), note=ref_note(f, var),
                      detail=f'verifier work to accept the answer, best-of-5 per receipt: {n} aggregation receipts '
                             f'(sampled mean {mv:.3f} ms, {mb:.0f} B each) + 1 query receipt ({how})',
                      variant=var, root_construction=con)
@@ -908,6 +911,24 @@ run_order = {'main': 0, 'vt': 1, 'r2': 0, 'zk': 0, 'r1': 3}
 OUT.sort(key=lambda r: (order[r['family']], sys_order[r['system']], run_order.get(r['run'], 0),
                         r['operation'].split('_')[0] != 'update', VORDER.get(r['variant'], 99),
                         r['operation'].split('_')[0], int(r['n'] or 0), r['operation']))
+# The HLL note's "N-Mx above exact": the committed set keeps its text; a new run at the paper
+# shape (2048, 8), or an --extended one, gets the ratios of its own answers
+HLL_RAW = ('NOT like-for-like: zkSketch certifies the raw HLL estimator (no small-range / linear-counting '
+           'branch); ')
+if A.zks and ((SHAPE['hll'][0], T) == (2048, 8) or EXT):
+    for key in {(r['system'], r['run']) for r in OUT if r['family'] == 'hll' and r['system'].startswith('zkSketch')}:
+        qs = [r for r in OUT if (r['system'], r['run']) == key and r['family'] == 'hll'
+              and r['operation'].startswith('query_n') and num(r['exact'])]
+        xs = [num(r['answer']) / num(r['exact']) for r in qs if num(r['answer']) is not None]
+        if not xs:
+            continue
+        lo, hi = min(xs), max(xs)
+        # HLL's standard error at b = 14 is 1.04 / 2^7 = 0.8%: outside its bounds well before 5% off
+        txt = HLL_RAW + (f'its answers are {lo:.1f}-{hi:.1f}x the exact count here (n = {qs[0]["n"]}..{qs[-1]["n"]}), '
+                         f'outside HLL error bounds' if lo > 1.05 or hi < 0.95 else
+                         'compare its answer with the exact column')
+        for r in qs:
+            r['note'] = txt
 for r in OUT:   # the family's shape on every row (--extended)
     r['epoch_records'], r['zks_leaf_records'], r['zks_leaves_per_epoch'] = SHAPE[r['family']]
 w = csv.DictWriter(open(OUT_PATH, 'w', newline=''), fieldnames=COLS + (COLS_EXT if EXT else []),

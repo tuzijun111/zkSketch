@@ -189,7 +189,7 @@ the per-family plan (epoch, k x leaf, the exp_compose shape, the zk-Analytics GK
 from `SIX_M_<FAM>` and `SIX_LEAF` / `SIX_LEAF_<FAM>` (knobs below), and every zkSketch log
 records it in a `# shape:` line, which `assemble.py` reads.
 
-**Outputs.** Every `quick` / `full` / `memmatch` writes a fresh, git-ignored directory
+**Outputs.** Every `quick` / `full` writes a fresh, git-ignored directory
 `results/six/<mode>-<YYYYmmdd-HHMMSS>/`; the run prints its path and the summary
 tables at the end.
 

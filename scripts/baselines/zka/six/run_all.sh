@@ -309,14 +309,22 @@ stale_builds() {
   local -a pairs=("$z/cyc" "${ZKA_BINS[0]}" "$z/cm_noroot" "${ZKA_BINS[0]}" "$z/hll" "${ZKA_BINS[1]}"
                   "$z/spacesaving" "${ZKA_BINS[2]}" "$z/gk" "${ZKA_BINS[3]}" "$z/bloom" "${ZKA_BINS[4]}"
                   "$z/kmv" "${ZKA_BINS[5]}" "$z/gk_matched" "${ZKA_BINS[6]}" "$z/gk_bm2/core" "${ZKA_BINS[6]}")
+  local stale=" "
   for ((i = 0; i < ${#pairs[@]}; i += 2)); do
     src=${pairs[i]}; bin=${pairs[i + 1]}
-    [[ -x $bin ]] || continue
+    [[ -x $bin && $stale != *" $bin "* ]] || continue
     if [[ -n $(find "$src" -type f \( -name '*.rs' -o -name Cargo.toml -o -name Cargo.lock \) -newer "$bin" 2>/dev/null | head -1) ]]; then
-      echo "$bin"
+      echo "$bin"; stale+="$bin "
     fi
   done
+  # the matched GK driver links zkSketch as a path dependency (native reference, leaf-proof
+  # check): a zkSketch change leaves it stale too.
   # src/proofs/ is git-ignored output of the #[ignore]d *_generate_and_store_proof tests
+  bin=${ZKA_BINS[6]}
+  if [[ -x $bin && $stale != *" $bin "* ]] && [[ -n $(find "$ZKS/src" -path "$ZKS/src/proofs" -prune -o -type f -name '*.rs' -newer "$bin" -print 2>/dev/null | head -1;
+        find "$ZKS/Cargo.toml" "$ZKS/Cargo.lock" -newer "$bin" 2>/dev/null | head -1) ]]; then
+    echo "$bin"
+  fi
   if [[ -x $ZKS_BIN ]] && [[ -n $(find "$ZKS/src" -path "$ZKS/src/proofs" -prune -o -type f -name '*.rs' -newer "$ZKS_BIN" -print 2>/dev/null | head -1;
         find "$ZKS/examples/exp_compose.rs" "$ZKS/Cargo.toml" "$ZKS/Cargo.lock" -newer "$ZKS_BIN" 2>/dev/null | head -1) ]]; then
     echo "$ZKS_BIN"

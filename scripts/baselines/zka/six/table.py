@@ -213,6 +213,13 @@ def E(r):  # ' est' when the row's value is (partly) an estimate
     return ' est' if r is not None and 'ESTIMATED' in r['provenance'] else ''
 
 
+SAMPLED_Q = 'not proved: SAMPLED'   # assemble.py: an accept row whose query receipt n was not proved
+
+
+def Q(r):  # ' ~' on such a row (its query receipt is the mean of the proved ones)
+    return ' ~' if r is not None and SAMPLED_Q in r['provenance'] else ''
+
+
 def f(x, d=1):
     return '-' if x is None else f'{x:,.{d}f}'
 
@@ -595,7 +602,9 @@ for who, title in WHO:
                  if col == 'verify_ms' else 'KB = 10^3 bytes')
         print(f'\n**{what}, zkA vs {title}** ({unit}; {extra}; cells {" / ".join(zl(var) for var in ZV)} / zkS; zkA = '
               f'n aggregation receipts + 1 query receipt, derived; {FPEAKS}, sum of '
-              f'measured parts; **bold** = the smaller side)\n')
+              f'measured parts; **bold** = the smaller side'
+              + ('; ~ = zkA did not prove the query at that n: its query receipt is the mean of the proved ones'
+                 if any(SAMPLED_Q in r['provenance'] for r in rows) else '') + ')\n')
         table(['sketch'] + [f'n={n}' if FOREST else f'n={n} ({PEAKS[n]} peak{"s" if PEAKS[n] > 1 else ""})'
                             for n in NALL])
         for fam in FAMS:
@@ -608,7 +617,7 @@ for who, title in WHO:
                         cells.append('-')
                         continue
                     lo = max(i for i, x in enumerate(xs) if x == min(xs))  # a tie goes to zkS
-                    cells.append(' / '.join((f'**{fmt(x)}**' if i == lo else fmt(x)) + (E(ra[i]) if i < len(ra) else '')
+                    cells.append(' / '.join((f'**{fmt(x)}**' if i == lo else fmt(x)) + (E(ra[i]) + Q(ra[i]) if i < len(ra) else '')
                                             for i, x in enumerate(xs)))
                 line([label(fam, suf)] + cells)
 
