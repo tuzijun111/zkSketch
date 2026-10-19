@@ -4,7 +4,7 @@
 #
 #   run_all.sh check            check the prerequisites; exit 1 if something blocking is missing
 #   run_all.sh build            fetch zk-Analytics @ d4a5a9a into $BASELINE_DIR, build both sides
-#   run_all.sh quick            smoke test of the whole pipeline at tiny scale (about 9-11 min on 32
+#   run_all.sh quick            smoke test of the whole pipeline at tiny scale (about 5-11 min on 32
 #                               cores): zkSketch 7 runs at N = 512 (2 batches of 256), zk-Analytics
 #                               executor for all six (noroot, and designed for the CM reference and
 #                               the root-work table), 4 real zk-Analytics proofs (SIX_QUICK_PROVE),
@@ -26,7 +26,7 @@
 #                               Every planned zk-Analytics job is proved (14 at T = 1: about 5 h 30 min,
 #                               an estimate). --quick: the same pipeline at tiny scale (epochs of 256
 #                               records in leaves of 128, SS/KMV one leaf of 256, GK 512 = 4 x 128 with
-#                               cap 384, T = 2; about 10 min), proofs as in quick (SIX_QUICK_PROVE), the
+#                               cap 384, T = 2; 8 min here), proofs as in quick (SIX_QUICK_PROVE), the
 #                               rest ESTIMATED. The tables then give zkSketch's "1 epoch" as its k leaves
 #                               + k - 1 merges, and its worker, coordinator and combined peak memory
 #   run_all.sh assemble DIR     re-run assemble.py + table.py on a finished results directory
@@ -215,7 +215,7 @@ check_run() {  # machine resources and run-time settings
   # MemTotal is a little below the installed RAM (a 16 / 96 GiB machine reports ~15.5 / ~94):
   # accept 15 / 90 GiB of MemTotal for the README's 16 / 96 GiB
   mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo); mem_g=$((mem_kb / 1024 / 1024))
-  if (( mem_g >= 90 )); then ok "RAM ${mem_g} GiB MemTotal (quick and memmatch need 16 GiB installed; full 96, its zkSketch GK run peaks at ~59 GiB)"
+  if (( mem_g >= 90 )); then ok "RAM ${mem_g} GiB MemTotal (quick needs 16 GiB installed; full 96, its zkSketch GK run peaks at ~59 GiB)"
   elif (( mem_g >= 15 )); then warn "RAM ${mem_g} GiB MemTotal: enough for quick, not for full (its zkSketch GK run peaks at ~59 GiB under the default zero-knowledge build; 96 GiB installed, 128 recommended)"
   else miss "RAM ${mem_g} GiB MemTotal: need 16 GiB installed (one zk-Analytics proof alone peaks at ~9.2 GiB)"; fi
   pc=$(phys_cores); cores=${SIX_CORES:-$(default_cores)}

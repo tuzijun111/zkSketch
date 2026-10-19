@@ -389,12 +389,14 @@ if FOREST:
     print(f'**Update proofs side by side{HEAD_TXT}: proving time, verification time, proof size, peak memory** (one epoch = '
           f'the family\'s epoch, run line. zkA: one aggregation receipt per epoch, all kept and verified; "1 epoch" = '
           f'the mean of proved epochs {and_join(AE)} (sampled){za_t}; verify = best of 5 calls per receipt; peak RSS: '
-          f'prover = the r0vm process, coordinator = their host driver (max over the proved epochs). zkS: "1 epoch" = '
+          f'prover = the r0vm process (max over the proved epochs), no coordinator (their host driver, tens of MB, is in '
+          f'the CSV). zkS: "1 epoch" = '
           f'the epoch\'s k leaves + k - 1 merges (the forest\'s measured makespan when it is one epoch, else k x '
           f'leaf_s + (k - 1) x merge_s from the run, excluding the merges across epochs; its proof = the epoch\'s live '
           f'peak(s)){zs_t}, {"best of 5 calls (as zkA)" if ROOTV_BEST else "single call"}; peak RSS: prover = the '
           f'procs-engine worker, coordinator = exp_compose (VK derivation, audit, queries), over the run. "together" = '
-          f'the whole process tree at once (VmRSS summed per 0.5 s sample). Ratio = zkA / zkS for every metric: above '
+          f'the whole process tree at once (VmRSS summed per 0.5 s sample, so it can read a little below a process\'s '
+          f'own peak). Ratio = zkA / zkS for every metric: above '
           f'1, zkSketch is faster / smaller / lighter. KB = 10^3 bytes, GB = 2^30 bytes)\n')
 else:
     print(f'**Update proofs side by side{HEAD_TXT}: proving time, verification time, proof size, peak memory** (one epoch = '
@@ -404,8 +406,8 @@ else:
           f'proof alone (leafgen_seq_ms / {T}, EXCLUDING composition; its proof = the leaf-1 proof), "{T} epochs" = the '
           f'whole forest incl. its {T - 1} merge{"" if T == 2 else "s"} (measured), which ends in ONE root proof: '
           f'"verify" is that root, {"best of 5 calls (as zkA)" if ROOTV_BEST else "single call"}, in both rows; peak RSS = the procs-engine worker'
-          + ('' if not HAS_EXT else '; the coordinator (zkA: their host driver; zkS: exp_compose) and "together" (the '
-             'whole process tree at once, VmRSS summed per 0.5 s sample) next to it') + '. Ratio = zkA / zkS for '
+          + ('' if not HAS_EXT else '; next to it zkS\'s coordinator (exp_compose) and "together" (the whole process '
+             'tree at once, VmRSS summed per 0.5 s sample; zkA: driver + r0vm)') + '. Ratio = zkA / zkS for '
           f'every metric: above 1, zkSketch is faster / smaller / lighter. KB = 10^3 bytes, GB = 2^30 bytes)\n')
 METRICS = [  # label, zkA op, zkA col, zkA multiplier, zkS op, zkS col, format
     ('prove, 1 epoch (s)', 'update_per_epoch', 'prove_s', 1, 'update_per_epoch', 'prove_s', fs),
@@ -420,7 +422,8 @@ if HAS_EXT:  # the coordinator and the whole tree next to the prover
     METRICS[-1] = ('peak RSS, prover (GB)',) + METRICS[-1][1:]
     if ONE:
         METRICS = [x for x in METRICS if f'{T} epochs' not in x[0]]
-    METRICS += [('peak RSS, coordinator (GB)', 'update_per_epoch', 'coord_peak_rss_mb', 1, 'update_per_epoch',
+    # zkA's host driver (the CSV's coord_peak_rss_mb, tens of MB) has no coordinator role: not compared
+    METRICS += [('peak RSS, coordinator (GB)', None, 'coord_peak_rss_mb', 1, 'update_per_epoch',
                  'coord_peak_rss_mb', gb),
                 ('peak RSS, together (GB)', 'update_per_epoch', 'combined_peak_rss_mb', 1, 'update_per_epoch',
                  'combined_peak_rss_mb', gb)]
