@@ -45,7 +45,7 @@ scripts/run_decode.sh                 # decode/query circuits (tests + table)
 
 | Var | Meaning | Default |
 | --- | --- | --- |
-| `EXP_COMPOSE_BACKEND` | `plonky3` \| `plonky2`. plonky2 takes **single** values for machines/cores, and silently ignores `EXP_COMPOSE_EXEC`, `EXP_COMPOSE_NODES`, `EXP_COMPOSE_WAVE_SIZE`, `EXP_GK_S`, and all three mixed-query knobs | `plonky3` |
+| `EXP_COMPOSE_BACKEND` | `plonky3` \| `plonky2`. plonky2 takes **single** values for machines/cores, and silently ignores `EXP_COMPOSE_EXEC`, `EXP_COMPOSE_NODES`, `EXP_COMPOSE_WAVE_SIZE`, `EXP_GK_S`, and all three mixed-query knobs. The Default column of this table is the plonky3 runner's; the plonky2 runner's own defaults are smaller: N 16, m 4, cores 4, d 2, w 4, SS/GK capacity 4 | `plonky3` |
 | `EXP_COMPOSE_N` | total stream records — integer or `2^k` | `32` |
 | `EXP_COMPOSE_BATCHES` | batch sizes `m`, comma-list | `8` |
 | `EXP_COMPOSE_FAMILY` | comma-list of `cm,hll,ss,gk`, the opt-in BabyBear-only `bloom` (`EXP_BLOOM_K`, `EXP_BLOOM_LOGW`) and `kmv` (KMV / bottom-`k` distinct count, capacity `EXP_KMV_K`, default `1024`: a multiple of 4 in `4..=32768` with `k + m < 2^24`, a bad value exits 2), and the Goldilocks ports `cm_gl,hll_gl,ss_gl,gk_gl` | `cm,hll,ss,gk` |
@@ -86,7 +86,7 @@ Earlier modes of the E1–E10 ladder (**e3, e4, e5real, e6, e7, e9, e10, inputfo
 casestudy**) and the RQ1–RQ4 figure track are **retired from the driver** —
 each was superseded by one of the surfaces above. Their runners stay in
 `examples/` and remain directly runnable via `cargo run --release --example
-exp_<name>`.
+exp_<name>` (`exp_e5_real` for e5real; e10 is `python3 scripts/cost_model_e10.py`).
 
 ### Reproducing the paper's results
 
@@ -295,7 +295,10 @@ on Plonky2; and `tab:mixed`'s amortized per-element cost is
 > **Still live**, despite looking like leftovers: `frame_out_{2,3,4}machine_plonky3_coresident.csv`
 > and `frame_out_1machine_plonky3_busysib.csv` are the co-residency controls
 > behind the appendix's staged-wave fidelity argument (the ~6% package-sharing
-> penalty), produced by `scripts/run_m1_busy_sibling.sh`.
+> penalty). `scripts/run_m1_busy_sibling.sh` produces the `_busysib` file (one M=1
+> forest per family next to a busy sibling node); the `_coresident` files are plain
+> `run_compose.sh` forest runs at M=2,3,4 without `EXP_COMPOSE_NODES` /
+> `EXP_COMPOSE_WAVE_SIZE` (the default, socket-unaware placement).
 
 ### Standalone comparison demos
 

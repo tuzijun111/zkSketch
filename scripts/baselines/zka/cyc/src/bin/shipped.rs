@@ -447,6 +447,10 @@ fn main() {
         println!("{HEADER}");
         return;
     }
+    // as in the other six drivers: dev mode would "prove" with fake receipts
+    if std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty()).unwrap_or(false) {
+        die("RISC0_DEV_MODE is set; unset it (nothing here may run in dev mode)");
+    }
     let mode = arg_str("--mode").unwrap_or_else(|| die("--mode aggr|query is required"));
     let fam = match arg_str("--family").as_deref() {
         Some("samples") => Family::Samples,

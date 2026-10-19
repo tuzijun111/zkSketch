@@ -47,7 +47,7 @@ checkout they sit in, so a worktree measures its own sources.
 | `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 | `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
 | `gk_matched/gk_matched_check.sh` | no (`CERTIFY=1`: zkSketch's GK leaf and decoder proofs) | `zka_gk_matched_{check,aggr,certify}.csv` + `zka_gk_matched_check.log` | zkSketch's GK rule inside zk-Analytics' pipeline (the six-sketch GK default): equivalence with zkSketch's native chain, its leaf circuit and its decoder at configs (384, 128) and (768, 512) (see "GK with zkSketch's algorithm in their pipeline") |
-| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~9-11 min, `full` ~3 h 30 min (estimate) plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †; GK = zkSketch's own GK rule in their pipeline, `gk_matched/`) at 8 x 2,048 AOL records: update proving per epoch (zk-Analytics `noroot`, the headline; their shipped CM as a reference), query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
+| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~5-11 min, `full` ~3 h 30 min (estimate) plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †; GK = zkSketch's own GK rule in their pipeline, `gk_matched/`) at 8 x 2,048 AOL records: update proving per epoch (zk-Analytics `noroot`, the headline; their shipped CM as a reference), query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -807,7 +807,9 @@ zkSketch's algorithm in their pipeline". The other matched-rule guests (`ss_mg/`
 > masks"), and much more for GK at this shape: one GK run of the default (ZK) build
 > on 2026-10-12, on a shared, loaded machine, took 824 s wall, 70 s of leaf proving
 > per batch and 58.8 GiB peak RSS (worker; coordinator 57.9 GiB while deriving the
-> root VK), against 215 s, 14.7 s and 19.4 GiB in `six_zksketch_r2_gk`. Re-run with
+> root VK), against 215 s, 14.7 s and 19.4 GiB in `six_zksketch_r2_gk`. That run used
+> the pre-M3 `sorted` GK circuit; the default `stable` circuit at 2 batches of 2,048
+> (2026-10-19) took 86 s wall, 19.3 s of leaf proving per batch and 15.1 GiB. Re-run with
 > `six/run_all.sh full` before quoting zero-knowledge numbers. The committed `quick_zksketch_*` rows (2026-10-10,
 > 256 records per batch, `pcs=hiding,logup_mask=on`) are from the ZK build. Both
 > zkSketch builds use hiding (salted Poseidon2) state commitments (`ZKSKETCH_COMMIT`
@@ -1084,7 +1086,7 @@ top-level README, "Experiment 1", and the full guide `docs/six_sketch_comparison
 ```bash
 scripts/baselines/zka/six/run_all.sh check   # prerequisites; exit 1 + the fix if anything blocking is missing
 scripts/baselines/zka/six/run_all.sh build   # fetch zk-Analytics @ d4a5a9a into $BASELINE_DIR; build both sides
-scripts/baselines/zka/six/run_all.sh quick   # smoke test of the whole pipeline (N = 512 = 2 x 256), ~9-11 min
+scripts/baselines/zka/six/run_all.sh quick   # smoke test of the whole pipeline (N = 512 = 2 x 256), ~5-11 min
 scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~3 h 30 min (estimate) + gate waits
 scripts/baselines/zka/six/run_all.sh full --dry-run   # the plan and the 42 jobs, nothing run
 SIX_ZKA_ROOTS=designed,noroot scripts/baselines/zka/six/run_all.sh full   # the earlier two-variant plan, 52 jobs

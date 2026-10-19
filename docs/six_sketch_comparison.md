@@ -61,9 +61,10 @@ the zk-Analytics aggregation proofs").
 **Machine.** Linux x86_64 with glibc >= 2.34 and the libstdc++ of GCC >= 12 (Ubuntu 22.04+,
 Debian 12+, Fedora 37+; NOT RHEL / Rocky / Alma 9 or Amazon Linux 2023, whose GCC 11
 libstdc++ cannot run RISC Zero's compiler; `check` tests this); at least
-16 GiB RAM for `quick`, and for `full` at least 96 GiB (128 GiB recommended: its
-zkSketch GK run peaks at 59 GiB; `check` accepts 15 / 90 GiB of `MemTotal`, which is
-what 16 / 96 GiB machines report); about 30 GB of free disk (zk-Analytics builds
+16 GiB RAM for `quick`, and 32 GiB for `full` (its largest process, zkSketch's GK run,
+peaks at about 15 GiB with the default circuits, measured 2026-10-19; the pre-M3 GK
+circuit needed 59 GiB, hence the 96 GiB this guide asked for until then; `check` accepts
+15 / 30 GiB of `MemTotal`, which is what 16 / 32 GiB machines report); about 30 GB of free disk (zk-Analytics builds
 ~13 GB, `~/.risc0` ~1.8 GB, the Rust toolchain and cargo cache ~1 GB, zkSketch's
 `target/` ~0.3 GB; a fresh install measured about 16 GB in all). The paper
 configuration runs zkSketch on 32 physical cores; on a smaller machine it uses the
@@ -136,8 +137,8 @@ then query proving), followed by the list of result files. With `GATE_WAIT_S=0` 
 |---|---|---|---|---|
 | `check` | tools and versions, RAM, cores, disk, dataset, builds | seconds | - | - |
 | `build` | clones zk-Analytics (5 MB); builds the 7 zk-Analytics-side drivers (their CM, which also embeds the CM `noroot` guest; our † ports, each with its `designed` / `noroot` guest; GK twice: the matched port and the textbook reference) and zkSketch's `exp_compose` | about 7-8 min on the 32-core reference machine, including the first-time download of crates, the pinned forks and zk-Analytics (a cold build with an empty cargo cache took 7 min 16 s, measured before the matched GK driver was added: the six zk-Analytics-side drivers of then 5 min 10 s, `exp_compose` 2 min 5 s); much faster when nothing changed | 1.8 GB for `exp_compose` (zk-Analytics side not measured) | ~13 GB under `$BASELINE_DIR/build`, ~0.3 GB in `target/` |
-| `quick` | zkSketch: 7 runs at N = 512 (2 batches of 256). zk-Analytics: executor for all six (`noroot`, plus `designed` for the Count-Min reference and the root-work table), 4 real proofs (`cm:aggr:0:noroot`, `kmv:aggr:0:noroot`, `gk:query:1:<v>`, `bloom:query:1:key:<k>`), the other 24 of 28 planned jobs ESTIMATED (their shipped Count-Min among them: 14 segments of 2^20 cycles at 256 records, about 7 min if proved) | 5-11 min here (2026-10-18, stable GK + packed Bloom defaults: 5 min 27 s in all, zkSketch 3 min 16 s; before M2/M3 9-11 min, zkSketch 6.5-8 min; zk-Analytics executor ~10 s, the 4 proofs ~2 min) | ~9.2 GiB (one r0vm proof; zkSketch runs up to 6.8 GiB today, 8.5 GiB before M2/M3) | < 1 MB |
-| `full` | zkSketch: 7 runs at N = 16,384 (8 batches of 2,048). zk-Analytics: executor (`noroot`, plus `designed` for the reference), then 42 proofs: aggregation epochs 0 and 7 of every family as `noroot` (12), queries at n = 1, 2, 4, 8, Bloom with an inserted and an absent key (28), and their shipped Count-Min at epochs 0 and 7 as the reference (2, last) | about 3 h 30 min of running, an ESTIMATE: zkSketch's 7 runs ~30-40 min (the reference run's non-ZK build took ~10 min; the default ZK build is slower, GK alone took 14 min here, see Notes), the zk-Analytics executor ~2 min, and the 42 proofs about 2 h 50 min, from segment counts x ~30 s per segment of 2^20 cycles (the rate of the reference run): the 12 `noroot` aggregation proofs 150 segments (147 x 2^20 padded cycles), ~74 min; the 2 Count-Min reference proofs 48 segments, ~24 min (the same guest took 712 and 713 s in the 2026-10-09 reference run); the 28 queries ~58 min, as in that run (the 74 min uses the textbook GK's segment counts; the matched GK's two noroot aggregation proofs at (2048, 2048) with the default `literal` are about 29.25 + 30.0 x 2^20 padded cycles, against about 13.25 x 2^20 each for textbook GK, so about 17 min more, included in the totals here; its queries open one compact state instead of merging n summaries). Plus the quiet-machine waits (1 h 17 min for 47 jobs in the reference run, so about 1 h 20 min for 49; see Notes). `SIX_ZKA_CM_REF=0`: 40 proofs, about 3 h 5 min in all; `SIX_ZKA_ROOTS=designed,noroot`: 52 proofs (the 12 `designed` ones add 176 segments, ~88 min), about 4 h 30 min | zkSketch GK run 59 GiB (ZK build; see Notes); r0vm ~9.2 GiB per proof; one job at a time | < 100 MB |
+| `quick` | zkSketch: 7 runs at N = 512 (2 batches of 256). zk-Analytics: executor for all six (`noroot`, plus `designed` for the Count-Min reference and the root-work table), 4 real proofs (`cm:aggr:0:noroot`, `kmv:aggr:0:noroot`, `gk:query:1:<v>`, `bloom:query:1:key:<k>`), the other 24 of 28 planned jobs ESTIMATED (their shipped Count-Min among them: 14 segments of 2^20 cycles at 256 records, about 7 min if proved) | 5-11 min here (2026-10-18, stable GK + packed Bloom defaults: 5 min 27 s in all, zkSketch 3 min 16 s; before M2/M3 9-11 min, zkSketch 6.5-8 min; zk-Analytics executor ~10 s, the 4 proofs ~2 min) | ~9.2 GiB (one r0vm proof; zkSketch runs up to 6.6 GiB today, 8.4 GiB before M2/M3) | < 1 MB |
+| `full` | zkSketch: 7 runs at N = 16,384 (8 batches of 2,048). zk-Analytics: executor (`noroot`, plus `designed` for the reference), then 42 proofs: aggregation epochs 0 and 7 of every family as `noroot` (12), queries at n = 1, 2, 4, 8, Bloom with an inserted and an absent key (28), and their shipped Count-Min at epochs 0 and 7 as the reference (2, last) | about 3 h 15 min of running, an ESTIMATE: zkSketch's 7 runs ~15-25 min (extrapolated per leaf and per merge from the 2-batch probe of 2026-10-19 in Notes, 6.1 min for all 7 runs at 2 batches; the reference run's non-ZK build took ~10 min), the zk-Analytics executor ~2 min, and the 42 proofs about 2 h 50 min, from segment counts x ~30 s per segment of 2^20 cycles (the rate of the reference run): the 12 `noroot` aggregation proofs 150 segments (147 x 2^20 padded cycles), ~74 min; the 2 Count-Min reference proofs 48 segments, ~24 min (the same guest took 712 and 713 s in the 2026-10-09 reference run); the 28 queries ~58 min, as in that run (the 74 min uses the textbook GK's segment counts; the matched GK's two noroot aggregation proofs at (2048, 2048) with the default `literal` are about 29.25 + 30.0 x 2^20 padded cycles, against about 13.25 x 2^20 each for textbook GK, so about 17 min more, included in the totals here; its queries open one compact state instead of merging n summaries). Plus the quiet-machine waits (1 h 17 min for 47 jobs in the reference run, so about 1 h 20 min for 49; see Notes). `SIX_ZKA_CM_REF=0`: 40 proofs, about 3 h 5 min in all; `SIX_ZKA_ROOTS=designed,noroot`: 52 proofs (the 12 `designed` ones add 176 segments, ~88 min), about 4 h 30 min | zkSketch GK run ~15 GiB (ZK build, default circuits; see Notes); r0vm ~9.2 GiB per proof; one job at a time | < 100 MB |
 
 `full --dry-run` prints the plan, including the 42 zk-Analytics jobs, and runs
 nothing. Times are for the 32-core machine above.
@@ -203,7 +204,8 @@ tables at the end.
   proofs are the same for every variant); in `full`, zkSketch's query proving at the n
   zk-Analytics does not prove (n = 3, 5, 6, 7); the verifier's work and bytes to accept one
   answer at each n (n aggregation receipts + 1 query receipt); peak RSS while proving a
-  query; the answers next to the exact ones; the zk-Analytics guest profile; and each
+  query; the answers next to the exact ones; the per-proof verify protocol (first call /
+  median / best of 5, when the run recorded those timings); the zk-Analytics guest profile; and each
   executed variant's root construction and executor cycles (root work = designed -
   noroot). With `SIX_ZKA_ROOTS=designed,noroot` the update-side and accept tables show
   `zkA designed` and `zkA noroot` side by side, with a ratio against each. Ratios are
@@ -316,18 +318,30 @@ Notes:
   loaded machine, with the pre-M3 `sorted` GK circuit, today's `SIX_GK_ROUNDS=sorted`)
   took 824 s and peaked at 58.8 GiB RSS, with 70 s of proving per
   batch, against 215 s, 19.4 GiB and 14.7 s per batch for the non-ZK reference run
-  (`six_zksketch_r2_gk`). The default `stable` circuit (M3, 2026-10-16) has not been
-  run at this monolithic shape; at capacity 768 with 512-record leaves it needs 2.9x
-  fewer ALU rows and peaks at 5.2 GiB combined, so 59 GiB is an upper bound. The other five sketches have not been run at this shape on
-  the zero-knowledge build, and `full` as a whole has not been run on it yet. At 2
-  batches of 2,048 on the zero-knowledge build (2026-10-12, same machine, pre-M2/M3:
-  `sorted` GK and the `omc` Bloom leaf) the 7 runs
+  (`six_zksketch_r2_gk`). At 2 batches of 2,048 on the zero-knowledge build
+  (2026-10-12, same machine, pre-M2/M3: `sorted` GK and the `omc` Bloom leaf) the 7 runs
   took 14.7 min in all: GK 371 s and 58 GiB, Bloom 126 s and 15 GiB per run (two
-  runs), CM / HLL / SS / KMV 38-95 s and 5-8 GiB each; the 30-40 min estimate for
-  `full`'s 7 zkSketch runs is extrapolated from those runs and GK's full-shape run.
-  This probe needs as much RAM as `full` (GK peaks about the same at 2 and 8 batches).
-  To see each sketch's time and memory at the full batch size on a new machine
-  (~15 min here) before starting `full`:
+  runs), CM / HLL / SS / KMV 38-95 s and 5-8 GiB each.
+  The same probe with today's defaults (2026-10-19, zkSketch `2c9fc17`, ZK build,
+  `stable` GK, `packed` Bloom, 32 cores, an otherwise idle machine) took 6.1 min for
+  the 7 runs (Bloom's absent-key run is the same circuit as its inserted-key run):
+
+  | sketch | wall (s) | leaf proving per batch (s) | worker peak (GiB) | coordinator peak (GiB) |
+  |---|---|---|---|---|
+  | CM | 48 | 10.1 | 7.3 | 7.3 |
+  | HLL | 73 | 8.9 | 6.8 | 6.9 |
+  | SS | 35 | 5.4 | 4.9 | 4.4 |
+  | GK | 86 | 19.3 | 15.1 | 15.1 |
+  | Bloom | 49 | 11.3 | 8.1 | 8.1 |
+  | KMV | 27 | 3.4 | 4.6 | 4.3 |
+
+  The coordinator peaks while it derives the auditor's verifying keys, before the worker
+  starts, so the two peaks do not add up. The ~15-25 min estimate for `full`'s 7 runs
+  extrapolates these per leaf and per merge; `full` as a whole has not been run on the
+  zero-knowledge build yet. Memory does not grow with the number of batches (the M0
+  harness frees each proof's prover data; the M3 report measured the same peak at 4
+  and 8 batches). To see each sketch's time and memory at the full batch size on a new
+  machine (~6 min here) before starting `full`:
   `RESULTS=$PWD/results/six/m2048t2 SIX_M=2048 SIX_T=2 GATE_WAIT_S=0 scripts/baselines/zka/six/run_zks.sh`
   (the 7 zkSketch runs at 2 batches of 2,048; `wall_s` and `desc_peak_rss_mb` in
   that directory's `six_zksketch_runs.csv`).

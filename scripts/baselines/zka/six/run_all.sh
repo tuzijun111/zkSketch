@@ -212,11 +212,11 @@ check_tools() {  # what building and running need (also used by `build`)
 
 check_run() {  # machine resources and run-time settings
   local mem_kb mem_g pc cores allowed c bad free_b free_r d
-  # MemTotal is a little below the installed RAM (a 16 / 96 GiB machine reports ~15.5 / ~94):
-  # accept 15 / 90 GiB of MemTotal for the README's 16 / 96 GiB
+  # MemTotal is a little below the installed RAM (a 16 / 32 GiB machine reports ~15.5 / ~31):
+  # accept 15 / 30 GiB of MemTotal for the README's 16 / 32 GiB
   mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo); mem_g=$((mem_kb / 1024 / 1024))
-  if (( mem_g >= 90 )); then ok "RAM ${mem_g} GiB MemTotal (quick needs 16 GiB installed; full 96, its zkSketch GK run peaks at ~59 GiB)"
-  elif (( mem_g >= 15 )); then warn "RAM ${mem_g} GiB MemTotal: enough for quick, not for full (its zkSketch GK run peaks at ~59 GiB under the default zero-knowledge build; 96 GiB installed, 128 recommended)"
+  if (( mem_g >= 30 )); then ok "RAM ${mem_g} GiB MemTotal (quick needs 16 GiB installed; full 32, its zkSketch GK run peaks at ~15 GiB)"
+  elif (( mem_g >= 15 )); then warn "RAM ${mem_g} GiB MemTotal: enough for quick, not for full (its zkSketch GK run peaks at ~15 GiB under the default zero-knowledge build, next to the OS; 32 GiB installed recommended)"
   else miss "RAM ${mem_g} GiB MemTotal: need 16 GiB installed (one zk-Analytics proof alone peaks at ~9.2 GiB)"; fi
   pc=$(phys_cores); cores=${SIX_CORES:-$(default_cores)}
   if (( pc >= 32 )); then ok "CPU: $pc physical cores, $(nproc) usable CPUs; zkSketch runs on SIX_CORES=$cores"

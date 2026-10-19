@@ -43,7 +43,8 @@ cargo test --release                   # plonky3: library unit tests + tests/ in
   `CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build --release`.
 - **Zero knowledge is on by default** (Cargo feature `zk`: hiding FRI PCS plus
   masked LogUp sums). `--no-default-features` builds the non-hiding variant used for
-  the stored non-ZK numbers. Every CSV row records `pcs` and `logup_mask`.
+  the stored non-ZK numbers. Every env.json and every `exp_compose` / `exp_e0` CSV row
+  records `pcs` and `logup_mask`.
 - **Plots:** `python3` + `matplotlib`.
 
 ---
@@ -72,8 +73,8 @@ Two things to know when reading the tables:
 
 **Machine.** Linux x86_64, glibc >= 2.34 and the libstdc++ of GCC >= 12 (Ubuntu 22.04+,
 Debian 12+, Fedora 37+; not RHEL/Rocky/Alma 9 or Amazon Linux 2023). RAM: 16 GiB for
-`quick`, 96 GiB or more for `full` (its zkSketch GK run peaks at ~59 GiB). About
-30 GB of free disk. The reference numbers come from a 32-core AMD Threadripper PRO
+`quick`, 32 GiB for `full` (its largest process, zkSketch's GK run, peaks at ~15 GiB).
+About 30 GB of free disk. The reference numbers come from a 32-core AMD Threadripper PRO
 9975WX; a smaller machine uses the physical cores it has (`SIX_CORES`).
 
 **Prerequisites**, once per machine (`run_all.sh check` verifies them and prints the fix
@@ -82,7 +83,7 @@ for anything missing):
 ```bash
 # 1. System packages (the only step that needs sudo; numactl is optional).
 sudo apt-get install -y build-essential git curl ca-certificates python3 procps util-linux diffutils numactl
-# 2. Rust via rustup, pinned to the reference toolchain (any stable >= 1.90 builds).
+# 2. Rust via rustup, pinned to the reference toolchain (any stable >= 1.90 builds; the zk-Analytics hosts need 1.90).
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.1
 . "$HOME/.cargo/env"
 # 3. RISC Zero at the exact versions used.
@@ -98,7 +99,7 @@ private, as it was on 2026-10-13, cloning needs your GitHub credentials):
 ```bash
 git clone https://github.com/tuzijun111/zkSketch.git && cd zkSketch
 scripts/baselines/zka/six/run_all.sh check    # OK / WARN / MISSING per item; exit 1 if anything blocks
-scripts/baselines/zka/six/run_all.sh build    # clone zk-Analytics into ~/ext-baselines; build both sides (~5-8 min)
+scripts/baselines/zka/six/run_all.sh build    # clone zk-Analytics into ~/ext-baselines; build both sides (~7-8 min cold)
 scripts/baselines/zka/six/run_all.sh quick    # smoke test of the whole pipeline at tiny scale (5-11 min)
 scripts/baselines/zka/six/run_all.sh full     # the paper configuration (hours; run it under tmux / nohup)
 ```
@@ -106,9 +107,9 @@ scripts/baselines/zka/six/run_all.sh full     # the paper configuration (hours; 
 | step | what it does | time (32 cores) | peak RAM |
 |---|---|---|---|
 | `check` | tools and versions, RAM, cores, disk, dataset, stale builds | seconds | - |
-| `build` | clones zk-Analytics @ `d4a5a9a`; builds its 7 drivers (their CM; our † ports; GK matched + textbook) and zkSketch's `exp_compose` | ~5-8 min | ~2 GB |
+| `build` | clones zk-Analytics @ `d4a5a9a`; builds its 7 drivers (their CM; our † ports; GK matched + textbook) and zkSketch's `exp_compose` | ~7-8 min cold; a few minutes when little changed | ~2 GB |
 | `quick` | zkSketch: 7 runs at N = 512 (2 batches of 256). zk-Analytics: executor for all six, 4 real proofs, the other planned jobs ESTIMATED from their cycle counts | ~5-11 min | ~9 GiB |
-| `full` | zkSketch: 7 runs at N = 16,384 (8 batches of 2,048). zk-Analytics: executor, then 42 proofs (aggregation epochs 0 and 7 of every family as `noroot`; queries at n = 1, 2, 4, 8; their shipped Count-Min at epochs 0 and 7 as the reference) | ~3 h 30 min plus quiet-machine waits (estimate) | zkSketch GK ~59 GiB; r0vm ~9 GiB |
+| `full` | zkSketch: 7 runs at N = 16,384 (8 batches of 2,048). zk-Analytics: executor, then 42 proofs (aggregation epochs 0 and 7 of every family as `noroot`; queries at n = 1, 2, 4, 8; their shipped Count-Min at epochs 0 and 7 as the reference) | ~3 h 15 min plus quiet-machine waits (estimate) | zkSketch GK ~15 GiB; r0vm ~9 GiB |
 
 `quick` checks the pipeline end to end; it is not a measurement. `full --dry-run`
 prints the plan and runs nothing. `run_all.sh assemble <dir>` re-runs only the tables.
@@ -202,12 +203,13 @@ The most used knobs:
 | `EXP_M` | e1 | batch sizes, comma list | `4,8,16,32` |
 | `EXP_FAMILY` / `EXP_COMPOSE_FAMILY` | e1 / compose | `cm,hll,ss,gk`; compose also takes `bloom`, `kmv` and the Goldilocks `*_gl` ports | `all` / `cm,hll,ss,gk` |
 | `EXP_{CM,HLL}_VARIANT`, `EXP_SS_VARIANT`, `EXP_GK_VARIANT` | e1 | deployed circuit vs its baselines (`omc` / `one_hot` / `merkle`; `certified` / `naive`; `bandmerge2` / `bandmerge2_naive`) | `one_hot`, `certified`, `certified` |
-| `EXP_D`, `EXP_W`, `EXP_HLL_B`, `EXP_SS_CAP`, `EXP_GK_CAP`, `EXP_BLOOM_K`, `EXP_BLOOM_LOGW`, `EXP_KMV_K` | both | sketch sizes | small |
-| `EXP_COMPOSE_N`, `EXP_COMPOSE_BATCHES`, `EXP_COMPOSE_MODE` | compose | stream length (`2^k` allowed), batch size `m`, `per_batch` \| `chain` \| `forest` | `32`, `8`, all three |
+| `EXP_D`, `EXP_W`, `EXP_HLL_B`, `EXP_SS_CAP`, `EXP_GK_CAP` | both | sketch sizes | small (GK capacity 8 on e1, 64 on compose) |
+| `EXP_BLOOM_K`, `EXP_BLOOM_LOGW`, `EXP_KMV_K` | compose | Bloom slices, log2 bits per slice, KMV k | 7, 14, 1024 (the deployed sizes) |
+| `EXP_COMPOSE_N`, `EXP_COMPOSE_BATCHES`, `EXP_COMPOSE_MODE` | compose | stream length (`2^k` allowed), batch size `m`, `per_batch` \| `chain` \| `forest` | `32`, `8`, all three (plonky2 runner: N 16, m 4, cores 4, and d 2, w 4, SS/GK capacity 4) |
 | `EXP_COMPOSE_MACHINES`, `EXP_COMPOSE_CORES`, `EXP_COMPOSE_EXEC` | compose | machines, cores per machine, `procs` (real pinned processes) \| `sim`; pass `EXP_COMPOSE_EXEC=procs` explicitly at one machine | `1`, all, `procs` iff machines > 1 |
 | `EXP_COMPOSE_QUERY_EVERY_OPS` / `EXP_COMPOSE_QUERY_EVERY` | compose | mixed updates + queries: a query every Q stream positions / after every k-th batch | off |
 | `EXP_COMPOSE_BACKEND`, `BACKENDS` | compose / e1 | `plonky3` \| `plonky2` (\| `both` for e1) | `plonky3` / `both` |
-| `EXP_OUT` / `$1` | both | output CSV name under `results/` | per surface |
+| `EXP_OUT` | both | output CSV name under `results/`; also positional: `$1` of `run_compose.sh`, `$2` of `run_experiments.sh` (after the experiment id) | per surface |
 | `ZKSKETCH_COMMIT`, `ZKSKETCH_BINDING`, `ZKSKETCH_STATEMENT` | plonky3 | `hiding` \| `plain` commitments; `semantic` \| `bound` \| `legacy` binding; `interval` \| `boundary` statement | `hiding`, `semantic`, `interval` |
 
 Every paper command (figure and table by name), where each result file lives, the
@@ -221,8 +223,11 @@ hardware notes for the paper's testbed (RAM per machine, NUMA placement):
 
 32-bit key streams under `data/` (flat little-endian `u32` files), with the same key
 derivation as S³ so inputs are comparable. The synthetic files are seeded and frozen
-byte-for-byte; the real slices are 2^20 keys each. Recipe, regeneration and fetching:
-[docs/datasets.md](docs/datasets.md).
+byte-for-byte; the real slices are 2^20 keys each. The experiment runners load only
+`aol` and `netflix` from these files: for `uniform`, `gaussian` and `zipf` they regenerate
+the stream in code (seed 1, and a Zipf universe of N keys), so their inputs differ from
+the frozen `uniform.keys` (seed 2) and `zipf.keys` (universe 2^16). Recipe, regeneration
+and fetching: [docs/datasets.md](docs/datasets.md).
 
 | Dataset | Kind | Recipe | File |
 | --- | --- | --- | --- |
