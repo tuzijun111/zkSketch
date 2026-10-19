@@ -6,6 +6,9 @@
 # pipeline (state carried from epoch to epoch; --capacity SIX_GK_CAP --m-sub SIX_GK_MSUB --s 51
 # --impl SIX_ZKA_GK_IMPL; root variants designed / noroot / pertuple, no legacy); textbook =
 # ../gk, textbook Greenwald-Khanna, the labelled reference (and the committed 2026-10-09 rows).
+# A family's epoch is SIX_M_<FAM> when set (six_common.sh; e.g. GK 2,048 next to 16,384 for the
+# others in the memory-matched shape); the zkSketch leaf size (SIX_LEAF*) changes nothing here
+# except the matched GK's default --m-sub (= the zkSketch GK leaf).
 #
 #   run_zka.sh exec             executor only: aggregation epochs 0..T-1 of every family, once per
 #                               root variant of SIX_ZKA_ROOTS (default noroot), plus designed when
@@ -26,7 +29,7 @@
 #                               (gk query arg = rank value; bloom query arg = first|key:<u32>)
 #                               `jobs.py` prints the job list (42 jobs at the defaults).
 # ProverOpts::succinct(), CPU r0vm. Every proof is wrapped by rss_tree.sh (r0vm peak RSS).
-# Env: RESULTS, SIX_M, SIX_T, SIX_QNS, SIX_ZKA_ROOTS, SIX_ZKA_CM_REF (six_common.sh); GATE_* (gate.sh);
+# Env: RESULTS, SIX_M, SIX_M_<FAM>, SIX_T, SIX_QNS, SIX_ZKA_ROOTS, SIX_ZKA_CM_REF (six_common.sh); GATE_* (gate.sh);
 #   SIX_ZKA_PREFIX  output prefix (default six_zka): <prefix>_<fam>_{exec,qexec,prove}.csv/.log,
 #                   <prefix>_jobs.csv, <prefix>_qexec_jobs.csv. Rows of every variant share a
 #                   family's CSV; its root_variant / root_construction columns tell them apart.
@@ -53,7 +56,7 @@ OUTD=$RESULTS
 PFX=${SIX_ZKA_PREFIX:-six_zka}
 EB=$BASELINE_DIR/build
 KEYS=$WT/data/aol.keys
-M=$SIX_M   # records per epoch
+M=$SIX_M   # records per epoch (a family's own: six_fam_m)
 T=$SIX_T   # epochs
 QNS=$SIX_QNS
 source "$HERE6/gate.sh"
@@ -87,21 +90,25 @@ elf_md5s() {  # provenance: md5 of every guest ELF under the build dirs
 provenance() {
   echo "# $1 $(date -Is) host=$(hostname) nproc=$(nproc) load=[$(cut -d' ' -f1-3 /proc/loadavg)]"
   echo "# zka=$(git -C "$ZKA" rev-parse --short=12 HEAD) r0vm=$(r0vm --version 2>/dev/null) keys md5=$(md5sum < "$KEYS" | cut -c1-12) M=$M T=$T"
+  local f; for f in "${SIX_FAMS[@]}"; do
+    [[ $(six_fam_m "$f") == "$M" ]] || { echo "# per-family epochs: $(six_shape_desc)"; break; }
+  done
   echo "# zkSketch=$(git -C "$WT" rev-parse --short=9 HEAD) dirty_files=$(git -C "$WT" status --porcelain | wc -l) build_dir=$EB"
   echo "# $(six_gk_desc) gk_driver=${BIN[gk]}"
   elf_md5s
 }
 
-# common args per family (epoch slicing m = M, batches of 8, AOL) -> COMMON
+# common args per family (epoch slicing m = the family's epoch, batches of 8, AOL) -> COMMON
 common() {
+  local em; em=$(six_fam_m "$1")
   case $1 in
-    cm)    COMMON=(--family cm --epoch-size "$M" --batch 8 --keys "$KEYS") ;;
-    ss)    COMMON=(--capacity 1024 --epoch-size "$M" --batch 8 --keys "$KEYS") ;;
-    bloom) COMMON=(--epoch-size "$M" --batch 8 --keys "$KEYS" --absent 10000) ;;
-    gk)    COMMON=(--epoch-size "$M" --batch 8 --keys "$KEYS")
+    cm)    COMMON=(--family cm --epoch-size "$em" --batch 8 --keys "$KEYS") ;;
+    ss)    COMMON=(--capacity 1024 --epoch-size "$em" --batch 8 --keys "$KEYS") ;;
+    bloom) COMMON=(--epoch-size "$em" --batch 8 --keys "$KEYS" --absent 10000) ;;
+    gk)    COMMON=(--epoch-size "$em" --batch 8 --keys "$KEYS")
            [[ $SIX_ZKA_GK == matched ]] &&
              COMMON+=(--capacity "$SIX_GK_CAP" --m-sub "$SIX_GK_MSUB" --s 51 --impl "$SIX_ZKA_GK_IMPL") ;;
-    *)     COMMON=(--epoch-size "$M" --batch 8 --keys "$KEYS") ;;
+    *)     COMMON=(--epoch-size "$em" --batch 8 --keys "$KEYS") ;;
   esac
 }
 

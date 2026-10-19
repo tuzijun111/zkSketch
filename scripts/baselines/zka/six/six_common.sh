@@ -7,6 +7,16 @@
 #   SIX_T       epochs / batches                (default 8, or SIX_N / SIX_M when only SIX_N is set)
 #   SIX_N       records in all = SIX_M x SIX_T  (default 16384)
 #   SIX_QNS     query points n of the zk-Analytics side (default: powers of two <= T)
+#   SIX_M_<FAM> records per epoch of one family (FAM = CM HLL SS GK BLOOM KMV; default SIX_M), e.g.
+#               SIX_M_GK=2048 next to SIX_M=16384: each family is its own comparison, with SIX_T
+#               epochs of its own size on both sides (the memory-matched shape, run_all.sh memmatch)
+#   SIX_LEAF, SIX_LEAF_<FAM>  records per zkSketch LEAF (default: the family's epoch, one leaf per
+#               epoch). A smaller leaf proves each epoch as k = epoch / leaf leaves plus their k - 1
+#               merges in exp_compose's forest (EXP_COMPOSE_BATCHES = leaf, EXP_COMPOSE_N = epoch x
+#               SIX_T, a query after every leaf); zk-Analytics still proves one receipt per epoch.
+#               The leaf must divide the epoch. The zkSketch log records the shape ("# shape:" line),
+#               which assemble.py reads: zkSketch's "1 epoch" is then k leaves + k - 1 merges and the
+#               query at zk-Analytics point n is zkSketch's query after leaf n x k
 #   SIX_GK_CAP  zkSketch GK capacity            (default 2048)
 #   SIX_GK_ROUNDS  stable (default) | sorted: the zkSketch GK leaf's round certification
 #               (exp_compose EXP_GK_ROUNDS, M3). stable = the G1 stable-compaction circuit;
@@ -26,12 +36,12 @@
 #               epoch to epoch. textbook = Greenwald-Khanna 2001 rebuilt per epoch with a
 #               query-time merge (../gk): a DIFFERENT algorithm, kept as a labelled reference
 #               (the committed 2026-10-09 rows are textbook).
-#   SIX_GK_MSUB records per zkSketch GK leaf (default SIX_M, the zkSketch side's batch). The
-#               matched zk-Analytics GK applies each SIX_M-record epoch as SIX_M / SIX_GK_MSUB
-#               successive apply_batch2 steps: exactly zkSketch's leaves. Set it only to match
-#               a zkSketch GK run with smaller leaves than SIX_M (a memory-matched forest, e.g.
-#               zkSketch SIX_M=128 SIX_T=16 SIX_GK_CAP=384 against zk-Analytics SIX_M=2048
-#               SIX_T=1 SIX_GK_MSUB=128 SIX_GK_CAP=384); run_zks.sh always uses SIX_M.
+#   SIX_GK_MSUB records per zkSketch GK leaf on the zk-Analytics side (default: the zkSketch GK
+#               leaf, SIX_LEAF_GK / SIX_LEAF, else the GK epoch). The matched zk-Analytics GK applies
+#               each epoch as epoch / SIX_GK_MSUB successive apply_batch2 steps: exactly zkSketch's
+#               leaves. Leave it unset: set SIX_LEAF_GK instead, which sets both sides (the old way,
+#               a zk-Analytics-only run with SIX_GK_MSUB against a zkSketch run of other SIX_M / SIX_T,
+#               still works; assemble.py flags a GK leaf that differs from it as CONFIG MISMATCH).
 #   SIX_ZKA_GK_IMPL  literal (default) | tuned | fast | fixed_linear: the matched GK guest's
 #               implementation of the one transition (same state). literal = zkSketch's GK
 #               algorithm as its original code (apply_batch2 statement for statement): the
@@ -69,6 +79,35 @@ if ! six_is_uint "$SIX_M" || ! six_is_uint "$SIX_T" || (( SIX_M == 0 || SIX_T ==
 fi
 SIX_N=${SIX_N:-$((SIX_M * SIX_T))}
 (( SIX_N == SIX_M * SIX_T )) || six_die "SIX_N=$SIX_N must equal SIX_M x SIX_T = $((SIX_M * SIX_T))"
+SIX_FAMS=(cm hll ss gk bloom kmv)
+six_fam_m() {     # six_fam_m <fam>: records per epoch of that family (SIX_M_<FAM>, else SIX_M)
+  local v="SIX_M_${1^^}"
+  echo "${!v:-$SIX_M}"
+}
+six_fam_leaf() {  # six_fam_leaf <fam>: records per zkSketch leaf (SIX_LEAF_<FAM>, else SIX_LEAF, else the epoch)
+  local v="SIX_LEAF_${1^^}"
+  echo "${!v:-${SIX_LEAF:-$(six_fam_m "$1")}}"
+}
+for _f in "${SIX_FAMS[@]}"; do
+  _m=$(six_fam_m "$_f"); _l=$(six_fam_leaf "$_f")
+  six_is_uint "$_m" && six_is_uint "$_l" && (( _m > 0 && _l > 0 )) ||
+    six_die "$_f: epoch $_m (SIX_M_${_f^^} / SIX_M) and leaf $_l (SIX_LEAF_${_f^^} / SIX_LEAF) must be positive integers"
+  (( _m % _l == 0 )) || six_die "$_f: the zkSketch leaf of $_l records (SIX_LEAF_${_f^^} / SIX_LEAF) must divide the $_m-record epoch"
+done
+unset _f _m _l
+six_forest() {    # true when some family proves an epoch as several zkSketch leaves
+  local f
+  for f in "${SIX_FAMS[@]}"; do [[ $(six_fam_leaf "$f") != "$(six_fam_m "$f")" ]] && return 0; done
+  return 1
+}
+six_shape_desc() {  # one line: per family epoch = k x leaf (logs, manifest)
+  local f m l out=
+  for f in "${SIX_FAMS[@]}"; do
+    m=$(six_fam_m "$f"); l=$(six_fam_leaf "$f")
+    out+="${out:+, }$f $m = $((m / l)) x $l"
+  done
+  echo "records per epoch = zkSketch leaves x leaf records: $out; $SIX_T epoch(s) each"
+}
 SIX_GK_CAP=${SIX_GK_CAP:-2048}
 SIX_GK_ROUNDS=${SIX_GK_ROUNDS:-stable}
 [[ $SIX_GK_ROUNDS == stable || $SIX_GK_ROUNDS == sorted ]] || six_die "SIX_GK_ROUNDS=$SIX_GK_ROUNDS must be stable or sorted"
@@ -95,13 +134,13 @@ SIX_ZKA_EXEC_ROOTS=$SIX_ZKA_ROOTS   # the variants `run_zka.sh exec` executes
 if six_cm_ref_on; then SIX_ZKA_EXEC_ROOTS+=,designed; fi
 SIX_ZKA_GK=${SIX_ZKA_GK:-matched}
 [[ $SIX_ZKA_GK == matched || $SIX_ZKA_GK == textbook ]] || six_die "SIX_ZKA_GK=$SIX_ZKA_GK must be matched or textbook"
-SIX_GK_MSUB=${SIX_GK_MSUB:-$SIX_M}
+SIX_GK_MSUB=${SIX_GK_MSUB:-$(six_fam_leaf gk)}
 SIX_ZKA_GK_IMPL=${SIX_ZKA_GK_IMPL:-literal}
 if [[ $SIX_ZKA_GK == matched ]]; then
   six_is_uint "$SIX_GK_MSUB" && six_is_uint "$SIX_GK_CAP" && (( SIX_GK_MSUB > 0 && SIX_GK_CAP > 0 )) ||
     six_die "SIX_GK_MSUB=$SIX_GK_MSUB / SIX_GK_CAP=$SIX_GK_CAP must be positive integers"
-  (( SIX_M % SIX_GK_MSUB == 0 )) ||
-    six_die "SIX_GK_MSUB=$SIX_GK_MSUB must divide SIX_M=$SIX_M (each epoch is SIX_M / SIX_GK_MSUB zkSketch leaves)"
+  (( $(six_fam_m gk) % SIX_GK_MSUB == 0 )) ||
+    six_die "SIX_GK_MSUB=$SIX_GK_MSUB must divide the GK epoch $(six_fam_m gk) (SIX_M_GK / SIX_M; each epoch is epoch / SIX_GK_MSUB zkSketch leaves)"
   (( (SIX_GK_CAP + SIX_GK_MSUB) % 2 == 0 )) ||
     six_die "SIX_GK_CAP + SIX_GK_MSUB = $((SIX_GK_CAP + SIX_GK_MSUB)) is odd: zkSketch's GK leaf needs an even table"
   [[ $SIX_ZKA_GK_IMPL =~ ^(tuned|fast|fixed_linear|literal)$ ]] ||
@@ -112,7 +151,8 @@ fi
 # six_gk_desc: one line naming the zk-Analytics GK of this configuration (logs, manifest)
 six_gk_desc() {
   if [[ $SIX_ZKA_GK == matched ]]; then
-    echo "zka_gk=matched (zkSketch's GK rule bm2 in their pipeline: capacity $SIX_GK_CAP, s 51, m_sub $SIX_GK_MSUB = $((SIX_M / SIX_GK_MSUB)) apply_batch2 step(s) per $SIX_M-record epoch, implementation $SIX_ZKA_GK_IMPL)"
+    local mg; mg=$(six_fam_m gk)
+    echo "zka_gk=matched (zkSketch's GK rule bm2 in their pipeline: capacity $SIX_GK_CAP, s 51, m_sub $SIX_GK_MSUB = $((mg / SIX_GK_MSUB)) apply_batch2 step(s) per $mg-record epoch, implementation $SIX_ZKA_GK_IMPL)"
   else
     echo "zka_gk=textbook (Greenwald-Khanna 2001 per epoch + query-time merge: NOT zkSketch's algorithm; reference)"
   fi

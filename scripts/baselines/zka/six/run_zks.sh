@@ -4,9 +4,12 @@
 #   forest, procs engine, 1 machine x SIX_CORES cores, N = SIX_T x SIX_M AOL records in SIX_T
 #   batches of SIX_M, a query after every batch (n = 1..T), default (hiding) commitments.
 #   Paper configuration (the defaults): 32 cores, N = 16,384, m = 2,048 (t = 8).
+#   With a zkSketch leaf smaller than the epoch (SIX_LEAF / SIX_LEAF_<FAM>, per-family epochs
+#   SIX_M_<FAM>; six_common.sh): N = SIX_T x epoch records in leaves of `leaf` records (t = SIX_T x
+#   epoch / leaf leaves), a query after every leaf; the log's "# shape:" line records the epoch.
 # Usage: run_zks.sh [tag ...]   (default: cm hll ss gk bloom bloom_absent kmv)
-# Env (see six_common.sh for RESULTS, SIX_M, SIX_T, SIX_N, SIX_GK_CAP, SIX_GK_ROUNDS, SIX_BLOOM_VARIANT,
-#   SIX_CORES; gate.sh for GATE_*):
+# Env (see six_common.sh for RESULTS, SIX_M, SIX_T, SIX_N, SIX_M_<FAM>, SIX_LEAF, SIX_LEAF_<FAM>, SIX_GK_CAP,
+#   SIX_GK_ROUNDS, SIX_BLOOM_VARIANT, SIX_CORES; gate.sh for GATE_*):
 #   ZKS_BIN          exp_compose binary (default: this checkout's target/release/examples/exp_compose;
 #                    build it in THIS checkout: exp_compose finds data/ and results/ through the
 #                    checkout it was compiled in)
@@ -50,6 +53,11 @@ source "$HERE6/gate.sh"
 
 [[ -x $BIN ]] || six_die "missing $BIN -- build it: (cd $WT && cargo build --release --locked --example exp_compose)"
 (( CORES <= $(nproc) )) || six_die "SIX_CORES=$CORES > $(nproc) usable CPUs (exp_compose refuses to oversubscribe)"
+for tag in "${TAGS[@]}"; do
+  [[ $tag == gk ]] || continue
+  (( (SIX_GK_CAP + $(six_fam_leaf gk)) % 2 == 0 )) ||
+    six_die "SIX_GK_CAP + the GK leaf = $SIX_GK_CAP + $(six_fam_leaf gk) is odd: zkSketch's GK leaf needs an even table"
+done
 NOTES_HDR="tag,family,key_mode,family_env,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,main_peak_rss_mb,desc_peak_rss_mb,commit,zks_head,features,bin_md5"
 if [[ ! -s $NOTES ]]; then echo "$NOTES_HDR" > "$NOTES"
 elif [[ "$(head -1 "$NOTES")" != "$NOTES_HDR" ]]; then six_die "$NOTES has a different header; use a fresh RESULTS directory"; fi
@@ -77,20 +85,26 @@ trap on_signal INT TERM HUP
 # only this call's proof dirs: another run_zks.sh may share an explicit SIX_WORK
 trap 'for t in "${TAGS[@]}"; do rm -rf "$SP/proofs_$t"; done; rmdir "$SP" 2>/dev/null' EXIT
 
-echo "run_zks.sh: ${#TAGS[@]} run(s) -> $OUTD (N=$SIX_N m=$SIX_M t=$SIX_T cores=$CORES; $(gate_settings))" >&2
+if six_forest || [[ $(for f in "${SIX_FAMS[@]}"; do six_fam_m "$f"; done | sort -u | wc -l) != 1 ]]; then
+  echo "run_zks.sh: ${#TAGS[@]} run(s) -> $OUTD ($(six_shape_desc); cores=$CORES; $(gate_settings))" >&2
+else
+  echo "run_zks.sh: ${#TAGS[@]} run(s) -> $OUTD (N=$SIX_N m=$SIX_M t=$SIX_T cores=$CORES; $(gate_settings))" >&2
+fi
 FAILED=()
 for tag in "${TAGS[@]}"; do
   fam=${FAM[$tag]}
+  em=$(six_fam_m "$fam"); lm=$(six_fam_leaf "$fam")   # records per epoch, per leaf
   log=$OUTD/${PFX}_$tag.log
   csvname=${PFX}_$tag
   rm -f "$WT/results/$csvname.csv"
   if gate; then g=quiet; else g="$GATE_WHY"; echo "gate failed for $tag: $GATE_WHY -- running anyway, row marked" >&2; fi
   start=$(date -Is)
-  envs="EXP_COMPOSE_FAMILY=$fam EXP_COMPOSE_MODE=forest EXP_COMPOSE_EXEC=procs EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=$CORES EXP_COMPOSE_N=$SIX_N EXP_COMPOSE_BATCHES=$SIX_M EXP_COMPOSE_QUERY_EVERY=1 EXP_DATASET=aol EXP_QUERY_KEY_MODE=${KM[$tag]} ${ENVS[$tag]} EXP_QUERY_LOG=1 EXP_VERIFY_REPEATS=$VREP"
+  envs="EXP_COMPOSE_FAMILY=$fam EXP_COMPOSE_MODE=forest EXP_COMPOSE_EXEC=procs EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=$CORES EXP_COMPOSE_N=$((em * SIX_T)) EXP_COMPOSE_BATCHES=$lm EXP_COMPOSE_QUERY_EVERY=1 EXP_DATASET=aol EXP_QUERY_KEY_MODE=${KM[$tag]} ${ENVS[$tag]} EXP_QUERY_LOG=1 EXP_VERIFY_REPEATS=$VREP"
   {
     echo "# six-sketch zkSketch run tag=$tag $(date -Is) host=$(hostname) nproc=$(nproc) gate=$g waited_s=$GATE_WAITED_S load1_start=$GATE_L0 busy_cores_start=$GATE_BUSY"
     echo "# zkSketch HEAD=$(git -C "$WT" rev-parse --short=9 HEAD) dirty_files_outside_results=$(dirty) features=$FEAT bin_md5=$BIN_MD5"
     echo "# env: $envs (ZKSKETCH_COMMIT unset = hiding default)"
+    echo "# shape: epoch_records=$em leaf_records=$lm leaves_per_epoch=$((em / lm)) epochs=$SIX_T"
     echo "# m0 switches: EXP_FOREST_RETAIN_PREP=${EXP_FOREST_RETAIN_PREP-unset} EXP_MALLOC_TRIM=${EXP_MALLOC_TRIM-unset} EXP_EXIT_BEFORE_AUDIT=${EXP_EXIT_BEFORE_AUDIT-unset} EXP_MERGE_CACHE=${EXP_MERGE_CACHE-unset} EXP_MERGE_CACHE_ENTRIES=${EXP_MERGE_CACHE_ENTRIES-unset} (unset = M0 default on)"
   } > "$log"
   echo "== zkSketch $tag ($(date +%T)); log $log" >&2

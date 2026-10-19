@@ -17,6 +17,18 @@
 #                               prints the plan and runs nothing; the GK rank values and Bloom absent
 #                               keys are then derived natively, or read from DIR's zkSketch logs with
 #                               --from-logs (the real run reads this run's logs)
+#   run_all.sh memmatch [--quick] [--epochs T] [--dry-run] [--from-logs DIR [--zks-prefix P]]
+#                               the memory-matched shape behind the paper's final numbers: each family
+#                               on its own epoch (GK 2,048 records, the others 16,384), which zkSketch
+#                               proves as k leaves + k - 1 merges (GK cap 768, leaves of 512: k = 4;
+#                               CM, HLL, Bloom 1,024: k = 16; SS, KMV 4,096: k = 4) and zk-Analytics as
+#                               one receipt (its matched GK with --m-sub 512), T epochs (default 1).
+#                               Every planned zk-Analytics job is proved (14 at T = 1: about 5 h 30 min,
+#                               an estimate). --quick: the same pipeline at tiny scale (epochs of 256
+#                               records in leaves of 128, SS/KMV one leaf of 256, GK 512 = 4 x 128 with
+#                               cap 384, T = 2; about 10 min), proofs as in quick (SIX_QUICK_PROVE), the
+#                               rest ESTIMATED. The tables then give zkSketch's "1 epoch" as its k leaves
+#                               + k - 1 merges, and its worker, coordinator and combined peak memory
 #   run_all.sh assemble DIR     re-run assemble.py + table.py on a finished results directory
 #
 # zk-Analytics root variants. Their code builds, inside each epoch's aggregation proof, a Merkle
@@ -61,8 +73,9 @@
 #   SIX_BLOOM_VARIANT  packed (default) | omc: zkSketch's Bloom leaf (six_common.sh); honoured by quick/full
 #   EXP_VERIFY_REPEATS, EXP_FOREST_RETAIN_PREP, EXP_MALLOC_TRIM, EXP_EXIT_BEFORE_AUDIT, EXP_MERGE_CACHE,
 #                  EXP_MERGE_CACHE_ENTRIES  passed through to the zkSketch runs (run_zks.sh)
-# quick and full use fixed run shapes: SIX_M, SIX_T, SIX_N, SIX_GK_CAP, SIX_GK_MSUB and SIX_QNS are
-# ignored here (they apply to the individual six/*.sh scripts).
+# quick, full and memmatch use fixed run shapes: SIX_M, SIX_T, SIX_N, SIX_GK_CAP, SIX_GK_MSUB, SIX_QNS,
+# SIX_M_<FAM>, SIX_LEAF and SIX_LEAF_<FAM> are ignored here (they apply to the individual six/*.sh
+# scripts; memmatch takes --epochs T).
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZKS="$(cd "$HERE6/../../../.." && pwd)"
@@ -100,6 +113,20 @@ plan_counts() {  # plan_counts <roots> <cm_ref>: "<total> <aggregation> <referen
   nr=$(tr ',' '\n' <<< "$1" | wc -l); na=$((12 * nr))
   if cm_ref_on "$1" "$2"; then nref=2; fi
   echo "$((na + nref + 28)) $na $nref"
+}
+
+FAMS=(cm hll ss gk bloom kmv)
+fam_m() { local v="SIX_M_${1^^}"; echo "${!v:-$SIX_M}"; }                       # records per epoch
+fam_leaf() { local v="SIX_LEAF_${1^^}"; echo "${!v:-${SIX_LEAF:-$(fam_m "$1")}}"; }  # records per zkSketch leaf
+shape_args() {  # jobs.py --fam-m / --leaf of this run shape (nothing for one leaf per epoch everywhere)
+  local f fm= lf=
+  for f in "${FAMS[@]}"; do
+    [[ $(fam_m "$f") != "$SIX_M" ]] && fm+="${fm:+,}$f=$(fam_m "$f")"
+    [[ $(fam_leaf "$f") != "$(fam_m "$f")" ]] && lf+="${lf:+,}$f=$(fam_leaf "$f")"
+  done
+  [[ -n $fm ]] && echo "--fam-m $fm"
+  [[ -n $lf ]] && echo "--leaf $lf"
+  return 0
 }
 
 die() { echo "error: $*" >&2; exit 2; }
@@ -188,7 +215,7 @@ check_run() {  # machine resources and run-time settings
   # MemTotal is a little below the installed RAM (a 16 / 96 GiB machine reports ~15.5 / ~94):
   # accept 15 / 90 GiB of MemTotal for the README's 16 / 96 GiB
   mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo); mem_g=$((mem_kb / 1024 / 1024))
-  if (( mem_g >= 90 )); then ok "RAM ${mem_g} GiB MemTotal (quick needs 16 GiB installed; full 96, its zkSketch GK run peaks at ~59 GiB)"
+  if (( mem_g >= 90 )); then ok "RAM ${mem_g} GiB MemTotal (quick and memmatch need 16 GiB installed; full 96, its zkSketch GK run peaks at ~59 GiB)"
   elif (( mem_g >= 15 )); then warn "RAM ${mem_g} GiB MemTotal: enough for quick, not for full (its zkSketch GK run peaks at ~59 GiB under the default zero-knowledge build; 96 GiB installed, 128 recommended)"
   else miss "RAM ${mem_g} GiB MemTotal: need 16 GiB installed (one zk-Analytics proof alone peaks at ~9.2 GiB)"; fi
   pc=$(phys_cores); cores=${SIX_CORES:-$(default_cores)}
@@ -335,9 +362,16 @@ write_manifest() {  # write_manifest <mode>
     echo "# six-sketch comparison run manifest"
     echo "mode=$1"
     echo "started=$(date -Is)"
-    echo "N=$SIX_N M=$SIX_M T=$SIX_T gk_cap=$SIX_GK_CAP gk_rounds=${SIX_GK_ROUNDS:-stable} bloom_variant=${SIX_BLOOM_VARIANT:-packed} query_points=$SIX_QNS aggr_epochs=0,$((SIX_T - 1)) cores=$SIX_CORES"
+    if [[ $1 == memmatch* ]]; then
+      echo "M=$SIX_M T=$SIX_T gk_cap=$SIX_GK_CAP gk_rounds=${SIX_GK_ROUNDS:-stable} bloom_variant=${SIX_BLOOM_VARIANT:-packed} query_points=$SIX_QNS aggr_epochs=$(aggr_list) cores=$SIX_CORES"
+      echo "shape=$(for f in "${FAMS[@]}"; do printf '%s:%s/%s,' "$f" "$(fam_m "$f")" "$(fam_leaf "$f")"; done | sed 's/,$//') (family:epoch records/zkSketch leaf records; k = epoch / leaf leaves + k - 1 merges per epoch)"
+    else
+      echo "N=$SIX_N M=$SIX_M T=$SIX_T gk_cap=$SIX_GK_CAP gk_rounds=${SIX_GK_ROUNDS:-stable} bloom_variant=${SIX_BLOOM_VARIANT:-packed} query_points=$SIX_QNS aggr_epochs=0,$((SIX_T - 1)) cores=$SIX_CORES"
+    fi
     echo "zka_roots=$SIX_ZKA_ROOTS (aggregation root variants executed and planned) zka_cm_ref=$SIX_ZKA_CM_REF ($(if cm_ref_on "$SIX_ZKA_ROOTS" "$SIX_ZKA_CM_REF"; then echo "their shipped CM planned as a reference; designed also executed"; else echo "no separate CM reference"; fi))"
-    if [[ $SIX_ZKA_GK == matched ]]; then
+    if [[ $SIX_ZKA_GK == matched && $1 == memmatch* ]]; then
+      echo "zka_gk=matched (zkSketch's GK rule in their pipeline: capacity $SIX_GK_CAP, s 51, m_sub $(fam_leaf gk) = $(( $(fam_m gk) / $(fam_leaf gk) )) apply_batch2 step(s) per $(fam_m gk)-record epoch, implementation $SIX_ZKA_GK_IMPL)"
+    elif [[ $SIX_ZKA_GK == matched ]]; then
       echo "zka_gk=matched (zkSketch's GK rule in their pipeline: capacity $SIX_GK_CAP, s 51, m_sub $SIX_M = 1 apply_batch2 step per epoch, implementation $SIX_ZKA_GK_IMPL)"
     else
       echo "zka_gk=textbook (textbook Greenwald-Khanna, NOT zkSketch's algorithm: a reference)"
@@ -376,14 +410,17 @@ preflight_built() {
   [[ -z $stale ]] || die "built before the root variants (no --root; run: $0 build): $(echo $stale)"
 }
 
+aggr_list() { if (( SIX_T > 1 )); then echo "0,$((SIX_T - 1))"; else echo 0; fi; }
 jobs_py() {  # jobs_py [jobs.py options...]: the job plan of this run shape
+  # shellcheck disable=SC2046  # shape_args prints option words
   python3 -I "$HERE6/jobs.py" --keys "$KEYS" --m "$SIX_M" --t "$SIX_T" --qns "$SIX_QNS" --aggr "0,$((SIX_T - 1))" \
-    --roots "$SIX_ZKA_ROOTS" --cm-ref "$SIX_ZKA_CM_REF" "$@"
+    --roots "$SIX_ZKA_ROOTS" --cm-ref "$SIX_ZKA_CM_REF" $(shape_args) "$@"
 }
 
+ASM_EXTRA=()   # memmatch: --extended (the shape, zkSketch-variant and memory columns)
 assemble_and_table() {  # assemble_and_table <dir> [--plan FILE]
   local d=$1; shift
-  python3 -I "$HERE6/assemble.py" "$d" "$KEYS" --zka six_zka --zks six_zksketch "$@" \
+  python3 -I "$HERE6/assemble.py" "$d" "$KEYS" --zka six_zka --zks six_zksketch "$@" ${ASM_EXTRA[@]+"${ASM_EXTRA[@]}"} \
     --out "$d/six_sketch_comparison.csv" || return 1
   python3 -I "$HERE6/table.py" "$d/six_sketch_comparison.csv" --zka six_zka > "$d/six_sketch_table.md" || return 1
 }
@@ -405,19 +442,41 @@ summary() {  # summary <mode> <rc>
   if (( rc == 0 )); then echo "$mode: OK in $(hms $SECONDS)"; else echo "$mode: FAILED (rc=$rc) after $(hms $SECONDS); see the logs above"; fi
 }
 
-load_shape() {  # load_shape <mode>: export the run shape for the child scripts
-  local v given=()
-  for v in SIX_M SIX_T SIX_N SIX_GK_CAP SIX_GK_MSUB SIX_QNS; do [[ -n ${!v:-} ]] && given+=("$v=${!v}"); done
-  unset SIX_GK_MSUB   # = SIX_M (six_common.sh): one zkSketch leaf per epoch in both fixed shapes
+load_shape() {  # load_shape <mode> [epochs]: export the run shape for the child scripts
+  local v given=() f q
+  for v in SIX_M SIX_T SIX_N SIX_GK_CAP SIX_GK_MSUB SIX_QNS SIX_LEAF; do [[ -n ${!v:-} ]] && given+=("$v=${!v}"); done
+  for f in "${FAMS[@]}"; do
+    for v in "SIX_M_${f^^}" "SIX_LEAF_${f^^}"; do [[ -n ${!v:-} ]] && given+=("$v=${!v}"); unset "$v"; done
+  done
+  # the zk-Analytics GK's m_sub = the zkSketch GK leaf (six_common.sh): one leaf per epoch in quick
+  # and full, the memmatch leaf in memmatch
+  unset SIX_GK_MSUB SIX_LEAF
   if (( ${#given[@]} )); then
     echo "note: run_all.sh $1 uses its fixed run shape; ignoring ${given[*]} (those apply to the individual six/*.sh scripts)" >&2
   fi
-  if [[ $1 == quick ]]; then
-    export SIX_M=256 SIX_T=2 SIX_N=512 SIX_GK_CAP=512 SIX_QNS=1,2
-    export GATE_WAIT_S=${GATE_WAIT_S:-0}
-  else
-    export SIX_M=2048 SIX_T=8 SIX_N=16384 SIX_GK_CAP=2048 SIX_QNS=1,2,4,8
-    export GATE_WAIT_S=${GATE_WAIT_S:-1800}
+  case $1 in
+    quick)
+      export SIX_M=256 SIX_T=2 SIX_N=512 SIX_GK_CAP=512 SIX_QNS=1,2
+      export GATE_WAIT_S=${GATE_WAIT_S:-0} ;;
+    full)
+      export SIX_M=2048 SIX_T=8 SIX_N=16384 SIX_GK_CAP=2048 SIX_QNS=1,2,4,8
+      export GATE_WAIT_S=${GATE_WAIT_S:-1800} ;;
+    memmatch)   # M2/M3: GK cap 768 in 512-record leaves; Bloom, CM, HLL 1,024; SS, KMV 4,096
+      export SIX_M=16384 SIX_M_GK=2048 SIX_T=${2:-1} SIX_GK_CAP=768
+      export SIX_LEAF_CM=1024 SIX_LEAF_HLL=1024 SIX_LEAF_SS=4096 SIX_LEAF_GK=512 SIX_LEAF_BLOOM=1024 SIX_LEAF_KMV=4096
+      export GATE_WAIT_S=${GATE_WAIT_S:-1800} ;;
+    memmatch-quick)   # the same pipeline at tiny scale: k = 2 (CM, HLL, Bloom), 1 (SS, KMV), 4 (GK)
+      export SIX_M=256 SIX_M_GK=512 SIX_T=${2:-2} SIX_GK_CAP=384
+      export SIX_LEAF_CM=128 SIX_LEAF_HLL=128 SIX_LEAF_SS=256 SIX_LEAF_GK=128 SIX_LEAF_BLOOM=128 SIX_LEAF_KMV=256
+      export GATE_WAIT_S=${GATE_WAIT_S:-0} ;;
+  esac
+  if [[ $1 == memmatch* ]]; then
+    export SIX_N=$((SIX_M * SIX_T)) SIX_QNS=1
+    for ((q = 2; q <= SIX_T; q *= 2)); do SIX_QNS+=",$q"; done
+    for f in "${FAMS[@]}"; do
+      (( $(fam_m "$f") % $(fam_leaf "$f") == 0 )) || die "memmatch: the $f leaf $(fam_leaf "$f") must divide its epoch $(fam_m "$f")"
+    done
+    (( (SIX_GK_CAP + $(fam_leaf gk)) % 2 == 0 )) || die "memmatch: GK cap + leaf must be even"
   fi
   export SIX_CORES=${SIX_CORES:-$(default_cores)}
   export SIX_ZKA_ROOTS=${SIX_ZKA_ROOTS:-noroot} SIX_ZKA_CM_REF=${SIX_ZKA_CM_REF:-1}
@@ -444,7 +503,11 @@ cmd_quick() {
   echo "  zkSketch: 7 runs, N=$SIX_N (t=$SIX_T batches of m=$SIX_M), $SIX_CORES cores; zk-Analytics: executor for all six"
   echo "  under root variants $EXEC_ROOTS, proofs: ${sel//,/ } (the other planned jobs are ESTIMATED from padded"
   echo "  cycles); GATE_WAIT_S=$GATE_WAIT_S"
-  local rc=0 plan
+  steps_sampled quick "$sel"
+}
+
+steps_sampled() {  # steps_sampled <mode> <selection>: quick's steps: the selected proofs, the rest ESTIMATED
+  local mode=$1 sel=$2 rc=0 plan
   step "zkSketch: run_zks.sh (7 runs)" "$HERE6/run_zks.sh" || rc=1
   if (( rc == 0 )); then
     step "zk-Analytics executor: run_zka.sh exec (root variants $EXEC_ROOTS)" "$HERE6/run_zka.sh" exec || rc=1
@@ -470,7 +533,7 @@ cmd_quick() {
   if (( rc == 0 )); then
     step "assemble + table" assemble_and_table "$RESULTS" --plan "$RESULTS/zka_plan.txt" || rc=1
   fi
-  summary quick $rc
+  summary "$mode" $rc
   return $rc
 }
 
@@ -528,20 +591,120 @@ EOF
   echo "full run (paper configuration) -> $RESULTS"
   echo "  zkSketch 7 runs + zk-Analytics executor (root variants $EXEC_ROOTS) + the planned proofs (42 at the"
   echo "  defaults: expect ~3 h 30 min of running, an estimate, plus gate waits; GATE_WAIT_S=$GATE_WAIT_S per timed job)"
-  local rc=0 plan
+  steps_proved full
+}
+
+steps_proved() {  # steps_proved <mode>: full's steps: every planned zk-Analytics job proved
+  local mode=$1 rc=0 plan
   # zkSketch or executor failures stop the run (fix and start again); a failed proof does not:
   # the remaining proofs still run, the table shows '-' for it, and the exit status is 1.
-  step "zkSketch: run_zks.sh (7 runs)" "$HERE6/run_zks.sh" || { summary full 1; return 1; }
-  step "zk-Analytics executor: run_zka.sh exec (root variants $EXEC_ROOTS)" "$HERE6/run_zka.sh" exec || { summary full 1; return 1; }
+  step "zkSketch: run_zks.sh (7 runs)" "$HERE6/run_zks.sh" || { summary "$mode" 1; return 1; }
+  step "zk-Analytics executor: run_zka.sh exec (root variants $EXEC_ROOTS)" "$HERE6/run_zka.sh" exec || { summary "$mode" 1; return 1; }
   jobs_py --logs "$RESULTS" --prefix six_zksketch --lines > "$RESULTS/zka_plan.txt" \
-    || { echo "cannot plan the zk-Analytics jobs (see above)"; summary full 1; return 1; }
+    || { echo "cannot plan the zk-Analytics jobs (see above)"; summary "$mode" 1; return 1; }
   echo "zk-Analytics plan: $(wc -l < "$RESULTS/zka_plan.txt") jobs ($RESULTS/zka_plan.txt), GK rank values and Bloom absent keys from this run's zkSketch logs"
   step "zk-Analytics SS/GK profile: prof_exec.sh" "$HERE6/prof_exec.sh" || rc=1
   mapfile -t plan < "$RESULTS/zka_plan.txt"
   step "zk-Analytics proofs: run_zka.sh prove (${#plan[@]} jobs)" "$HERE6/run_zka.sh" prove "${plan[@]}" || rc=1
   step "assemble + table" assemble_and_table "$RESULTS" || rc=1
-  summary full $rc
+  summary "$mode" $rc
   return $rc
+}
+
+# ------------------------------------------------------------------ memmatch
+memmatch_plan() {  # memmatch_plan <mode> <quick> <selection> <jobs> <source>: the --dry-run text
+  local mode=$1 quick=$2 sel=$3 jobs=$4 src=$5 f m l k nagg nref=0 nq nsel
+  nagg=$(grep -c ':aggr:' <<< "$jobs"); nq=$(grep -c ':query:' <<< "$jobs")
+  if cm_ref_on "$SIX_ZKA_ROOTS" "$SIX_ZKA_CM_REF"; then nref=$(grep -c '^cm:aggr:[0-9]*:designed$' <<< "$jobs"); fi
+  echo "memory-matched run plan (dry run; nothing is executed)$( (( quick )) && echo ": --quick, the tiny smoke shape")"
+  echo "  RESULTS=${RESULTS:-$ZKS/results/six/$mode-<YYYYmmdd-HHMMSS>}  BASELINE_DIR=$BASELINE_DIR"
+  echo "  shape: T=$SIX_T epoch(s) per family, queries at n = $SIX_QNS, zkSketch cores $SIX_CORES, gate wait <= ${GATE_WAIT_S}s per timed job"
+  printf '    %-6s %8s   %-28s %s\n' family epoch 'zkSketch leaves x records' 'zkSketch run (exp_compose forest, a query after every leaf)'
+  for f in "${FAMS[@]}"; do
+    m=$(fam_m "$f"); l=$(fam_leaf "$f"); k=$((m / l))
+    printf '    %-6s %8s   %-28s %s\n' "$f" "$m" "$k x $l" "EXP_COMPOSE_N=$((m * SIX_T)) EXP_COMPOSE_BATCHES=$l: $((k * SIX_T)) leaves + $((k * SIX_T - 1)) merge$( (( k * SIX_T != 2 )) && echo s)$( [[ $f == gk ]] && echo ", cap $SIX_GK_CAP, rounds ${SIX_GK_ROUNDS:-stable}")$( [[ $f == bloom ]] && echo ", ${SIX_BLOOM_VARIANT:-packed} (+ bloom_absent)")"
+  done
+  if [[ $SIX_ZKA_GK == matched ]]; then
+    echo "  zk-Analytics GK: SIX_ZKA_GK=matched, --capacity $SIX_GK_CAP --m-sub $(fam_leaf gk) --s 51 --impl $SIX_ZKA_GK_IMPL: $(( $(fam_m gk) / $(fam_leaf gk) )) apply_batch2 steps per $(fam_m gk)-record epoch, zkSketch's leaves"
+  else
+    echo "  zk-Analytics GK: SIX_ZKA_GK=textbook (textbook Greenwald-Khanna: a reference, not zkSketch's algorithm)"
+  fi
+  local envs="SIX_M=$SIX_M SIX_M_GK=$SIX_M_GK SIX_T=$SIX_T"
+  for f in "${FAMS[@]}"; do envs+=" SIX_LEAF_${f^^}=$(fam_leaf "$f")"; done
+  echo "  1. zkSketch, 7 timed runs:   $envs SIX_GK_CAP=$SIX_GK_CAP SIX_GK_ROUNDS=${SIX_GK_ROUNDS:-stable} SIX_BLOOM_VARIANT=${SIX_BLOOM_VARIANT:-packed} SIX_CORES=$SIX_CORES $HERE6/run_zks.sh ${TAGS[*]}"
+  echo "  2. zk-Analytics executor:    SIX_M=$SIX_M SIX_M_GK=$SIX_M_GK SIX_T=$SIX_T SIX_GK_CAP=$SIX_GK_CAP SIX_LEAF_GK=$(fam_leaf gk) SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS SIX_ZKA_CM_REF=$SIX_ZKA_CM_REF $HERE6/run_zka.sh exec"
+  echo "                               (aggregation epochs 0..$((SIX_T - 1)) of all six under root variants $EXEC_ROOTS, each on its family's epoch)"
+  if (( quick )); then
+    nsel=$(jobs_sel "$jobs" "$sel" | wc -l)
+    echo "  3. zk-Analytics query executor (run_zka.sh qexec, $nq jobs) and SS/GK guest profile (prof_exec.sh)"
+    echo "  4. zk-Analytics, $nsel timed proofs: $(jobs_sel "$jobs" "$sel" | tr '\n' ' ')(SIX_QUICK_PROVE=$sel); the other $(( $(wc -l <<< "$jobs") - nsel )) planned jobs ESTIMATED"
+  else
+    echo "  3. SS/GK guest profile:      $HERE6/prof_exec.sh          (executor only)"
+    echo "  4. zk-Analytics, $(wc -l <<< "$jobs") timed proofs: $HERE6/run_zka.sh prove <jobs>"
+    echo "     $((nagg - nref)) aggregation proofs (epoch(s) $(aggr_list) x 6 families x root variants $SIX_ZKA_ROOTS) + $nq query proofs$( (( nref )) && echo " + $nref CM reference proof(s) (their shipped CM, last)")"
+    (( SIX_T == 1 )) && echo "     about 5 h 30 min of running at T = 1, an ESTIMATE: ~2,500-3,100 s per 16,384-record aggregation proof (85-104 segments of 2^20 cycles x ~30 s), ~930 s for GK (31 segments), the 7 queries and zkSketch's 7 runs ~40 min; plus quiet-machine waits"
+  fi
+  echo "     GK rank values / Bloom keys (zk-Analytics point n = zkSketch leaf n x k): $src"
+  echo "  5. python3 -I $HERE6/assemble.py \$RESULTS $KEYS --zka six_zka --zks six_zksketch$( (( quick )) && echo " --plan \$RESULTS/zka_plan.txt") --extended --out \$RESULTS/six_sketch_comparison.csv"
+  echo "     python3 -I $HERE6/table.py \$RESULTS/six_sketch_comparison.csv > \$RESULTS/six_sketch_table.md"
+  echo "jobs:"
+  echo "$jobs"
+}
+
+jobs_sel() {  # jobs_sel <jobs> <selection>: the jobs a jobs.py --select would keep
+  local j s
+  while read -r j; do
+    for s in ${2//,/ }; do [[ $j == "$s" || $j == "$s":* ]] && { echo "$j"; break; }; done
+  done <<< "$1"
+}
+
+cmd_memmatch() {
+  local dry=0 quick=0 epochs= from='' zpfx=six_zksketch mode
+  while (( $# )); do
+    case $1 in
+      --dry-run) dry=1 ;;
+      --quick) quick=1 ;;
+      --epochs) epochs=${2:?--epochs T}; shift ;;
+      --from-logs) from=${2:?--from-logs DIR}; shift ;;
+      --zks-prefix) zpfx=${2:?--zks-prefix P}; shift ;;
+      *) die "unknown option $1 (memmatch [--quick] [--epochs T] [--dry-run] [--from-logs DIR [--zks-prefix P]])" ;;
+    esac
+    shift
+  done
+  [[ -z $epochs || $epochs =~ ^[1-9][0-9]*$ ]] || die "--epochs $epochs: a positive integer"
+  mode=memmatch; (( quick )) && mode=memmatch-quick
+  load_shape "$mode" "$epochs"
+  ASM_EXTRA=(--extended)
+  local sel=${SIX_QUICK_PROVE:-$QUICK_PROVE_DEFAULT}
+  if (( ! dry )) && [[ -n $from ]]; then die "--from-logs / --zks-prefix apply to --dry-run only (the real run reads its own zkSketch logs)"; fi
+  if (( dry )); then
+    local src jobs
+    if [[ -n $from ]]; then
+      src="read from $from/${zpfx}_{gk,bloom,bloom_absent}.log and cross-checked against the native derivation"
+      jobs=$(jobs_py --logs "$from" --prefix "$zpfx" --lines) || exit 1
+    else
+      src="derived natively from data/aol.keys; the real run reads them from its own zkSketch logs and cross-checks"
+      jobs=$(jobs_py --lines) || exit 1
+    fi
+    memmatch_plan "$mode" "$quick" "$sel" "$jobs" "$src"
+    return 0
+  fi
+  preflight_built
+  new_results "$mode"
+  exec > >(trap '' TERM; exec tee -i -a "$RESULTS/run_all.log") 2>&1   # tee outlives Ctrl-C / TERM; exits at EOF
+  write_manifest "$mode"
+  echo "memory-matched run$( (( quick )) && echo " (--quick: tiny smoke shape)") -> $RESULTS"
+  local f; for f in "${FAMS[@]}"; do echo "  $f: epoch $(fam_m "$f") = $(( $(fam_m "$f") / $(fam_leaf "$f") )) zkSketch leaves x $(fam_leaf "$f")"; done
+  if (( quick )); then
+    export SIX_FAIL_FAST=1
+    echo "  T=$SIX_T epochs; zk-Analytics executor (root variants $EXEC_ROOTS), proofs: ${sel//,/ } (the other planned"
+    echo "  jobs are ESTIMATED from padded cycles); GATE_WAIT_S=$GATE_WAIT_S"
+    steps_sampled "$mode" "$sel"
+  else
+    echo "  T=$SIX_T epochs; zk-Analytics executor (root variants $EXEC_ROOTS) + every planned proof (expect ~5 h 30 min"
+    echo "  at T = 1, an estimate, plus gate waits; GATE_WAIT_S=$GATE_WAIT_S per timed job)"
+    steps_proved "$mode"
+  fi
 }
 
 cmd_assemble() {
@@ -551,7 +714,8 @@ cmd_assemble() {
   if [[ -n $(git -C "$d" ls-files -- . 2>/dev/null | head -1) ]]; then die "$d is git-tracked"; fi
   [[ -f $d/manifest.txt ]] ||
     echo "note: $d has no manifest.txt (made by the individual six/ scripts); assembling the files it holds" >&2
-  if [[ -f $d/manifest.txt ]] && grep -qx 'mode=quick' "$d/manifest.txt"; then
+  if [[ -f $d/manifest.txt ]] && grep -qx 'mode=memmatch.*' "$d/manifest.txt"; then ASM_EXTRA=(--extended); fi
+  if [[ -f $d/manifest.txt ]] && grep -qxE 'mode=(memmatch-)?quick' "$d/manifest.txt"; then
     assemble_and_table "$d" --plan "$d/zka_plan.txt" || exit 1
   else
     assemble_and_table "$d" || exit 1
@@ -571,6 +735,7 @@ case ${1:-} in
   build) cmd_build ;;
   quick) cmd_quick ;;
   full) shift; cmd_full "$@" ;;
+  memmatch) shift; cmd_memmatch "$@" ;;
   assemble) shift; cmd_assemble "$@" ;;
   *) sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -3,6 +3,7 @@
 
 Usage:
   jobs.py --keys <aol.keys> --m M --t T [--aggr 0,7] [--qns 1,2,4,8] [--roots noroot] [--cm-ref 1]
+          [--fam-m FAM=M,...] [--leaf [FAM=]m,...]
           [--logs DIR [--prefix six_zksketch]] [--select SEL,...] [--lines]
 
 A job is `<fam>:aggr:<epoch>:<variant>` or `<fam>:query:<n>[:<arg>]` (the argument syntax
@@ -19,19 +20,27 @@ is planned once. Defaults: --aggr 0,T-1, --qns = the powers of two <= T, --roots
 jobs at T = 8 (40 with --cm-ref 0; 52 with --roots designed,noroot, the reference then being
 the designed CM jobs; 40 with --roots legacy, the plan of the committed 2026-10-09 run).
 
+Run shape: M (--m) records per epoch, T (--t) epochs; --fam-m gives a family its own epoch
+(e.g. gk=2048 next to --m 16384), --leaf the zkSketch leaf size (a bare number: every family;
+FAM=m: one family; default: the epoch, one leaf per epoch). With leaves of m records an epoch is
+k = M / m zkSketch leaves, and zk-Analytics query point n (after n epochs) is zkSketch's query
+after leaf j = n*k (QLOG_KEY at_leaf=j, over the first n*M records).
+
 Two query arguments must equal what zkSketch probed at n, so both sides answer the
 same query:
   GK rank value     the most frequent 21-bit value (key & 0x1FFFFF) of the first n*M
                     records, ties to the smaller value (zkSketch EXP_QUERY_KEY_MODE=hot)
-  Bloom absent key  splitmix64(n ^ 0xD1B54A32D192ED03) & 0xFFFFFFFF, re-hashed with
+  Bloom absent key  splitmix64(j ^ 0xD1B54A32D192ED03) & 0xFFFFFFFF, re-hashed with
                     splitmix64(c) & 0xFFFFFFFF (up to 128 times) while c is in the
-                    prefix (zkSketch EXP_QUERY_KEY_MODE=absent)
+                    first n*M records (zkSketch EXP_QUERY_KEY_MODE=absent)
 (src/experiments/stream_compose.rs, select_query_key). With --logs they are READ from
 the QLOG_KEY lines of <prefix>_gk.log and <prefix>_bloom_absent.log in DIR (zkSketch's
 own record of what it probed) and cross-checked against the derivation above, if
 --keys is given (exit 1 on any difference). Without --logs they are derived.
-The inserted Bloom key needs no argument: `first` is the first record of batch n on
-both sides.
+The inserted Bloom key: with one leaf per epoch (k = 1) it needs no argument, `first` is
+the first record of batch n on both sides. With k > 1 zkSketch probes the first record of
+leaf j = n*k (key index (j-1)*m), not of epoch n, so the job names it, `bloom:query:<n>:key:<k>`
+(read from <prefix>_bloom.log with --logs, cross-checked as above).
 
 The plan does not depend on which zk-Analytics GK runs (`run_zka.sh` picks it: the matched
 port of zkSketch's GK rule by default, SIX_ZKA_GK=matched, or the textbook reference): both
@@ -63,46 +72,69 @@ def splitmix64(x):
     return z ^ (z >> 31)
 
 
-def derive(keys_path, m, ns):
-    """{n: (gk value, bloom absent key)} by zkSketch's select_query_key rule."""
-    need = max(ns) * m
+def derive(keys_path, shape, ns):
+    """{n: (gk value, bloom absent key, bloom inserted key)} by zkSketch's select_query_key rule,
+    at zkSketch leaf n*k of each family (shape: {fam: (epoch M, leaves per epoch k)})."""
+    (mg, _), (mb, kb) = shape['gk'], shape['bloom']
+    need = max(ns) * max(mg, mb)
     raw = open(keys_path, 'rb').read()
     if len(raw) // 4 < need:
         sys.exit(f'{keys_path}: {len(raw) // 4} keys, need {need}')
     keys = struct.unpack('<%dI' % need, raw[:4 * need])
     out = {}
     for n in ns:
-        pre = [k for k in keys[:n * m] if k != PAD]
+        pre = [k for k in keys[:n * mg] if k != PAD]
         gk = collections.Counter(k & 0x1FFFFF for k in pre)
         gv = min(gk.items(), key=lambda kv: (-kv[1], kv[0]))[0]
-        present = set(pre)
-        cand = splitmix64(n ^ 0xD1B54A32D192ED03) & 0xFFFFFFFF
+        present = {k for k in keys[:n * mb] if k != PAD}
+        j = n * kb   # zkSketch's leaf (1-based) = the query's seed
+        cand = splitmix64(j ^ 0xD1B54A32D192ED03) & 0xFFFFFFFF
         for _ in range(128):
             if cand not in present:
                 break
             cand = splitmix64(cand) & 0xFFFFFFFF
-        out[n] = (gv, cand)
+        out[n] = (gv, cand, keys[(j - 1) * (mb // kb)])
     return out
 
 
-def from_logs(d, prefix, ns):
-    """{n: (gk value, bloom absent key)} from the QLOG_KEY lines of zkSketch's logs."""
-    def grab(tag, field):
+def from_logs(d, prefix, shape, ns):
+    """{n: (gk value, bloom absent key, bloom inserted key or None)} from the QLOG_KEY lines of
+    zkSketch's logs, at leaf n*k (the inserted key only when k > 1: else the job says `first`)."""
+    def grab(tag, field, k):
         p = os.path.join(d, f'{prefix}_{tag}.log')
         if not os.path.exists(p):
             sys.exit(f'missing {p} (run the zkSketch side first: run_zks.sh {tag})')
         got = {int(a): int(b) for a, b in
                re.findall(r'^QLOG_KEY,at_leaf=(\d+),' + field + r'=(\d+)$', open(p).read(), re.M)}
-        missing = [n for n in ns if n not in got]
+        missing = [n for n in ns if n * k not in got]
         if missing:
-            sys.exit(f'{p}: no QLOG_KEY {field} line for n = {missing} (did that run finish?)')
-        return got
-    gk, ab = grab('gk', 'gk_value'), grab('bloom_absent', 'bloom_key')
-    return {n: (gk[n], ab[n]) for n in ns}
+            where = f'n = {missing}' if k == 1 else f'leaf n x {k} at n = {missing}'
+            sys.exit(f'{p}: no QLOG_KEY {field} line for {where} (did that run finish?)')
+        return {n: got[n * k] for n in ns}
+    kg, kb = shape['gk'][1], shape['bloom'][1]
+    gk, ab = grab('gk', 'gk_value', kg), grab('bloom_absent', 'bloom_key', kb)
+    ins = grab('bloom', 'bloom_key', kb) if kb > 1 else {n: None for n in ns}
+    return {n: (gk[n], ab[n], ins[n]) for n in ns}
 
 
 def ints(s):
-    return [int(x) for x in s.split(',') if x != '']
+    return list(dict.fromkeys(int(x) for x in s.split(',') if x != ''))   # in order, each once
+
+
+def fam_ints(s, what, bare_ok=False):
+    """{fam: int} of a comma list of FAM=x items; with bare_ok, a bare x applies to every family
+    (FAM=x items win, wherever they stand)."""
+    out, every = {}, None
+    for item in (x for x in (s or '').split(',') if x):
+        f, eq, v = item.rpartition('=')
+        if not v.isdigit() or (eq and f not in FAMS) or (not eq and not bare_ok):
+            sys.exit(f'bad {what} item {item!r}: FAM=<records> with FAM in {", ".join(FAMS)}'
+                     + (' (or a bare number: every family)' if bare_ok else ''))
+        if eq:
+            out[f] = int(v)
+        else:
+            every = int(v)
+    return {f: out.get(f, every) for f in FAMS if f in out or every is not None}
 
 
 def main():
@@ -112,6 +144,8 @@ def main():
     ap.add_argument('--t', type=int, default=8)
     ap.add_argument('--aggr')
     ap.add_argument('--qns')
+    ap.add_argument('--fam-m', default='')
+    ap.add_argument('--leaf', default='')
     ap.add_argument('--roots', default='noroot')
     ap.add_argument('--cm-ref', choices=['0', '1'], default='1')
     ap.add_argument('--logs')
@@ -127,23 +161,42 @@ def main():
         sys.exit(f'bad plan: t={t} aggr={aggr} qns={qns}')
     if not roots or any(v not in ROOTS for v in roots) or len(set(roots)) != len(roots):
         sys.exit(f'bad --roots {a.roots}: a comma list of distinct {", ".join(ROOTS)}')
+    epochs = {f: a.m for f in FAMS}
+    epochs.update(fam_ints(a.fam_m, '--fam-m'))
+    leaves = dict(epochs)
+    leaves.update(fam_ints(a.leaf, '--leaf', bare_ok=True))
+    shape = {}
+    for f in FAMS:
+        if epochs[f] < 1 or leaves[f] < 1 or epochs[f] % leaves[f]:
+            sys.exit(f'bad shape {f}: the {leaves[f]}-record leaf must divide the {epochs[f]}-record epoch')
+        shape[f] = (epochs[f], epochs[f] // leaves[f])
     if a.logs:
-        args = from_logs(a.logs, a.prefix, qns)
+        args = from_logs(a.logs, a.prefix, shape, qns)
         if a.keys:
-            nat = derive(a.keys, a.m, qns)
+            nat = derive(a.keys, shape, qns)
+            if shape['bloom'][1] == 1:   # `first`: no inserted key to compare
+                nat = {n: x[:2] + (None,) for n, x in nat.items()}
             bad = [n for n in qns if nat[n] != args[n]]
             if bad:
+                def two(x):   # the message of one leaf per epoch, as before
+                    return x[:2] if x[2] is None else x
                 sys.exit('zkSketch logs and the native derivation disagree at n = '
-                         + ', '.join(f'{n} (log gk/absent {args[n]}, derived {nat[n]})' for n in bad)
-                         + f'; check --m (M={a.m}) and the keys file')
+                         + ', '.join(f'{n} (log gk/absent{"" if args[n][2] is None else "/inserted"} '
+                                     f'{two(args[n])}, derived {two(nat[n])})' for n in bad)
+                         + f'; check --m (M={a.m})'
+                         + (', --fam-m / --leaf' if any(shape[f] != (a.m, 1) for f in FAMS) else '')
+                         + ' and the keys file')
     elif a.keys:
-        args = derive(a.keys, a.m, qns)
+        args = derive(a.keys, shape, qns)
+        if shape['bloom'][1] == 1:
+            args = {n: x[:2] + (None,) for n, x in args.items()}
     else:
         sys.exit('need --logs and/or --keys')
     jobs = [f'{f}:aggr:{e}:{v}' for f in FAMS for e in aggr for v in roots]
     jobs += [f'cm:query:{n}' for n in qns] + [f'hll:query:{n}' for n in qns]
     jobs += [f'gk:query:{n}:{args[n][0]}' for n in qns]
-    jobs += [f'bloom:query:{n}:first' for n in qns] + [f'bloom:query:{n}:key:{args[n][1]}' for n in qns]
+    jobs += [f'bloom:query:{n}:first' if args[n][2] is None else f'bloom:query:{n}:key:{args[n][2]}' for n in qns]
+    jobs += [f'bloom:query:{n}:key:{args[n][1]}' for n in qns]
     jobs += [f'kmv:query:{n}' for n in qns] + [f'ss:query:{n}' for n in qns]
     if a.cm_ref == '1' and 'designed' not in roots and 'legacy' not in roots:
         jobs += [f'cm:aggr:{e}:designed' for e in aggr]   # their shipped CM, the reference

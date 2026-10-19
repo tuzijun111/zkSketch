@@ -101,6 +101,7 @@ scripts/baselines/zka/six/run_all.sh check    # OK / WARN / MISSING per item; ex
 scripts/baselines/zka/six/run_all.sh build    # clone zk-Analytics into ~/ext-baselines; build both sides (~5-8 min)
 scripts/baselines/zka/six/run_all.sh quick    # smoke test of the whole pipeline at tiny scale (5-11 min)
 scripts/baselines/zka/six/run_all.sh full     # the paper configuration (hours; run it under tmux / nohup)
+scripts/baselines/zka/six/run_all.sh memmatch # the memory-matched shape of the final GK/Bloom numbers (hours; --quick: ~10 min)
 ```
 
 | step | what it does | time (32 cores) | peak RAM |
@@ -109,13 +110,14 @@ scripts/baselines/zka/six/run_all.sh full     # the paper configuration (hours; 
 | `build` | clones zk-Analytics @ `d4a5a9a`; builds its 7 drivers (their CM; our † ports; GK matched + textbook) and zkSketch's `exp_compose` | ~5-8 min | ~2 GB |
 | `quick` | zkSketch: 7 runs at N = 512 (2 batches of 256). zk-Analytics: executor for all six, 4 real proofs, the other planned jobs ESTIMATED from their cycle counts | ~5-11 min | ~9 GiB |
 | `full` | zkSketch: 7 runs at N = 16,384 (8 batches of 2,048). zk-Analytics: executor, then 42 proofs (aggregation epochs 0 and 7 of every family as `noroot`; queries at n = 1, 2, 4, 8; their shipped Count-Min at epochs 0 and 7 as the reference) | ~3 h 30 min plus quiet-machine waits (estimate) | zkSketch GK ~59 GiB; r0vm ~9 GiB |
+| `memmatch` | one epoch per family (GK 2,048 records, the others 16,384), proved by zkSketch as a forest of small leaves (GK capacity 768 in leaves of 512; CM, HLL, Bloom 1,024; SS, KMV 4,096) and by zk-Analytics as one receipt; 14 proofs. `--quick`: the same pipeline at tiny scale | ~5 h 30 min (estimate); `--quick` ~10 min | zkSketch < 9 GiB; r0vm ~9 GiB |
 
 `quick` checks the pipeline end to end; it is not a measurement. `full --dry-run`
 prints the plan and runs nothing. `run_all.sh assemble <dir>` re-runs only the tables.
 Success looks like `check: ok`, every `build` step `ok`, and `quick`/`full` ending in
 `quick: OK in ...` / `full: OK in ...` after printing the summary tables.
 
-**Outputs.** Each `quick` / `full` writes a fresh, git-ignored directory
+**Outputs.** Each `quick` / `full` / `memmatch` writes a fresh, git-ignored directory
 `results/six/<mode>-<YYYYmmdd-HHMMSS>/`:
 
 - `six_sketch_table.md`: all tables (update proofs side by side with the ratio
@@ -145,22 +147,21 @@ Success looks like `check: ok`, every `build` step `ok`, and `quick`/`full` endi
 
 Notes:
 
-- Use an otherwise idle machine; all times are wall-clock. `quick` and `full` refuse
+- Use an otherwise idle machine; all times are wall-clock. `quick`, `full` and `memmatch` refuse
   binaries older than their sources: re-run `run_all.sh build` after pulling or editing.
 - `full` takes hours: run it inside `tmux` / `screen` or with `nohup ... &`. Ctrl-C stops
   the running job and exits. A failed zk-Analytics proof does not stop `full`; the
   table shows `-` for it and the exit status is 1. To finish an interrupted run without
   starting over, see the full guide.
-- **Open item.** `full` proves one zkSketch leaf per 2,048-record epoch (GK capacity
-  2,048; the 59 GiB GK peak was measured with the earlier `sorted` circuit, the default
-  `stable` circuit has not been run at this shape). The memory-matched runs behind the
-  GK and Bloom redesign reports (one epoch as a forest of smaller leaves: GK capacity 768
-  with 512-record leaves, Bloom 1,024-record leaves, under 8 GiB of combined RSS) are not
-  reproducible through `run_all.sh`: `run_zks.sh` has no leaf size separate from the
-  epoch, and `jobs.py` / `assemble.py` / `table.py` only compare equal shapes. Those
-  reports ran `run_zks.sh` (zkSketch, `SIX_M` = leaf size) and `run_zka.sh` (zk-Analytics,
-  `SIX_GK_MSUB` = leaf size) by hand and built their tables with one-off scripts; see
-  `scripts/baselines/zka/results/{memmatch-20261014,20261015-m1,20261016-m2,20261016-m3}/README.md`.
+- **Memory-matched shape.** `full` proves one zkSketch leaf per 2,048-record epoch (GK
+  capacity 2,048; the 59 GiB GK peak was measured with the earlier `sorted` circuit).
+  `memmatch` is the shape of the final GK / Bloom numbers
+  (`scripts/baselines/zka/results/{memmatch-20261014,20261016-m2,20261016-m3}/README.md`):
+  zkSketch's "1 epoch" is its k leaves + k - 1 merges, its query at epoch n is the one
+  after leaf n x k, and the tables add the coordinator's and the combined (worker +
+  coordinator) peak next to the worker's, plus each run's circuit variant.
+  `memmatch --dry-run` prints the plan; `--epochs T` proves T epochs per family. Only
+  `memmatch --quick` has been run through `run_all.sh` so far (2026-10-19).
 
 Full guide (every knob, times per step, recovery, caveats):
 [docs/six_sketch_comparison.md](docs/six_sketch_comparison.md). Exact configuration,

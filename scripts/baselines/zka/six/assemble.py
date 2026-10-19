@@ -41,6 +41,36 @@ Records per epoch M and epochs T are read from the zkSketch CSV (m, t) and check
 the zk-Analytics executor (epoch_records). Exact answers are recomputed here from the same
 M x T AOL records.
 
+Memory-matched forest (`run_all.sh memmatch`; six_common.sh SIX_LEAF*, SIX_M_<FAM>): a family's
+zkSketch run may prove each epoch of M records as k = M / m leaves of m records, and families
+may have epochs of their own (GK 2,048 next to 16,384). The zkSketch log's "# shape:" line
+(run_zks.sh) gives the epoch and k; its CSV's m is the leaf and t = k x T the leaves. Without
+that line (runs before it) m is the epoch, k = 1, and every family must share one (m, t), as
+before. Per family the zk-Analytics executor's epoch_records must equal its epoch. With k > 1:
+  update_per_epoch            zkSketch's ONE EPOCH = its k leaves + k - 1 merges: the measured
+                              total_time_ms when the forest is one epoch (T = 1), else
+                              k x leaf_s + (k - 1) x merge_s with leaf_s = leafgen_seq_ms / t and
+                              merge_s = (total_time_ms - leafgen_seq_ms) / (t - 1) (the memmatch
+                              method, scripts/baselines/zka/results/memmatch-20261014/README.md;
+                              merge_s carries the run's other prover work, e.g. the worker spawn);
+                              proof_bytes = the live peak(s) after leaf k (the epoch's proof)
+  update_per_epoch_amortized  total_time_ms / T; update_stream_<T>_epochs = total_time_ms
+  query_n<n>, accept_n<n>     zkSketch's query after leaf n x k (= after epoch n, over the first
+                              n x M records), next to zk-Analytics' query over n epochs; zkSketch's
+                              queries after the other leaves are not reported here
+--extended appends, after `variant` and `root_construction`, the columns
+  epoch_records, zks_leaf_records, zks_leaves_per_epoch   the family's shape (every row of it)
+  zks_variant, zks_gk_rounds, zks_shape                    the zkSketch CSV's variant, gk_rounds
+                              and shape (zkSketch rows; '-' elsewhere): a SIX_GK_ROUNDS=sorted or
+                              SIX_BLOOM_VARIANT=omc run says so
+  coord_peak_rss_mb           next to peak_rss_mb (zkSketch: the procs-engine worker; zk-Analytics:
+                              r0vm): zkSketch's coordinator process (exp_compose: VK derivation,
+                              audit, queries) over the run; zk-Analytics' host driver of that proof
+  combined_peak_rss_mb        the whole process tree at once (rss_tree.sh tree_peak_rss_mb: VmRSS
+                              summed over the processes per 0.5 s sample): zkSketch coordinator +
+                              worker, zk-Analytics driver + r0vm; blank for logs without it
+It is implied when some family has k > 1; without it (and k = 1) the output is the previous one.
+
 Root variants (zk-Analytics aggregation proofs; ../README.md, "Root variants of the
 zk-Analytics aggregation proofs"): every zk-Analytics update row (update_*, accept_*) carries
 the `variant` of its aggregation guest (designed / noroot / legacy / a sensitivity variant)
@@ -93,6 +123,8 @@ ap.add_argument('--plan')
 ap.add_argument('--out')
 ap.add_argument('--m', type=int, help='records per epoch, if no zkSketch CSV says (default 2048)')
 ap.add_argument('--t', type=int, help='epochs, if no zkSketch CSV says (default 8)')
+ap.add_argument('--extended', action='store_true',
+                help='append the shape, zkSketch-variant and memory columns (implied by a forest of k > 1 leaves)')
 A = ap.parse_args()
 R, KEYS = A.results, A.keys
 FAMS = ['cm', 'hll', 'ss', 'gk', 'bloom', 'kmv']
@@ -153,66 +185,108 @@ def step_of(r):
     return r.get('step') or r.get('mode')
 
 
-# ------------------------------------------------------------------ workload shape (M, T)
+# ------------------------------------------------------------------ workload shape
+def shape_line(pfx, tag):
+    """(epoch, leaf, leaves per epoch, epochs) of run_zks.sh's '# shape:' log line, or None."""
+    p = os.path.join(R, f'{pfx}_{tag}.log')
+    if not os.path.exists(p):
+        return None
+    m = re.search(r'^# shape: epoch_records=(\d+) leaf_records=(\d+) leaves_per_epoch=(\d+) epochs=(\d+)$',
+                  open(p).read(), re.M)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
 def shape():
-    """(M, T) from the zkSketch CSVs, else --m/--t, else the paper configuration."""
-    seen = set()
+    """({family: (records per epoch M, zkSketch leaf records, leaves per epoch k)}, epochs T) from
+    the zkSketch CSVs (m = leaf, t = leaves) and their logs' shape lines, else --m/--t, else the
+    paper configuration. Runs without the shape line: one leaf per epoch, one (m, t) for all."""
+    seen, lines = collections.defaultdict(set), True
     for pfx, _, _, _ in ZKS_SETS:
-        for tags in ZKS_TAGS.values():
+        for f, tags in ZKS_TAGS.items():
             for tag in tags:
                 for r in rows(f'{pfx}_{tag}.csv')[:1]:
                     if num(r.get('m')) and num(r.get('t')):
-                        seen.add((int(r['m']), int(r['t'])))
-    if len(seen) > 1:
-        sys.exit(f'zkSketch CSVs disagree on (m, t): {sorted(seen)}')
-    if seen:
-        m, t = seen.pop()
+                        m, t = int(r['m']), int(r['t'])
+                        sl = shape_line(pfx, tag)
+                        if sl is None:
+                            lines, sl = False, (m, m, 1, t)
+                        if sl[1] != m or sl[0] != m * sl[2] or t != sl[2] * sl[3]:
+                            sys.exit(f'{pfx}_{tag}: shape line epoch/leaf/k/epochs {sl} does not match the CSV\'s '
+                                     f'm={m}, t={t}')
+                        seen[f].add(sl)
+    if not seen:
+        m = A.m or 2048
+        return {f: (m, m, 1) for f in FAMS}, A.t or 8
+    if not lines:
+        # one leaf per epoch, as every run before the shape line: one (m, t) for all, as before
+        mt = {(s[1], s[2] * s[3]) for ss in seen.values() for s in ss}
+        if len(mt) > 1:
+            sys.exit(f'zkSketch CSVs disagree on (m, t): {sorted(mt)}')
+        m, t = mt.pop()
         if (A.m and A.m != m) or (A.t and A.t != t):
             sys.exit(f'--m/--t ({A.m}, {A.t}) disagree with the zkSketch CSVs ({m}, {t})')
-        return m, t
-    return A.m or 2048, A.t or 8
+        return {f: (m, m, 1) for f in FAMS}, t
+    bad = {f: sorted(ss) for f, ss in seen.items() if len(ss) > 1}
+    if bad:
+        sys.exit(f'zkSketch runs of one family disagree on epoch/leaf/k/epochs: {bad}')
+    one = {f: ss.pop() for f, ss in seen.items()}
+    ts = {s[3] for s in one.values()}
+    if len(ts) > 1 or (A.t and A.t not in ts):
+        sys.exit(f'zkSketch runs disagree on the number of epochs: {sorted(ts)}' + (f' (--t {A.t})' if A.t else ''))
+    t = ts.pop()
+    epochs = {s[0] for s in one.values()}
+    dm = A.m or (epochs.pop() if len(epochs) == 1 else 2048)   # families without a zkSketch run
+    return {f: one[f][:3] if f in one else (dm, dm, 1) for f in FAMS}, t
 
 
-M, T = shape()
+SHAPE, T = shape()
+FOREST = any(s[2] > 1 for s in SHAPE.values())
+EXT = A.extended or FOREST
 NS = list(range(1, T + 1))
 for f in FAMS:
+    mf, leaf, kf = SHAPE[f]
     for r in rows(f'{ZKA}_{f}_exec.csv'):
-        if step_of(r) == 'aggr' and r.get('epoch_records') not in (None, '', '-') and int(r['epoch_records']) != M:
-            sys.exit(f'{ZKA}_{f}_exec.csv: epoch_records={r["epoch_records"]} but the zkSketch run used m={M}')
+        if step_of(r) == 'aggr' and r.get('epoch_records') not in (None, '', '-') and int(r['epoch_records']) != mf:
+            sys.exit(f'{ZKA}_{f}_exec.csv: epoch_records={r["epoch_records"]} but the zkSketch run used m={mf}'
+                     + (f'-record epochs ({kf} leaves of {leaf})' if kf > 1 else ''))
 
 # ------------------------------------------------------------------ exact answers
 raw = open(KEYS, 'rb').read()
-keys = list(struct.unpack('<%dI' % (len(raw) // 4), raw))[:M * T]
+keys = list(struct.unpack('<%dI' % (len(raw) // 4), raw))[:max(s[0] for s in SHAPE.values()) * T]
 
 
-def prefix(n):
-    return keys[:n * M]
+def prefix(f, n):
+    """The records of family f's first n epochs."""
+    return keys[:n * SHAPE[f][0]]
 
 
-def hot_key(n):
-    c = collections.Counter(prefix(n))
+def hot_key(f, n):
+    c = collections.Counter(prefix(f, n))
     return sorted(c.items(), key=lambda kv: (-kv[1], kv[0]))[0]
 
 
-def distinct(n):
-    return len(set(prefix(n)))
+def distinct(f, n):
+    return len(set(prefix(f, n)))
 
 
-def rank_le(n, v):
-    return sum(1 for k in prefix(n) if (k & 0x1FFFFF) <= v)
+def rank_le(f, n, v):
+    return sum(1 for k in prefix(f, n) if (k & 0x1FFFFF) <= v)
 
 
 OUT = []
 COLS = ['family', 'system', 'run', 'operation', 'n', 'prove_s', 'verify_ms', 'verify_first_ms', 'verify_median_ms',
         'decode_ms', 'proof_bytes', 'peak_rss_mb', 'rss_scope', 'answer', 'exact', 'provenance', 'note', 'detail',
         'variant', 'root_construction']
+# --extended (implied by a forest of k > 1 leaves): see the docstring
+COLS_EXT = ['epoch_records', 'zks_leaf_records', 'zks_leaves_per_epoch', 'zks_variant', 'zks_gk_rounds', 'zks_shape',
+            'coord_peak_rss_mb', 'combined_peak_rss_mb']
 
 
 def emit(**kw):
     def fmt(v, d):
         return '' if v is None else (f'{v:.{d}f}' if isinstance(v, float) else str(v))
-    r = {c: '' for c in COLS}
-    r['variant'] = r['root_construction'] = '-'
+    r = {c: '' for c in COLS + COLS_EXT}
+    r['variant'] = r['root_construction'] = r['zks_variant'] = r['zks_gk_rounds'] = r['zks_shape'] = '-'
     for k, v in kw.items():
         if k in ('prove_s',):
             r[k] = fmt(v, 6)
@@ -220,7 +294,7 @@ def emit(**kw):
             r[k] = fmt(v, 3)
         elif k == 'proof_bytes':
             r[k] = fmt(v, 0)
-        elif k == 'peak_rss_mb':
+        elif k in ('peak_rss_mb', 'coord_peak_rss_mb', 'combined_peak_rss_mb'):
             r[k] = fmt(v, 1)
         else:
             r[k] = '' if v is None else str(v)
@@ -231,7 +305,7 @@ def note_for(fam, system):
     if fam == 'gk' and system.startswith('zk-Analytics'):
         return GK_NOTE
     if fam == 'hll' and system.startswith('zkSketch'):
-        if (M, T) == (2048, 8):
+        if (SHAPE['hll'][0], T) == (2048, 8):
             return ('NOT like-for-like: zkSketch certifies the raw HLL estimator (no small-range / linear-counting '
                     'branch); its answers are 1.9-10x above exact here, outside HLL error bounds')
         return ('NOT like-for-like: zkSketch certifies the raw HLL estimator (no small-range / linear-counting '
@@ -262,21 +336,21 @@ def zka_answer(f, row):
 def zka_exact(f, r, n):
     """(exact, probe description, op suffix) of a zk-Analytics query row."""
     if f == 'cm':
-        k, c = hot_key(n)
+        k, c = hot_key(f, n)
         m = re.search(r'key=(\d+)', r['exact'])
         assert int(m.group(1)) == k, (f, n)
         return str(c), f'key {k} (heaviest of prefix)', ''
     if f in ('hll', 'kmv'):
-        return str(distinct(n)), 'distinct count', ''
+        return str(distinct(f, n)), 'distinct count', ''
     if f == 'ss':
-        k, c = hot_key(n)
+        k, c = hot_key(f, n)
         return f'key {k} count {c}', 'top-1 (topk limit 1)', ''
     if f == 'gk':
         v = int(r['_job']['arg'])
-        return str(rank_le(n, v)), f'rank({v})', ''
+        return str(rank_le(f, n, v)), f'rank({v})', ''
     if f == 'bloom':
         pk = int(r['probe_key'])
-        ex = str(pk in set(prefix(n))).lower()
+        ex = str(pk in set(prefix(f, n))).lower()
         return ex, f"key {pk} ({'inserted' if ex == 'true' else 'absent'})", \
             '_inserted' if ex == 'true' else '_absent'
     raise ValueError(f)
@@ -324,6 +398,33 @@ def attach_jobs(prefix_, kind='prove', jobs_name=None):
                          f'{row_variant(f, row)[0]}')
             row['_job'] = j
     return out
+
+
+def tree_peaks(prefix_):
+    """{job: tree_peak_rss_mb} of the RSSTREE lines in <prefix>_<fam>_prove.log (rss_tree.sh labels
+    each with its job; the last line of a job wins; logs before the field have none)."""
+    out = {}
+    for f in FAMS:
+        p = os.path.join(R, f'{prefix_}_{f}_prove.log')
+        if os.path.exists(p):
+            for job, x in re.findall(r'^RSSTREE,([^,]+),main_peak_rss_mb=.*,tree_peak_rss_mb=([\d.]+)$',
+                                     open(p).read(), re.M):
+                out[job] = float(x)
+    return out
+
+
+def zmem(r, trees):
+    """--extended peak columns of a zk-Analytics proof row: its host driver and its whole tree."""
+    if r['_est']:
+        return {}
+    return dict(coord_peak_rss_mb=num(r['_job'].get('main_peak_rss_mb')),
+                combined_peak_rss_mb=trees.get(r['_job']['job']))
+
+
+def zmax(zms, col):
+    """The largest value of col over zmem() dicts (the measured proofs), or None."""
+    xs = [z[col] for z in zms if z.get(col) is not None]
+    return max(xs) if xs else None
 
 
 ZKA_NAME = {'cm': 'zk-Analytics', **{f: 'zk-Analytics arch. (port †)' for f in FAMS if f != 'cm'}}
@@ -486,6 +587,7 @@ def check_variants():
 
 
 check_variants()
+TREES, TREES_VT = tree_peaks(ZKA), tree_peaks(ZKA_VT)
 zka_aggr_mean, zka_query_mean = {}, {}
 for f in FAMS:
     sysname = ZKA_NAME[f]
@@ -501,14 +603,16 @@ for f in FAMS:
         ex = [r for r in ex_all if row_variant(f, r)[0] == var]
         segs = [int(r['segments']) for r in ex]
         cyc = [int(r['user_cycles']) for r in ex]
-        for r in aggr:
+        zm = [zmem(r, TREES) for r in aggr]
+        for r, zr in zip(aggr, zm):
             e = r['epoch_index']
             emit(family=f, system=sysname, run='main', operation=f'update_epoch{e}', prove_s=num(r['prove_s']),
                  verify_ms=num(r['verify_ms']), proof_bytes=int(r['receipt_bytes']),
                  peak_rss_mb=num(r['_job']['r0vm_peak_rss_mb']), rss_scope='' if r['_est'] else 'r0vm process of this proof',
                  answer='-', exact='-', provenance=prov(r), note=ref_note(f, var),
-                 detail=f"aggregation guest on epoch {e} ({M} records); {r['segments']} segments; {r['user_cycles']} "
-                        f"user cycles; {gate_of(r)}", **vk)
+                 detail=f"aggregation guest on epoch {e} ({SHAPE[f][0]} records); {r['segments']} segments; {r['user_cycles']} "
+                        f"user cycles; {gate_of(r)}", **vk, **zr)
+        zmx = dict(coord_peak_rss_mb=zmax(zm, 'coord_peak_rss_mb'), combined_peak_rss_mb=zmax(zm, 'combined_peak_rss_mb'))
         anyest = any(r['_est'] for r in aggr)
         ps = [num(r['prove_s']) for r in aggr]
         vs = [num(r['verify_ms']) for r in aggr]
@@ -525,14 +629,14 @@ for f in FAMS:
              answer='-', exact='-', provenance='sampled (incl. ESTIMATED epochs)' if anyest else 'sampled',
              note=ref_note(f, var),
              detail=f"mean of {'proved/ESTIMATED' if anyest else 'proved'} epochs "
-                    f"{and_join(r['epoch_index'] for r in aggr)}; {exd}", **vk)
+                    f"{and_join(r['epoch_index'] for r in aggr)}; {exd}", **vk, **zmx)
         emit(family=f, system=sysname, run='main', operation='update_per_epoch_amortized', prove_s=mp,
              answer='-', exact='-', provenance='sampled (incl. ESTIMATED epochs)' if anyest else 'sampled',
              note=ref_note(f, var), detail='no composition on this side: equals update_per_epoch', **vk)
         emit(family=f, system=sysname, run='main', operation=f'update_stream_{T}_epochs', prove_s=T * mp,
              peak_rss_mb=rss, rss_scope=rscope, answer='-', exact='-',
              provenance='derived (incl. ESTIMATED epochs)' if anyest else 'derived', note=ref_note(f, var),
-             detail=f'{T} x sampled per-epoch prove time; {T} receipts are kept (no composition)', **vk)
+             detail=f'{T} x sampled per-epoch prove time; {T} receipts are kept (no composition)', **vk, **zmx)
     qrows = {}
     for r in [r for r in prove[f] if r['_job']['op'] == 'query']:
         n = int(r['epochs'])
@@ -543,7 +647,7 @@ for f in FAMS:
              peak_rss_mb=num(r['_job']['r0vm_peak_rss_mb']), rss_scope='' if r['_est'] else 'r0vm process of this proof',
              answer=zka_answer(f, r), exact=exact, provenance=prov(r), note=note_for(f, sysname),
              detail=f"query guest over {n} epoch states; {probe}; {r['segments']} segments; {r['user_cycles']} user "
-                    f"cycles; {gate_of(r)}")
+                    f"cycles; {gate_of(r)}", **zmem(r, TREES))
     if not qrows or not variants:
         continue
     sufs = sorted({s for (_, s) in qrows})
@@ -589,6 +693,7 @@ for f in FAMS:
         emit(family=f, system=sysname, run='vt', operation=op, n='' if j['op'] == 'aggr' else r['epochs'],
              prove_s=num(r['prove_s']), verify_ms=mn, verify_first_ms=first, verify_median_ms=med, decode_ms=dec,
              proof_bytes=int(r['receipt_bytes']), peak_rss_mb=num(j['r0vm_peak_rss_mb']),
+             coord_peak_rss_mb=num(j.get('main_peak_rss_mb')), combined_peak_rss_mb=TREES_VT.get(j['job']),
              rss_scope='r0vm process of this proof', answer=ans, exact=ex, provenance='measured (re-proof)',
              detail=f"re-proof for the verify protocol: all 5 in-process verify calls {';'.join(f'{x:.3f}' for x in times)} ms; "
                     f"decode = bincode deserialisation of the receipt; gate={j['gate']} load1_start={j['load1_start']} "
@@ -619,26 +724,29 @@ def parse_zks_log(log):
         r'QLOG_PHASE,after=(\w+),coord_hwm_mb=([\d.]+),coord_rss_mb=([\d.]+)', log)}
     vk = re.findall(r'auditor: VK derived from public parameters in ([\d.]+)s', log)
     rs = re.search(r'RSSTREE,\S+,main_peak_rss_mb=([\d.]+),r0vm_peak_rss_mb=[\d.]+,desc_peak_rss_mb=([\d.]+)', log)
-    return q, kk, b, vq, bv, mem, memstart, phase, vk, (float(rs.group(1)), float(rs.group(2)))
+    tr = re.search(r'^RSSTREE,.*,tree_peak_rss_mb=([\d.]+)$', log, re.M)
+    return q, kk, b, vq, bv, mem, memstart, phase, vk, (float(rs.group(1)), float(rs.group(2))), \
+        (float(tr.group(1)) if tr else None)
 
 
 def zks_answer(f, n, ans, key):
+    """(answer, exact, probe, op suffix) of zkSketch's query after n epochs (leaf n x k)."""
     if f == 'cm':
         kv = int(key.split('=')[1])
-        return str(ans), str(collections.Counter(prefix(n))[kv]), f'key {kv} (hot = heaviest of prefix)', ''
+        return str(ans), str(collections.Counter(prefix(f, n))[kv]), f'key {kv} (hot = heaviest of prefix)', ''
     if f == 'hll':
-        return f'{ans / 256:.1f}', str(distinct(n)), f'raw HLL estimator, fixed point {ans}/2^8, no small-range correction', ''
+        return f'{ans / 256:.1f}', str(distinct(f, n)), f'raw HLL estimator, fixed point {ans}/2^8, no small-range correction', ''
     if f == 'kmv':
-        return str(ans), str(distinct(n)), 'distinct count (27-bit hash)', ''
+        return str(ans), str(distinct(f, n)), 'distinct count (27-bit hash)', ''
     if f == 'ss':
-        k, c = hot_key(n)
+        k, c = hot_key(f, n)
         return f'count {ans} (no key)', f'key {k} count {c}', 'top-1 mass (c=1), MG under-estimate', ''
     if f == 'gk':
         v = int(key.split('=')[1])
-        return str(ans), str(rank_le(n, v)), f'rank({v}) (hot value)', ''
+        return str(ans), str(rank_le(f, n, v)), f'rank({v}) (hot value)', ''
     if f == 'bloom':
         kv = int(key.split('=')[1])
-        ex = str(kv in set(prefix(n))).lower()
+        ex = str(kv in set(prefix(f, n))).lower()
         return ('true' if ans == 1 else 'false'), ex, f"key {kv} ({'inserted' if ex == 'true' else 'absent'})", \
             '_inserted' if ex == 'true' else '_absent'
     raise ValueError(f)
@@ -649,6 +757,7 @@ MISSING = []
 for pfx, sysname, run, full in ZKS_SETS:
     runs = rows(f'{pfx}_runs.csv')
     for f in FAMS:
+        mf, leaf, k = SHAPE[f]   # epoch records, leaf records, leaves per epoch (k = 1: a leaf is an epoch)
         for tag in ZKS_TAGS[f]:
             rr = rows(f'{pfx}_{tag}.csv')
             if not rr:
@@ -658,7 +767,11 @@ for pfx, sysname, run, full in ZKS_SETS:
             if row.get('status', 'ok') != 'ok':
                 sys.exit(f'{pfx}_{tag}.csv: status={row.get("status")} (the run failed; see {pfx}_{tag}.log)')
             log = open(os.path.join(R, f'{pfx}_{tag}.log')).read()
-            q, kk, b, vq, bv, mem, memstart, phase, vk, (main_rss, worker_rss) = parse_zks_log(log)
+            q, kk, b, vq, bv, mem, memstart, phase, vk, (main_rss, worker_rss), tree_rss = parse_zks_log(log)
+            # --extended columns of every zkSketch row of this run
+            zx = dict(zks_variant=row.get('variant') or '-', zks_gk_rounds=row.get('gk_rounds') or '-',
+                      zks_shape=row.get('shape') or '-')
+            zmem_ = dict(coord_peak_rss_mb=main_rss, combined_peak_rss_mb=tree_rss)
             # the per-query log lines must add up to the CSV's summed query_* columns
             for col, vals in (('query_prove_ms', [float(v['prove']) for v in q.values()]),
                               ('query_verify_ms', [float(v['verify']) for v in q.values()]),
@@ -680,23 +793,49 @@ for pfx, sysname, run, full in ZKS_SETS:
                         print(f'{pfx}_{tag}: VmHWM reset failed at n={n} (/proc/self/clear_refs not writable); '
                               f'its query peak RSS is left blank', file=sys.stderr)
                 PHASES.append((pfx, tag, phase, vk, (main_rss, worker_rss)))
-            t = int(row['t'])
+            t = int(row['t'])   # leaves
+            te = t // k         # epochs
             g = ([x for x in runs if x['tag'] == tag] or [{}])[-1]
             gate = (f"gate={g.get('gate', '?')} load1_start={g.get('load1_start', '?')} "
                     f"busy_cores_start={g.get('busy_cores_start', '?')} "
                     f"commit={row['commit']} features={g.get('features', 'default')}")
-            if tag == ZKS_TAGS[f][0]:
+            if tag == ZKS_TAGS[f][0] and k == 1:
                 emit(family=f, system=sysname, run=run, operation='update_per_epoch',
                      prove_s=float(row['leafgen_seq_ms']) / t / 1000, proof_bytes=int(b[1]['ib']),
                      peak_rss_mb=worker_rss, rss_scope='procs-engine worker (RSSTREE sampler)', answer='-', exact='-',
                      provenance='derived',
                      detail=f"EXCLUDING composition: leafgen_seq_ms/t = {row['leafgen_seq_ms']}/{t} (sum of the {t} "
                             f"measured leaf proofs); proof_bytes = leaf-1 proof as shipped for query binding; "
-                            f"exp_compose's own worker peak_rss_mb = {row['peak_rss_mb']}; {gate}")
+                            f"exp_compose's own worker peak_rss_mb = {row['peak_rss_mb']}; {gate}", **zx, **zmem_)
                 emit(family=f, system=sysname, run=run, operation='update_per_epoch_amortized',
                      prove_s=float(row['total_time_ms']) / t / 1000, answer='-', exact='-', provenance='derived',
                      detail=f"INCLUDING composition: total_time_ms/t = {row['total_time_ms']}/{t} ({t} leaves + "
-                            f"{row['merges_local']} merges, 1 machine x {row['cores']} cores)")
+                            f"{row['merges_local']} merges, 1 machine x {row['cores']} cores)", **zx)
+            elif tag == ZKS_TAGS[f][0]:
+                # one epoch = k leaves + (k - 1) merges (the memmatch method; see the docstring)
+                tot = float(row['total_time_ms']) / 1000
+                leaf_s = float(row['leafgen_seq_ms']) / t / 1000
+                merge_s = (tot - leaf_s * t) / (t - 1)
+                how = ('the measured total_time_ms: this forest is one epoch' if te == 1 else
+                       f'k x leaf_s + (k - 1) x merge_s = {k} x {leaf_s:.3f} + {k - 1} x {merge_s:.3f} s')
+                emit(family=f, system=sysname, run=run, operation='update_per_epoch',
+                     prove_s=tot if te == 1 else k * leaf_s + (k - 1) * merge_s,
+                     proof_bytes=sum(int(x) for x in b[k]['ib'].split(';')),
+                     peak_rss_mb=worker_rss, rss_scope='procs-engine worker (RSSTREE sampler)', answer='-', exact='-',
+                     provenance='measured' if te == 1 else 'derived',
+                     detail=f"ONE EPOCH = {k} leaves of {leaf} records + {k - 1} merges: {how}; leaf_s = "
+                            f"leafgen_seq_ms/t = {row['leafgen_seq_ms']}/{t} ms, merge_s = (total_time_ms - "
+                            f"leafgen_seq_ms)/(t - 1) = ({row['total_time_ms']} - {row['leafgen_seq_ms']})/{t - 1} ms "
+                            f"(the merges plus the run's other prover work: worker spawn, circuit build, per-leaf "
+                            f"verify){'' if te == 1 else f'; EXCLUDING the {te - 1} merge(s) across epochs'}; "
+                            f"proof_bytes = the live peak(s) after leaf {k} ({b[k]['ib']}), the epoch's proof as "
+                            f"shipped for query binding; exp_compose's own worker peak_rss_mb = {row['peak_rss_mb']}; "
+                            f"{gate}", **zx, **zmem_)
+                emit(family=f, system=sysname, run=run, operation='update_per_epoch_amortized',
+                     prove_s=tot / te, answer='-', exact='-', provenance='derived',
+                     detail=f"INCLUDING composition: total_time_ms/T = {row['total_time_ms']}/{te} ({t} leaves of "
+                            f"{leaf} records + {row['merges_local']} merges, 1 machine x {row['cores']} cores)", **zx)
+            if tag == ZKS_TAGS[f][0]:
                 # root verify: newer logs carry QLOG_ROOTV (best of EXP_VERIFY_REPEATS calls = the CSV's
                 # verify_ms, plus the first call); older ones only the CSV's single call
                 rv = re.search(r'QLOG_ROOTV,repeats=(\d+),first_ms=([\d.]+),best_ms=([\d.]+)', log)
@@ -704,39 +843,42 @@ for pfx, sysname, run, full in ZKS_SETS:
                     sys.exit(f'{pfx}_{tag}: QLOG_ROOTV best_ms != the CSV verify_ms')
                 root_v = dict(verify_ms=float(rv.group(3)), verify_first_ms=float(rv.group(2))) if rv \
                     else dict(verify_first_ms=float(row['verify_ms']))
-                emit(family=f, system=sysname, run=run, operation=f'update_stream_{t}_epochs',
+                emit(family=f, system=sysname, run=run, operation=f'update_stream_{te}_epochs',
                      prove_s=float(row['total_time_ms']) / 1000, **root_v,
-                     proof_bytes=int(row['proof_bytes']), peak_rss_mb=worker_rss,
+                     proof_bytes=int(row['proof_bytes']), peak_rss_mb=worker_rss, **zx, **zmem_,
                      rss_scope='procs-engine worker (RSSTREE sampler)', answer='-', exact='-', provenance='measured',
-                     detail=f"forest, 1 machine x {row['cores']} cores: {t} leaves + {row['merges_local']} merges (merge_ms "
+                     detail=f"forest, 1 machine x {row['cores']} cores: {t} leaves"
+                            f"{f' of {leaf} records ({k} per epoch)' if k > 1 else ''} + {row['merges_local']} merges (merge_ms "
                             f"{row['merge_ms']}, local_fold_ms {row['local_fold_ms']}); one O(1) root ("
                             f"{f'verify_ms = best of {rv.group(1)} calls, verify_first_ms = the first' if rv else 'single verify verify_first_ms'}"
                             f", proof_bytes); {gate}")
             for n in NS:
-                if n not in q:
+                j = n * k   # zkSketch's leaf at the end of epoch n
+                if j not in q:
                     continue
-                qq, bb = q[n], b[n]
-                answer, exact, probe, suf = zks_answer(f, n, int(qq['answer']), kk.get(n, ''))
+                qq, bb = q[j], b[j]
+                answer, exact, probe, suf = zks_answer(f, n, int(qq['answer']), kk.get(j, ''))
                 op = f'query_n{n}{suf}'
                 ib = [int(x) for x in bb['ib'].split(';')]
+                ver = f"t'={n}" if k == 1 else f"t'={j} (after leaf {j} = epoch {n})"
                 if full:
-                    mn, first, med = stats(vq[n])
+                    mn, first, med = stats(vq[j])
                     emit(family=f, system=sysname, run=run, operation=op, n=n, prove_s=float(qq['prove']) / 1000,
                          verify_ms=mn, verify_first_ms=first, verify_median_ms=med, proof_bytes=int(qq['bytes']),
-                         peak_rss_mb=mem[n] if hwm_ok[n] else None,
-                         rss_scope='coordinator VmHWM reset at query start (this query only)' if hwm_ok[n] else
+                         peak_rss_mb=mem[j] if hwm_ok[j] else None,
+                         rss_scope='coordinator VmHWM reset at query start (this query only)' if hwm_ok[j] else
                          'not measured (VmHWM reset failed)',
                          answer=answer, exact=exact, provenance='measured', note=note_for(f, sysname),
-                         detail=f"decode proof at version t'={n}; {probe}; prove = witness + prove; verify calls "
-                                f"{';'.join(f'{x:.3f}' for x in vq[n])} ms; rss_start {memstart[n][1]} MB; {gate}")
-                    parts = bv[n]
+                         detail=f"decode proof at version {ver}; {probe}; prove = witness + prove; verify calls "
+                                f"{';'.join(f'{x:.3f}' for x in vq[j])} ms; rss_start {memstart[j][1]} MB; {gate}", **zx)
+                    parts = bv[j]
                     pmin = sum(min(v) for v in parts['ver'])
                     pfirst = sum(v[0] for v in parts['ver'])
                     pmed = sum(statistics.median(v) for v in parts['ver'])
                     emit(family=f, system=sysname, run=run, operation=op.replace('query', 'accept'), n=n,
                          verify_ms=pmin + parts['check'] + mn, verify_first_ms=pfirst + parts['check'] + first,
                          verify_median_ms=pmed + parts['check'] + med, decode_ms=sum(parts['dec']),
-                         proof_bytes=sum(ib) + int(qq['bytes']), answer='', exact='',
+                         proof_bytes=sum(ib) + int(qq['bytes']), answer='', exact='', **zx,
                          provenance='derived (sum of measured parts)',
                          detail=f"{bb['ctx']} live peak(s) [{bb['iv']}] verified against pinned VKs (per part, best "
                                 f"of 5: {'+'.join(f'{min(v):.3f}' for v in parts['ver'])} ms) + statement checks "
@@ -747,7 +889,7 @@ for pfx, sysname, run, full in ZKS_SETS:
                     emit(family=f, system=sysname, run=run, operation=op, n=n, prove_s=float(qq['prove']) / 1000,
                          verify_first_ms=float(qq['verify']), proof_bytes=int(qq['bytes']), answer=answer,
                          exact=exact, provenance='measured (repeat run r1)', note=note_for(f, sysname),
-                         detail=f"first run (r1), single verify only; {probe}; {gate}")
+                         detail=f"first run (r1), single verify only; {probe}; {gate}", **zx)
 
 if A.zks:
     for f in FAMS:
@@ -766,7 +908,10 @@ run_order = {'main': 0, 'vt': 1, 'r2': 0, 'zk': 0, 'r1': 3}
 OUT.sort(key=lambda r: (order[r['family']], sys_order[r['system']], run_order.get(r['run'], 0),
                         r['operation'].split('_')[0] != 'update', VORDER.get(r['variant'], 99),
                         r['operation'].split('_')[0], int(r['n'] or 0), r['operation']))
-w = csv.DictWriter(open(OUT_PATH, 'w', newline=''), fieldnames=COLS)
+for r in OUT:   # the family's shape on every row (--extended)
+    r['epoch_records'], r['zks_leaf_records'], r['zks_leaves_per_epoch'] = SHAPE[r['family']]
+w = csv.DictWriter(open(OUT_PATH, 'w', newline=''), fieldnames=COLS + (COLS_EXT if EXT else []),
+                   extrasaction='ignore')
 w.writeheader()
 w.writerows(OUT)
 print(f'{len(OUT)} rows -> {OUT_PATH}')

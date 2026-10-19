@@ -40,6 +40,15 @@ the configuration; when assemble.py found the zkSketch GK run at another capacit
 size (CONFIG MISMATCH in the note) it is labelled "CONFIG MISMATCH: same rule, NOT the same
 function" instead. Otherwise (the committed set, SIX_ZKA_GK=textbook) the zk-Analytics GK is
 textbook Greenwald-Khanna, a different algorithm: the row is labelled "zkA: textbook GK".
+
+A CSV with assemble.py's --extended columns (a `run_all.sh memmatch` run) also gets, after the
+first table(s), "zkSketch run shape and memory": per family the epoch, zkSketch's leaves per
+epoch, its variant and shape, its "1 epoch" time and how it was obtained, and the worker,
+coordinator and combined peaks against the 8 GiB budget; the first table gets the coordinator
+and combined peaks of both sides next to the prover's. When some family proves an epoch as
+k > 1 zkSketch leaves (the memory-matched forest), zkS "1 epoch" is those k leaves + k - 1
+merges, the query at n is zkSketch's query after leaf n x k, and the texts say so; families
+may then have epochs of their own (the run line lists them).
 """
 import argparse
 import csv
@@ -154,6 +163,20 @@ QNS = sorted({int(r['n']) for r in rows if zka_row(r) and r['operation'].startsw
 NALL = list(range(1, T + 1))
 OTHER = [n for n in NALL if n not in QNS]
 OP_STREAM = f'update_stream_{T}_epochs'
+# assemble.py --extended: the family's shape on every row (a memory-matched forest when k > 1)
+HAS_EXT = bool(rows) and 'zks_leaves_per_epoch' in rows[0]
+MF, LF, KF = {}, {}, {}
+if HAS_EXT:
+    for r in rows:
+        if r['family'] not in MF and r['epoch_records']:
+            MF[r['family']], LF[r['family']], KF[r['family']] = (int(r['epoch_records']), int(r['zks_leaf_records']),
+                                                                  int(r['zks_leaves_per_epoch']))
+FOREST = any(k > 1 for k in KF.values())
+PERFAM = FOREST or len(set(MF.values())) > 1   # texts name each family's epoch
+EPOCH_TXT = "the family's epoch" if PERFAM else f'{M:,} records'
+PEAK_COLS = ('peak_rss_mb', 'coord_peak_rss_mb', 'combined_peak_rss_mb')
+BUDGET_MB = 8192   # the memory-matched budget: 8 GiB of worker + coordinator together
+ONE = HAS_EXT and T == 1   # one epoch: the "T epochs" rows and columns would repeat the "1 epoch" ones
 
 
 def and_join(xs):
@@ -234,8 +257,16 @@ if not LEGACY:
     feats = sorted({m.group(1) for r in rows if (r['system'], r['run']) == ZKS
                     for m in [re.search(r'features=(\S+)', r['detail'])] if m})
     est = sorted({m.group(1) for r in rows for m in [re.search(r'ESTIMATED \((.*?)\)$', r['provenance'])] if m})
-    print(f'_Run: {M * T:,} AOL records = {T} epochs x {M:,}; zk-Analytics proved epochs {and_join(AE)} and '
-          f'queries at n = {", ".join(map(str, QNS))}; zkSketch features: {", ".join(feats) or "?"}._\n')
+    if PERFAM:
+        shp = '; '.join(f'{fam.upper() if fam != "bloom" else "Bloom"} {MF[fam]:,} = {KF[fam]} x {LF[fam]:,}'
+                        for fam in FAMS if fam in MF)
+        print(f'_Run (memory-matched shape): {T} epoch{"" if T == 1 else "s"} per family, each epoch of the family\'s '
+              f'own size on both sides; zkSketch proves an epoch as k leaves + k - 1 merges (epoch records = k x leaf '
+              f'records: {shp}); zk-Analytics proved epochs {and_join(AE)} and queries at n = '
+              f'{", ".join(map(str, QNS))}; zkSketch features: {", ".join(feats) or "?"}._\n')
+    else:
+        print(f'_Run: {M * T:,} AOL records = {T} epochs x {M:,}; zk-Analytics proved epochs {and_join(AE)} and '
+              f'queries at n = {", ".join(map(str, QNS))}; zkSketch features: {", ".join(feats) or "?"}._\n')
     if est:
         print(f'_`est` = ESTIMATED zk-Analytics prove time, NOT proved in this run: {est[0]}. Verify time and bytes '
               f'of an estimated receipt are the mean of the measured ones; ratios built on an estimate are marked '
@@ -350,14 +381,32 @@ ROOTV_BEST = any(v(get(fam, 'zks', OP_STREAM), 'verify_ms') is not None for fam 
 # ------------------------------------------------------------------ update proofs, the four metrics
 HEAD_TXT = ('' if LEGACY or 'noroot' not in ZV else ' (headline: zkA noroot)' if MULTI else
             ' (headline: zkA = zk-Analytics without the per-bucket Merkle root, noroot)')
-print(f'**Update proofs side by side{HEAD_TXT}: proving time, verification time, proof size, peak memory** (one epoch = '
-      f'one batch of {M:,} records. zkA: one aggregation receipt per epoch, all kept and verified; "1 epoch" = the '
-      f'mean of proved epochs {and_join(AE)} (sampled), "{T} epochs" = {T} x that (derived); verify = best of 5 '
-      f'calls per receipt; peak RSS = the r0vm process (max over the proved epochs). zkS: "1 epoch" = the leaf '
-      f'proof alone (leafgen_seq_ms / {T}, EXCLUDING composition; its proof = the leaf-1 proof), "{T} epochs" = the '
-      f'whole forest incl. its {T - 1} merge{"" if T == 2 else "s"} (measured), which ends in ONE root proof: '
-      f'"verify" is that root, {"best of 5 calls (as zkA)" if ROOTV_BEST else "single call"}, in both rows; peak RSS = the procs-engine worker. Ratio = zkA / zkS for '
-      f'every metric: above 1, zkSketch is faster / smaller / lighter. KB = 10^3 bytes, GB = 2^30 bytes)\n')
+if FOREST:
+    za_t = '' if T == 1 else f', "{T} epochs" = {T} x that (derived)'
+    zs_t = ('; the forest is that one epoch and ends in ONE root proof: "verify" is that root' if T == 1 else
+            f', "{T} epochs" = the whole forest incl. all its merges (measured), which ends in ONE root proof: "verify" '
+            f'is that root, in both rows')
+    print(f'**Update proofs side by side{HEAD_TXT}: proving time, verification time, proof size, peak memory** (one epoch = '
+          f'the family\'s epoch, run line. zkA: one aggregation receipt per epoch, all kept and verified; "1 epoch" = '
+          f'the mean of proved epochs {and_join(AE)} (sampled){za_t}; verify = best of 5 calls per receipt; peak RSS: '
+          f'prover = the r0vm process, coordinator = their host driver (max over the proved epochs). zkS: "1 epoch" = '
+          f'the epoch\'s k leaves + k - 1 merges (the forest\'s measured makespan when it is one epoch, else k x '
+          f'leaf_s + (k - 1) x merge_s from the run, excluding the merges across epochs; its proof = the epoch\'s live '
+          f'peak(s)){zs_t}, {"best of 5 calls (as zkA)" if ROOTV_BEST else "single call"}; peak RSS: prover = the '
+          f'procs-engine worker, coordinator = exp_compose (VK derivation, audit, queries), over the run. "together" = '
+          f'the whole process tree at once (VmRSS summed per 0.5 s sample). Ratio = zkA / zkS for every metric: above '
+          f'1, zkSketch is faster / smaller / lighter. KB = 10^3 bytes, GB = 2^30 bytes)\n')
+else:
+    print(f'**Update proofs side by side{HEAD_TXT}: proving time, verification time, proof size, peak memory** (one epoch = '
+          f'one batch of {M:,} records. zkA: one aggregation receipt per epoch, all kept and verified; "1 epoch" = the '
+          f'mean of proved epochs {and_join(AE)} (sampled), "{T} epochs" = {T} x that (derived); verify = best of 5 '
+          f'calls per receipt; peak RSS = the r0vm process (max over the proved epochs). zkS: "1 epoch" = the leaf '
+          f'proof alone (leafgen_seq_ms / {T}, EXCLUDING composition; its proof = the leaf-1 proof), "{T} epochs" = the '
+          f'whole forest incl. its {T - 1} merge{"" if T == 2 else "s"} (measured), which ends in ONE root proof: '
+          f'"verify" is that root, {"best of 5 calls (as zkA)" if ROOTV_BEST else "single call"}, in both rows; peak RSS = the procs-engine worker'
+          + ('' if not HAS_EXT else '; the coordinator (zkA: their host driver; zkS: exp_compose) and "together" (the '
+             'whole process tree at once, VmRSS summed per 0.5 s sample) next to it') + '. Ratio = zkA / zkS for '
+          f'every metric: above 1, zkSketch is faster / smaller / lighter. KB = 10^3 bytes, GB = 2^30 bytes)\n')
 METRICS = [  # label, zkA op, zkA col, zkA multiplier, zkS op, zkS col, format
     ('prove, 1 epoch (s)', 'update_per_epoch', 'prove_s', 1, 'update_per_epoch', 'prove_s', fs),
     (f'prove, {T} epochs (s)', OP_STREAM, 'prove_s', 1, OP_STREAM, 'prove_s', fs),
@@ -367,6 +416,14 @@ METRICS = [  # label, zkA op, zkA col, zkA multiplier, zkS op, zkS col, format
     (f'proof, {T} epochs (KB)', 'update_per_epoch', 'proof_bytes', T, OP_STREAM, 'proof_bytes', kb),
     ('peak RSS (GB)', 'update_per_epoch', 'peak_rss_mb', 1, 'update_per_epoch', 'peak_rss_mb', gb),
 ]
+if HAS_EXT:  # the coordinator and the whole tree next to the prover
+    METRICS[-1] = ('peak RSS, prover (GB)',) + METRICS[-1][1:]
+    if ONE:
+        METRICS = [x for x in METRICS if f'{T} epochs' not in x[0]]
+    METRICS += [('peak RSS, coordinator (GB)', 'update_per_epoch', 'coord_peak_rss_mb', 1, 'update_per_epoch',
+                 'coord_peak_rss_mb', gb),
+                ('peak RSS, together (GB)', 'update_per_epoch', 'combined_peak_rss_mb', 1, 'update_per_epoch',
+                 'combined_peak_rss_mb', gb)]
 table(['sketch', 'metric'] + [zl(var) for var in ZV] + [lab for _, lab in SYSZ]
       + [f'{zl(var)} / {lab}' for _, lab in SYSZ for var in ZV])
 for fam in FAMS:
@@ -376,7 +433,7 @@ for fam in FAMS:
         sv = {who: (root_verify(get(fam, who, sop)) if scol == 'root_verify' else v(get(fam, who, sop), scol))
               for who, _ in SYSZ}
         def est(x, r):  # the est mark only on a value that exists; peak RSS is always that of measured proofs
-            return E(r) if x is not None and acol != 'peak_rss_mb' else ''
+            return E(r) if x is not None and acol not in PEAK_COLS else ''
         line([NAME[fam], mlab] + [fmt(av[var]) + est(av[var], ra[var]) for var in ZV] + [fmt(sv[who]) for who, _ in SYSZ]
              + [ratio(av[var], sv[who]) + est(av[var] if sv[who] else None, ra[var]) for who, _ in SYSZ for var in ZV])
 
@@ -401,20 +458,52 @@ if REF_SHOW:
         xz = root_verify(rz) if scol == 'root_verify' else v(rz, scol)
 
         def est(x, r):
-            return E(r) if x is not None and acol != 'peak_rss_mb' else ''
+            return E(r) if x is not None and acol not in PEAK_COLS else ''
         line([mlab, fmt(xr) + est(xr, rr), fmt(xh) + est(xh, rh), fmt(xz),
               ratio(xr, xz) + est(xr if xz else None, rr), ratio(xh, xz) + est(xh if xz else None, rh)])
 
+# ------------------------------------------------------------------ run shape and memory (--extended)
+if HAS_EXT:
+    print(f'\n**zkSketch run shape and memory** (per family: zk-Analytics proves one receipt per epoch, zkSketch k '
+          f'leaves + k - 1 merges per epoch; zkS variant / gk_rounds / shape = the exp_compose CSV\'s; "1 epoch" as in '
+          f'the first table, measured = the whole forest is one epoch; peaks over the zkSketch run in GB = 2^30 bytes: '
+          f'worker = the procs-engine worker, coordinator = exp_compose, together = both at once (VmRSS summed per '
+          f'0.5 s sample); budget = together <= {BUDGET_MB / 1024:.0f} GiB, the memory-matched budget; zkA prover = '
+          f'their r0vm, max over the proved epochs)\n')
+    table(['sketch', 'epoch (records)', 'zkS leaves x records', 'zkS variant / gk_rounds / shape',
+           'zkS 1 epoch (s)', 'zkS worker / coordinator / together (GB)', f'within {BUDGET_MB / 1024:.0f} GiB',
+           f'{zl(ZV[0])} prover (GB)'])
+    for fam in FAMS:
+        rz = get(fam, 'zks', 'update_per_epoch')
+        if rz is None:
+            line([NAME[fam], f'{MF[fam]:,}' if fam in MF else '-', '-', '-', '-', '-', '-', '-'])
+            continue
+        tog = v(rz, 'combined_peak_rss_mb')
+        line([NAME[fam], f'{MF[fam]:,}', f'{KF[fam]} x {LF[fam]:,}',
+              f"{rz['zks_variant']} / {rz['zks_gk_rounds']} / {rz['zks_shape']}",
+              f"{fs(v(rz, 'prove_s'))} ({rz['provenance']})",
+              ' / '.join(gb(v(rz, c)) for c in PEAK_COLS), '-' if tog is None else 'yes' if tog <= BUDGET_MB else 'NO',
+              gb(v(get(fam, 'zka', 'update_per_epoch', ZV[0]), 'peak_rss_mb'))])
+
 zk_txt = ' / zkS-zk worker' if HAS_ZK else ''
-print(f'\n**Update side.** One epoch = one batch of {M:,} records. Ratios are zkA / zkS. zkA prove per epoch is the '
-      f'mean of proved epochs {and_join(AE)} (sampled); zkA {T} epochs = {T} x that mean (derived). zkS "{T} batches" is '
-      f'measured and includes the {T - 1} forest merge{"" if T == 2 else "s"}; "leaf alone" is leafgen_seq_ms / {T} and '
-      f'EXCLUDES composition.\n')
-hdr = ['sketch'] + [f'{zl(var)} {T} epochs (s)' for var in ZV] + [f'zkS {T} batches incl. merges (s)'] \
-    + [rl(var, 'zkS') for var in ZV]
+if FOREST:
+    print(f'\n**Update side.** One epoch = the family\'s epoch (run line). Ratios are zkA / zkS. zkA prove per epoch is '
+          f'the mean of proved epochs {and_join(AE)} (sampled)'
+          + ('; zkS "1 epoch" is the measured forest, its k leaves + k - 1 merges (first table).\n' if T == 1 else
+             f'; zkA {T} epochs = {T} x that mean (derived). zkS "{T} batches" is measured and includes all the '
+             f'forest\'s merges; "1 epoch" is the epoch\'s k leaves + k - 1 merges (first table) and EXCLUDES the '
+             f'merges across epochs.\n'))
+else:
+    print(f'\n**Update side.** One epoch = one batch of {M:,} records. Ratios are zkA / zkS. zkA prove per epoch is the '
+          f'mean of proved epochs {and_join(AE)} (sampled); zkA {T} epochs = {T} x that mean (derived). zkS "{T} batches" is '
+          f'measured and includes the {T - 1} forest merge{"" if T == 2 else "s"}; "leaf alone" is leafgen_seq_ms / {T} and '
+          f'EXCLUDES composition.\n')
+ZONE = 'zkS 1 epoch' if FOREST else 'zkS leaf alone'   # zkS update_per_epoch
+hdr = ['sketch'] + ([] if ONE else [f'{zl(var)} {T} epochs (s)' for var in ZV] + [f'zkS {T} batches incl. merges (s)']
+                    + [rl(var, 'zkS') for var in ZV])
 if HAS_ZK:
     hdr += [f'zkS-zk {T} batches (s)'] + [rl(var, 'zkS-zk') for var in ZV]
-hdr += [f'{zl(var)} / epoch (s)' for var in ZV] + ['zkS leaf alone (s)'] + [rl(var, 'zkS') for var in ZV]
+hdr += [f'{zl(var)} / epoch (s)' for var in ZV] + [f'{ZONE} (s)'] + [rl(var, 'zkS') for var in ZV]
 if HAS_ZK:
     hdr += ['zkS-zk leaf alone (s)'] + [rl(var, 'zkS-zk') for var in ZV]
 hdr += ['peak RSS GB: ' + ' / '.join([f'{zl(var)} r0vm' for var in ZV]) + f' / zkS worker{zk_txt}']
@@ -429,8 +518,8 @@ for fam in FAMS:
     b8, z8 = (v(x, 'prove_s') for x in (rb8, rz8))
     b1, z1 = (v(x, 'prove_s') for x in (rb1, rz1))
     rb, rz = (v(x, 'peak_rss_mb') for x in (rb1, rz1))
-    c = [NAME[fam]] + [f(a8[var], 0) + E(ra8[var]) for var in ZV] + [fs(b8)] \
-        + [ratio(a8[var], b8) + E(ra8[var]) for var in ZV]
+    c = [NAME[fam]] + ([] if ONE else [f(a8[var], 0) + E(ra8[var]) for var in ZV] + [fs(b8)]
+                       + [ratio(a8[var], b8) + E(ra8[var]) for var in ZV])
     if HAS_ZK:
         c += [fs(z8)] + [ratio(a8[var], z8) + E(ra8[var]) for var in ZV]
     c += [fs(a1[var]) + E(ra1[var]) for var in ZV] + [fs(b1)] + [ratio(a1[var], b1) + E(ra1[var]) for var in ZV]
@@ -440,7 +529,8 @@ for fam in FAMS:
     line(c)
 
 print('\n**Proof bytes, update side** (KB = 10^3 bytes): zkA keeps one receipt per epoch; zkS keeps one root.\n')
-hdr = ['sketch'] + [x for var in ZV for x in (f'{zl(var)} receipt / epoch', f'{zl(var)} {T} receipts')] + ['zkS root'] \
+hdr = ['sketch'] + [x for var in ZV for x in (f'{zl(var)} receipt / epoch', f'{zl(var)} {T} receipts')[:1 if ONE else 2]] \
+    + ['zkS root'] \
     + (['zkS-zk root'] if HAS_ZK else []) + [f'zkS root verify, {"best of 5" if ROOTV_BEST else "single call"} (ms)'] \
     + (['zkS-zk root verify (ms)'] if HAS_ZK else [])
 table(hdr)
@@ -449,7 +539,7 @@ for fam in FAMS:
     for var in ZV:
         ra = get(fam, 'zka', 'update_per_epoch', var)
         ab = v(ra, 'proof_bytes')
-        c += [kb(ab) + E(ra), kb(T * ab if ab else None) + E(ra)]
+        c += [kb(ab) + E(ra), kb(T * ab if ab else None) + E(ra)][:1 if ONE else 2]
     sb, zb = (v(get(fam, w, OP_STREAM), 'proof_bytes') for w in ('zks', 'zk'))
     sv, zv = (root_verify(get(fam, w, OP_STREAM)) for w in ('zks', 'zk'))
     c += [kb(sb)] + ([kb(zb)] if HAS_ZK else []) + [f(sv)] + ([f(zv)] if HAS_ZK else [])
@@ -458,9 +548,10 @@ for fam in FAMS:
 nl, nh = QNS[0], QNS[-1]
 QNOTE = '; the same for every zkA root variant: query guests read no root' if ZV != ['legacy'] else ''
 print(f"\n**Query proving time** (s; the query proof alone; cells are zkA / zkS{' / zkS-zk' if HAS_ZK else ''}; "
-      f"‡ and § see notes{QNOTE})\n")
-table(['sketch'] + [f'n={n}' for n in QNS] + [f'zkA / zkS at n={nl}', f'at n={nh}']
-      + ([f'zkA / zkS-zk at n={nl}', f'at n={nh}'] if HAS_ZK else []))
+      f"‡ and § see notes{QNOTE}{'; n = epochs: zkS proves its query after leaf n x k' if FOREST else ''})\n")
+NR = 1 if HAS_EXT and nl == nh else 2   # one ratio column when there is one query point
+table(['sketch'] + [f'n={n}' for n in QNS] + [f'zkA / zkS at n={nl}', f'at n={nh}'][:NR]
+      + ([f'zkA / zkS-zk at n={nl}', f'at n={nh}'][:NR] if HAS_ZK else []))
 for fam in FAMS:
     for suf in sufs(fam):
         cells = []
@@ -471,9 +562,9 @@ for fam in FAMS:
         rl, rh = get(fam, 'zka', f'query_n{nl}{suf}'), get(fam, 'zka', f'query_n{nh}{suf}')
         a1, b1, z1 = (v(get(fam, w, f'query_n{nl}{suf}'), 'prove_s') for w in ('zka', 'zks', 'zk'))
         a8, b8, z8 = (v(get(fam, w, f'query_n{nh}{suf}'), 'prove_s') for w in ('zka', 'zks', 'zk'))
-        c = [label(fam, suf)] + cells + [ratio(a1, b1) + E(rl), ratio(a8, b8) + E(rh)]
+        c = [label(fam, suf)] + cells + [ratio(a1, b1) + E(rl), ratio(a8, b8) + E(rh)][:NR]
         if HAS_ZK:
-            c += [ratio(a1, z1) + E(rl), ratio(a8, z8) + E(rh)]
+            c += [ratio(a1, z1) + E(rl), ratio(a8, z8) + E(rh)][:NR]
         line(c)
 
 if OTHER:
@@ -489,6 +580,8 @@ if OTHER:
             line([label(fam, suf)] + cells)
 
 PEAKS = {n: bin(n).count('1') for n in NALL}
+FPEAKS = ('zkS = live forest peak(s) after leaf n x k (popcount(n x k) peaks; k per family, run line) + 1 query proof'
+          if FOREST else 'zkS = live forest peak(s) + 1 query proof')
 WHO = [('zks', 'zkSketch default build' if LEGACY else 'zkSketch')]
 if HAS_ZK:
     WHO.append(('zk', 'zkSketch `--features zk`'))
@@ -498,9 +591,10 @@ for who, title in WHO:
         extra = ('best of 5 calls per proof on both sides; deserialisation excluded on both sides'
                  if col == 'verify_ms' else 'KB = 10^3 bytes')
         print(f'\n**{what}, zkA vs {title}** ({unit}; {extra}; cells {" / ".join(zl(var) for var in ZV)} / zkS; zkA = '
-              f'n aggregation receipts + 1 query receipt, derived; zkS = live forest peak(s) + 1 query proof, sum of '
+              f'n aggregation receipts + 1 query receipt, derived; {FPEAKS}, sum of '
               f'measured parts; **bold** = the smaller side)\n')
-        table(['sketch'] + [f'n={n} ({PEAKS[n]} peak{"s" if PEAKS[n] > 1 else ""})' for n in NALL])
+        table(['sketch'] + [f'n={n}' if FOREST else f'n={n} ({PEAKS[n]} peak{"s" if PEAKS[n] > 1 else ""})'
+                            for n in NALL])
         for fam in FAMS:
             for suf in sufs(fam):
                 cells = []
@@ -557,8 +651,8 @@ for fam in FAMS:
         return f"{gb(v(get(fam, who, f'query_n1{suf}'), 'peak_rss_mb'))} / {gb(v(get(fam, who, f'query_n{T}{suf}'), 'peak_rss_mb'))} ({gb(max(xs))})"
     line([NAME[fam]] + a + [zz('zks')] + ([zz('zk')] if HAS_ZK else []))
 
-print(f'\n**Answers vs exact** (same {M * T:,} AOL records; exact computed natively; ‡ HLL zkSketch answers are the raw '
-      'estimator, outside HLL error bounds)\n')
+print(f'\n**Answers vs exact** (same {"first n epochs of AOL records per family" if PERFAM else f"{M * T:,} AOL records"}; '
+      'exact computed natively; ‡ HLL zkSketch answers are the raw estimator, outside HLL error bounds)\n')
 table(['sketch', 'n', 'zk-Analytics answer', 'zkSketch answer'] + (['zkSketch-zk answer'] if HAS_ZK else []) + ['exact'])
 for fam in FAMS:
     for suf in sufs(fam):
@@ -579,11 +673,11 @@ if HAS_R1:
         q2 = sum(v(get(fam, 'zks', f'query_n{n}{suf}'), 'prove_s') or 0 for n in NALL)
         line([NAME[fam], f'{fs(s1)} / {fs(s2)}', f'{fs(l1)} / {fs(l2)}', f'{fs(q1)} / {fs(q2)}'])
 
-print(f'\n**zk-Analytics aggregation guest, epoch 0 ({M:,} records): their ingest vs the rest** (user cycles; '
+print(f'\n**zk-Analytics aggregation guest, epoch 0 ({EPOCH_TXT}): their ingest vs the rest** (user cycles; '
       'MODELED column = proved per-epoch time x the non-ingest share of user cycles, ignoring paging and segment '
       'rounding; it is NOT a measurement)\n')
 table(['sketch', 'user cycles', 'Event read', 'batch-chain check', 'read + chain share', 'source',
-       'MODELED non-ingest prove / epoch (s)', 'vs zkS leaf alone', 'vs zkS amortized'])
+       'MODELED non-ingest prove / epoch (s)', f'vs {ZONE}', 'vs zkS amortized'])
 for fam in FAMS:
     for var in ZV:
         name = NAME[fam] + (f' ({var})' if MULTI else '')
@@ -610,7 +704,7 @@ for fam in FAMS:
 VX = vsort({raw_var(r) for fam in FAMS for r in rd(f'{ZP}_{fam}_exec.csv')
             if (r.get('step') or r.get('mode')) == 'aggr'} | set(ZV))
 WORK = 'designed' in VX and 'noroot' in VX
-print(f'\n**zk-Analytics aggregation guests per root variant** (executor, aggregation epoch 0 ({M:,} records): '
+print(f'\n**zk-Analytics aggregation guests per root variant** (executor, aggregation epoch 0 ({EPOCH_TXT}): '
       'user cycles (segments of at most 2^20 cycles); root = what the variant proves besides the state '
       'commitment: cm_rows+cm+heap = their CM row roots over 3 x 1,024 counter leaves + cm_root + heap_root, '
       'samples64 / buckets64 = their samples pattern with 64 buckets, pertuple = one leaf per GK tuple, none = no '
