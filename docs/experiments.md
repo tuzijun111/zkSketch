@@ -145,7 +145,7 @@ python3 scripts/plot_eval.py        # -> latex/pics/zkSketch_eval_batch.pdf if l
 ```
 
 **The deployed reference run** — one command feeds five artifacts: the forest
-column of `tab:compose-schedules`, the `M=1` column of `tab:compose-scale`, the
+column of `tab:compose-schedules`, the measured `M=1` runs behind `tab:compose-scale` (CM at `d = 7`), the
 `2^20` Plonky3 row of `tab:stream-scale`, the AOL column of `tab:eval-datasets`,
 and the Plonky3 (BabyBear) rows of `tab:p2-forest`. Run it first:
 
@@ -200,7 +200,7 @@ M = 1, 2, 3, 4 (M = 1 runs on node 0, as it would without the node list, and ign
 
 ```bash
 EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
-EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+EXP_D=3 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
 EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc EXP_KMV_K=16384 \
 EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest \
 EXP_COMPOSE_MACHINES=1,2,3,4 EXP_COMPOSE_CORES=32 \
@@ -216,11 +216,26 @@ same command shape for all six families at M = 1, 2, 3, 4 with 8 cores per machi
 tiny shapes (`results/smoke_forest6_m1234.csv`, all 24 rows ok, M = 3 and 4 `exec=staged`),
 and every family at its deployed shape on one 32-core machine, two 2^14-record leaves plus
 one composition (`results/smoke_forest6_deployed_n2e15.csv`, GK at `s = 51` in
-`results/smoke_forest6_deployed_gk_s51.csv`). Per-machine peak memory at the deployed
-shapes: CM 117 GiB, GK 74, Bloom 60, SS 53, HLL 51, KMV 29 GiB (two machines live at once
-under the waves). Leaf times there: CM 134 s, GK 94, Bloom 72, SS 61, HLL 57, KMV 35 s, a
-composition 5-8 s, so the M = 1 forest is about 9 h for the six families and the whole
-command about a day of wall clock (estimate).
+`results/smoke_forest6_deployed_gk_s51.csv`; Count-Min at `d = 3` in
+`results/smoke_forest6_deployed_cm_d3.csv`). Count-Min runs at `d = 3` (`EXP_D=3`), the
+paper's Tables 4 and 5 setting since 2026-10-26; at `d = 7` it costs twice as much. Per-machine peak
+memory at the deployed shapes: GK 74 GiB, Bloom 60, CM 58 (117 at `d = 7`), SS 53, HLL 51,
+KMV 29 GiB (two machines live at once under the waves). Leaf times there: GK 94 s, Bloom 72,
+CM 67 (134 at `d = 7`), SS 61, HLL 57, KMV 35 s, a composition 5-8 s, so the M = 1 forest is
+about 7.5 h for the six families and the whole command about a day of wall clock (estimate).
+Table 4's CM (`d = 3`), Bloom and KMV rows are ESTIMATED: CM scales the measured `d = 7` M = 1
+run (`frame_out_1machine_plonky3.csv`) by the `d = 3` / `d = 7` ratios of leaf, composition and
+setup time in the two current-circuit runs (0.500, 0.951, 0.425) and keeps CM's measured
+speedups; Bloom and KMV take Table 5's `N = 2^20` estimates (setup + prove) and the four
+measured families' mean speedups (1.964, 2.813, 3.804). The two current-circuit inputs (two
+`2^14`-record leaves plus one composition each):
+
+```bash
+EXP_DATASET=aol EXP_COMPOSE_N=2^15 EXP_COMPOSE_BATCHES=16384 EXP_D=3 EXP_W=16384 EXP_COMPOSE_FAMILY=cm EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 EXP_COMPOSE_BACKEND=plonky3 scripts/run_compose.sh forest6_deployed_cm_d3.csv
+EXP_DATASET=aol EXP_COMPOSE_N=2^15 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc EXP_KMV_K=16384 EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 EXP_COMPOSE_BACKEND=plonky3 scripts/run_compose.sh forest6_deployed_n2e15.csv
+```
+
+(kept as `results/smoke_forest6_deployed_cm_d3.csv` and `results/smoke_forest6_deployed_n2e15.csv`).
 
 **Table `tab:stream-scale` — stream scaling on both backends.** `k=16..19` only:
 the `2^20` row is the deployed reference run above (Plonky3) and the
@@ -252,7 +267,8 @@ done
 
 **Six-family version of `tab:stream-scale`** (adds the Bloom filter and KMV; current
 circuits, zero knowledge on by default; Plonky3 only, since the Plonky2 crate has no Bloom
-or KMV circuit). Same extra knob as the six-family `tab:compose-scale` command
+or KMV circuit). Count-Min at `d = 3` (`EXP_D=3`), as in the paper's Table 5 since 2026-10-26.
+Same extra knob as the six-family `tab:compose-scale` command
 (`EXP_BLOOM_VARIANT=omc`); GK's `1/eps` is derived per `N` as in the published rows (64, 60, 56,
 53, 51 at `k = 16..20`). `k = 20` is included, although it is the same configuration as the
 M = 1 rows of that command (skip it if you have those):
@@ -260,7 +276,7 @@ M = 1 rows of that command (skip it if you have those):
 ```bash
 for k in 16 17 18 19 20; do
   EXP_DATASET=aol \
-  EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+  EXP_D=3 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
   EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc EXP_KMV_K=16384 \
   EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest \
   EXP_COMPOSE_N=2^$k EXP_COMPOSE_BATCHES=16384 \
@@ -275,13 +291,17 @@ Validated on 2026-10-26 without the long run: the same loop at tiny shapes and
 N = 2^8..2^10 in 64-record batches for all six families (`results/smoke_stream6_2e{8,9,10}.csv`),
 and every family at the deployed shape with two 2^14-record leaves plus one composition
 (`results/smoke_forest6_deployed_n2e15.csv`, GK at `s = 51` in
-`results/smoke_forest6_deployed_gk_s51.csv`). Table 5 (`tab:stream-scale`) columns:
-`prove = leaf_busy_max_ms`, `setup = total_time_ms − leaf_busy_max_ms`. Its Bloom and KMV
+`results/smoke_forest6_deployed_gk_s51.csv`; Count-Min at `d = 3` in `results/smoke_forest6_deployed_cm_d3.csv`). Table 5 (`tab:stream-scale`) columns:
+`prove = leaf_busy_max_ms`, `setup = total_time_ms − leaf_busy_max_ms`. Its CM row (`d = 3`) is
+ESTIMATED: each measured `d = 7` run (`forest_plonky3_1machine_verify_2e{16..19}.csv`,
+`frame_out_1machine_plonky3.csv`) with its leaves (`leafgen_seq_ms`) x 0.500, compositions (`leaf_busy_max_ms − leafgen_seq_ms`) x 0.951 and setup x 0.425,
+the `d = 3` / `d = 7` ratios of `smoke_forest6_deployed_cm_d3.csv` / `smoke_forest6_deployed_n2e15.csv`
+(its `2^20` point is Table 4's CM M = 1 estimate). Its Bloom and KMV
 rows are ESTIMATED from that deployed-shape run (per leaf 71.7 / 35.4 s, per composition
 5.0 / 7.0 s, setup 21.0 / 8.0 s, plus 0.12 / 0.10 s of setup per extra leaf from the
 memmatch and queryrate runs): prove(t) = t x leaf + (t − 1) x composition and setup(t) =
-setup(2) + per-leaf x (t − 2) for t = N / 2^14. The whole loop is about 17-18 h on one
-32-core machine (estimate: about 9 h for k = 20, half that for each smaller k).
+setup(2) + per-leaf x (t − 2) for t = N / 2^14. The whole loop is about 15 h on one
+32-core machine (estimate: about 7.5 h for k = 20 with CM at `d = 3`, half that for each smaller k).
 
 **Table `tab:p2-forest` — cross-backend at stream scale.** The Plonky3
 (BabyBear) rows are the reference run above; add the Goldilocks port and Plonky2:
@@ -355,8 +375,8 @@ on Plonky2; and `tab:mixed`'s per-update cost is `(total_time_ms + query_prove_m
 | --- | --- |
 | `fig:eval-batch` | `{cm,hll}_batch_{one_hot,merkle,omc}.csv`, `{ss,gk}_batch_{naive,certified}.csv` (plotted by `scripts/plot_eval.py`) |
 | `tab:compose-schedules` | `frame_out_1machine_plonky3_perbatch.csv` (per-batch) + `frame_out_1machine_plonky3.csv` (forest) |
-| `tab:compose-scale` | `frame_out_1machine_plonky3.csv` (M=1) + `frame_out_staged_m234_plonky3.csv` (M=2,3,4) |
-| `tab:stream-scale` | CM/HLL/SS/GK: `forest_plonky3_1machine_verify_2e{16..19}.csv` + `frame_out_1machine_plonky3.csv` (the `2^20` row); Bloom/KMV ESTIMATED from `smoke_forest6_deployed_n2e15.csv` + the setup slopes of `results/six/memmatch-20261022-205419/six_zksketch_{bloom,kmv}.csv` and `results/six/queryrate-20261023-230106/qr_zks_{a,b}_q0.csv` |
+| `tab:compose-scale` | HLL/SS/GK: `frame_out_1machine_plonky3.csv` (M=1) + `frame_out_staged_m234_plonky3.csv` (M=2,3,4); CM `d = 3` ESTIMATED: those CM (`d = 7`) rows x the `d = 3` / `d = 7` ratios of `smoke_forest6_deployed_cm_d3.csv` / `smoke_forest6_deployed_n2e15.csv`; Bloom/KMV ESTIMATED: `tab:stream-scale`'s `2^20` estimates / the four measured mean speedups |
+| `tab:stream-scale` | HLL/SS/GK: `forest_plonky3_1machine_verify_2e{16..19}.csv` + `frame_out_1machine_plonky3.csv` (the `2^20` row); CM `d = 3` ESTIMATED: those CM (`d = 7`) rows x the ratios of `smoke_forest6_deployed_cm_d3.csv` / `smoke_forest6_deployed_n2e15.csv`; Bloom/KMV ESTIMATED from `smoke_forest6_deployed_n2e15.csv` + the setup slopes of `results/six/memmatch-20261022-205419/six_zksketch_{bloom,kmv}.csv` and `results/six/queryrate-20261023-230106/qr_zks_{a,b}_q0.csv` |
 | `tab:mixed` | `scripts/baselines/zka/results/queryrate-20261023-230106/queryrate.csv` (+ `queryrate_table.md`, `qr_zks_{a,b,c}_q{0,1000,10000,100000}.csv`, `zka_epoch_E*/`, `zka_query_E4096_T64/`); the four-family `s3_plonky3_1machine_mixed_q{1000,10000,100000,1000000}.csv` files are superseded |
 | `tab:eval-datasets` | `frame_out_1machine_datasets_plonky3.csv` + `frame_out_1machine_plonky3.csv` (AOL); memory: `{cm,hll}_batch_omc.csv`, `{ss,gk}_batch_certified.csv` at `m=2^14` (leaf) + `frame_out_4machine_plonky3.csv` (M=4) |
 | `tab:zka` | `scripts/baselines/zka/results/memmatch-20261022-205419/` (`six_sketch_table.md`, `six_sketch_comparison.csv`) |
