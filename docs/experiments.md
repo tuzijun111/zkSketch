@@ -98,8 +98,9 @@ days of prover time on the 128-core testbed.
 
 **Figure `fig:eval-batch` — batch-size sweep** (`results/{cm,hll,ss,gk}_batch_*.csv`,
 plotted by `scripts/plot_eval.py`). Baselines stop where the padded trace
-exceeds the backend's `2^27` FRI domain; those points are recorded as
-`status=too_large` and drawn as the infeasibility ✗:
+exceeds the backend's `2^27` FRI domain (`2^24` rows per table under the default
+zero-knowledge build, which makes the Count-Min one-hot leaf `too_large` already at `m = 16`);
+those points are recorded as `status=too_large` and drawn as the infeasibility ✗:
 
 ```bash
 # Count-Min: one-hot replay / Merkle sparse-opening / deployed memory-checked
@@ -140,7 +141,7 @@ EXP_DATASET=aol EXP_FAMILY=gk EXP_GK_CAP=2048 EXP_GK_VARIANT=bandmerge2 \
   EXP_M=16,32,64,128,256,512,1024,2048,4096,8192,16384 EXP_CORES=32 BACKENDS=plonky3 \
   EXP_OUT=gk_batch_certified.csv scripts/run_experiments.sh e1
 
-python3 scripts/plot_eval.py        # -> results/zkSketch_eval_batch.pdf
+python3 scripts/plot_eval.py        # -> latex/pics/zkSketch_eval_batch.pdf if latex/pics/ exists, else results/
 ```
 
 **The deployed reference run** — one command feeds five artifacts: the forest
@@ -187,7 +188,39 @@ scripts/run_compose.sh frame_out_staged_m234_plonky3.csv
 
 `frame_out_staged_m234_plonky3.csv` holds all 12 rows (4 families × 3 machine
 counts); `results/frame_out_{2,3,4}machine_plonky3.csv` are that file split by
-machine count. `tab:eval-memory`'s forest column reads the `M=4` rows.
+machine count. `tab:eval-datasets`' M = 4 memory column reads the `M=4` rows.
+
+**Six-family version of `tab:compose-scale`** (adds the Bloom filter and KMV; current
+circuits, zero knowledge on by default). One knob beyond the four-family command:
+`EXP_BLOOM_VARIANT=omc`, because the default packed Bloom leaf needs `7 m < 2^16` and
+`exp_compose` exits 2 at `m = 16384`. GK's `1/eps` needs no knob: `exp_compose` derives
+`s = floor(cap / (2 ceil(log2 N)))`, which is 51 at `N = 2^20`, the paper's value and how the
+published `tab:compose-scale` rows got `cap2048_s51` (`EXP_GK_S` overrides it). One command covers
+M = 1, 2, 3, 4 (M = 1 runs on node 0, as it would without the node list, and ignores the wave size):
+
+```bash
+EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
+EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc EXP_KMV_K=16384 \
+EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest \
+EXP_COMPOSE_MACHINES=1,2,3,4 EXP_COMPOSE_CORES=32 \
+EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
+EXP_COMPOSE_BACKEND=plonky3 \
+EXP_COMPOSE_NODES=0,2 EXP_COMPOSE_WAVE_SIZE=2 \
+scripts/run_compose.sh frame_out_m1234_plonky3_6fam.csv
+```
+
+It needs the four-NUMA-node, two-socket server of the original runs (each machine = 32
+physical cores of one node). Validated on 2026-10-26 on a one-node 32-core machine: the
+same command shape for all six families at M = 1, 2, 3, 4 with 8 cores per machine and
+tiny shapes (`results/smoke_forest6_m1234.csv`, all 24 rows ok, M = 3 and 4 `exec=staged`),
+and every family at its deployed shape on one 32-core machine, two 2^14-record leaves plus
+one composition (`results/smoke_forest6_deployed_n2e15.csv`, GK at `s = 51` in
+`results/smoke_forest6_deployed_gk_s51.csv`). Per-machine peak memory at the deployed
+shapes: CM 117 GiB, GK 74, Bloom 60, SS 53, HLL 51, KMV 29 GiB (two machines live at once
+under the waves). Leaf times there: CM 134 s, GK 94, Bloom 72, SS 61, HLL 57, KMV 35 s, a
+composition 5-8 s, so the M = 1 forest is about 9 h for the six families and the whole
+command about a day of wall clock (estimate).
 
 **Table `tab:stream-scale` — stream scaling on both backends.** `k=16..19` only:
 the `2^20` row is the deployed reference run above (Plonky3) and the
@@ -217,6 +250,39 @@ for k in 16 17 18 19; do
 done
 ```
 
+**Six-family version of `tab:stream-scale`** (adds the Bloom filter and KMV; current
+circuits, zero knowledge on by default; Plonky3 only, since the Plonky2 crate has no Bloom
+or KMV circuit). Same extra knob as the six-family `tab:compose-scale` command
+(`EXP_BLOOM_VARIANT=omc`); GK's `1/eps` is derived per `N` as in the published rows (64, 60, 56,
+53, 51 at `k = 16..20`). `k = 20` is included, although it is the same configuration as the
+M = 1 rows of that command (skip it if you have those):
+
+```bash
+for k in 16 17 18 19 20; do
+  EXP_DATASET=aol \
+  EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+  EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc EXP_KMV_K=16384 \
+  EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest \
+  EXP_COMPOSE_N=2^$k EXP_COMPOSE_BATCHES=16384 \
+  EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 \
+  EXP_COMPOSE_EXEC=procs EXP_NET_MBPS=200 EXP_NET_RTT_MS=0.2 \
+  EXP_COMPOSE_BACKEND=plonky3 \
+  scripts/run_compose.sh forest_plonky3_1machine_6fam_2e$k.csv
+done
+```
+
+Validated on 2026-10-26 without the long run: the same loop at tiny shapes and
+N = 2^8..2^10 in 64-record batches for all six families (`results/smoke_stream6_2e{8,9,10}.csv`),
+and every family at the deployed shape with two 2^14-record leaves plus one composition
+(`results/smoke_forest6_deployed_n2e15.csv`, GK at `s = 51` in
+`results/smoke_forest6_deployed_gk_s51.csv`). Table 5 (`tab:stream-scale`) columns:
+`prove = leaf_busy_max_ms`, `setup = total_time_ms − leaf_busy_max_ms`. Its Bloom and KMV
+rows are ESTIMATED from that deployed-shape run (per leaf 71.7 / 35.4 s, per composition
+5.0 / 7.0 s, setup 21.0 / 8.0 s, plus 0.12 / 0.10 s of setup per extra leaf from the
+memmatch and queryrate runs): prove(t) = t x leaf + (t − 1) x composition and setup(t) =
+setup(2) + per-leaf x (t − 2) for t = N / 2^14. The whole loop is about 17-18 h on one
+32-core machine (estimate: about 9 h for k = 20, half that for each smaller k).
+
 **Table `tab:p2-forest` — cross-backend at stream scale.** The Plonky3
 (BabyBear) rows are the reference run above; add the Goldilocks port and Plonky2:
 
@@ -238,7 +304,18 @@ EXP_COMPOSE_BACKEND=plonky2 \
 scripts/run_compose.sh frame_out_1machine_plonky2.csv
 ```
 
-**Table `tab:mixed` — query-rate sweep.** One query every `Q` stream positions:
+**Table `tab:mixed` — query-rate sweep.** One query every `Q` stream positions. Since
+2026-10-24 the paper's table comes from the six-sketch harness, which runs all six families
+at the memory-matched leaf sizes over 2^17 AOL positions (Q = 1,000, 10,000, 100,000 plus the
+query-free baseline) and adds a modeled zk-Analytics column
+([docs/six_sketch_comparison.md](six_sketch_comparison.md), "The query-rate experiment"):
+
+```bash
+taskset -c 0-31 scripts/baselines/zka/six/run_all.sh queryrate
+```
+
+The earlier four-family, zero-knowledge-off version of the table (Uniform stream, N = 2^20,
+m = 16,384 leaves) was produced by:
 
 ```bash
 for Q in 1000 10000 100000 1000000; do
@@ -272,19 +349,20 @@ Two artifacts derive their columns: `tab:stream-scale` is the only one that
 splits wall-clock into setup `+` prove, using
 `prove = leaf_busy_max_ms`, `setup = total_time_ms − leaf_busy_max_ms` on
 Plonky3 and `prove = leafgen_seq_ms + merge_total_ms`, `setup = total − prove`
-on Plonky2; and `tab:mixed`'s amortized per-element cost is
-`(total_time_ms + query_prove_ms)/N`.
+on Plonky2; and `tab:mixed`'s per-update cost is `(total_time_ms + query_prove_ms)/(n - n_queries)` per `qr_zks_<group>_q<Q>.csv` row for zkSketch (measured) and `zka_total_s / updates_U` for zk-Analytics (modeled by `scripts/baselines/zka/six/queryrate_model.py`), the `zks_ms_per_update` and `zka_ms_per_update` columns of `queryrate.csv`.
 
 | Paper artifact | `results/` file(s) |
 | --- | --- |
 | `fig:eval-batch` | `{cm,hll}_batch_{one_hot,merkle,omc}.csv`, `{ss,gk}_batch_{naive,certified}.csv` (plotted by `scripts/plot_eval.py`) |
 | `tab:compose-schedules` | `frame_out_1machine_plonky3_perbatch.csv` (per-batch) + `frame_out_1machine_plonky3.csv` (forest) |
 | `tab:compose-scale` | `frame_out_1machine_plonky3.csv` (M=1) + `frame_out_staged_m234_plonky3.csv` (M=2,3,4) |
-| `tab:stream-scale` | `forest_plonky{3,2}_1machine_verify_2e{16..19}.csv` + `frame_out_1machine_plonky{3,2}.csv` (the `2^20` row) |
-| `tab:mixed` | `s3_plonky3_1machine_mixed_q{1000,10000,100000,1000000}.csv` |
-| `tab:eval-datasets` | `frame_out_1machine_datasets_plonky3.csv` + `frame_out_1machine_plonky3.csv` (AOL) |
-| `tab:eval-memory` | `{cm,hll}_batch_omc.csv`, `{ss,gk}_batch_certified.csv` at `m=2^14` (leaf) + `frame_out_4machine_plonky3.csv` (forest) |
-| `tab:p2-forest` | `frame_out_1machine_plonky3.csv`, `frame_out_1machine_Goldilocks.csv`, `frame_out_1machine_plonky2.csv` |
+| `tab:stream-scale` | CM/HLL/SS/GK: `forest_plonky3_1machine_verify_2e{16..19}.csv` + `frame_out_1machine_plonky3.csv` (the `2^20` row); Bloom/KMV ESTIMATED from `smoke_forest6_deployed_n2e15.csv` + the setup slopes of `results/six/memmatch-20261022-205419/six_zksketch_{bloom,kmv}.csv` and `results/six/queryrate-20261023-230106/qr_zks_{a,b}_q0.csv` |
+| `tab:mixed` | `scripts/baselines/zka/results/queryrate-20261023-230106/queryrate.csv` (+ `queryrate_table.md`, `qr_zks_{a,b,c}_q{0,1000,10000,100000}.csv`, `zka_epoch_E*/`, `zka_query_E4096_T64/`); the four-family `s3_plonky3_1machine_mixed_q{1000,10000,100000,1000000}.csv` files are superseded |
+| `tab:eval-datasets` | `frame_out_1machine_datasets_plonky3.csv` + `frame_out_1machine_plonky3.csv` (AOL); memory: `{cm,hll}_batch_omc.csv`, `{ss,gk}_batch_certified.csv` at `m=2^14` (leaf) + `frame_out_4machine_plonky3.csv` (M=4) |
+| `tab:zka` | `scripts/baselines/zka/results/memmatch-20261022-205419/` (`six_sketch_table.md`, `six_sketch_comparison.csv`) |
+| `fig:eval-sweep` | `scripts/baselines/zka/results/sweep-20261024-195453/sweep.csv` (plotted by `scripts/plot_sweep.py`) |
+| appendix staged-wave controls | `frame_out_{2,3,4}machine_plonky3_coresident.csv`, `frame_out_1machine_plonky3_busysib.csv` (SS row only) |
+| `tab:p2-forest` (earlier drafts; not in the current paper) | `frame_out_1machine_plonky3.csv`, `frame_out_1machine_Goldilocks.csv`, `frame_out_1machine_plonky2.csv` |
 
 > **Superseded** (kept for provenance; no current table reads them): the `_old`
 > and `_new` suffixes, `forest_plonky3_1machine_verify_2e20.csv`, and the
@@ -298,7 +376,18 @@ on Plonky2; and `tab:mixed`'s amortized per-element cost is
 > penalty). `scripts/run_m1_busy_sibling.sh` produces the `_busysib` file (one M=1
 > forest per family next to a busy sibling node); the `_coresident` files are plain
 > `run_compose.sh` forest runs at M=2,3,4 without `EXP_COMPOSE_NODES` /
-> `EXP_COMPOSE_WAVE_SIZE` (the default, socket-unaware placement).
+> `EXP_COMPOSE_WAVE_SIZE` (the default, socket-unaware placement):
+>
+> ```bash
+> for M in 2 3 4; do
+>   EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
+>   EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 \
+>   EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest \
+>   EXP_COMPOSE_MACHINES=$M EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs \
+>   scripts/run_compose.sh frame_out_${M}machine_plonky3_coresident.csv
+> done
+> scripts/run_m1_busy_sibling.sh frame_out_1machine_plonky3_busysib.csv ss   # the kept file has the SS row only
+> ```
 
 ### Standalone comparison demos
 

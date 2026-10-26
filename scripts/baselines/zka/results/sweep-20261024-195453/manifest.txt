@@ -1,0 +1,71 @@
+# six-sketch comparison run manifest
+mode=sweep
+started=2026-10-24T19:54:53+08:00
+sizes=6,7,8,9,10,11,12,13,14 (E; m = 2^E records, one batch per size: SIX_T=1, one zkSketch leaf = the batch, k = 1)
+gk_cap=2048 gk_cap_from=default gk_rounds=stable gk_s=51 bloom_variant=auto (packed while 7 x m < 2^16, else omc; per size below) query_points=1 aggr_epochs=0 cores=32
+zka_roots=noroot (aggregation root variants executed and proved) zka_cm_ref=0 (no separate CM reference)
+zka_gk=matched (zkSketch's GK rule in their pipeline: capacity 2048, s 51, m_sub = the batch m = 1 apply_batch2 step per batch, implementation literal)
+verify_repeats=5 gate: GATE_WAIT_S=600 GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 fail_fast=0
+zksketch=bf5d8bcf1c63bb841a9eaa8afaa4f8dc453dba6b changed_files=10 checkout=/home/binbin/zkSketch
+exp_compose_md5=e4a2a04653ef
+zka=d4a5a9a90f7470b4af29045ef248f724708813ad baseline_dir=/home/binbin/ext-baselines
+host=SPRL6201019991 kernel=7.0.0-34-generic cpu="AMD Ryzen Threadripper PRO 9975WX 32-Cores" nproc=32 phys_cores=32 mem_gib=559
+rustc="rustc 1.97.1 (8bab26f4f 2026-07-14)" r0vm="risc0-r0vm 3.0.6" rzup="rzup 0.5.0" python="Python 3.14.4"
+risc0_toolchains="v1.97.0-rust-x86_64-unknown-linux-gnu v2024.1.5-cpp-x86_64-unknown-linux-gnu "
+cpus_allowed=0-31 (this process's affinity, e.g. taskset -c 0-31: zkSketch's worker and r0vm inherit it)
+size m06 E=6 m=64 bloom_variant=packed (auto: 7 x m < 2^16) gk_cap=2048 dir=/home/binbin/zkSketch/results/six/sweep-20261024-195453/m06 started=2026-10-24T19:54:53+08:00
+step rc=0 seconds=188 m06 zkSketch: run_zks.sh (6 runs, m=64)
+step rc=0 seconds=1 m06 zk-Analytics executor: run_zka.sh exec (root variants noroot, m=64)
+step rc=0 seconds=916 m06 zk-Analytics proofs: run_zka.sh prove (6 jobs, m=64)
+step rc=0 seconds=0 m06 assemble + table
+size m06 rc=0 seconds=1105 finished=2026-10-24T20:13:18+08:00
+size m07 E=7 m=128 bloom_variant=packed (auto: 7 x m < 2^16) gk_cap=2048 dir=/home/binbin/zkSketch/results/six/sweep-20261024-195453/m07 started=2026-10-24T20:13:18+08:00
+step rc=0 seconds=283 m07 zkSketch: run_zks.sh (6 runs, m=128)
+step rc=0 seconds=1 m07 zk-Analytics executor: run_zka.sh exec (root variants noroot, m=128)
+step rc=0 seconds=1065 m07 zk-Analytics proofs: run_zka.sh prove (6 jobs, m=128)
+step rc=0 seconds=0 m07 assemble + table
+size m07 rc=0 seconds=1349 finished=2026-10-24T20:35:47+08:00
+size m08 E=8 m=256 bloom_variant=packed (auto: 7 x m < 2^16) gk_cap=2048 dir=/home/binbin/zkSketch/results/six/sweep-20261024-195453/m08 started=2026-10-24T20:35:47+08:00
+step rc=0 seconds=342 m08 zkSketch: run_zks.sh (6 runs, m=256)
+step rc=0 seconds=1 m08 zk-Analytics executor: run_zka.sh exec (root variants noroot, m=256)
+step rc=0 seconds=1342 m08 zk-Analytics proofs: run_zka.sh prove (6 jobs, m=256)
+step rc=0 seconds=1 m08 assemble + table
+size m08 rc=0 seconds=1686 finished=2026-10-24T21:03:53+08:00
+size m09 E=9 m=512 bloom_variant=packed (auto: 7 x m < 2^16) gk_cap=2048 dir=/home/binbin/zkSketch/results/six/sweep-20261024-195453/m09 started=2026-10-24T21:03:53+08:00
+step rc=0 seconds=322 m09 zkSketch: run_zks.sh (6 runs, m=512)
+step rc=0 seconds=2 m09 zk-Analytics executor: run_zka.sh exec (root variants noroot, m=512)
+step rc=0 seconds=1793 m09 zk-Analytics proofs: run_zka.sh prove (6 jobs, m=512)
+step rc=0 seconds=0 m09 assemble + table
+size m09 rc=0 seconds=2117 finished=2026-10-24T21:39:10+08:00
+size m10 E=10 m=1024 bloom_variant=packed (auto: 7 x m < 2^16) gk_cap=2048 dir=/home/binbin/zkSketch/results/six/sweep-20261024-195453/m10 started=2026-10-24T21:39:10+08:00
+step rc=0 seconds=511 m10 zkSketch: run_zks.sh (6 runs, m=1024)
+step rc=0 seconds=1 m10 zk-Analytics executor: run_zka.sh exec (root variants noroot, m=1024)
+step rc=0 seconds=2705 m10 zk-Analytics proofs: run_zka.sh prove (6 jobs, m=1024)
+step rc=0 seconds=0 m10 assemble + table
+size m10 rc=0 seconds=3217 finished=2026-10-24T22:32:47+08:00
+size m11 E=11 m=2048 bloom_variant=packed (auto: 7 x m < 2^16) gk_cap=2048 dir=/home/binbin/zkSketch/results/six/sweep-20261024-195453/m11 started=2026-10-24T22:32:47+08:00
+step rc=0 seconds=544 m11 zkSketch: run_zks.sh (6 runs, m=2048)
+step rc=0 seconds=2 m11 zk-Analytics executor: run_zka.sh exec (root variants noroot, m=2048)
+step rc=0 seconds=4533 m11 zk-Analytics proofs: run_zka.sh prove (6 jobs, m=2048)
+step rc=0 seconds=0 m11 assemble + table
+size m11 rc=0 seconds=5079 finished=2026-10-24T23:57:26+08:00
+size m12 E=12 m=4096 bloom_variant=packed (auto: 7 x m < 2^16) gk_cap=2048 dir=/home/binbin/zkSketch/results/six/sweep-20261024-195453/m12 started=2026-10-24T23:57:26+08:00
+step rc=0 seconds=694 m12 zkSketch: run_zks.sh (6 runs, m=4096)
+step rc=0 seconds=4 m12 zk-Analytics executor: run_zka.sh exec (root variants noroot, m=4096)
+step rc=0 seconds=8040 m12 zk-Analytics proofs: run_zka.sh prove (6 jobs, m=4096)
+step rc=0 seconds=0 m12 assemble + table
+size m12 rc=0 seconds=8738 finished=2026-10-25T02:23:04+08:00
+size m13 E=13 m=8192 bloom_variant=packed (auto: 7 x m < 2^16) gk_cap=2048 dir=/home/binbin/zkSketch/results/six/sweep-20261024-195453/m13 started=2026-10-25T02:23:04+08:00
+step rc=0 seconds=912 m13 zkSketch: run_zks.sh (6 runs, m=8192)
+step rc=0 seconds=7 m13 zk-Analytics executor: run_zka.sh exec (root variants noroot, m=8192)
+step rc=0 seconds=15426 m13 zk-Analytics proofs: run_zka.sh prove (6 jobs, m=8192)
+step rc=0 seconds=0 m13 assemble + table
+size m13 rc=0 seconds=16345 finished=2026-10-25T06:55:29+08:00
+size m14 E=14 m=16384 bloom_variant=omc (auto: 7 x m >= 2^16, the packed leaf's 16-bit timestamps) gk_cap=2048 dir=/home/binbin/zkSketch/results/six/sweep-20261024-195453/m14 started=2026-10-25T06:55:29+08:00
+step rc=0 seconds=1420 m14 zkSketch: run_zks.sh (6 runs, m=16384)
+step rc=0 seconds=12 m14 zk-Analytics executor: run_zka.sh exec (root variants noroot, m=16384)
+step rc=0 seconds=30154 m14 zk-Analytics proofs: run_zka.sh prove (6 jobs, m=16384)
+step rc=0 seconds=0 m14 assemble + table
+size m14 rc=0 seconds=31586 finished=2026-10-25T15:41:55+08:00
+step rc=0 seconds=0 sweep sweep table: sweep_table.py (/home/binbin/zkSketch/results/six/sweep-20261024-195453)
+finished=2026-10-25T15:41:55+08:00 rc=0 sizes_ok=9 sizes_failed=0 sizes_skipped=0

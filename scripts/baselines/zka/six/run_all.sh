@@ -29,6 +29,36 @@
 #                               cap 384, T = 2; 8 min here), proofs as in quick (SIX_QUICK_PROVE), the
 #                               rest ESTIMATED. The tables then give zkSketch's "1 epoch" as its k leaves
 #                               + k - 1 merges, and its worker, coordinator and combined peak memory
+#   run_all.sh sweep [--min E] [--max E] [--sizes 6,8,10] [--quick] [--dry-run] [--resume]
+#                               batch-size sweep (six/sweep.sh): both systems on ONE batch of m = 2^E records per
+#                               size, E = 6..14 by default, six families, each size in $RESULTS/m<EE>: zkSketch one
+#                               leaf per batch (SIX_T=1, k = 1; GK capacity 2,048 on both sides; Bloom packed while
+#                               7 x m < 2^16, omc at 2^14), zk-Analytics executor + 6 noroot aggregation proofs
+#                               (epoch 0; no CM reference), assemble.py + table.py; then sweep_table.py ->
+#                               sweep.csv / sweep_table.md (per family x m: prove, ms per record, zkA / zkS, verify,
+#                               proof bytes, peak RSS, zkS variant). About 12-16 h for E = 6..14 (estimate from the
+#                               executor's cycle counts at r0vm's 33-44 s per 2^20-cycle segment; the 2^14 size alone
+#                               5-7 h; HLL / GK leaves at 2^13-2^14 take tens of GiB). --quick: m = 64 and 128 only,
+#                               GK capacity 512 (as quick; SIX_GK_CAP overrides), no gate wait, stop at the first
+#                               failure: a ~15-20 min smoke. --dry-run prints the plan and runs nothing; --resume
+#                               skips the finished sizes of RESULTS
+#   run_all.sh queryrate [--q LIST] [--n N] [--quick] [--dry-run]
+#                               the query-rate experiment (the paper's mixed operation stream for all six
+#                               families): one query every Q stream positions, default Q = 1000,10000,100000
+#                               over N = 2^17 AOL positions plus the query-free baseline Q = 0. zkSketch is
+#                               MEASURED: 12 exp_compose forest runs at the memmatch leaf sizes (CM/HLL/Bloom
+#                               1,024; SS/KMV 4,096; GK 512 at capacity 768), a query mid-leaf seals and pads
+#                               the leaf. zk-Analytics is MODELED from measured parts (six/queryrate_model.py):
+#                               its epoch proof at E = Q (proved for Q <= 10,000, else estimated from padded
+#                               cycles) and its query proof cost vs the number n of merged epochs (executor
+#                               at n = 1..64 over 4,096-record epochs, where the SS/KMV summaries are saturated
+#                               as at every Q >= 10,000; proved at n = 1 and 8), total(Q) = T A(Q) + a T +
+#                               b T(T+1)/2 for T = N/Q queries. A GK capacity preflight (the matched GK driver's
+#                               executor over all N records; exit 3 = overflow stops the run) comes first.
+#                               About 14 h (rough estimate). --quick: N = 1024, Q = 100,1000, tiny zk-Analytics
+#                               parts, SIX_FAIL_FAST=1 (about 40 min, rough; `--quick --n 4096` makes every
+#                               leaf a padded one at Q = 100: ~1 h 20 min). --dry-run prints the plan with
+#                               time estimates and runs nothing (six/queryrate.sh)
 #   run_all.sh assemble DIR     re-run assemble.py + table.py on a finished results directory
 #
 # zk-Analytics root variants. Their code builds, inside each epoch's aggregation proof, a Merkle
@@ -744,6 +774,8 @@ case ${1:-} in
   quick) cmd_quick ;;
   full) shift; cmd_full "$@" ;;
   memmatch) shift; cmd_memmatch "$@" ;;
+  sweep) shift; exec "$HERE6/sweep.sh" "$@" ;;
+  queryrate) shift; "$HERE6/queryrate.sh" "$@" ;;
   assemble) shift; cmd_assemble "$@" ;;
   *) sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

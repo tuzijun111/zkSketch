@@ -1,0 +1,55 @@
+family,m,zka_prove_s,zks_prove_s,zka_ms_per_record,zks_ms_per_record,speedup,zka_verify_ms,zks_verify_ms,zka_proof_bytes,zks_proof_bytes,zka_peak_rss_mb,zks_peak_rss_mb,zks_variant,provenance,size_dir,zka_variant,zka_system,zks_verify_kind
+cm,64,40.075000,0.934947,626.172,14.609,42.863,9.687,24.739,225834,816273,9350.5,447.2,cm_omc,zka sampled; zks derived,m06,noroot,zk-Analytics,first
+cm,128,52.683000,1.419609,411.586,11.091,37.111,11.533,25.065,225834,804006,9384.4,852.0,cm_omc,zka sampled; zks derived,m07,noroot,zk-Analytics,first
+cm,256,84.178000,1.644159,328.820,6.422,51.198,11.458,25.750,225834,839192,9375.4,874.2,cm_omc,zka sampled; zks derived,m08,noroot,zk-Analytics,first
+cm,512,144.935000,2.608031,283.076,5.094,55.573,11.443,26.552,225834,888871,9382.3,1845.7,cm_omc,zka sampled; zks derived,m09,noroot,zk-Analytics,first
+cm,1024,261.500000,4.777674,255.371,4.666,54.734,11.477,23.805,225834,905511,9383.4,3776.2,cm_omc,zka sampled; zks derived,m10,noroot,zk-Analytics,first
+cm,2048,530.250000,9.070528,258.911,4.429,58.459,11.471,28.716,225834,955812,9388.1,7360.8,cm_omc,zka sampled; zks derived,m11,noroot,zk-Analytics,first
+cm,4096,1020.751000,17.207709,249.207,4.201,59.319,11.461,26.181,225834,976238,9398.1,14762.1,cm_omc,zka sampled; zks derived,m12,noroot,zk-Analytics,first
+cm,8192,2031.271000,35.193863,247.958,4.296,57.717,11.466,26.012,225834,1030087,9421.0,29476.0,cm_omc,zka sampled; zks derived,m13,noroot,zk-Analytics,first
+cm,16384,4037.819000,66.273452,246.449,4.045,60.927,11.483,30.348,225834,1053620,9449.4,58908.4,cm_omc,zka sampled; zks derived,m14,noroot,zk-Analytics,first
+hll,64,22.261000,3.363625,347.828,52.557,6.618,9.672,26.429,224818,884481,4700.0,1998.5,hll_omc,zka sampled; zks derived,m06,noroot,zk-Analytics arch. (port †),first
+hll,128,40.318000,3.400540,314.984,26.567,11.856,9.713,26.699,224818,856055,9352.9,2006.9,hll_omc,zka sampled; zks derived,m07,noroot,zk-Analytics arch. (port †),first
+hll,256,68.037000,2.667938,265.770,10.422,25.502,11.727,22.874,224818,855937,9387.3,2023.8,hll_omc,zka sampled; zks derived,m08,noroot,zk-Analytics arch. (port †),first
+hll,512,129.666000,4.654822,253.254,9.091,27.856,11.491,28.050,224818,907642,9387.1,3446.4,hll_omc,zka sampled; zks derived,m09,noroot,zk-Analytics arch. (port †),first
+hll,1024,243.663000,5.180263,237.952,5.059,47.037,11.472,22.603,224818,908054,9387.0,3753.9,hll_omc,zka sampled; zks derived,m10,noroot,zk-Analytics arch. (port †),first
+hll,2048,482.156000,9.057743,235.428,4.423,53.231,9.669,26.210,224818,922656,9392.5,6972.2,hll_omc,zka sampled; zks derived,m11,noroot,zk-Analytics arch. (port †),first
+hll,4096,941.937000,16.448840,229.965,4.016,57.265,9.702,25.525,224818,971619,9398.2,13521.1,hll_omc,zka sampled; zks derived,m12,noroot,zk-Analytics arch. (port †),first
+hll,8192,1884.818000,29.458397,230.080,3.596,63.982,11.460,28.601,224818,988915,9422.2,26672.4,hll_omc,zka sampled; zks derived,m13,noroot,zk-Analytics arch. (port †),first
+hll,16384,3768.446000,58.423200,230.008,3.566,64.503,11.506,26.107,224818,1013228,9430.1,52657.9,hll_omc,zka sampled; zks derived,m14,noroot,zk-Analytics arch. (port †),first
+ss,64,22.463000,2.778962,350.984,43.421,8.083,11.500,25.547,224826,851487,4697.9,1511.3,ss_certified,zka sampled; zks derived,m06,noroot,zk-Analytics arch. (port †),first
+ss,128,40.802000,2.491716,318.766,19.467,16.375,11.464,25.617,224826,850976,9366.9,1507.3,ss_certified,zka sampled; zks derived,m07,noroot,zk-Analytics arch. (port †),first
+ss,256,84.443000,2.756922,329.855,10.769,30.629,11.460,26.691,224826,887963,9377.0,1747.7,ss_certified,zka sampled; zks derived,m08,noroot,zk-Analytics arch. (port †),first
+ss,512,173.918000,2.593126,339.684,5.065,67.069,11.515,23.747,224826,888062,9378.2,1923.3,ss_certified,zka sampled; zks derived,m09,noroot,zk-Analytics arch. (port †),first
+ss,1024,309.634000,4.330162,302.377,4.229,71.506,11.481,25.576,224826,867928,9382.3,3405.8,ss_certified,zka sampled; zks derived,m10,noroot,zk-Analytics arch. (port †),first
+ss,2048,613.658000,4.874062,299.638,2.380,125.903,11.506,25.430,224826,939878,9398.0,3801.3,ss_certified,zka sampled; zks derived,m11,noroot,zk-Analytics arch. (port †),first
+ss,4096,1150.045000,8.509342,280.773,2.077,135.151,11.483,27.620,224826,919968,9401.4,6889.5,ss_certified,zka sampled; zks derived,m12,noroot,zk-Analytics arch. (port †),first
+ss,8192,2265.922000,16.558295,276.602,2.021,136.845,11.461,27.930,224826,940781,9436.5,13644.5,ss_certified,zka sampled; zks derived,m13,noroot,zk-Analytics arch. (port †),first
+ss,16384,4452.308000,31.130364,271.747,1.900,143.021,11.451,29.743,224826,992654,9431.0,27191.3,ss_certified,zka sampled; zks derived,m14,noroot,zk-Analytics arch. (port †),first
+gk,64,408.134000,11.808545,6377.094,184.509,34.563,11.604,28.635,225114,967733,9377.9,8456.3,gk_bandmerge2_stable,zka sampled; zks derived,m06,noroot,"zk-Analytics arch. (port †, zkSketch GK rule)",first
+gk,128,441.657000,11.328743,3450.445,88.506,38.986,11.564,28.294,225114,968255,9380.1,8479.6,gk_bandmerge2_stable,zka sampled; zks derived,m07,noroot,"zk-Analytics arch. (port †, zkSketch GK rule)",first
+gk,256,484.807000,10.806242,1893.777,42.212,44.864,11.481,28.118,225114,968009,9384.2,8504.4,gk_bandmerge2_stable,zka sampled; zks derived,m08,noroot,"zk-Analytics arch. (port †, zkSketch GK rule)",first
+gk,512,618.454000,12.361154,1207.918,24.143,50.032,11.449,27.393,225114,931026,9385.9,9517.7,gk_bandmerge2_stable,zka sampled; zks derived,m09,noroot,"zk-Analytics arch. (port †, zkSketch GK rule)",first
+gk,1024,838.243000,19.002236,818.597,18.557,44.113,11.490,28.154,225114,943354,9385.3,15250.3,gk_bandmerge2_stable,zka sampled; zks derived,m10,noroot,"zk-Analytics arch. (port †, zkSketch GK rule)",first
+gk,2048,1290.622000,17.812913,630.187,8.698,72.454,11.588,24.786,225114,943889,9396.1,15419.0,gk_bandmerge2_stable,zka sampled; zks derived,m11,noroot,"zk-Analytics arch. (port †, zkSketch GK rule)",first
+gk,4096,2375.563000,35.835733,579.971,8.749,66.290,11.581,28.629,225114,993706,9414.2,30515.8,gk_bandmerge2_stable,zka sampled; zks derived,m12,noroot,"zk-Analytics arch. (port †, zkSketch GK rule)",first
+gk,8192,4654.223000,47.599969,568.142,5.811,97.778,11.532,30.777,225114,1036429,9441.6,37805.2,gk_bandmerge2_stable,zka sampled; zks derived,m13,noroot,"zk-Analytics arch. (port †, zkSketch GK rule)",first
+gk,16384,9397.307000,92.509066,573.566,5.646,101.583,9.746,30.449,225114,1063329,9491.6,75348.7,gk_bandmerge2_stable,zka sampled; zks derived,m14,noroot,"zk-Analytics arch. (port †, zkSketch GK rule)",first
+bloom,64,22.325000,1.768332,348.828,27.630,12.625,11.479,21.252,224818,765266,4688.9,1079.5,bloom_packed,zka sampled; zks derived,m06,noroot,zk-Analytics arch. (port †),first
+bloom,128,40.458000,2.697145,316.078,21.071,15.000,11.466,21.607,224818,817141,9356.8,1408.7,bloom_packed,zka sampled; zks derived,m07,noroot,zk-Analytics arch. (port †),first
+bloom,256,85.142000,3.028438,332.586,11.830,28.114,11.107,21.352,224818,814780,9376.7,1938.3,bloom_packed,zka sampled; zks derived,m08,noroot,zk-Analytics arch. (port †),first
+bloom,512,128.657000,3.307824,251.283,6.461,38.895,11.438,23.562,224818,782472,9386.5,2148.9,bloom_packed,zka sampled; zks derived,m09,noroot,zk-Analytics arch. (port †),first
+bloom,1024,261.305000,6.389117,255.181,6.239,40.898,11.655,26.263,224818,862242,9389.4,4322.4,bloom_packed,zka sampled; zks derived,m10,noroot,zk-Analytics arch. (port †),first
+bloom,2048,515.626000,10.726958,251.771,5.238,48.068,11.610,23.435,224818,848581,9394.9,8260.8,bloom_packed,zka sampled; zks derived,m11,noroot,zk-Analytics arch. (port †),first
+bloom,4096,1018.593000,19.349996,248.680,4.724,52.640,11.526,25.210,224818,942708,9391.3,14858.1,bloom_packed,zka sampled; zks derived,m12,noroot,zk-Analytics arch. (port †),first
+bloom,8192,2016.725000,34.536415,246.182,4.216,58.394,11.494,28.382,224818,995530,9437.3,29595.5,bloom_packed,zka sampled; zks derived,m13,noroot,zk-Analytics arch. (port †),first
+bloom,16384,4015.513000,69.675949,245.087,4.253,57.631,11.447,29.198,224818,1013681,9443.8,60964.8,bloom_omc,zka sampled; zks derived,m14,noroot,zk-Analytics arch. (port †),first
+kmv,64,22.307000,0.892862,348.547,13.951,24.984,11.521,23.534,224818,789350,4697.8,502.5,kmv,zka sampled; zks derived,m06,noroot,zk-Analytics arch. (port †),first
+kmv,128,40.273000,1.376202,314.633,10.752,29.264,11.469,25.018,224818,838553,9365.7,808.2,kmv,zka sampled; zks derived,m07,noroot,zk-Analytics arch. (port †),first
+kmv,256,66.530000,1.291226,259.883,5.044,51.525,11.509,23.327,224818,865416,9376.9,896.7,kmv,zka sampled; zks derived,m08,noroot,zk-Analytics arch. (port †),first
+kmv,512,128.990000,1.772622,251.934,3.462,72.768,11.772,23.964,224818,803799,9378.5,1092.5,kmv,zka sampled; zks derived,m09,noroot,zk-Analytics arch. (port †),first
+kmv,1024,261.236000,2.671517,255.113,2.609,97.786,11.761,25.817,224818,882035,9387.2,1589.9,kmv,zka sampled; zks derived,m10,noroot,zk-Analytics arch. (port †),first
+kmv,2048,510.679000,2.825403,249.355,1.380,180.746,11.672,22.664,224818,851008,9396.3,2091.5,kmv,zka sampled; zks derived,m11,noroot,zk-Analytics arch. (port †),first
+kmv,4096,1002.343000,6.048321,244.713,1.477,165.723,9.673,24.063,224818,900816,9397.0,4176.3,kmv,zka sampled; zks derived,m12,noroot,zk-Analytics arch. (port †),first
+kmv,8192,1978.548000,10.446235,241.522,1.275,189.403,11.548,27.544,224818,921944,9419.9,8351.0,kmv,zka sampled; zks derived,m13,noroot,zk-Analytics arch. (port †),first
+kmv,16384,3883.256000,18.781087,237.015,1.146,206.764,11.544,29.845,224818,1017027,9423.3,15189.8,kmv,zka sampled; zks derived,m14,noroot,zk-Analytics arch. (port †),first

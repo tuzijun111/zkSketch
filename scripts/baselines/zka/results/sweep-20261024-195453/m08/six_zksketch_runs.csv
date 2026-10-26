@@ -1,0 +1,7 @@
+tag,family,key_mode,family_env,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,main_peak_rss_mb,desc_peak_rss_mb,commit,zks_head,features,bin_md5
+cm,cm,hot,EXP_D=3 EXP_W=1024,2026-10-24T20:36:49+08:00,quiet,60,6.30,0.2,5.57,6,0,1042.7,874.2,hiding,bf5d8bcf1,default:pcs=hiding;logup_mask=on,e4a2a04653ef
+hll,hll,first,EXP_HLL_B=14,2026-10-24T20:36:57+08:00,quiet,0,5.57,0.2,13.72,28,0,6748.3,2023.8,hiding,bf5d8bcf1,default:pcs=hiding;logup_mask=on,e4a2a04653ef
+ss,ss,first,EXP_SS_CAP=1024,2026-10-24T20:38:27+08:00,quiet,60,5.14,0.1,9.35,8,0,1940.9,1747.7,hiding,bf5d8bcf1,default:pcs=hiding;logup_mask=on,e4a2a04653ef
+gk,gk,hot,EXP_GK_CAP=2048 EXP_GK_S=51 EXP_GK_ROUNDS=stable,2026-10-24T20:39:08+08:00,quiet,30,5.85,0.1,15.35,33,0,8592.5,8504.4,hiding,bf5d8bcf1,default:pcs=hiding;logup_mask=on,e4a2a04653ef
+bloom,bloom,first,EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=packed,2026-10-24T20:40:43+08:00,quiet,60,6.42,1.3,10.28,9,0,2177.7,1938.3,hiding,bf5d8bcf1,default:pcs=hiding;logup_mask=on,e4a2a04653ef
+kmv,kmv,first,EXP_KMV_K=1024,2026-10-24T20:41:24+08:00,quiet,30,6.87,1.2,6.04,5,0,969.8,896.7,hiding,bf5d8bcf1,default:pcs=hiding;logup_mask=on,e4a2a04653ef

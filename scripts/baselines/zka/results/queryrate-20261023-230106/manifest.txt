@@ -1,0 +1,28 @@
+# six-sketch comparison run manifest
+mode=queryrate
+started=2026-10-23T23:01:06+08:00
+N=131072 Q=1000,10000,100000 baseline_q0=1 dataset=aol key_mode=uniform_stream cores=32
+leaf_a=1024 leaf_b=4096 leaf_c=512 gk_cap=768 gk_s=51 gk_rounds=stable bloom_variant=packed (group a = cm,hll,bloom, b = ss,kmv, c = gk)
+group_a_env="EXP_D=3 EXP_W=1024 EXP_HLL_B=14 EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=packed" group_b_env="EXP_SS_CAP=1024 EXP_KMV_K=1024" group_c_env="EXP_GK_CAP=768 EXP_GK_S=51 EXP_GK_ROUNDS=stable"
+Eq=4096 Tq=64 query_points=1,2,4,8,16,32,64 prove_max_e=10000 prove_qns=1,8 zka_roots=noroot zka_cm_ref=0
+zka_gk=matched (zkSketch's GK rule in their pipeline: capacity 768, s 51, implementation literal; m_sub per epoch: E1000=500 E10000=500 E100000=500 E4096=512 )
+gk_cap_source=memmatch default eq_note="q(n) measured at Eq=4096-record epochs (SS/KMV/GK summaries hold min(distinct, capacity) entries)"
+allow_stale=0 stale_bins=""
+verify_repeats=5 gate: GATE_WAIT_S=1800 GATE_MAX_LOAD=8 GATE_MAX_BUSY=4 fail_fast=0
+zksketch=bf5d8bcf1c63bb841a9eaa8afaa4f8dc453dba6b changed_files=8 checkout=/home/binbin/zkSketch
+exp_compose_md5=e4a2a04653ef features=default
+zka=d4a5a9a90f7470b4af29045ef248f724708813ad baseline_dir=/home/binbin/ext-baselines
+host=SPRL6201019991 kernel=7.0.0-34-generic cpu="AMD Ryzen Threadripper PRO 9975WX 32-Cores" nproc=32 phys_cores=32 mem_gib=559
+cpus_allowed=0-31 (the affinity of this process, inherited by both sides)
+rustc="rustc 1.97.1 (8bab26f4f 2026-07-14)" r0vm="risc0-r0vm 3.0.6" rzup="rzup 0.5.0" python="Python 3.14.4"
+risc0_toolchains="v1.97.0-rust-x86_64-unknown-linux-gnu v2024.1.5-cpp-x86_64-unknown-linux-gnu "
+gk_preflight=ok N=131072 m_sub=512 capacity=768 steps=256 keys=data/aol.keys
+step rc=0 seconds=36 GK capacity preflight: zkSketch's GK rule at capacity 768 over all N=131072 AOL records (gk_matched executor; exit 3 = overflow)
+step rc=0 seconds=76 zk-Analytics executor: one epoch of E = Q records for Q = 1000 10000 100000 (run_zka.sh exec x 3)
+step rc=0 seconds=202 zk-Analytics executor, query cost: zka_query_E4096_T64 (run_zka.sh exec at SIX_M=4096 SIX_T=64)
+step rc=0 seconds=15 zk-Analytics query executor: run_zka.sh qexec (42 jobs at n = 1,2,4,8,16,32,64, for the model)
+step rc=0 seconds=36914 zkSketch: 12 exp_compose runs (Q = 0 1000 10000 100000; groups a b c)
+step rc=0 seconds=22538 zk-Analytics epoch proofs: run_zka.sh prove cm:aggr:0:noroot hll:aggr:0:noroot ss:aggr:0:noroot gk:aggr:0:noroot bloom:aggr:0:noroot kmv:aggr:0:noroot at E = 1000 10000
+step rc=0 seconds=3802 zk-Analytics query proofs: run_zka.sh prove cm:query:1 cm:query:8 hll:query:1 hll:query:8 gk:query:1:1810625 gk:query:8:985491 bloom:query:1:first bloom:query:8:first kmv:query:1 kmv:query:8 ss:query:1 ss:query:8 (calibration at n = 1,8)
+step rc=0 seconds=0 model + tables: queryrate_model.py
+finished=2026-10-24T16:40:50+08:00 rc=0

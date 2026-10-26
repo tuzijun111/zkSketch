@@ -1,0 +1,7 @@
+job,family,op,n_or_epoch,arg,start_iso,gate,gate_waited_s,load1_start,busy_cores_start,load1_end,wall_s,rc,r0vm_peak_rss_mb,main_peak_rss_mb
+cm:aggr:0:noroot,cm,aggr,0,noroot,2026-10-24T09:23:22+08:00,quiet,90,5.45,3.0,32.96,263,0,9381.8,13.7
+hll:aggr:0:noroot,hll,aggr,0,noroot,2026-10-24T09:29:48+08:00,quiet,121,5.50,1.2,31.93,244,0,9384.8,13.0
+ss:aggr:0:noroot,ss,aggr,0,noroot,2026-10-24T09:35:54+08:00,quiet,120,6.38,2.2,34.41,309,0,9387.2,13.6
+gk:aggr:0:noroot,gk,aggr,0,noroot,2026-10-24T09:43:39+08:00,quiet,153,5.45,2.1,35.86,662,0,9397.4,15.5
+bloom:aggr:0:noroot,bloom,aggr,0,noroot,2026-10-24T09:57:16+08:00,quiet,153,4.87,1.1,36.40,260,0,9376.3,22.5
+kmv:aggr:0:noroot,kmv,aggr,0,noroot,2026-10-24T10:03:38+08:00,quiet,120,5.80,1.3,35.82,264,0,9377.3,12.6

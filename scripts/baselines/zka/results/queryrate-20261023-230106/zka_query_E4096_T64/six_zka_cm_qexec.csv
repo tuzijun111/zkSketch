@@ -1,0 +1,8 @@
+system,arm,mode,guest,family,query,topk_slots,histogram_slots,epochs,epoch_index,epoch_records,records,batch,value_enc,limit,distinct_keys,per_key_entries,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,journal_bytes,state_commits,journal_eq_native,result,exact,prove_s,verify_ms,receipt_bytes,s_per_segment,key_id,root_variant,root_construction,variants_agree,state_commit
+zka,shipped,query,querier_cm,cm,estimate,1,32,1,-,4096,4096,8,1,-,2372,1,12840,845442,1048576,1,20,0.038,412,1,true,estimate=116,key=3011223745 exact=115,NaN,NaN,0,NaN,aol,-,-,-,-
+zka,shipped,query,querier_cm,cm,estimate,1,32,2,-,4096,8192,8,1,-,4432,2,25608,1676303,2097152,2,20,0.046,540,2,true,estimate=119,key=3011223745 exact=115,NaN,NaN,0,NaN,aol,-,-,-,-
+zka,shipped,query,querier_cm,cm,estimate,1,32,4,-,4096,16384,8,1,-,8433,4,51144,3338025,3670016,4,20,0.070,796,4,true,estimate=189,key=3780053395 exact=180,NaN,NaN,0,NaN,aol,-,-,-,-
+zka,shipped,query,querier_cm,cm,estimate,1,32,8,-,4096,32768,8,1,-,16308,8,102216,6661469,7340032,7,20,0.110,1308,8,true,estimate=376,key=3780053395 exact=346,NaN,NaN,0,NaN,aol,-,-,-,-
+zka,shipped,query,querier_cm,cm,estimate,1,32,16,-,4096,65536,8,1,-,29390,16,204360,13308357,14680064,14,20,0.235,2332,16,true,estimate=1064,key=3780053395 exact=1020,NaN,NaN,0,NaN,aol,-,-,-,-
+zka,shipped,query,querier_cm,cm,estimate,1,32,32,-,4096,131072,8,1,-,50598,32,408648,26602133,28835840,28,20,0.424,4380,32,true,estimate=2069,key=3780053395 exact=1985,NaN,NaN,0,NaN,aol,-,-,-,-
+zka,shipped,query,querier_cm,cm,estimate,1,32,64,-,4096,262144,8,1,-,87540,64,817224,53189692,57147392,55,20,0.696,8476,64,true,estimate=4154,key=3780053395 exact=4010,NaN,NaN,0,NaN,aol,-,-,-,-

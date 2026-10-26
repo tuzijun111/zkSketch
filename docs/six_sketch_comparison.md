@@ -117,8 +117,8 @@ cd zkSketch
 scripts/baselines/zka/six/run_all.sh check    # OK / WARN / MISSING per item; exit 1 if anything blocks
 scripts/baselines/zka/six/run_all.sh build    # clone zk-Analytics @ d4a5a9a into ~/ext-baselines; build both sides
 scripts/baselines/zka/six/run_all.sh quick    # smoke test of the whole pipeline at tiny scale
-scripts/baselines/zka/six/run_all.sh full     # the paper configuration
-scripts/baselines/zka/six/run_all.sh memmatch # the memory-matched shape of the final GK / Bloom numbers (--quick: smoke test)
+scripts/baselines/zka/six/run_all.sh full     # one zkSketch leaf per 2,048-record epoch, 8 epochs
+taskset -c 0-31 scripts/baselines/zka/six/run_all.sh memmatch # the paper's zkSketch-vs-zk-Analytics table (--quick: smoke test; see "The same 32 cores" below)
 ```
 
 `run_all.sh assemble <results dir>` re-runs only the tables of a finished run;
@@ -189,6 +189,57 @@ the per-family plan (epoch, k x leaf, the exp_compose shape, the zk-Analytics GK
 `full` shapes and their outputs are unchanged. The individual scripts take the same shape
 from `SIX_M_<FAM>` and `SIX_LEAF` / `SIX_LEAF_<FAM>` (knobs below), and every zkSketch log
 records it in a `# shape:` line, which `assemble.py` reads.
+
+**The same 32 cores on both sides.** zkSketch pins its prover worker to CPUs
+0 .. `SIX_CORES`-1 (`numactl --physcpubind`), but nothing in the harness limits
+zk-Analytics' prover: `r0vm` sizes its thread pool from the CPUs it may run on, so on a
+32-core / 64-thread machine it ran 129 threads over all 64 CPUs, and every zk-Analytics
+number measured before 2026-10-22 is such a 64-thread number. Running the whole
+comparison under a CPU mask confines both sides to the same physical cores (the mask is
+inherited by every process, r0vm included; `six_clean_env` drops `RAYON_NUM_THREADS`, so an
+environment variable would not reach r0vm):
+
+```bash
+taskset -c 0-31 scripts/baselines/zka/six/run_all.sh memmatch             # one epoch per sketch: the paper's comparison table
+taskset -c 0-31 scripts/baselines/zka/six/run_all.sh memmatch --epochs 64 # N = 2^20 records (GK 2^17), about two days (estimate; not yet run)
+```
+
+Verified with a 2-segment KMV proof: unrestricted, r0vm used 129 threads on all 64 CPUs
+in 45.4 s (22.7 s per 2^20-cycle segment); under the mask, 97 threads on CPUs 0-31 only in
+66.0 s (33.0 s per segment), the same ~9.2 GiB peak (9,390 vs 9,386 MiB). The manifest records `nproc=32` and the
+zkSketch logs `avail=32` under the mask. The reference run of the first command
+(2026-10-22, 8 h 12 min: zkSketch 29 min, 14 real zk-Analytics proofs 7 h 42 min) is
+kept in `scripts/baselines/zka/results/memmatch-20261022-205419/`. The second command's
+plan (`--dry-run`): zkSketch 1,024 leaves + 1,023 merges per family (256 + 255 for SS,
+KMV and GK), zk-Analytics 63 proofs (aggregation epochs 0 and 63 of every family, 49
+queries at n = 1, 2, 4, ..., 64 (seven per query series), the Count-Min reference at both
+epochs), the stream total derived as 64 x the mean of the two proved epochs; it has only
+been smoke-tested at `--quick --epochs 2`.
+
+**The batch-size sweep (`sweep`).** `run_all.sh sweep [--min E] [--max E] [--sizes 6,8,10] [--quick] [--dry-run] [--resume]` (`six/sweep.sh`) compares both systems on ONE batch of m = 2^E records per size, E = 6..14 by default, for all six sketches: zkSketch proves the batch as one leaf (`SIX_T=1`, k = 1, a query after it; GK capacity 2,048 with s = 51 on both sides, the matched zk-Analytics GK with `--m-sub m`; the Bloom leaf is `packed` while 7 x m < 2^16 and `omc` at m = 16,384, `SIX_BLOOM_VARIANT` forces one), zk-Analytics as one `noroot` epoch-0 receipt (no shipped-CM reference, `SIX_ZKA_CM_REF=0`). Each size runs the usual chain in its own directory `$RESULTS/m<EE>` (`run_zks.sh` for the six families, `run_zka.sh exec`, `run_zka.sh prove` of the six aggregation jobs, `assemble.py --m m --t 1` + `table.py`), so every `m<EE>/six_sketch_table.md` is an ordinary one-epoch comparison (`run_all.sh assemble <dir>` re-tables it); `sweep_table.py` then writes `sweep.csv` and `sweep_table.md`: a cross-size table of the prove-time ratio zkA / zkS, prove time per record, and per family m as rows with prove, ms per record, verify, proof bytes and peak RSS of both sides, their ratios and the zkSketch circuit variant (omc Bloom rows marked; the conventions line reports the cores and verify repeats the runs used, a single-call zkS verify is marked `1st`). A failed run or proof leaves `-` and makes the exit status 1 (`SIX_FAIL_FAST=1` stops at the first failure; a zkSketch run that reports `too_large` is set aside as `.csv.failed` so the other families, and the zk-Analytics proofs, are still tabled); `--resume` skips finished sizes and redoes an unfinished one; `--dry-run` prints the plan with time estimates (about 12-16 h for E = 6..14, the 2^14 size alone 5-7 h, from the executor's cycles per record, the matched GK guest's cost in capacity + m, r0vm's measured 33-44 s per 2^20-cycle segment and the memmatch leaf rates; the large HLL and GK leaves run slower than linear). The sweep is a scaling probe, not the paper's memory-matched comparison: a 2^13-2^14-record zkSketch leaf is one monolithic proof and takes tens of GiB (GK, HLL), where `memmatch` stays under 8 GiB. `--quick` is its ~15-20 min smoke test (m = 64 and 128, GK capacity 512 as `quick` unless `SIX_GK_CAP` is set, since the matched GK guest's cost grows with the capacity: ~25 min at 2,048; no gate wait, stop at the first failure); the manifest records the per-size shape, where the capacity came from, and every step's time. The reference run
+(2026-10-24/25, 19 h 47 min: zkSketch 1 h 27 min, zk-Analytics 54 proofs 18 h 20 min) is kept in
+`scripts/baselines/zka/results/sweep-20261024-195453/`; `scripts/plot_sweep.py <dir>` renders its `sweep.csv` as the
+paper's figure `latex/pics/zkSketch_eval_sweep.pdf` (needs matplotlib).
+
+**The query-rate experiment (`queryrate`).** The paper's mixed operation stream, one query every Q positions, for
+all six families: `run_all.sh queryrate [--q LIST] [--n N] [--quick] [--dry-run]` (`six/queryrate.sh`) proves N = 2^17 AOL positions with zkSketch at Q = 1,000,
+10,000, 100,000 and at Q = 0 (the baseline), one forest run per leaf group at the memmatch leaf sizes
+(`EXP_COMPOSE_QUERY_EVERY_OPS=Q`, `EXP_QUERY_KEY_MODE=uniform_stream`); a query landing mid-leaf seals and pads the
+leaf (`query_split_leaves`, `query_pad_records`). zk-Analytics answers a query only at an epoch end, by a query proof
+merging the n epoch summaries so far, so a query every Q positions means epochs of Q records and N/Q query proofs of
+growing cost: a total that cannot be run and is MODELED by `queryrate_model.py` from measured parts, A(Q) = its
+aggregation proof at E = Q (real receipts at E <= 10,000, else executor padded cycles x k, k = s per 2^20 cycles calibrated
+over all real proofs of the run) and q(n) = a + bn fitted to its query executor at n = 1..64 over 4,096-record epochs
+(real proofs at n = 1 and 8; the SS/KMV summaries are saturated there as at every Q >= 10,000, so Q = 1,000 is slightly
+overstated), total(Q) = T A(Q) + aT + bT(T+1)/2 for T = floor(N/Q), flagged `extrapolated` beyond n = 64 and `estimated`
+without a receipt; every epoch is charged at epoch 0's cost and each period's last update is counted in the next epoch.
+Treat the zk-Analytics column as a derived bound, not a measurement; a GK capacity preflight (gk_matched executor
+over all N records at capacity 768) runs first, since the deployed capacity is empirical. `--quick` (N = 1,024, Q = 100
+and 1,000, zk-Analytics epochs of 100 records over n = 1..8, aggregation proofs at E = 100 and query proofs at n = 1 only)
+is its ~40 min smoke test. Outputs: `queryrate.csv`, `queryrate_table.md`, the per-run `qr_zks_<group>_q<Q>.csv` and the
+`zka_epoch_E<Q>/`, `zka_query_E<Eq>_T<Tq>/` subdirectories. The reference run (2026-10-23/24, 17 h 40 min: zkSketch
+12 runs 10 h 15 min, zk-Analytics 12 epoch proofs 6 h 16 min and 12 query proofs 1 h 03 min, executors 6 min) is kept in
+`scripts/baselines/zka/results/queryrate-20261023-230106/`; its table is the paper's query-rate table.
 
 **Outputs.** Every `quick` / `full` writes a fresh, git-ignored directory
 `results/six/<mode>-<YYYYmmdd-HHMMSS>/`; the run prints its path and the summary

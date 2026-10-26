@@ -1,0 +1,20 @@
+# six-sketch comparison run manifest
+mode=memmatch
+started=2026-10-22T20:54:19+08:00
+M=16384 T=1 gk_cap=768 gk_rounds=stable bloom_variant=packed query_points=1 aggr_epochs=0 cores=32
+shape=cm:16384/1024,hll:16384/1024,ss:16384/4096,gk:2048/512,bloom:16384/1024,kmv:16384/4096 (family:epoch records/zkSketch leaf records; k = epoch / leaf leaves + k - 1 merges per epoch)
+zka_roots=noroot (aggregation root variants executed and planned) zka_cm_ref=1 (their shipped CM planned as a reference; designed also executed)
+zka_gk=matched (zkSketch's GK rule in their pipeline: capacity 768, s 51, m_sub 512 = 4 apply_batch2 step(s) per 2048-record epoch, implementation literal)
+verify_repeats=5 gate: GATE_WAIT_S=1800 GATE_MAX_LOAD=8 GATE_MAX_BUSY=4
+zksketch=bf5d8bcf1c63bb841a9eaa8afaa4f8dc453dba6b changed_files=0 checkout=/home/binbin/zkSketch
+exp_compose_md5=e4a2a04653ef
+zka=d4a5a9a90f7470b4af29045ef248f724708813ad baseline_dir=/home/binbin/ext-baselines
+host=SPRL6201019991 kernel=7.0.0-34-generic cpu="AMD Ryzen Threadripper PRO 9975WX 32-Cores" nproc=32 phys_cores=32 mem_gib=559
+rustc="rustc 1.97.1 (8bab26f4f 2026-07-14)" r0vm="risc0-r0vm 3.0.6" rzup="rzup 0.5.0" python="Python 3.14.4"
+risc0_toolchains="v1.97.0-rust-x86_64-unknown-linux-gnu v2024.1.5-cpp-x86_64-unknown-linux-gnu "
+step rc=0 seconds=1767 zkSketch: run_zks.sh (7 runs)
+step rc=0 seconds=14 zk-Analytics executor: run_zka.sh exec (root variants noroot,designed)
+step rc=0 seconds=2 zk-Analytics SS/GK profile: prof_exec.sh
+step rc=0 seconds=27739 zk-Analytics proofs: run_zka.sh prove (14 jobs)
+step rc=0 seconds=1 assemble + table
+finished=2026-10-23T05:06:22+08:00 rc=0
