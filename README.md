@@ -186,6 +186,4 @@ repository. How each table is read from the CSVs, and every knob:
 [docs/experiments.md](docs/experiments.md) and [docs/six_sketch_comparison.md](docs/six_sketch_comparison.md).
 
 
-## Citation
 
-Citation details will be added once the paper is published.
