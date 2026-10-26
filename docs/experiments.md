@@ -91,10 +91,12 @@ exp_<name>` (`exp_e5_real` for e5real; e10 is `python3 scripts/cost_model_e10.py
 ### Reproducing the paper's results
 
 The exact commands behind each figure/table, at the deployed configuration
-(Count-Min `d=7, w=2^14`; HyperLogLog `b=14`; SpaceSaving `s=2^14`;
+(Count-Min `d=7, w=2^14`; HyperLogLog `b=14`; Misra-Gries (`ss`) `s=2^14`;
 Greenwald–Khanna `s'=2^11`; `N=2^20` AOL records in `t=64` batches of `m=2^14`;
 32 cores/machine). These are **long** runs — the full set is on the order of
 days of prover time on the 128-core testbed.
+
+(Removed from the paper on 2026-10-26; kept here because Table `tab:eval-datasets`' leaf-memory column reads the `m = 2^14` rows of these runs. The README reproduces that column alone with the same four deployed leaves at `EXP_M=16384`, written to `results/{cm,hll,ss,gk}_leaf_m16384.csv`.)
 
 **Figure `fig:eval-batch` — batch-size sweep** (`results/{cm,hll,ss,gk}_batch_*.csv`,
 plotted by `scripts/plot_eval.py`). Baselines stop where the padded trace
@@ -125,7 +127,7 @@ EXP_DATASET=aol EXP_FAMILY=hll EXP_HLL_B=14 EXP_HLL_VARIANT=omc \
   EXP_M=16,32,64,128,256,512,1024,2048,4096,8192,16384 EXP_CORES=32 BACKENDS=plonky3 \
   EXP_OUT=hll_batch_omc.csv scripts/run_experiments.sh e1
 
-# SpaceSaving: per-record replay baseline / deployed certified leaf
+# Misra-Gries (ss): per-record replay baseline (SpaceSaving's rule) / deployed certified leaf
 EXP_DATASET=aol EXP_FAMILY=ss EXP_SS_CAP=16384 EXP_SS_VARIANT=naive \
   EXP_M=16,32,64,128 EXP_CORES=32 BACKENDS=plonky3 \
   EXP_OUT=ss_batch_naive.csv scripts/run_experiments.sh e1
@@ -373,7 +375,7 @@ on Plonky2; and `tab:mixed`'s per-update cost is `(total_time_ms + query_prove_m
 
 | Paper artifact | `results/` file(s) |
 | --- | --- |
-| `fig:eval-batch` | `{cm,hll}_batch_{one_hot,merkle,omc}.csv`, `{ss,gk}_batch_{naive,certified}.csv` (plotted by `scripts/plot_eval.py`) |
+| `fig:eval-batch` (removed from the paper 2026-10-26) | `{cm,hll}_batch_{one_hot,merkle,omc}.csv`, `{ss,gk}_batch_{naive,certified}.csv` (plotted by `scripts/plot_eval.py`) |
 | `tab:compose-schedules` | `frame_out_1machine_plonky3_perbatch.csv` (per-batch) + `frame_out_1machine_plonky3.csv` (forest) |
 | `tab:compose-scale` | HLL/SS/GK: `frame_out_1machine_plonky3.csv` (M=1) + `frame_out_staged_m234_plonky3.csv` (M=2,3,4); CM `d = 3` ESTIMATED: those CM (`d = 7`) rows x the `d = 3` / `d = 7` ratios of `smoke_forest6_deployed_cm_d3.csv` / `smoke_forest6_deployed_n2e15.csv`; Bloom/KMV ESTIMATED: `tab:stream-scale`'s `2^20` estimates / the four measured mean speedups |
 | `tab:stream-scale` | HLL/SS/GK: `forest_plonky3_1machine_verify_2e{16..19}.csv` + `frame_out_1machine_plonky3.csv` (the `2^20` row); CM `d = 3` ESTIMATED: those CM (`d = 7`) rows x the ratios of `smoke_forest6_deployed_cm_d3.csv` / `smoke_forest6_deployed_n2e15.csv`; Bloom/KMV ESTIMATED from `smoke_forest6_deployed_n2e15.csv` + the setup slopes of `results/six/memmatch-20261022-205419/six_zksketch_{bloom,kmv}.csv` and `results/six/queryrate-20261023-230106/qr_zks_{a,b}_q0.csv` |

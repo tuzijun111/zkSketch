@@ -37,11 +37,13 @@
 #      executor of all Tq epochs, no proof), run_zka.sh qexec for the query jobs of jobs.py at
 #      n = 1,2,4,...,Tq (Bloom: the inserted key), then run_zka.sh prove for the query jobs at
 #      n in SIX_QR_PROVE_QNS (default 1,8), the calibration points. Eq defaults to 4096: the
-#      SS, KMV and GK summaries hold min(distinct keys, capacity) entries, so their query cost
-#      depends on the epoch size; the first 4,096 AOL keys hold 2,372 distinct > the SS / KMV
+#      KMV and GK summaries hold min(distinct keys, capacity) entries, so their query cost
+#      depends on the epoch size; the first 4,096 AOL keys hold 2,372 distinct > the KMV
 #      capacity 1,024 (saturated, as at every Q >= 10,000; the first 1,000 hold only 607), so
-#      q(n) carries over to the larger Q and overstates SS / KMV slightly at Q = 1,000 (the
-#      conservative direction). CM / HLL / Bloom summaries have a fixed size.
+#      q(n) carries over to the larger Q and overstates KMV slightly at Q = 1,000 (the
+#      conservative direction). The Misra-Gries summary (family ss) holds at most 1,024 entries,
+#      fewer after each decrement step, so its size varies with the epoch rather than saturating.
+#      CM / HLL / Bloom summaries have a fixed size.
 #   3. python3 -I queryrate_model.py $RESULTS -> queryrate.csv + queryrate_table.md (the model)
 # Order of the steps: 0. a GK capacity preflight: the matched zk-Analytics GK driver, executor
 # only (no proof), chains all N records through zkSketch's GK rule at capacity 768 in 512-record
@@ -151,7 +153,7 @@ source "$HERE6/gate.sh"
 export SIX_ZKA_GK=matched SIX_ZKA_GK_IMPL=${SIX_ZKA_GK_IMPL:-literal}
 KEYS=$ZKS/data/aol.keys
 EB=$BASELINE_DIR/build
-ZKA_BINS=("$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-ss/release/ss"
+ZKA_BINS=("$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-mg/release/mg"
           "$EB/zka-gk-matched/release/gk_matched" "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv")
 BIN=${ZKS_BIN:-$ZKS/target/release/examples/exp_compose}
 FEAT=${ZKS_FEATURES:-default}
@@ -215,7 +217,8 @@ declare -A QRY_S=([cm]=0.28 [hll]=8.2 [bloom]=0.53 [ss]=0.52 [kmv]=0.45 [gk]=0.9
 declare -A RUN_OVH_S=([cm]=35 [hll]=80 [bloom]=35 [ss]=30 [kmv]=25 [gk]=25)
 # zk-Analytics: ~33 s per 2^20-cycle segment (32 cores); aggregation ~5,400 cycles per record
 # plus ~0.4M fixed, one segment at least; query proofs at n = 1 and the growth per n (s): CM
-# and SS from the measured n = 1..8 series (SS with saturated summaries), the others guessed
+# and ss from the measured n = 1..8 series (ss: the older SpaceSaving port with saturated
+# summaries, an upper estimate for the Misra-Gries port), the others guessed
 SEG_S=33
 declare -A Q1_S=([cm]=41 [hll]=23 [ss]=235 [gk]=14 [bloom]=13 [kmv]=14)
 declare -A QN_S=([cm]=26 [hll]=20 [ss]=200 [gk]=10 [bloom]=10 [kmv]=10)
@@ -257,7 +260,7 @@ if (( DRY )); then
   echo "  N=$N stream positions, Q = ${QS[*]} (+ the baseline Q = 0), dataset $DATASET (zkSketch; zk-Analytics reads data/aol.keys),"
   echo "  zkSketch cores $CORES, gate wait <= ${GATE_WAIT_S}s per timed run, SIX_FAIL_FAST=${SIX_FAIL_FAST:-0}"
   echo "  every time below is a ROUGH estimate (+/-20%; the rates of memmatch-20261022-205419, ~${SEG_S} s per 2^20-cycle r0vm segment,"
-  echo "  the query-proof slopes of CM and SS measured, the others guessed), without gate waits"
+  echo "  the query-proof slope of CM measured, MG's taken from the older SpaceSaving port, the others guessed), without gate waits"
   e=$(exec_est "$N"); est_exec=$((est_exec + e))
   echo "  0. GK capacity preflight: gk_matched --mode aggr --epoch-index 0 --root noroot --epoch-size $N --m-sub $(gk_msub "$N") --capacity $GK_CAP --s 51"
   echo "     (executor only: all $N AOL records through zkSketch's GK rule in $(( N / $(gk_msub "$N") )) apply_batch2 steps; exit 3 = overflow stops the run; ~$(hmin "$e"))"
@@ -268,8 +271,8 @@ if (( DRY )); then
   echo "  1. zk-Analytics executor (no proof): per Q, zka_epoch_E<Q>/: SIX_M=Q SIX_T=1 run_zka.sh exec; then zka_query_E${EQ}_T${TQ}/:"
   echo "     SIX_M=$EQ SIX_T=$TQ SIX_QNS=$QNS run_zka.sh exec (every family executes all $TQ epochs of $EQ records) + run_zka.sh qexec of the"
   echo "     $(wc -l <<< "$QJOBS") query jobs below (~$(hmin "$e") in all; SIX_ZKA_ROOTS=noroot SIX_ZKA_CM_REF=0 SIX_GK_CAP=$GK_CAP; matched GK --m-sub: $(for q in "${EPOCHS[@]}"; do printf 'E=%s %s; ' "$q" "$(gk_msub "$q")"; done))"
-  echo "     Eq = $EQ: the SS / KMV / GK summaries hold min(distinct keys, capacity) entries, so q(n) depends on the epoch size; the first"
-  echo "     4,096 AOL keys hold 2,372 distinct (> the SS / KMV capacity 1,024: saturated, as at every Q >= 10,000), the first 1,000 only 607"
+  echo "     Eq = $EQ: the KMV / GK summaries hold min(distinct keys, capacity) entries (MG at most that many, fewer after its decrement steps),"
+  echo "     so q(n) depends on the epoch size; the first 4,096 AOL keys hold 2,372 distinct (> the KMV capacity 1,024: saturated), the first 1,000 only 607"
   echo "  2. zkSketch, $(( (${#QS[@]} + 1) * 3 )) timed exp_compose runs (forest, procs, 1 x $CORES cores, EXP_QUERY_KEY_MODE=uniform_stream, EXP_DATASET=$DATASET):"
   printf '     %-10s %-14s %5s %8s %6s %7s %9s %7s   %s\n' run families leaf Q queries leaves '(padded)' pads 'rough time'
   for q in 0 "${QS[@]}"; do
@@ -307,7 +310,7 @@ fi
 stale_bins() {  # binaries older than their sources (run_all.sh stale_builds; src/proofs is test output)
   local z=$ZKS/scripts/baselines/zka i src bin stale=" "
   local -a pairs=("$z/cyc" "${ZKA_BINS[0]}" "$z/cm_noroot" "${ZKA_BINS[0]}" "$z/hll" "${ZKA_BINS[1]}"
-                  "$z/spacesaving" "${ZKA_BINS[2]}" "$z/gk_matched" "${ZKA_BINS[3]}" "$z/gk_bm2/core" "${ZKA_BINS[3]}"
+                  "$z/mg" "${ZKA_BINS[2]}" "$z/gk_matched" "${ZKA_BINS[3]}" "$z/gk_bm2/core" "${ZKA_BINS[3]}"
                   "$z/bloom" "${ZKA_BINS[4]}" "$z/kmv" "${ZKA_BINS[5]}")
   for ((i = 0; i < ${#pairs[@]}; i += 2)); do
     src=${pairs[i]}; bin=${pairs[i + 1]}
@@ -370,7 +373,7 @@ exec > >(trap '' TERM; exec tee -i -a "$RESULTS/queryrate.log") 2>&1   # tee out
   echo "group_a_env=\"${GENV[a]}\" group_b_env=\"${GENV[b]}\" group_c_env=\"${GENV[c]}\""
   echo "Eq=$EQ Tq=$TQ query_points=$QNS prove_max_e=$PROVE_MAX_E prove_qns=$PROVE_QNS zka_roots=noroot zka_cm_ref=0"
   echo "zka_gk=matched (zkSketch's GK rule in their pipeline: capacity $GK_CAP, s 51, implementation $SIX_ZKA_GK_IMPL; m_sub per epoch: $(for q in "${EPOCHS[@]}"; do printf 'E%s=%s ' "$q" "$(gk_msub "$q")"; done))"
-  echo "gk_cap_source=$([[ -n ${SIX_QR_GK_CAP:-} ]] && echo "SIX_QR_GK_CAP (NOT the memory-matched 768)" || echo "memmatch default") eq_note=\"q(n) measured at Eq=$EQ-record epochs (SS/KMV/GK summaries hold min(distinct, capacity) entries)\""
+  echo "gk_cap_source=$([[ -n ${SIX_QR_GK_CAP:-} ]] && echo "SIX_QR_GK_CAP (NOT the memory-matched 768)" || echo "memmatch default") eq_note=\"q(n) measured at Eq=$EQ-record epochs (KMV/GK summaries hold min(distinct, capacity) entries, MG at most that many)\""
   echo "allow_stale=${SIX_ALLOW_STALE:-0} stale_bins=\"${STALE//$'\n'/ }\""
   ncpu=$(grep -c '^cpu[0-9]' /proc/stat)
   echo "verify_repeats=$VREP gate: GATE_WAIT_S=$GATE_WAIT_S GATE_MAX_LOAD=${GATE_MAX_LOAD:-$(( ncpu >= 16 ? ncpu / 8 : 2 ))} GATE_MAX_BUSY=${GATE_MAX_BUSY:-4} fail_fast=${SIX_FAIL_FAST:-0}"

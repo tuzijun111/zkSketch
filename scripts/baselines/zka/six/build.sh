@@ -2,7 +2,7 @@
 # Six-sketch comparison: build everything both sides need (not timed).
 #   zk-Analytics side: their CM driver at CM_TOPK_SLOTS=1 (cyc/ shipped, which also embeds
 #   the CM noroot guest of ../cm_noroot, after `cm_noroot/gen_upstream.sh --check` confirms
-#   its verbatim copy still matches the clone) and our HLL, SS, GK, Bloom and KMV ports (†),
+#   its verbatim copy still matches the clone) and our HLL, Misra-Gries (family ss), GK, Bloom and KMV ports (†),
 #   each --locked into $BASELINE_DIR/build/... GK is built twice: the matched port
 #   (../gk_matched, zkSketch's GK rule in their pipeline, the default of the comparison) and
 #   the textbook port (../gk, the labelled reference). Every aggregation guest of the root
@@ -41,7 +41,7 @@ step() {
 }
 b_cyc()   { source "$Z/common.sh"; BASELINE_DIR="$BASELINE_DIR" "$Z/cm_noroot/gen_upstream.sh" --check && build_cyc 1 --bin shipped; }
 b_hll()   { source "$Z/hll/hll_common.sh"; build_hll; }
-b_ss()    { source "$Z/spacesaving/common_ss.sh"; build_ss --bin ss; }
+b_ss()    { source "$Z/mg/common_mg.sh"; build_mg --bin mg; }   # family ss = Misra-Gries (../mg); ../spacesaving is the older SpaceSaving port
 b_gk()    { source "$Z/gk/common_gk.sh"; build_gk; }
 b_gkm()   { source "$Z/gk_matched/common_gk_matched.sh"; build_gk_matched; }
 b_bloom() { source "$Z/bloom/bloom_common.sh"; build_fam; }
@@ -58,12 +58,12 @@ if [[ $WHAT != zks ]]; then
   EB=$BASELINE_DIR/build
   step cyc "$EB/cyc-t1/release/shipped" b_cyc
   step hll "$EB/hll/release/hll" b_hll
-  step ss "$EB/zka-ss/release/ss" b_ss
+  step mg "$EB/zka-mg/release/mg" b_ss
   step gk "$EB/zka-gk/release/gk" b_gk
   step gk_matched "$EB/zka-gk-matched/release/gk_matched" b_gkm
   step bloom "$EB/zka-bloom/release/bloom" b_bloom
   step kmv "$EB/zka-kmv/release/kmv" b_kmv
-  for b in "$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-ss/release/ss" "$EB/zka-gk/release/gk" \
+  for b in "$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-mg/release/mg" "$EB/zka-gk/release/gk" \
            "$EB/zka-gk-matched/release/gk_matched" "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv"; do
     [[ -x $b ]] || FAIL+=("missing:$b")
   done
@@ -71,7 +71,7 @@ if [[ $WHAT != zks ]]; then
   # build did not produce them). <target>/riscv-guest/<methods crate>/<guest>/...
   elf() { echo "$EB/$1/riscv-guest/$2/$3/riscv32im-risc0-zkvm-elf/release/$3"; }
   for g in "cyc-t1 aggregator-methods aggr_cm" "cyc-t1 zka-cm-noroot-methods aggr_cm_noroot" \
-           "hll zka-hll-methods hll_aggr_root" "zka-ss ss-methods aggr_ss_rootvar" "zka-gk gk-methods aggr_gk_root" \
+           "hll zka-hll-methods hll_aggr_root" "zka-mg mg-methods aggr_mg_rootvar" "zka-gk gk-methods aggr_gk_root" \
            "zka-gk-matched gk-matched-methods aggr_gkm" "zka-gk-matched gk-matched-methods querier_gkm" \
            "zka-bloom zka-bloom-methods bloom_aggr_root" "zka-kmv zka-kmv-methods kmv_aggr_root"; do
     read -r t mc gn <<< "$g"

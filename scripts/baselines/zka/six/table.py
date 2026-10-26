@@ -69,7 +69,7 @@ if rows and 'run' not in rows[0]:
              f'assemble.py <dir> data/aol.keys --out <file>, then table.py <file> --raw <dir>; or print it '
              f'with that version: git show 6cac471:scripts/baselines/zka/six/table.py')
 FAMS = ['cm', 'hll', 'ss', 'gk', 'bloom', 'kmv']
-NAME = {'cm': 'Count-Min 3x1024', 'hll': 'HLL b=14 † ‡', 'ss': 'SS / MG s=1,024 † §', 'gk': 'GK eps=1/51 †',
+NAME = {'cm': 'Count-Min 3x1024', 'hll': 'HLL b=14 † ‡', 'ss': 'MG s=1,024 † §', 'gk': 'GK eps=1/51 †',
         'bloom': 'Bloom 7x2^14 †', 'kmv': 'KMV k=1,024 †'}
 LEGACY = any((r['system'], r['run']) == ('zkSketch', 'r2') for r in rows)
 # GK: zkSketch's own rule on the zk-Analytics side (the matched port) or textbook GK (a reference)
@@ -105,7 +105,8 @@ VNOTE = {'designed': ('their aggregation guests with a per-bucket Merkle root in
                     "part of zk-Analytics' protocol (paper sections 5.2 and 5.3: an epoch publishes its hash-chain "
                     "values and one commitment to the whole state, which the query proof opens) and nothing in "
                     "their code reads it; zkSketch publishes none either"),
-         'legacy': 'the guests of the committed 2026-10-09 run'}
+         'legacy': 'the guests of the committed 2026-10-09 run (for ss: aggr_ss of the SpaceSaving port there; '
+                   'in Misra-Gries runs aggr_mg, the 64-bucket root compiled in)'}
 
 
 def var_of(r):
@@ -330,7 +331,8 @@ def phase_split(fam, var):
         for r in rd(f'{ZP}_prof_ss.csv'):
             if r['mode'] == 'aggr' and r['epoch_index'] == '0':
                 ph = {k: int(v.split('(')[0]) for k, v in (kv.split('=') for kv in r['phases'].split(';'))}
-                sp = int(r['user_cycles']), ph['read'], ph['chain'], 'measured (profiling twin aggr_ss_prof)'
+                twin = r.get('guest') or 'aggr_mg_prof'
+                sp = int(r['user_cycles']), ph['read'], ph['chain'], f"measured (profiling twin {twin})"
                 break
     if fam == 'gk':
         for r in rd(f'{ZP}_prof_gk.csv'):
@@ -344,12 +346,14 @@ def phase_split(fam, var):
     ex = exec_e0(fam, var)
     if ex is None:
         return None
-    return int(ex['user_cycles']), sp[1], sp[2], (f'read + chain: legacy profiling twin aggr_{fam}_prof; user cycles: '
+    twin = re.search(r'profiling twin (\w+)', sp[3])
+    twin = twin.group(1) if twin else f'aggr_{fam}_prof'
+    return int(ex['user_cycles']), sp[1], sp[2], (f'read + chain: legacy profiling twin {twin}; user cycles: '
                                                   f'this variant (executor)')
 
 
 # ------------------------------------------------------------------ root variants
-SHORT = {'cm': 'CM', 'hll': 'HLL', 'ss': 'SS', 'gk': 'GK', 'bloom': 'Bloom', 'kmv': 'KMV'}
+SHORT = {'cm': 'CM', 'hll': 'HLL', 'ss': 'MG', 'gk': 'GK', 'bloom': 'Bloom', 'kmv': 'KMV'}
 
 
 def vdesc(var):

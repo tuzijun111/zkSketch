@@ -34,7 +34,7 @@ FAMS = ["cm", "hll", "ss", "gk", "bloom", "kmv"]
 TITLES = {
     "cm": "Count-Min  ($3{\\times}1024$)",
     "hll": "HLL  ($b{=}14$)",
-    "ss": "SS  ($s{=}1024$)",
+    "ss": "MG  ($s{=}1024$)",
     "gk": "GK  ($s'{=}2^{11}$)",
     "bloom": "Bloom  ($7{\\times}2^{14}$)",
     "kmv": "KMV  ($s{=}1024$)",

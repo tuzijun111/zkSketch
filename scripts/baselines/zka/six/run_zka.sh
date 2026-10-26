@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# zk-Analytics side of the six-sketch comparison (their CM + our ports of HLL, SS, GK,
+# zk-Analytics side of the six-sketch comparison (their CM + our ports of HLL, Misra-Gries (family ss), GK,
 # Bloom, KMV in their per-epoch architecture), AOL, SIX_T epochs x SIX_M records, batches of 8
 # (paper configuration, the defaults: 8 epochs x 2,048 records).
 # GK (SIX_ZKA_GK, six_common.sh): matched (default) = ../gk_matched, zkSketch's GK rule in their
@@ -64,7 +64,7 @@ source "$HERE6/gate.sh"
 declare -A BIN=(
   [cm]=$EB/cyc-t1/release/shipped
   [hll]=$EB/hll/release/hll
-  [ss]=$EB/zka-ss/release/ss
+  [ss]=$EB/zka-mg/release/mg   # Misra-Gries port (../mg)
   [gk]=$EB/zka-gk/release/gk
   [bloom]=$EB/zka-bloom/release/bloom
   [kmv]=$EB/zka-kmv/release/kmv

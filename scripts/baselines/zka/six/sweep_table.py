@@ -30,7 +30,7 @@ import re
 import sys
 
 FAMS = ['cm', 'hll', 'ss', 'gk', 'bloom', 'kmv']
-NAME = {'cm': 'Count-Min 3x1024', 'hll': 'HLL b=14 †', 'ss': 'SS / MG s=1,024 †', 'gk': 'GK eps=1/51 †',
+NAME = {'cm': 'Count-Min 3x1024', 'hll': 'HLL b=14 †', 'ss': 'MG s=1,024 †', 'gk': 'GK eps=1/51 †',
         'bloom': 'Bloom 7x2^14 †', 'kmv': 'KMV k=1,024 †'}
 VORDER = {v: i for i, v in enumerate(['noroot', 'designed', 'legacy', 'buckets1024', 'perkey', 'pertuple'])}
 COLS = ['family', 'm', 'zka_prove_s', 'zks_prove_s', 'zka_ms_per_record', 'zks_ms_per_record', 'speedup',

@@ -4,13 +4,15 @@
 
 **What it measures.** zkSketch against zk-Analytics (Zhu et al., "Zero-Knowledge
 Cloud Analytics", SIGCOMM '26; a RISC Zero zkVM pipeline, cloned at `d4a5a9a`) on
-six sketches: Count-Min (3 x 1024), HyperLogLog (b = 14), SpaceSaving / Misra-Gries
+six sketches: Count-Min (3 x 1024), HyperLogLog (b = 14), Misra-Gries
 (1,024 counters), Greenwald-Khanna (eps = 1/51), Bloom (7 x 2^14) and KMV
 (k = 1,024), over the same AOL records (`data/aol.keys`, tracked in git, so there is
 nothing to download). zk-Analytics ships only Count-Min. **For the other five
 sketches the zk-Analytics side is our code inside their per-epoch RISC Zero pipeline
 (marked † in every table), not zk-Analytics code: plain textbook per-record HLL,
-SpaceSaving, Bloom and KMV, and for Greenwald-Khanna zkSketch's own GK algorithm.**
+Misra-Gries (`scripts/baselines/zka/mg`; until 2026-10-26 SpaceSaving,
+`scripts/baselines/zka/spacesaving`, which produced the published runs), Bloom and KMV,
+and for Greenwald-Khanna zkSketch's own GK algorithm.**
 GK is the one sketch where "the same sketch" leaves the algorithm open (zkSketch
 certifies a two-sided band-merge batch rule, textbook GK is per-record INSERT /
 COMPRESS rebuilt per epoch), so a run puts zkSketch's rule, with zkSketch's capacity,
@@ -351,7 +353,7 @@ Notes:
 - After switching the Rust toolchain, `run_all.sh build` recompiles everything next
   to the old artifacts (another ~13 GB; `check` does not notice a toolchain switch,
   and the old builds stay usable). To reclaim the space, delete the old builds first,
-  from the repository root: `rm -rf ~/ext-baselines/build/{cyc-t1,hll,zka-ss,zka-gk,zka-gk-matched,zka-bloom,zka-kmv} target`
+  from the repository root: `rm -rf ~/ext-baselines/build/{cyc-t1,hll,zka-ss,zka-mg,zka-gk,zka-gk-matched,zka-bloom,zka-kmv} target`
   (with `BASELINE_DIR` set, use that instead of `~/ext-baselines`).
 - If cargo fails to fetch the pinned Plonky3 forks (`failed to authenticate`), retry
   with `CARGO_NET_GIT_FETCH_WITH_CLI=true scripts/baselines/zka/six/run_all.sh build`

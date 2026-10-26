@@ -71,7 +71,7 @@ VARIANTS = {
 TITLES = {
     "cm": "Count-Min  ($d{=}7$, $w{=}2^{14}$)",
     "hll": "HyperLogLog  ($b{=}14$)",
-    "ss": "SpaceSaving  ($s{=}2^{14}$)",
+    "ss": "Misra–Gries  ($s{=}2^{14}$)",
     "gk": "Greenwald–Khanna  ($s'{=}2^{11}$)",
 }
 

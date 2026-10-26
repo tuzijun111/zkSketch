@@ -301,7 +301,7 @@ def emit(**kw):
     OUT.append(r)
 
 
-def note_for(fam, system):
+def note_for(fam, system, arm=''):
     if fam == 'gk' and system.startswith('zk-Analytics'):
         return GK_NOTE
     if fam == 'hll' and system.startswith('zkSketch'):
@@ -311,9 +311,11 @@ def note_for(fam, system):
         return ('NOT like-for-like: zkSketch certifies the raw HLL estimator (no small-range / linear-counting '
                 'branch); compare its answer with the exact column')
     if fam == 'ss' and system.startswith('zkSketch'):
-        return 'releases the top-1 MG count only (no key); zk-Analytics port releases key, count and error'
+        return 'releases the top-1 MG count only (no key); the zk-Analytics port releases the key too'
+    if fam == 'ss' and arm == 'ss':   # results of the older SpaceSaving port (../spacesaving)
+        return 'SpaceSaving port; topk --limit 1: full sum-and-truncate merge of n x 1,024 entries; releases key, count, error'
     if fam == 'ss':
-        return 'topk --limit 1: full sum-and-truncate merge of n x 1,024 entries; releases key, count, error'
+        return "topk --limit 1: full Misra-Gries merge of the n epochs' entries (at most 1,024 each); releases key and count"
     return ''
 
 
@@ -323,8 +325,8 @@ def zka_answer(f, row):
     if f in ('cm', 'hll', 'kmv'):
         return re.search(r'estimate=(\d+)', res).group(1)
     if f == 'ss':
-        m = re.search(r'top=(\d+):(\d+)/e(\d+)', res)
-        return f'key {m.group(1)} count {m.group(2)} (error {m.group(3)})'
+        m = re.search(r'top=(\d+):(\d+)(?:/e(\d+))?', res)   # SpaceSaving rows carry /e<error>, Misra-Gries rows do not
+        return f'key {m.group(1)} count {m.group(2)}' + (f' (error {m.group(3)})' if m.group(3) else '')
     if f == 'gk':
         m = re.search(r'est=(\d+);lo=(\d+);hi=(\d+)', res)
         return f'{m.group(1)} [{m.group(2)}..{m.group(3)}]'
@@ -645,7 +647,7 @@ for f in FAMS:
         emit(family=f, system=sysname, run='main', operation=f'query_n{n}{suf}', n=n, prove_s=num(r['prove_s']),
              verify_ms=num(r['verify_ms']), proof_bytes=int(r['receipt_bytes']),
              peak_rss_mb=num(r['_job']['r0vm_peak_rss_mb']), rss_scope='' if r['_est'] else 'r0vm process of this proof',
-             answer=zka_answer(f, r), exact=exact, provenance=prov(r), note=note_for(f, sysname),
+             answer=zka_answer(f, r), exact=exact, provenance=prov(r), note=note_for(f, sysname, r.get('arm', '')),
              detail=f"query guest over {n} epoch states; {probe}; {r['segments']} segments; {r['user_cycles']} user "
                     f"cycles; {gate_of(r)}", **zmem(r, TREES))
     if not qrows or not variants:

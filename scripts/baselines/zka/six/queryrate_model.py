@@ -24,9 +24,10 @@ proof that merges the n epoch summaries published so far):
   q(n)   = a + b n, least squares over the measured n of the query executor rows, each
            valued padded_cycles / 2^20 x k (the real proofs at the calibration points are
            reported next to them with their relative error); b >= 0. It is measured at
-           Eq-record epochs (the directory name) and used for every Q: the SS, KMV and GK
-           summaries hold min(distinct keys, capacity) entries, so their q(n) depends on
-           the epoch size (disclosed in the header and per Q; conservative when Eq > Q)
+           Eq-record epochs (the directory name) and used for every Q: the KMV summary (and
+           the older SpaceSaving port's) holds min(distinct keys, capacity) entries, the
+           Misra-Gries port's at most that many, fewer after its decrement steps, so q(n)
+           depends on the epoch size (disclosed in the header and per Q)
   T      = floor(N / Q) queries = epochs, U = N - T updates
   total  = T x A(Q) + a T + b T (T + 1) / 2 seconds ('extrapolated' when T exceeds the
            largest measured n); amortized = total / U x 1000 ms per update
@@ -44,10 +45,12 @@ import sys
 
 FAMS = ['cm', 'hll', 'ss', 'gk', 'bloom', 'kmv']
 GROUP = {'cm': 'a', 'hll': 'a', 'bloom': 'a', 'ss': 'b', 'kmv': 'b', 'gk': 'c'}
-LABEL = {'cm': 'Count-Min', 'hll': 'HLL', 'ss': 'SS / MG', 'gk': 'GK', 'bloom': 'Bloom', 'kmv': 'KMV'}
+LABEL = {'cm': 'Count-Min', 'hll': 'HLL', 'ss': 'MG', 'gk': 'GK', 'bloom': 'Bloom', 'kmv': 'KMV'}
 SEG = float(1 << 20)
-# AOL: the distinct keys of a stream prefix exceed the SS / KMV capacity 1,024 from about 2,048
-# records on (1,234 distinct in the first 2,048 keys, 607 in the first 1,000, 2,372 in 4,096)
+# AOL: the distinct keys of a stream prefix exceed the KMV (and SpaceSaving) capacity 1,024 from
+# about 2,048 records on (1,234 distinct in the first 2,048 keys, 607 in the first 1,000, 2,372 in
+# 4,096). A Misra-Gries summary does not saturate this way: each decrement step releases every
+# count-1 counter, so its size varies with the epoch (e.g. 356-492 entries at 2,048 records).
 AOL_SAT_E = 2048
 
 
@@ -197,7 +200,7 @@ def pick_bloom(rs):
 def query_cost(d, fam, k):
     """q(n) of one family: {'n': {n: (cycles, est_s, real_s)}, 'a', 'b', 'note', 'dir'}."""
     dirs = sorted(glob.glob(os.path.join(d, 'zka_query_E*_T*')))
-    out = {'n': {}, 'a': None, 'b': None, 'note': 'no zka_query_E*_T* directory', 'dir': None}
+    out = {'n': {}, 'a': None, 'b': None, 'note': 'no zka_query_E*_T* directory', 'dir': None, 'arm': None}
     if not dirs:
         return out
     sub = dirs[0]
@@ -208,6 +211,8 @@ def query_cost(d, fam, k):
     pr = [r for r in rows(os.path.join(sub, f'six_zka_{fam}_prove.csv')) if step_of(r) == 'query']
     if fam == 'bloom':
         qx, pr = pick_bloom(qx), pick_bloom(pr)
+    # family ss: 'mg' = the Misra-Gries port (../mg), 'ss' = the older SpaceSaving port
+    out['arm'] = next((r.get('arm') for r in qx + pr if r.get('arm')), None)
     real = {}
     for r in pr:
         n, s = fnum(r.get('epochs')), fnum(r.get('prove_s'))
@@ -354,7 +359,11 @@ def main():
                     rec.update(zka_q_a_s=f'{qc["a"]:.3f}', zka_q_b_s=f'{qc["b"]:.4f}')
                     prov.append(f"zkA q(n) fit over n = {rec['zka_q_n_measured'].replace('|', ',')} "
                                 f"({qc['dir']}, executor cycles x k){'; ' + qc['note'] if qc['note'] else ''}")
-                    if f in ('ss', 'kmv') and eq is not None and eq != q:
+                    if f == 'ss' and eq is not None and eq != q and qc.get('arm') != 'ss':
+                        prov.append(f'q(n) measured at {eq:,}-record epochs, not {q:,}: the {LABEL[f]} summary holds at most '
+                                    f'min(distinct keys, capacity) entries, fewer after its decrement steps, so its size and '
+                                    f'query cost vary with the epoch rather than growing with its length')
+                    elif f in ('ss', 'kmv') and eq is not None and eq != q:
                         prov.append(f'q(n) measured at {eq:,}-record epochs, not {q:,}: the {LABEL[f]} summary holds '
                                     f'min(distinct keys, capacity) entries, so its query cost is '
                                     + ('overstated (conservative)' if eq > q else
@@ -395,7 +404,7 @@ def main():
              f"plus the query-free baseline Q = 0; zkSketch cores {cores}; {zk_note} "
              f"(zkSketch rows: pcs={','.join(pcs)}, logup_mask={','.join(lmask)}, commit={','.join(cmode)}; "
              f"zk-Analytics RISC Zero succinct receipts); "
-             f"zkSketch leaves: CM / HLL / Bloom {man.get('leaf_a', '1024')}, SS / KMV {man.get('leaf_b', '4096')}, "
+             f"zkSketch leaves: CM / HLL / Bloom {man.get('leaf_a', '1024')}, MG / KMV {man.get('leaf_b', '4096')}, "
              f"GK {man.get('leaf_c', '512')} (capacity {man.get('gk_cap', '768')}); zkSketch {man.get('zksketch', '?')[:9]}, "
              f"zk-Analytics {man.get('zka', '?')[:7]}; {man.get('started', '')}._")
     L.append('')
@@ -410,11 +419,13 @@ def main():
              'estimated); the stream tail after the last query is not proved; (2) the query proof cost is linear in the '
              'number n of merged epoch summaries, q(n) = a + b n, fitted by least squares over the measured n of the '
              f"query executor run (Eq = {eq if eq is not None else '?'}-record epochs, n up to {man.get('Tq', '?')}), each valued "
-             'padded cycles / 2^20 x k, and EXTRAPOLATED beyond the largest measured n (rows say so); the SS and KMV '
-             'summaries hold min(distinct keys, capacity 1,024) entries, so their q(n) depends on the epoch size and is the '
-             f"one of Eq = {eq if eq is not None else '?'}-record epochs for every Q (on AOL they are saturated from about {AOL_SAT_E:,} "
-             'records on: an Eq at or above that carries over to every Q >= Eq and overstates them slightly at Q < Eq; an '
-             'Eq below it understates them at larger Q; CM / HLL / Bloom summaries have a fixed size, the GK band-merge '
+             'padded cycles / 2^20 x k, and EXTRAPOLATED beyond the largest measured n (rows say so); the KMV summaries '
+             '(and those of the older SpaceSaving port) hold min(distinct keys, capacity 1,024) entries, so their q(n) depends '
+             f"on the epoch size and is the one of Eq = {eq if eq is not None else '?'}-record epochs for every Q (on AOL they are "
+             f'saturated from about {AOL_SAT_E:,} records on: an Eq at or above that carries over to every Q >= Eq and overstates '
+             'them slightly at Q < Eq; an Eq below it understates them at larger Q); the Misra-Gries summaries hold at most '
+             'that many entries, fewer after each decrement step, so their size varies with the epoch and the Eq-epoch q(n) '
+             'is used for every Q as measured; CM / HLL / Bloom summaries have a fixed size, the GK band-merge '
              'state is capacity-bounded and stays small); (3) k = s per 2^20 '
              'padded cycles is one rate for every guest, calibrated over all real proofs of this run; (4) both sides on '
              f'the same {cores} cores, ZK on, one proof at a time; (5) the T periods of Q positions hold Q - 1 updates and '
@@ -485,9 +496,13 @@ def main():
         T = n_total // q
         eq_note = ''
         if eq is not None and eq != q:
-            eq_note = (f'; SS / KMV q(n) is the one of {eq:,}-record epochs: '
-                       + ('conservative for zkA' if eq > q else
-                          'saturated summaries, carries over' if eq >= AOL_SAT_E else 'understated for zkA'))
+            sat = ('conservative for zkA' if eq > q else
+                   'saturated summaries, carries over' if eq >= AOL_SAT_E else 'understated for zkA')
+            if qcost['ss'].get('arm') == 'ss':   # older SpaceSaving port: saturates like KMV
+                eq_note = f'; SpaceSaving / KMV q(n) is the one of {eq:,}-record epochs: {sat}'
+            else:
+                eq_note = (f'; MG / KMV q(n) is the one of {eq:,}-record epochs (KMV: {sat}; MG: its size varies '
+                           f'with the decrement steps)')
         L.append(f'**Q = {q:,}: T = {T:,} queries / epochs, U = {n_total - T:,} updates** '
                  '(zkA = zk-Analytics, modeled; zkS = zkSketch, measured; ratio = zkA / zkS, above 1 zkSketch is faster; '
                  f'zkS pad fraction = padded record slots / proved record slots; x Q=0 = zkS total over the baseline makespan{eq_note})')

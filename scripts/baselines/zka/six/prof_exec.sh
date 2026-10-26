@@ -21,7 +21,7 @@ EB=$BASELINE_DIR/build
 KEYS=$ZKS/data/aol.keys
 OUTD=$RESULTS
 PFX=${SIX_ZKA_PREFIX:-six_zka}
-SSB=$EB/zka-ss/release/ss
+SSB=$EB/zka-mg/release/mg   # family ss = the Misra-Gries port (../mg)
 GKB=$EB/zka-gk/release/gk
 PROF_GK=0; [[ $SIX_ZKA_GK == textbook ]] && PROF_GK=1
 for b in "$SSB" $( (( PROF_GK )) && echo "$GKB"); do [[ -x $b ]] || six_die "missing $b (run six/build.sh zka)"; done
@@ -38,7 +38,7 @@ run() {  # run <csv> <bin> <args...>
   echo "# rc=$rc" >> "$LOG"
   (( rc == 0 )) || { NFAIL=$((NFAIL + 1)); echo "FAILED prof: $(basename "$bin") $* (rc=$rc)" >&2; }
 }
-echo "# ${PFX}_prof $(date -Is) host=$(hostname) load=[$(cut -d' ' -f1-3 /proc/loadavg)] executor only, not timed; M=$SIX_M T=$SIX_T (SS epoch $(six_fam_m ss), GK epoch $(six_fam_m gk))" > "$LOG"
+echo "# ${PFX}_prof $(date -Is) host=$(hostname) load=[$(cut -d' ' -f1-3 /proc/loadavg)] executor only, not timed; M=$SIX_M T=$SIX_T (MG epoch $(six_fam_m ss), GK epoch $(six_fam_m gk))" > "$LOG"
 echo "# zka=$(git -C "$ZKA" rev-parse --short=12 HEAD) zkSketch=$(git -C "$ZKS" rev-parse --short=9 HEAD)" >> "$LOG"
 SSO=$OUTD/${PFX}_prof_ss.csv
 "$SSB" --header > "$SSO"

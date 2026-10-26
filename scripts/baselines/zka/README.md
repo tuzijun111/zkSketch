@@ -44,6 +44,7 @@ checkout they sit in, so a worktree measures its own sources.
 | `sketch_exec.sh` | no (`--prove`: yes) | `zka_{hll,ss,gk}_*.csv` / `.log`, `zka_sketch_exec.log` | OUR HLL, SpaceSaving and GK guests (†) in their architecture; builds and regenerates all executor CSVs (see "Sketch-family guests") |
 | `bloom/run_exec.sh` | no (`PROVE=1`: yes) | `zka_bloom_exec.csv` (`PROVE=1`: `zka_bloom_prove.csv`) + `.log` | OUR partitioned Bloom filter guests (†) in their architecture: per-epoch aggregation and query-time OR merge, the whole pipeline in one run, plus the `bloom_query_words` state-encoding sensitivity (see "Bloom filter and KMV guests") |
 | `kmv/run_exec.sh` | no (`PROVE=1`: yes) | `zka_kmv_exec.csv` (`PROVE=1`: `zka_kmv_prove.csv`) + `.log` | OUR KMV / bottom-k guests (†) in their architecture: per-epoch aggregation and query-time bottom-k union, plus the `kmv_query_words` sensitivity (see "Bloom filter and KMV guests") |
+| `mg/` (built by `six/build.sh`) | - | - | OUR textbook Misra-Gries guests (†) in their architecture: the zk-Analytics side of family `ss` in the six-sketch runs since 2026-10-26 (see `mg/README.md`) |
 | `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 | `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
 | `gk_matched/gk_matched_check.sh` | no (`CERTIFY=1`: zkSketch's GK leaf and decoder proofs) | `zka_gk_matched_{check,aggr,certify}.csv` + `zka_gk_matched_check.log` | zkSketch's GK rule inside zk-Analytics' pipeline (the six-sketch GK default): equivalence with zkSketch's native chain, its leaf circuit and its decoder at configs (384, 128) and (768, 512) (see "GK with zkSketch's algorithm in their pipeline") |
@@ -68,7 +69,7 @@ Don't run them next to another job of yours.
   `aggr_cm_noroot` and the validation twin `aggr_cm_twin`, with a lock derived from
   `hll/guests/Cargo.lock`. See "Root variants" under "Six-sketch comparison".
 - Other build locations: `build/ourcm`, `build/zksq`, `build/shaccel`,
-  `build/zka-ss-mg`, `build/zka-gk-bm2`, `build/zka-gk-matched`, `build/zka-bloom`
+  `build/zka-mg`, `build/zka-ss-mg`, `build/zka-gk-bm2`, `build/zka-gk-matched`, `build/zka-bloom`
   and `build/zka-kmv` under `$BASELINE_DIR`;
   `nb-target-<T>` (`accuracy.sh native`) and `zka/target` (`a234.sh`,
   `compare.sh`) inside the clone's directory. `compare.sh` S1/S2 and
@@ -782,7 +783,7 @@ accuracy checks. Rows: `results/zka_{bloom,kmv}_validation.csv` (26 and 18 rows,
 
 zkSketch against zk-Analytics (Zhu et al., SIGCOMM '26; RISC Zero zkVM; clone at
 `d4a5a9a`) on six sketches, on one small, identical workload. zk-Analytics ships only
-Count-Min. **For HLL, SpaceSaving, Bloom and KMV the zk-Analytics side is our
+Count-Min. **For HLL, Misra-Gries, Bloom and KMV the zk-Analytics side is our
 plain textbook per-record code in their per-epoch pipeline with query-time merge
 (the ports above, marked †), not zk-Analytics code. For GK it is zkSketch's own GK
 algorithm in their pipeline (`gk_matched/`, †; since 2026-10-15, `SIX_ZKA_GK=matched`,
@@ -841,7 +842,7 @@ zkSketch's algorithm in their pipeline". The other matched-rule guests (`ss_mg/`
   |---|---|---|---|
   | Count-Min | their `aggr_cm` / `querier-guest-cm`, 3 x 1024, `CM_TOPK_SLOTS=1` | `cm` (omc leaf), `EXP_D=3 EXP_W=1024` | point count of the heaviest key of the queried prefix (their `Estimate` target rule; zkSketch `EXP_QUERY_KEY_MODE=hot`; ties to the smaller key on both sides; the same key on both sides at each n: 3,011,223,745 for n <= 5, 3,780,053,395 for n >= 6) |
   | HyperLogLog | `hll/` †, b = 14 | `hll` (omc), `EXP_HLL_B=14` | cardinality |
-  | SpaceSaving / Misra-Gries | `spacesaving/` †, SpaceSaving s = 1,024 per epoch, sum-and-truncate merge | `ss` (certified MG), `EXP_SS_CAP=1024` (MG with s counters ~ SpaceSaving with s+1) | top-1: theirs `topk --limit 1` (key, count, error); ours the top-1 mass (`c = 1`, count only, no key). This is the closest pair the two query sets allow |
+  | Misra-Gries | `mg/` †, textbook Misra-Gries s = 1,024 per epoch, mergeable Misra-Gries merge at query time (until 2026-10-26: `spacesaving/` †, SpaceSaving with a sum-and-truncate merge; the published runs used it) | `ss` (certified MG), `EXP_SS_CAP=1024` | top-1: theirs `topk --limit 1` (key, count); ours the top-1 mass (`c = 1`, count only, no key). This is the closest pair the two query sets allow |
   | Greenwald-Khanna | `gk_matched/` † (default, `SIX_ZKA_GK=matched`): zkSketch's band-merge rule, `--capacity $SIX_GK_CAP --s 51 --m-sub $SIX_GK_MSUB` (= 2048 / 51 / 2048: one `apply_batch2` step per epoch), state carried across epochs, guest implementation `literal` (`SIX_ZKA_GK_IMPL`; `tuned` / `fast` / `fixed_linear` are sensitivity rows). Reference (`SIX_ZKA_GK=textbook`, and the committed rows): `gk/` †, textbook GK, eps = 1/51, COMPRESS every 25 records | `gk` (band-merge), `EXP_GK_CAP=2048 EXP_GK_S=51 EXP_GK_ROUNDS=$SIX_GK_ROUNDS` (`SIX_GK_ROUNDS`, default `stable`: the M3 stable-compaction leaf, CSV `variant` `gk_bandmerge2_stable`, `gk_rounds` `stable`; `sorted` = the pre-M3 leaf byte for byte, `variant` `gk_bandmerge2`, which every zkSketch GK row recorded before M3, 2026-10-15, used) | rank of the same value on both sides: the most frequent 21-bit value of the prefix (zkSketch `EXP_QUERY_KEY_MODE=hot`; 1,810,625 for n <= 5, 985,491 for n >= 6), passed to theirs as `--rank-value`; the matched port answers with zkSketch's decoder estimator on the latest state |
   | Bloom (partitioned) | `bloom/` †, k = 7 x W = 2^14 | `bloom`, `EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14` | membership of the same two keys per n: an inserted key (the first record of batch n; zkSketch `first`, theirs `--probe first`) and an absent key (zkSketch `EXP_QUERY_KEY_MODE=absent`, a second zkSketch run; the key it drew is passed to theirs as `--probe key:<k>`) |
   | KMV / bottom-k | `kmv/` †, k = 1,024, 64-bit hash | `kmv`, `EXP_KMV_K=1024`, 27-bit hash | distinct count |
@@ -935,12 +936,13 @@ reference and as an option):
 |---|---|---|---|
 | `designed` | zk-Analytics as their code ships it, root included (CM: the reference; ports: an option) | their `aggr_cm`, unchanged (same ELF) | the cheapest of their root constructions applied uniformly: their samples pattern with 64 buckets (cells -> 64 buckets, leaf = SHA-256(tag \|\| the bucket's cells in canonical order), folded by their pub `samples_buckets_root_from_leaves`; the number of leaves is `next_pow2_ge(max bucket + 1)`, 64 in every run here) |
 | `noroot` | the default and the headline: zk-Analytics' protocol without the root its code adds (zkSketch commits its state but publishes no per-bucket root either) | `aggr_cm_noroot` (`cm_noroot/`): their `process_cm_aggr_with_state` cut byte for byte from the clone by `cm_noroot/gen_upstream.sh` (which `six/build.sh` runs with `--check`), with only lines 1262-1274 (row_roots, cm_root, heap_root) replaced by zeros; chain verification, flattening, table and heap update, `state_commit`, epoch link and journal type unchanged | the same guest as `designed`, root field zero |
-| `legacy` (the drivers' default `--root`) | the guests of the committed 2026-10-09 reference rows (GK: since 2026-10-13 with the corrected INSERT, like every GK guest, so a re-run gives about 1% fewer cycles than those rows; see `gk/README.md`, "INSERT's Delta") | `aggr_cm` | `hll_aggr`, `aggr_ss`, `aggr_gk`, `bloom_aggr`, `kmv_aggr`: SS samples-pattern 64 buckets, GK per-tuple root, HLL / Bloom / KMV none |
+| `legacy` (the drivers' default `--root`) | the guests of the committed 2026-10-09 reference rows (family `ss` now runs the Misra-Gries port, whose legacy guest is `aggr_mg`, 64-bucket root compiled in) (GK: since 2026-10-13 with the corrected INSERT, like every GK guest, so a re-run gives about 1% fewer cycles than those rows; see `gk/README.md`, "INSERT's Delta") | `aggr_cm` | `hll_aggr`, `aggr_ss`, `aggr_gk`, `bloom_aggr`, `kmv_aggr`: SS samples-pattern 64 buckets, GK per-tuple root, HLL / Bloom / KMV none |
 | sensitivity | | `twin` (validation only, below) | SS `buckets1024`, `perkey`; GK `pertuple` |
 
 The designed / noroot guests of the ports read the variant before their input and commit
 it with the journal: `hll_aggr_root`, `bloom_aggr_root`, `kmv_aggr_root` (`guests/aggr_root`),
-`aggr_gk_root` (`gk/guests/aggr_root`), and SpaceSaving's existing `aggr_ss_rootvar`. HLL,
+`aggr_gk_root` (`gk/guests/aggr_root`), and for family `ss` the Misra-Gries port's `aggr_mg_rootvar`
+(`mg/`; the committed rows used SpaceSaving's `aggr_ss_rootvar`). HLL,
 Bloom and KMV run their legacy aggregation function itself and then the root step; GK and
 SS run the legacy steps with the root construction chosen at run time. The variant code
 of HLL / Bloom / KMV / GK lives in each core crate's `src/root.rs`, compiled only with the
@@ -1481,12 +1483,14 @@ zkS = zkSketch. Ratios are zkA / zkS.
     estimate on the same data is 12,416 / 12,999 / 14,088 / 16,376, within 0.2% of
     zkSketch's answers, so the gap is the missing branch, not the hash or the
     proof. This is a property of zkSketch's decoder, not of the comparison.
-  - *SpaceSaving / MG.* Ours is mergeable Misra-Gries with 1,024 counters on keys
+  - *MG.* Ours is mergeable Misra-Gries with 1,024 counters on keys
     mapped to `(k & 0x1FFFFFFF) | 1`, and the query releases the top-1 count only
-    (an under-estimate, no key). Theirs is per-epoch SpaceSaving with 1,024 counters
-    merged at query time by sum-and-truncate, and the query releases key, count and
-    error (count is an over-estimate per epoch). MG with s counters is roughly
-    SpaceSaving with s + 1.
+    (an under-estimate, no key). Theirs, since 2026-10-26, is per-epoch textbook
+    Misra-Gries with 1,024 counters (`mg/`), merged at query time by the mergeable
+    Misra-Gries merge, and the query releases key and count (an under-estimate). In
+    the committed rows it is per-epoch SpaceSaving with 1,024 counters merged by
+    sum-and-truncate, releasing key, count and error (count is an over-estimate per
+    epoch); MG with s counters is roughly SpaceSaving with s + 1.
   - *GK.* Same value domain on both sides (`key & 0x1FFFFF`, 21 bits) and the same
     rank value. Ours is the two-sided band-merge summary (s = 51, capacity 2,048)
     and releases the bracket midpoint; theirs, in these committed rows, is per-epoch

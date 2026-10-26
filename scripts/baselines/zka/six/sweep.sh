@@ -58,7 +58,7 @@ export PATH="$HOME/.cargo/bin:$RZ_HOME/bin:$PATH"
 KEYS=$ZKS/data/aol.keys
 KEYS_MD5=01dd7d5c8a73
 EB=$BASELINE_DIR/build
-ZKA_BINS=("$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-ss/release/ss" "$EB/zka-gk/release/gk"
+ZKA_BINS=("$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-mg/release/mg" "$EB/zka-gk/release/gk"
           "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv" "$EB/zka-gk-matched/release/gk_matched")
 ZKS_BIN=$ZKS/target/release/examples/exp_compose
 ROOT_COLS=root_variant,root_construction,variants_agree,state_commit
@@ -246,7 +246,7 @@ fi
 stale_builds() {
   local z=$ZKS/scripts/baselines/zka i src bin
   local -a pairs=("$z/cyc" "${ZKA_BINS[0]}" "$z/cm_noroot" "${ZKA_BINS[0]}" "$z/hll" "${ZKA_BINS[1]}"
-                  "$z/spacesaving" "${ZKA_BINS[2]}" "$z/gk" "${ZKA_BINS[3]}" "$z/bloom" "${ZKA_BINS[4]}"
+                  "$z/mg" "${ZKA_BINS[2]}" "$z/gk" "${ZKA_BINS[3]}" "$z/bloom" "${ZKA_BINS[4]}"
                   "$z/kmv" "${ZKA_BINS[5]}" "$z/gk_matched" "${ZKA_BINS[6]}" "$z/gk_bm2/core" "${ZKA_BINS[6]}")
   local stale=" "
   for ((i = 0; i < ${#pairs[@]}; i += 2)); do
