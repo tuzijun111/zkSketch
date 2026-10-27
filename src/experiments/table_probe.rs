@@ -332,6 +332,46 @@ pub fn summary(shape: &CircuitShape) -> String {
     s
 }
 
+thread_local! {
+    /// The phase prefix the Count-Min `omc` and Greenwald--Khanna stable leaf
+    /// builders emit on this thread; `usize::MAX` = every phase (the deployed
+    /// circuit). Private: only [`capture_prefix_shapes`] sets it, and that
+    /// stops every build right after its shapes are recorded, so a prefix
+    /// circuit can never be returned, let alone proved.
+    static PHASE_LIMIT: Cell<usize> = const { Cell::new(usize::MAX) };
+}
+
+/// The phase prefix a leaf builder should emit on this thread: `usize::MAX`
+/// (every phase) unless inside [`capture_prefix_shapes`]. The builders'
+/// guards only skip gates, never reorder them, so outside a probe the
+/// circuit is unchanged.
+pub fn phase_limit() -> usize {
+    PHASE_LIMIT.get()
+}
+
+/// Shapes of a leaf built with only its first `k` paper phases (`k >= 1`):
+/// [`capture_shapes`] with the thread's phase prefix set to `k` for the
+/// duration of `build`, so each phase's rows per table are the difference
+/// between consecutive prefixes (`examples/exp_operator.rs`). The build is
+/// stopped after `get_airs_and_degrees_with_prep` like every shapes-only
+/// probe; a prefix circuit is never constructed.
+pub fn capture_prefix_shapes<R>(k: usize, build: impl FnOnce() -> R) -> Result<Vec<CircuitShape>, String> {
+    assert!(k >= 1, "capture_prefix_shapes: the prefix needs at least phase 1 (bind)");
+    let prev = PHASE_LIMIT.replace(k);
+    let res = capture_shapes(build);
+    PHASE_LIMIT.set(prev);
+    res
+}
+
+/// Builder hook after [`maybe_stop`]: a phase-limited build that was not
+/// stopped must never become a circuit.
+pub fn assert_full_circuit(site: &str) {
+    assert!(
+        phase_limit() == usize::MAX,
+        "{site}: a phase-limited (prefix) circuit is for shapes-only probing and must not be built or proved"
+    );
+}
+
 /// Drain this thread's recorded shapes.
 pub fn take() -> Vec<CircuitShape> {
     LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))

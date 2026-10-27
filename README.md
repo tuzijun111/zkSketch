@@ -18,10 +18,8 @@ src/
   experiments/    # Experiment code shared by the runners
 examples/
   exp_compose.rs  # Proof-forest runs: composition, machines, stream length, query rate
-  exp_e1.rs       # Per-sketch batch-size sweep
 scripts/
   run_compose.sh        # Runs exp_compose; CSVs go to results/
-  run_experiments.sh    # Runs exp_e1; CSVs go to results/
   plot_sweep.py         # Figure 5
   run_m1_busy_sibling.sh  # One machine next to a busy neighbour (appendix)
   baselines/zka/        # zk-Analytics baseline (RISC Zero); six/run_all.sh runs the comparison
@@ -117,7 +115,7 @@ EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16
 EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_plonky3.csv
 ```
 
-**5. Forest on M = 1-4 machines** (Table 4). The measured rows are item 4's forest run (M = 1) and this
+**5. Forest on M = 1-4 machines** (Table 4). The published four-sketch runs are item 4's forest run (M = 1) and this
 run (needs a two-socket server; `EXP_COMPOSE_NODES=0,2` puts the machines on different sockets of the paper's server):
 
 ```bash
@@ -130,7 +128,7 @@ All six sketches, Count-Min at d = 3 (about a day):
 EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=3 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc EXP_KMV_K=16384 EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1,2,3,4 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs EXP_COMPOSE_NODES=0,2 EXP_COMPOSE_WAVE_SIZE=2 scripts/run_compose.sh frame_out_m1234_plonky3_6fam.csv
 ```
 
-**6. Stream length N = 2^16 .. 2^20** (Table 5). The measured rows are item 4's forest run (N = 2^20) and:
+**6. Stream length N = 2^16 .. 2^20** (Table 5). The published four-sketch runs are item 4's forest run (N = 2^20) and:
 
 ```bash
 for k in 16 17 18 19; do EXP_DATASET=aol EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_N=2^$k EXP_COMPOSE_BATCHES=16384 EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh forest_plonky3_1machine_verify_2e$k.csv; done
@@ -142,27 +140,10 @@ All six sketches, Count-Min at d = 3 (~15 h):
 for k in 16 17 18 19 20; do EXP_DATASET=aol EXP_D=3 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc EXP_KMV_K=16384 EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest EXP_COMPOSE_N=2^$k EXP_COMPOSE_BATCHES=16384 EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh forest_plonky3_1machine_6fam_2e$k.csv; done
 ```
 
-The Count-Min (d = 3), Bloom and KMV rows of Tables 4 and 5 are estimated from the runs above and
-these short runs of two 2^14-record batches:
-
-```bash
-EXP_DATASET=aol EXP_COMPOSE_N=2^15 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc EXP_KMV_K=16384 EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh forest6_deployed_n2e15.csv
-EXP_DATASET=aol EXP_COMPOSE_N=2^15 EXP_COMPOSE_BATCHES=16384 EXP_D=3 EXP_W=16384 EXP_COMPOSE_FAMILY=cm EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh forest6_deployed_cm_d3.csv
-```
-
-**7. Datasets** (Table 8; its AOL column is item 4's forest run, its M = 4 memory column item 5's first run):
+**7. Datasets** (Table 8; its AOL column is item 4's forest run):
 
 ```bash
 EXP_DATASET=uniform,gaussian,netflix EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_datasets_plonky3.csv
-```
-
-The leaf-memory column of Table 8 is one 2^14-record leaf per sketch:
-
-```bash
-EXP_DATASET=aol EXP_FAMILY=cm EXP_D=7 EXP_W=16384 EXP_CM_VARIANT=omc EXP_M=16384 EXP_CORES=32 BACKENDS=plonky3 EXP_OUT=cm_leaf_m16384.csv scripts/run_experiments.sh e1
-EXP_DATASET=aol EXP_FAMILY=hll EXP_HLL_B=14 EXP_HLL_VARIANT=omc EXP_M=16384 EXP_CORES=32 BACKENDS=plonky3 EXP_OUT=hll_leaf_m16384.csv scripts/run_experiments.sh e1
-EXP_DATASET=aol EXP_FAMILY=ss EXP_SS_CAP=16384 EXP_SS_VARIANT=certified EXP_M=16384 EXP_CORES=32 BACKENDS=plonky3 EXP_OUT=ss_leaf_m16384.csv scripts/run_experiments.sh e1
-EXP_DATASET=aol EXP_FAMILY=gk EXP_GK_CAP=2048 EXP_GK_VARIANT=bandmerge2 EXP_M=16384 EXP_CORES=32 BACKENDS=plonky3 EXP_OUT=gk_leaf_m16384.csv scripts/run_experiments.sh e1
 ```
 
 **8. Fully concurrent machines** (appendix): all M machines live at once, and one machine next to a busy neighbour:
@@ -172,10 +153,9 @@ for M in 2 3 4; do EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=163
 scripts/run_m1_busy_sibling.sh frame_out_1machine_plonky3_busysib.csv ss
 ```
 
-Table 3, Table 8 and the measured rows of Tables 4 and 5 were measured on an earlier version of
-the circuits without zero knowledge. These commands run the current zero-knowledge circuits, so
-their times and peak memory differ from the paper's (the GK leaf-memory command still builds the
-earlier sorted-copy GK leaf, as Table 8 did). The zk-Analytics MG numbers of Table 2, Figure 5 and
+The published runs behind Tables 3, 4, 5 and 8 used an earlier version of the circuits without
+zero knowledge. These commands run the current zero-knowledge circuits, so
+their times differ from the paper's. The zk-Analytics MG numbers of Table 2, Figure 5 and
 Table 6 were measured with the older SpaceSaving port (`scripts/baselines/zka/spacesaving`);
 experiments 1-3 now run the Misra-Gries port. How each table is read from the CSVs, and every knob:
 [docs/experiments.md](docs/experiments.md) and [docs/six_sketch_comparison.md](docs/six_sketch_comparison.md).

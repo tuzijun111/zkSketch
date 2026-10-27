@@ -5,8 +5,8 @@ latex/pics/zkSketch_eval_sweep.pdf from a `run_all.sh sweep` results directory
 
 Usage: python3 scripts/plot_sweep.py [<sweep results dir>]
   default dir: the newest results/six/sweep-*/ (quick smokes excluded).
-Style follows scripts/plot_eval.py (same fonts, ink and palette), so the figure
-sits next to zkSketch_eval_batch.pdf in the paper. Needs matplotlib.
+Style follows scripts/plot_eval.py (same fonts, ink and palette); the legend sits
+inside the first panel only. Needs matplotlib.
 """
 import csv
 import glob
@@ -73,8 +73,8 @@ def main():
         "xtick.color": INK2, "ytick.color": INK2,
         "pdf.fonttype": 42,  # embed TrueType so ACM's pdf checks pass
     })
-    fig, axes = plt.subplots(1, 6, figsize=(7.0, 1.55), sharey=True)
-    fig.subplots_adjust(left=0.055, right=0.995, top=0.78, bottom=0.22, wspace=0.10)
+    fig, axes = plt.subplots(1, 6, figsize=(7.0, 1.45), sharey=True)
+    fig.subplots_adjust(left=0.055, right=0.995, top=0.88, bottom=0.22, wspace=0.10)
     for ax, fam in zip(axes, FAMS):
         pts = data[fam]
         if not pts:
@@ -82,18 +82,11 @@ def main():
             continue
         xs = [p[0] for p in pts]
         ax.plot(xs, [p[1] for p in pts], color=C_ZKA, marker="^", markersize=3.2,
-                linewidth=1.4, label="zk-Analytics (one receipt per batch)", zorder=3,
+                linewidth=1.4, label="zk-Analytics", zorder=3,
                 markerfacecolor=C_ZKA, markeredgewidth=0)
         ax.plot(xs, [p[2] for p in pts], color=C_ZKS, marker="o", markersize=3.2,
-                linewidth=1.4, label="zkSketch (one leaf per batch)", zorder=3,
+                linewidth=1.4, label="zkSketch", zorder=3,
                 markerfacecolor=C_ZKS, markeredgewidth=0)
-        # a zkSketch point proved by another leaf circuit (Bloom's bit-array leaf at 2^14,
-        # where the packed leaf's bound 7m < 2^16 does not hold): open marker
-        alt = [(p[0], p[2]) for p in pts if fam == "bloom" and "omc" in p[4]]
-        if alt:
-            ax.plot([a[0] for a in alt], [a[1] for a in alt], linestyle="none",
-                    marker="o", markersize=4.2, markerfacecolor="white",
-                    markeredgecolor=C_ZKS, markeredgewidth=1.1, zorder=4)
         # the ratio at the largest batch, next to the last points
         m_last, zka_last, zks_last, sp_last, _ = pts[-1]
         ax.annotate(f"{sp_last:.0f}×", xy=(m_last, (zka_last * zks_last) ** 0.5),
@@ -102,7 +95,7 @@ def main():
         ax.set_xscale("log", base=2)
         ax.set_yscale("log")
         ax.set_xlim(40, 26000)
-        ax.set_ylim(0.6, 12000)
+        ax.set_ylim(0.6, 40000)
         ax.set_xticks([2 ** k for k in (6, 8, 10, 12, 14)])
         ax.set_xticklabels(["$2^{%d}$" % k for k in (6, 8, 10, 12, 14)])
         ax.set_title(TITLES[fam], pad=3)
@@ -113,14 +106,11 @@ def main():
             ax.spines[s].set_visible(False)
         for s in ("left", "bottom"):
             ax.spines[s].set_linewidth(0.6)
-    axes[0].set_ylabel("prover time / record (ms)", labelpad=2)
-    handles, labels = axes[0].get_legend_handles_labels()
-    omark = plt.Line2D([], [], linestyle="none", marker="o", markersize=4.2,
-                       markerfacecolor="white", markeredgecolor=C_ZKS, markeredgewidth=1.1,
-                       label="Bloom at $2^{14}$: bit-array leaf")
-    fig.legend(handles + [omark], labels + [omark.get_label()], loc="upper center", ncol=3,
-               frameon=False, bbox_to_anchor=(0.5, 1.02), columnspacing=1.6,
-               handletextpad=0.5, handlelength=1.8, borderaxespad=0.0)
+    axes[0].set_ylabel("proving time / record (ms)", labelpad=2)
+    # one legend, inside the first panel (as in VPJoin's Figure 3)
+    axes[0].legend(loc="upper right", fontsize=5.8, frameon=True, framealpha=0.9,
+                   edgecolor=GRID, fancybox=False, handlelength=1.5, handletextpad=0.4,
+                   borderpad=0.3, labelspacing=0.25, borderaxespad=0.3)
     fig.savefig(OUT, bbox_inches="tight", pad_inches=0.01)
     print(f"wrote {os.path.relpath(OUT)} from {os.path.relpath(sweep_dir)}")
 

@@ -4604,6 +4604,11 @@ fn build_gkb2_leaf_stable(
     let lf = num_rounds(total);
     let num_pairs = total / 2;
     check_bind_range(total, lf);
+    // Paper phases 1 (bind: Stages 1-2), 2 (sorted union: 3-4), 3 (initialize:
+    // 5), 4 (fusion tests: 6), 5 (compaction: 6), 6 (output & count: 7-10);
+    // `usize::MAX` unless probing per-phase rows (`table_probe::phase_limit`).
+    // Guards skip gates, never reorder them.
+    let phase_limit = crate::experiments::table_probe::phase_limit();
     assert!(
         bind_coord(lf, 1, (1 << SRC_BITS) - 1) < LIVE_CARRY
             && LIVE_CARRY + bind_coord(lf, 1, (1 << SRC_BITS) - 1) < 2_013_265_921,
@@ -4733,6 +4738,10 @@ fn build_gkb2_leaf_stable(
     let batch_f: Vec<Vec<ExprId>> = batch_packed.iter().map(|&p| dec(&mut b, p)).collect();
     let uraw_f: Vec<Vec<ExprId>> = union_raw_packed.iter().map(|&p| dec(&mut b, p)).collect();
 
+    'phases: {
+    if phase_limit < 2 {
+        break 'phases;
+    }
     // ── Stage 3: well-formed committed inputs + union multiset ──
     // Batch rows (v,0,0,0,0,t) with zero pads; init pads zero. The union
     // range checks of the SortedCopy leaf move here, onto the committed rows
@@ -4846,6 +4855,9 @@ fn build_gkb2_leaf_stable(
         batch_act.push(actj);
     }
 
+    if phase_limit < 3 {
+        break 'phases;
+    }
     // ── Stage 5: is_fresh + two-sided neighbour-init ──
     // is_fresh_r = [N_{t-1}+1 ≤ t_r]; Σ is_fresh = #active(B_t), so no init row
     // carries t > N_{t-1} (dead rows have t = 0, fresh rows t > N_{t-1}).
@@ -4878,10 +4890,17 @@ fn build_gkb2_leaf_stable(
         .map(|r| [uraw_f[2 * r][0], uraw_f[2 * r][1], uraw_f[2 * r][2], d1[r], d2[r], uraw_f[2 * r + 1][1]])
         .collect();
 
+    if phase_limit < 4 {
+        break 'phases;
+    }
     // ── Stage 6: L_f rounds — selected test, survivor update, stable compaction ──
-    let tail: Vec<ExprId> = (0..total)
-        .map(|i| b.alloc_const(Challenge::from_u64((total - 1 - i) as u64), "tail_offset"))
-        .collect();
+    let tail: Vec<ExprId> = if phase_limit >= 5 {
+        (0..total)
+            .map(|i| b.alloc_const(Challenge::from_u64((total - 1 - i) as u64), "tail_offset"))
+            .collect()
+    } else {
+        Vec::new()
+    };
     for round in 0..lf {
         let k_op = round + 1;
         let mut emitted: Vec<[ExprId; 6]> = cur.clone();
@@ -4922,6 +4941,10 @@ fn build_gkb2_leaf_stable(
             emitted[2 * j + 1][1] = b.mul_add(dir1, ub, bb[1]);
             let ua = b.sub(mnew, a[2]);
             emitted[2 * j][2] = b.mul_add(dir2, ua, a[2]);
+        }
+        if phase_limit < 5 {
+            // probing fusion tests only: no compaction, next round re-tests `cur`
+            continue;
         }
         // destinations: ρ' runs from B(k,0,0); dest_lo_i = ρ'_i + (1−sflag_i)·(T−1−i)
         let base_lo = b.alloc_const(Challenge::from_u64(bind_coord(k_op, 0, 0)), "dest_base_lo");
@@ -4973,6 +4996,9 @@ fn build_gkb2_leaf_stable(
         alive_in = alive[round].clone();
     }
 
+    if phase_limit < 6 {
+        break 'phases;
+    }
     // ── Stage 7: final = α^L ⊙ R^L on the first cap rows; α^L_cap = 0 ──
     let mut mass = zero;
     let mut count = zero;
@@ -5021,6 +5047,7 @@ fn build_gkb2_leaf_stable(
         let batch_t: Vec<ExprId> = (0..m).map(|j| batch_f[2 * j + 1][1]).collect();
         bind_arrival_positions(&mut b, &batch_t, &batch_act, n_prev_pi, one, zero);
     }
+    } // 'phases
 
     let circuit = b.build().expect("build gkb2 stable circuit");
 
@@ -5057,6 +5084,7 @@ fn build_gkb2_leaf_stable(
         &primitive_columns,
     );
     crate::experiments::table_probe::maybe_stop();
+    crate::experiments::table_probe::assert_full_circuit("gk_bandmerge2_stable");
     let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
     let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);

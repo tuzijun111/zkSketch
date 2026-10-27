@@ -418,6 +418,9 @@ pub fn build_countmin_omc_leaf_commit(
         assert!(addr_bits <= 24, "bound omc: d·w must be ≤ 2^24");
     }
     let cfg = Poseidon2Config::BABY_BEAR_D4_W16;
+    // Paper phases 1 (bind) .. 5 (install); `usize::MAX` unless probing
+    // per-phase rows (`table_probe::phase_limit`). Guards skip, never reorder.
+    let phase_limit = crate::experiments::table_probe::phase_limit();
 
     // ─── Circuit ─────────────────────────────────────────────────────────
     let mut b = CircuitBuilder::<Challenge>::new();
@@ -694,6 +697,12 @@ pub fn build_countmin_omc_leaf_commit(
         b.tag(kf0, "cm_key_field_0").expect("tag");
     }
 
+    #[cfg(test)]
+    let mut probe_hv: Vec<[ExprId; 8]> = Vec::new();
+    'phases: {
+    if phase_limit < 2 {
+        break 'phases;
+    }
     // Stage F — per-record PRF hash → payload.
     let mut h_w = Vec::with_capacity(m);
     for _ in 0..m {
@@ -713,8 +722,6 @@ pub fn build_countmin_omc_leaf_commit(
         Vec::new()
     };
     let mut payload = Vec::with_capacity(n_ctr);
-    #[cfg(test)]
-    let mut probe_hv: Vec<[ExprId; 8]> = Vec::new();
     for k in 0..m {
         let hashed = bind::hash_slice(&mut b, &cfg, &[key_field[k]], zero, binding);
         let (h0, h1) = h_w[k];
@@ -780,6 +787,9 @@ pub fn build_countmin_omc_leaf_commit(
         }
     }
 
+    if phase_limit < 3 {
+        break 'phases;
+    }
     // Stage G — counter sort.
     // Placeholder identity permutation — `prove_epoch` swaps in the real
     // per-batch sigma via `update_permute_witnesses` before each run.
@@ -804,18 +814,24 @@ pub fn build_countmin_omc_leaf_commit(
         bind::range_exact::<Val, Challenge>(&mut b, combined_sorted[0], addr_bits);
         for r in 0..n_ctr {
             bind::pin_base::<Val, Challenge>(&mut b, val_sorted[r]);
-            bind::pin_base::<Val, Challenge>(&mut b, op_old[r]);
+            if phase_limit >= 5 {
+                // the reads' widths (phase 5, install)
+                bind::pin_base::<Val, Challenge>(&mut b, op_old[r]);
+            }
         }
     }
     for r in 1..n_ctr {
-        let diff = b.sub(combined_sorted[r - 1], combined_sorted[r]);
-        let l1 = b.mul(eq_tag[r], diff);
-        b.connect(l1, zero);
-        let omt = b.sub(one, eq_tag[r]);
-        let di = b.mul(diff, inv_diff[r]);
-        let omdi = b.sub(one, di);
-        let l2 = b.mul(omt, omdi);
-        b.connect(l2, zero);
+        if phase_limit >= 4 {
+            // run flags (phase 4, patch)
+            let diff = b.sub(combined_sorted[r - 1], combined_sorted[r]);
+            let l1 = b.mul(eq_tag[r], diff);
+            b.connect(l1, zero);
+            let omt = b.sub(one, eq_tag[r]);
+            let di = b.mul(diff, inv_diff[r]);
+            let omdi = b.sub(one, di);
+            let l2 = b.mul(omt, omdi);
+            b.connect(l2, zero);
+        }
         // sortedness: gap ∈ [0, 2^addr_bits) (canonical 1-entry-per-address).
         let gap = b.sub(combined_sorted[r], combined_sorted[r - 1]);
         let gb = b
@@ -824,6 +840,9 @@ pub fn build_countmin_omc_leaf_commit(
         for &bit in gb.iter().skip(addr_bits) {
             b.connect(bit, zero);
         }
+    }
+    if phase_limit < 4 {
+        break 'phases;
     }
     let mut acc = Vec::with_capacity(n_ctr);
     acc.push(val_sorted[0]);
@@ -840,6 +859,9 @@ pub fn build_countmin_omc_leaf_commit(
         });
     }
 
+    if phase_limit < 5 {
+        break 'phases;
+    }
     // ─── Build the multiset sides and check M_old ⊎ W == M_new ⊎ R ───────
     // enc(a,v) = recompose([a, v, 1, 0]) — the `1` tag in coord 2 keeps real
     // elements disjoint from the zero dummies that inactive W/R rows produce.
@@ -868,6 +890,7 @@ pub fn build_countmin_omc_leaf_commit(
     for r in 0..l {
         b.connect(permuted[r], target[r]);
     }
+    } // 'phases
 
     let circuit = b.build().expect("build countmin_omc circuit");
 
@@ -908,6 +931,7 @@ pub fn build_countmin_omc_leaf_commit(
         &primitive_columns,
     );
     crate::experiments::table_probe::maybe_stop();
+    crate::experiments::table_probe::assert_full_circuit("countmin_omc");
     let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
     let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);

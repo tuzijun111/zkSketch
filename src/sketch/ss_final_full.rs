@@ -845,6 +845,12 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
     let m = params.batch;
     let total = cap + m;
     let op_tag = use_op_tag();
+    // Paper phases of the Misra--Gries circuit: 1 bind (Stages 1-3 on the
+    // committed tables), 2 merge (Stages 4-5), 3 cutoff (Stages 6-7),
+    // 4 reduce (Stage 8), 5 output and accounting (residual rows, Stage 9);
+    // `usize::MAX` unless probing per-phase rows (`table_probe::phase_limit`).
+    // Guards skip gates, never reorder them.
+    let phase_limit = crate::experiments::table_probe::phase_limit();
 
     // ─── Build circuit ──────────────────────────────────────────────────
     let mut b = CircuitBuilder::<Challenge>::new();
@@ -996,37 +1002,56 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
         .iter()
         .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d batch"))
         .collect();
-    let key_sorted_fields: Vec<Vec<ExprId>> = key_sorted_packed
-        .iter()
-        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d ks"))
-        .collect();
-    let grouped_fields: Vec<Vec<ExprId>> = grouped_packed
-        .iter()
-        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d g"))
-        .collect();
-    let g_sorted_fields: Vec<Vec<ExprId>> = g_sorted_packed
-        .iter()
-        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d gs"))
-        .collect();
-    let residual_fields: Vec<Vec<ExprId>> = residual_packed
-        .iter()
-        .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d res"))
-        .collect();
+    let key_sorted_fields: Vec<Vec<ExprId>> = if phase_limit >= 2 {
+        key_sorted_packed
+            .iter()
+            .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d ks"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let grouped_fields: Vec<Vec<ExprId>> = if phase_limit >= 2 {
+        grouped_packed
+            .iter()
+            .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d g"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let g_sorted_fields: Vec<Vec<ExprId>> = if phase_limit >= 3 {
+        g_sorted_packed
+            .iter()
+            .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d gs"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let residual_fields: Vec<Vec<ExprId>> = if phase_limit >= 5 {
+        residual_packed
+            .iter()
+            .map(|&p| b.decompose_ext_to_base_coeffs::<Val>(p).expect("d res"))
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // ─── Stage 2b (opt-in): bind every decomposition to its packed value ─
     // See BIND_DECOMPOSITIONS: without this the decomposed fields are not
     // constrained to the packed (hashed / permuted) values at all.
     if bind_decomp {
         assert!(op_tag, "decomposition binding assumes the op-tagged layout");
-        for (packed, fields) in [
-            (&init_packed, &init_fields),
-            (&final_packed, &final_fields),
-            (&batch_packed, &batch_fields),
-            (&key_sorted_packed, &key_sorted_fields),
-            (&grouped_packed, &grouped_fields),
-            (&g_sorted_packed, &g_sorted_fields),
-            (&residual_packed, &residual_fields),
+        for (phase, packed, fields) in [
+            (1, &init_packed, &init_fields),
+            (1, &final_packed, &final_fields),
+            (1, &batch_packed, &batch_fields),
+            (2, &key_sorted_packed, &key_sorted_fields),
+            (2, &grouped_packed, &grouped_fields),
+            (3, &g_sorted_packed, &g_sorted_fields),
+            (5, &residual_packed, &residual_fields),
         ] {
+            if phase_limit < phase {
+                continue;
+            }
             for (&p, f) in packed.iter().zip(fields.iter()) {
                 bind_decomposition(&mut b, p, f, zero);
             }
@@ -1054,10 +1079,12 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
                 .add_range_bits::<Val>(batch_fields[j][2], COUNT_DIFF_BITS - 1)
                 .expect("batch value base-range");
         }
-        for r in 0..total {
-            let _ = b
-                .add_range_bits::<Val>(g_sorted_fields[r][0], KEY_DIFF_BITS)
-                .expect("g_sorted key base-range");
+        if phase_limit >= 3 {
+            for r in 0..total {
+                let _ = b
+                    .add_range_bits::<Val>(g_sorted_fields[r][0], KEY_DIFF_BITS)
+                    .expect("g_sorted key base-range");
+            }
         }
     }
 
@@ -1081,11 +1108,17 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
         bool_check(&mut b, batch_fields[j][3]);
     }
     for r in 0..total {
-        bool_check(&mut b, key_sorted_fields[r][3]);
-        bool_check(&mut b, g_sorted_fields[r][3]);
+        if phase_limit >= 2 {
+            bool_check(&mut b, key_sorted_fields[r][3]);
+        }
+        if phase_limit >= 3 {
+            bool_check(&mut b, g_sorted_fields[r][3]);
+        }
     }
-    for j in 0..m {
-        bool_check(&mut b, residual_fields[j][3]);
+    if phase_limit >= 5 {
+        for j in 0..m {
+            bool_check(&mut b, residual_fields[j][3]);
+        }
     }
 
     // key_field per row = key_lo + key_hi·2^32, for several tables.
@@ -1094,6 +1127,10 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
         b.add(f[0], hi)
     };
 
+    'phases: {
+    if phase_limit < 2 {
+        break 'phases;
+    }
     // ─── Stage 4: Union → key-sort via PermuteAir ───────────────────────
     // combined = init ‖ batch; the multiset check ties key_sorted to it.
     let mut combined: Vec<ExprId> = Vec::with_capacity(total);
@@ -1241,6 +1278,9 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
         }
     }
 
+    if phase_limit < 3 {
+        break 'phases;
+    }
     // ─── Stage 6: count-sort G → g_sorted via PermuteAir ────────────────
     let cs_permuted = b
         .add_permute(
@@ -1322,11 +1362,16 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
             .expect("key tie-break within count-equal run");
     }
 
+    if phase_limit < 4 {
+        break 'phases;
+    }
     // ─── Stage 8: compaction + Misra-Gries (s+1)-th-value subtraction ────
     // residual ↔ g_sorted[..m] (ORIGINAL counts, needed for mass accounting).
-    for i in 0..m {
-        for k in 0..4 {
-            b.connect(residual_fields[i][k], g_sorted_fields[i][k]);
+    if phase_limit >= 5 {
+        for i in 0..m {
+            for k in 0..4 {
+                b.connect(residual_fields[i][k], g_sorted_fields[i][k]);
+            }
         }
     }
     // S_new ↔ mergeable Misra-Gries / Frequent compression of g_sorted[m..]:
@@ -1368,6 +1413,9 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
         }
     }
 
+    if phase_limit < 5 {
+        break 'phases;
+    }
     // ─── Stage 9: mass conservation ─────────────────────────────────────
     // Σ(init.count·active) + Σ(batch.value·active)
     //   = Σ(final.count·active) + Σ(residual.count·active) + capacity·τ.
@@ -1404,6 +1452,7 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
     let cap_tau = b.mul(tau, cap_const);
     let out_mass2 = b.add(out_mass, cap_tau);
     b.connect(in_mass, out_mass2);
+    } // 'phases
 
     let circuit = b.build().expect("build ss_full circuit");
 
@@ -1442,6 +1491,7 @@ pub fn build_ss_full_leaf_commit(params: SsFullParams, expose: Expose, mode: Com
         &primitive_columns,
     );
     crate::experiments::table_probe::maybe_stop();
+    crate::experiments::table_probe::assert_full_circuit("ss_final_full");
     let (airs, degrees): (Vec<_>, Vec<usize>) = airs_degrees.into_iter().unzip();
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + config.is_zk()).collect();
     let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &ext_degrees);
