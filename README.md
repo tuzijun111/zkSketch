@@ -82,11 +82,6 @@ scripts/baselines/zka/six/run_all.sh quick    # ~10 min smoke test of the compar
 
 ## Running the Experiments
 
-Run from the repository root. zkSketch CSVs are written to `results/`; each zk-Analytics
-comparison writes its tables (`*_table.md`) and CSVs to `results/six/<mode>-<date>/`.
-The `taskset -c 0-31` mask gives both systems the same 32 physical cores (zk-Analytics'
-prover otherwise uses every hardware thread). The runs behind the paper are kept in
-`scripts/baselines/zka/results/`.
 
 **1. zkSketch vs zk-Analytics, whole stream**:
 
