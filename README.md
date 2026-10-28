@@ -94,20 +94,20 @@ The `taskset -c 0-31` mask gives both systems the same 32 physical cores (zk-Ana
 prover otherwise uses every hardware thread). The runs behind the paper are kept in
 `scripts/baselines/zka/results/`.
 
-**1. zkSketch vs zk-Analytics, whole stream** (Table 2; ~8 h):
+**1. zkSketch vs zk-Analytics, whole stream**:
 
 ```bash
 SIX_ZKA_HH=spacesaving taskset -c 0-31 scripts/baselines/zka/six/run_all.sh memmatch
 ```
 
-**2. Query rate** (Table 3; ~18 h). zk-Analytics' cost per Q is computed from its epoch and query
+**2. Query rate**. zk-Analytics' cost per Q is computed from its epoch and query
 proofs and their cycle counts by `six/queryrate_model.py`, which the command runs:
 
 ```bash
 SIX_ZKA_HH=spacesaving taskset -c 0-31 scripts/baselines/zka/six/run_all.sh queryrate
 ```
 
-**3. Batch size** (Figure 5). The sweep proves one batch of m = 2^6 .. 2^14 records per size on both
+**3. Batch size**. The sweep proves one batch of m = 2^6 .. 2^14 records per size on both
 systems (~20 h; Figure 5 uses its zk-Analytics receipts); `batches.sh` proves zkSketch's batch of every
 size in Table 2's setting and one zk-Analytics GK receipt at capacity 768 (~1.5 h); `sweep_memmatch.py`
 joins them with item 1's run:
@@ -119,29 +119,28 @@ python3 scripts/sweep_memmatch.py --sweep results/six/sweep-<date> --batches res
 python3 scripts/plot_sweep.py
 ```
 
-**4. Proving cost by phase** (Figure 6):
+**4. Proving cost by phase**:
 
 ```bash
 RAYON_NUM_THREADS=32 taskset -c 0-31 cargo run --release --example exp_operator
 python3 scripts/plot_operator.py
 ```
 
-**5. Stream length, machine count and datasets** (Tables 4 and 5), computed from item 1's run with
+**5. Stream length, machine count and datasets**, computed from item 1's run with
 the speedups of item 6 and the per-dataset ratios of item 7:
 
 ```bash
 python3 scripts/forest_tables.py
 ```
 
-**6. Forest on M = 1-4 machines** (speedups in Table 4's machine rows; needs a two-socket server, `EXP_COMPOSE_NODES=0,2`
-puts the machines on different sockets):
+**6. Forest on M = 1-4 machines**:
 
 ```bash
 EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_plonky3.csv
 EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=2,3,4 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs EXP_COMPOSE_NODES=0,2 EXP_COMPOSE_WAVE_SIZE=2 scripts/run_compose.sh frame_out_staged_m234_plonky3.csv
 ```
 
-**7. Datasets** (per-dataset ratios of Table 5, relative to item 6's one-machine run on AOL):
+**7. Datasets**:
 
 ```bash
 EXP_DATASET=uniform,gaussian,netflix EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_datasets_plonky3.csv
@@ -154,6 +153,4 @@ for M in 2 3 4; do EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=163
 scripts/run_m1_busy_sibling.sh frame_out_1machine_plonky3_busysib.csv ss
 ```
 
-Items 6-8 ran before zero knowledge became the default (commit 98de654), with Count-Min at d = 7;
-the paper uses only their speedups and ratios. How each table is read from the CSVs, and every knob:
-[docs/experiments.md](docs/experiments.md) and [docs/six_sketch_comparison.md](docs/six_sketch_comparison.md).
+
