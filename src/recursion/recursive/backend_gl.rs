@@ -1,9 +1,4 @@
-//! `FriRecursionBackend` wired for Goldilocks + Poseidon2 width-8 / D = 2.
-//!
-//! Goldilocks analog of [`crate::recursion::recursive::backend`] (BabyBear
-//! width-16 / D = 4). Mirrors the fork's `recursive_keccak.rs::goldilocks`
-//! backend: `FriRecursionBackend::<8, 4, _>::new(GOLDILOCKS_D2_W8)
-//! .for_extension_degree::<2>()`.
+//! FRI recursion backend for Goldilocks, Poseidon2 width 8, D = 2.
 
 use p3_recursion::{FriRecursionBackend, FriRecursionBackendForExt, Poseidon2Config};
 

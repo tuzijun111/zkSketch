@@ -1,55 +1,7 @@
 #![no_std]
 
-//! zkSketch's Greenwald-Khanna batch rule run inside zk-Analytics' own epoch pipeline
-//! (Zhu et al., "Zero-Knowledge Cloud Analytics", SIGCOMM '26; code at commit d4a5a9a):
-//! the MATCHED GK port of the six-sketch comparison.
-//!
-//! `../../gk` runs textbook Greenwald-Khanna (INSERT / COMPRESS per record, a summary
-//! built from scratch per epoch, a k-way COMBINE at query time) in their pipeline. That
-//! is a different function from the one zkSketch's GK circuit certifies, so its cost is
-//! not the cost of the same work. This crate keeps their pipeline step for step and
-//! swaps only the summary update for zkSketch's, so both systems compute the same
-//! sketch state from the same records:
-//!
-//!   aggregation (one guest run per epoch of B records)
-//!     1. verify the data source's SHA-256 batch hash chain   -- their code, verbatim
-//!     2. flatten the batches to events                       -- as upstream
-//!     3. take the CARRIED previous state S_{e-1} and check it against the previous
-//!        epoch's state commitment through the epoch hash chain (their
-//!        EpochChainLink::compute_final_hash); epoch 0 starts from the empty state
-//!     4. map the records with zkSketch's gk_vals_of (drop PAD_KEY, mask to 21 bits)
-//!     5. apply ceil(B / m_sub) successive zkSketch batch steps
-//!        S <- apply_batch2(S, values[j*m_sub .. (j+1)*m_sub])   -- `tuned`: here; others:
-//!        ../../gk_bm2/core; GkbParams { capacity, batch: m_sub, s }; overflow: HARD ERROR
-//!     6. (variant) Merkle root over the state entries        -- their per-type pattern
-//!     7. unsalted SHA-256 state commitment                    -- their pattern (over the
-//!        parameters, n and the active tuples: `compact_words`)
-//!     8. link the commitment into the epoch hash chain        -- their EpochChainLink
-//!   query (one guest run per query)
-//!     1. re-verify the epoch chain links                      -- their code, verbatim
-//!     2. recompute the LATEST epoch's state commitment and check it against the last
-//!        link (the carried state summarises every epoch, so only it is opened)
-//!     3. rank(v) with zkSketch's GK decoder estimator         -- src/decode/gk_bandmerge.rs
-//!     4. low-support suppression                              -- their MIN_SUPPORT rule
-//!
-//! zkSketch proves the same B records as m_sub-record leaves composed in a proof
-//! forest; the function it certifies for the epoch is exactly the chain of step 5
-//! (`apply_batch2` once per leaf, from the previous state). The host checks the guest
-//! against zkSketch's native `apply_batch2` chain tuple by tuple and against the
-//! commitments zkSketch's GK leaf circuit exposes (`../host`, `--mode check|certify`).
-//!
-//! Four implementations of the one transition are selectable (`GkmImpl`). The default
-//! is `Literal` (zkSketch's code statement for statement: the baseline, since
-//! 2026-10-15). `Tuned` (our rewrite, a sensitivity row) is defined here: `Fast`'s data-dependent schedule run as
-//! one loop over the epoch's steps, without `Fast`'s per-step fixed costs (see
-//! [`apply_epoch_tuned`]). `Fast` (a data-dependent schedule a zkVM may use, one
-//! `apply_batch2_fast` call per step), `FixedLinear` (zkSketch's fixed schedule,
-//! linear-time tables) and `Literal` (zkSketch's code statement for statement) are
-//! ported and tested in ../../gk_bm2. All four give the same state; the guest's cycle
-//! count depends on the choice.
-//!
-//! Upstream items that are `pub` are imported. Items that are private upstream are
-//! copied VERBATIM below, each with its upstream file:line at commit d4a5a9a.
+//! Matched GK port: zkSketch's GK batch rule (`apply_batch2`) in zk-Analytics' epoch pipeline
+//! (upstream commit d4a5a9a); the transition's implementation is selected by `GkmImpl`.
 
 extern crate alloc;
 

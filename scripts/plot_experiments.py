@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
-"""Render the zkSketch evaluation figures from the experiment CSVs.
-
-Reads `results/*.csv` (produced by `cargo run --release --example exp_*`) and
-writes one figure per panel to `results/figures/*.pdf` (+ `.png`). Each figure
-maps to a paper panel (RQ1-a … RQ4, case study) of the retired figure track;
-see README.md §Running the experiments.
-
-Usage:
-    cargo run --release --example exp_rq1   # (and exp_rq2 … exp_casestudy)
-    python3 scripts/plot_experiments.py     # render every available figure
-    python3 scripts/plot_experiments.py rq2a rq4ab   # just some
-
-Dependencies: matplotlib only (CSV parsing is stdlib). If matplotlib is
-missing the script explains how to install it and exits cleanly.
+"""Figures of the exp_* runners: results/*.csv -> results/figures/*.pdf and .png (needs matplotlib).
+Usage: python3 scripts/plot_experiments.py [rq1a rq2a ... e8]   (default: every figure whose CSV exists)
 """
 import csv
 import os

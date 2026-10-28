@@ -1,19 +1,5 @@
-//! Materialize the **canonical synthetic datasets** to `data/*.keys` — the
-//! seeded Gaussian / Uniform / Zipf streams frozen as flat little-endian `u32`
-//! files, siblings of the real `aol.keys` / `netflix.keys`.
-//!
-//! Why freeze a *deterministic* generator? The synthetic streams are already
-//! reproducible from `(generator, seed)`, but the Gaussian/Zipf path uses libm
-//! transcendentals (`ln/cos/sin/powf`) whose last-ULP rounding can differ across
-//! platforms/libc. Freezing the bytes guarantees **byte-identical inputs on every
-//! machine** — the only fully airtight form of reproducibility. (Uniform is pure
-//! integer ops and is bit-portable regardless, but we freeze it too for uniform
-//! treatment.) These files use the SAME generators as `src/dataset.rs`, so there
-//! is one source of truth and no re-implementation drift.
-//!
-//! Run:    cargo run --release --example gen_synthetic
-//! Config: GEN_SYNTH_N=200000   (keys per file; default = `dataset::SYNTH_N`)
-//! Output: data/{gaussian,uniform,zipf}.keys  +  data/synthetic.manifest.json
+//! Writes the seeded Gaussian, Uniform and Zipf key streams to data/*.keys and data/synthetic.manifest.json.
+//! Usage: [GEN_SYNTH_N=200000] cargo run --release --example gen_synthetic
 
 use std::collections::HashSet;
 

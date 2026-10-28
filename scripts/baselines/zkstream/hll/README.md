@@ -112,7 +112,7 @@ touches the whole state, so the cost is Theta(s/P) per record.
 | `native.py` | native reference: BN254 Poseidon, bit-exact with the ZoKrates stdlib (constants parsed from it; self-test `python3 native.py`), the index/rank map, packing, commitment, digest and HLL estimate |
 | `run_hll.py` | driver, patterned on `../run_zkstream.py` (imports its `timed`, `constraints_of`, ...) |
 | `run_all.sh [stage...]` | the exact measurement sequence behind the CSVs: `probes grid deployed wall edge` |
-| `fit.py [CK]` | soundness gate, exact-formula check, fits, deployed-size model |
+| `fit.py [CK]` | soundness gate, exact-formula check, fits, deployed-size costs from the fits |
 | `probes/constraint_probe.sh` | compile-only probe (constraint formula, P sweep) |
 
 Results, all in `../results/`:
@@ -217,7 +217,7 @@ the CLI, about 7 ms. Every proof is 997 B of JSON.
 The full grid (s in {16, 64, 256, 1024, 4096} x k in {4, 16, 64}, plus s = 2^14 at
 k in {4, 16, 64, 256, 512}) is in the CSV and in `fit.py`'s table.
 
-**Fits** (MODELED, over all 20 measured points; n = constraints):
+**Fits** (least squares over all 20 measured points; n = constraints):
 
 | Quantity | Fit | R^2 |
 |---|---|---|
@@ -237,30 +237,31 @@ A power law over the 10 points with n >= 50k gives n^0.97.
   - At s = 1024, b = 14.1 ms/record.
 - **Compile at s = 2^14:** time = 45.7 + 0.698 k + 3.42e-3 k^2 s (R^2 0.9998), and
   memory = 4.34 GiB + 24.3 MiB * k (R^2 1.0000). The k = 1024 refusal is consistent with
-  this model, which predicts 4,343 s. The largest chunk that fits the wall is about
+  this fit, which gives 4,343 s. The largest chunk that fits the wall is about
   **k = 785**, bound by time.
 
-**Deployed size, s = 2^14 registers and one proof per m = 2^14-record batch** (MODELED
-unless marked):
+**Deployed size, s = 2^14 registers and one proof per m = 2^14-record batch** (computed
+from the fits unless marked MEASURED):
 
 - 35,983,852 constraints (exact formula), 30x the largest measured circuit.
 - **Compile: exceeds the 45 min / 150 GiB budget.** The evidence is MEASURED: the
   k = 1024 compile was refused at 2701 s. The k = 16384 program strictly contains the
   k = 1024 one (the same commitments and per-record update, over more records), so
-  compile time is monotone in k and the deployed compile is refused too. The models
-  are secondary: the quadratic model gives 258 h and 393 GiB, and even the measured
-  marginal rate (3.3 s/record at k = 256..512, a lower bound if growth were only
-  linear) gives 14.9 h. The modeled 393 GiB is 2.6x the 150 GiB cap but below the
-  box's 559 GiB, so this is a budget verdict, not an impossibility.
+  compile time is monotone in k and the deployed compile is refused too. The fits
+  are secondary: the quadratic time fit and the linear memory fit give 258 h and
+  393 GiB, and even the measured marginal rate (3.3 s/record at k = 256..512, a lower
+  bound if growth were only linear) gives 14.9 h. The fitted 393 GiB is 2.6x the
+  150 GiB cap but below the box's 559 GiB, so this is a budget verdict, not an
+  impossibility.
 - If it did compile: setup 323 s, a 15.5 GB proving key, and 431 s of witness+prove
   per batch (393 s from the power law) at 128 GiB RSS. The 64 batches of a 2^20 stream
   would take 7.7 h.
 - **Feasible chunking** keeps k at or below about 785. At k = 512, a 2^20-record
   stream is 2,048 chained proofs at 14.45 s each: **8.2 h of proving**, 2 MB of JSON
-  proofs and 2,048 verifications. This is derived from measured per-chunk cost: 4
-  chunks were measured and 2,048 are assumed to cost the same (`fit.py` prints these
+  proofs and 2,048 verifications. This is the measured per-chunk cost times 2,048: 4
+  chunks were measured and every chunk is taken to cost the same (`fit.py` prints these
   rows as "MEASURED chunking").
-  - Derived the same way, k = 256 gives 8.6 h, and k = 64 gives 12.4 h.
+  - Computed the same way, k = 256 gives 8.6 h, and k = 64 gives 12.4 h.
   - The per-record floor is 2^20 x 2,192 constraints x 11.98 us = **7.65 h**.
   - One-time cost per shape at k = 512: a 21.6 min compile and a 10.7 s setup.
 

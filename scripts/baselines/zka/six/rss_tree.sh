@@ -1,18 +1,6 @@
 #!/usr/bin/env bash
-# Run a command and report peak RSS (VmHWM, a kernel high-water mark) of
-#   main      the command's own process
-#   r0vm      the largest r0vm process descending from it (RISC Zero proves in r0vm)
-#   desc      the largest descendant of any name (e.g. the procs-engine workers)
-#   tree      the whole tree at once: the largest sum of VmRSS over the command and all its
-#             descendants in one sample (e.g. zkSketch's coordinator + worker together; a sample
-#             can miss a peak shorter than the interval, the per-process VmHWM values cannot)
-# Samples /proc every 0.5 s.
-# The command runs in its own session and process group (setsid). On INT/TERM/HUP this
-# script stops that group (TERM, then KILL) and exits 130; when the command exits, any
-# process of its group still alive (e.g. a worker that outlived the coordinator) is killed.
-# It never signals a process outside the group it started.
-# Usage: rss_tree.sh <label> <cmd...>     -> one RSSTREE line on stderr at the end
-#   RSSTREE,<label>,main_peak_rss_mb=,r0vm_peak_rss_mb=,desc_peak_rss_mb=,wall_s=,rc=,tree_peak_rss_mb=
+# Run a command and report the peak RSS of the command, its largest r0vm and other descendant, and its whole tree.
+# Usage: rss_tree.sh <label> <cmd...>   (prints one RSSTREE line on stderr at the end)
 set -uo pipefail
 LBL=${1:?usage: rss_tree.sh <label> <cmd...>}; shift
 STATE=$(mktemp)

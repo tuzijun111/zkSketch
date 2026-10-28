@@ -1,14 +1,4 @@
-//! Count-Min **point-frequency** decode circuit (E3).
-//!
-//! Proves `answer = release( min_i  S[i][ h_i(key) ] )` against a committed
-//! Count-Min state `S`, where `h_i(key) = Poseidon(key)[i] mod w` (derived
-//! in-circuit, so the prover can't pick favourable cells). Stages:
-//! 1. Re-hash the `d·w` cells → bind to the committed digest (the `Θ(s)` cost).
-//! 2. Derive the `d` query positions from `Poseidon(key)`; select each cell via
-//!    a one-hot row selector.
-//! 3. Prove the min via the standard gadget (`mn ≤ every cell` by range check,
-//!    and `∏(cell − mn) = 0` so `mn` is one of them).
-//! 4. Apply the release policy and bind the released value to the public answer.
+//! Count-Min point-query decode circuit: answer = release(min_i S[i][h_i(key)]) against Com(S).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

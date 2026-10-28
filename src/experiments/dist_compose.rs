@@ -1,113 +1,6 @@
-//! **Process-level distributed emulation** of the three composition modes —
-//! the rigorous execution engine behind `EXP_COMPOSE_EXEC=procs`.
-//!
-//! `stream_compose::measure_compose` proves everything in ONE process and
-//! reports the M-machine leaf split as a *work-partition makespan projection*.
-//! That is honest but weak: the machines never exist, nothing is pinned, and
-//! no byte ever crosses a machine boundary. This module replaces the
-//! projection with a real execution one can defend in the paper:
-//!
-//! - **One OS process per machine.** The coordinator (the `exp_compose`
-//!   example itself) re-executes its own binary in a `worker` role per
-//!   machine, so "machine" = process: disjoint address spaces, no shared
-//!   heap, no accidental data sharing. (The chain uses a single such worker.)
-//! - **NUMA-aware physical-core pinning.** Each machine is pinned (via
-//!   `numactl --physcpubind` when available, falling back to `taskset -c`) to a
-//!   disjoint `cores`-wide block of physical cores and NUMA-membound to that
-//!   block's node. Machines are spread round-robin across NUMA nodes
-//!   (`machine_core_range`), so when the machine count does not exceed the node
-//!   count each machine sits on its own node and DRAM controller — e.g. on a
-//!   2-node EPYC, 2 machines × 32 cores land one per socket rather than both on
-//!   node 0. Heavier counts pack an equal share onto each node. SMT siblings
-//!   stay idle, so machines never contend for execution units or caches, and
-//!   contend for DRAM bandwidth only when a node count forces node sharing.
-//!   Containers add nothing on top of this: Docker's CPU isolation is the
-//!   same cpuset/cgroup mechanism.
-//! - **All inter-machine data crosses a real serialized channel.** States,
-//!   batches, leaf proofs, and subtree roots travel as length-framed
-//!   postcard bytes over sockets — the exact bytes a network deployment
-//!   would ship. The coordinator records per-phase message counts, byte
-//!   totals, and measured (loopback) transfer time, and additionally models
-//!   the critical-path transfer time at a configurable link bandwidth
-//!   (`EXP_NET_MBPS`, default 200 Mb/s) and per-message RTT
-//!   (`EXP_NET_RTT_MS`), so a target-network number is derivable from the
-//!   measured byte counts rather than trusted loopback speed.
-//!
-//! ## Scheduling per mode (who composes, and where)
-//!
-//! - `per_batch` — no composition. Each machine proves its contiguous slice
-//!   of leaves and streams every leaf proof to the coordinator (the
-//!   auditor's proof store): the Θ(t) artifact and Θ(t) transfer are real.
-//! - `chain` — the **recursive linear chain is inherently sequential**
-//!   (paper §Recursive-Linear-Proof-Chain: each fold verifies the previous
-//!   prefix proof in-circuit and applies the new batch, "the batch is folded
-//!   in directly, never proved standalone first"; "its proving schedule is
-//!   inherently sequential"). It therefore runs on **one machine**, folding
-//!   `Π⁽ᵗ⁾ = merge(Π⁽ᵗ⁻¹⁾, π_t)` left-leaning in place. The `machines` knob
-//!   does NOT apply — giving the chain parallel leaf-gen would smuggle in the
-//!   forest's whole contribution. No proof crosses a machine boundary (the
-//!   fold is in-process); only the single O(1) root reaches the auditor, so
-//!   cross-machine composition traffic is ~zero. (Our fold uses the same
-//!   leaf+composition-atom as the forest, run linearly, so the chain↔forest
-//!   comparison isolates the *schedule* as the single variable; the paper's
-//!   deployed fused fold is cheaper per step but equally sequential, so it
-//!   only strengthens the forest's parallel-speedup conclusion.)
-//! - `forest` — **symmetric, in-place**: the leaf machines are the
-//!   composers. Each machine folds its own slice Bentley–Saxe-style *as its
-//!   leaves complete* (the paper's composition cascade — zero
-//!   communication), then `⌈log₂ M⌉` cross-machine reduction rounds combine
-//!   the M slice roots: machine k+2ʳ ships its root (one serialized proof)
-//!   to machine k, which merges. Total cross-machine traffic is M−1 proofs,
-//!   bought to unlock the M-way parallelism the sequential chain lacks.
-//!
-//! **Auditor (B6(b)).** Leaves carry the Interval statement by default (each
-//! worker proves its slice's leaves at their GLOBAL batch indices, shipped as
-//! `ToWorker::Task::first_index`); the coordinator's auditor pins the derived
-//! root VK, verifies the root, and checks its statement against the public
-//! batch log (`Com(S_0)`, `Com(S_T)`, `Com(B_1..B_T)`) under
-//! `dist_tree_shape(mode, t, M)`. Where the auditor receives LEAF proofs
-//! directly (per_batch, and the lone leaf of a one-batch stream) it pins each
-//! one to the trusted leaf VK (derived from a no-op leaf,
-//! [`derive_dist_leaf_vk`]), STARK-verifies it with a verifier configured
-//! from public parameters, and checks its statement against its log entry
-//! and the boundary chain ([`audit::audit_leaf_bytes`]); the reported verify
-//! time is that audit, not the workers' self-verify (except under the legacy
-//! `EXP_ROOT_VK=self` opt-in).
-//!
-//! **Hiding commitments (B2).** The run's commitment context
-//! ([`ProverCommit`]: `ZKSKETCH_COMMIT`, default `hiding`, plus the salt seed)
-//! is PROVER state. The coordinator is the prover's front end: it builds the
-//! published batch log itself ([`publish_batch_log`] /
-//! [`batch_commits_with`]: `Com(S_0; 0)`, `Com(S_T; ρ^S_T)`,
-//! `Com(B_t; ρ^B_t)` at the global index `t`) and ships the seed to its own
-//! workers inside `ToWorker::Task` (prover-internal), which open leaf `t` with
-//! `Openings::for_leaf(seed, family, t)`. The auditor half
-//! ([`super::audit`]) takes the published log, the proof bytes and
-//! [`PublicParams`] (family, shape, batch size, commitment mode) only; it
-//! recomputes the genesis `Com(S_0; 0)` itself and takes `Com(S_T)` and every
-//! `Com(B_t)` from the log. `ZKSKETCH_COMMIT=plain` runs the pre-B2 code
-//! path, commitments and VKs byte for byte.
-//!
-//! Cross-machine merging is possible because a merge consumes only the
-//! children's `BatchStarkProof`s (see
-//! [`prove_hiding_merge_proofs`](crate::recursion::recursive::expose_forest::prove_hiding_merge_proofs));
-//! proofs are wire-portable and fold-of-fold outputs are uniform.
-//!
-//! ## The witness pass
-//!
-//! The coordinator runs the ordinary (plaintext) sketch update over the whole
-//! stream once — the paper's "off-circuit plaintext witness pass" — records
-//! the state at each machine's slice start, and ships machine `i` only its
-//! start state + its own batches. Machines re-derive their interior per-batch
-//! states by replaying their own slice (which leaf witness generation needs
-//! anyway). The pass is timed (`witness_pass_ms`) and the shipped state bytes
-//! are counted (`scatter_state_bytes`), substantiating the paper's claim that
-//! the sequential dependency is cheap and O(state) per machine, not O(N).
-//!
-//! Message routing is a star through the coordinator (workers do not dial
-//! each other); a forest round-root therefore traverses two loopback hops
-//! but is **counted once** as cross-machine traffic, and the network models
-//! use the direct-link topology.
+//! Multi-process engine (`EXP_COMPOSE_EXEC=procs`): one core-pinned worker process per machine.
+//! `comm_model_ms`: critical-path transfer time (max scatter link + composition path + root), each
+//! message costing its measured bytes × 8 / `EXP_NET_MBPS` Mb/s + `EXP_NET_RTT_MS`.
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -2374,9 +2267,10 @@ pub struct DistCell {
     /// Coordinator-measured loopback wall spent in composition-path
     /// socket sends/recvs (excluding time waiting on proving).
     pub comm_ms_measured: f64,
-    /// Critical-path network model (scatter + composition-path + root) at the
-    /// modeled link bandwidth `EXP_NET_MBPS` Mb/s with `rtt_ms` per message.
-    /// The measured `comm_bytes` make any other bandwidth derivable.
+    /// Critical-path transfer time (scatter + composition path + root),
+    /// computed from the measured message bytes at `EXP_NET_MBPS` Mb/s plus
+    /// `rtt_ms` per message (`xfer_ms`). For another bandwidth, recompute it
+    /// from the recorded byte counts.
     pub comm_model_ms: f64,
     /// Verifier-facing artifact: Σ leaf proofs (per_batch) or the root.
     pub proof_bytes: u64,
@@ -2401,8 +2295,8 @@ pub struct DistCell {
     pub query_bind_ms: Option<f64>,
 }
 
-/// Network-model transfer time for one message: serialization at `mbps`
-/// megabits/second plus a fixed per-message RTT.
+/// Transfer time for one message: serialization at `mbps` megabits/second
+/// plus a fixed per-message RTT.
 fn xfer_ms(bytes: u64, mbps: f64, rtt_ms: f64) -> f64 {
     bytes as f64 * 8.0 / (mbps * 1e6) * 1000.0 + rtt_ms
 }
@@ -3065,8 +2959,8 @@ pub fn measure_compose_dist(
     )?;
     qlog_phase("queries_done");
 
-    // ── Network models (critical path): scatter (parallel links, max) +
-    // composition-path proof transfers + root delivery.
+    // ── Critical-path transfer time from the byte counts: scatter (parallel
+    // links, max) + composition-path proof transfers + root delivery.
     let root_sz = root_bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
     let leaf_sz_sum: u64 = leaf_proofs.iter().flatten().map(|p| p.len() as u64).sum();
     let per_worker_scatter: Vec<u64> = ranges
@@ -3079,9 +2973,8 @@ pub fn measure_compose_dist(
             st + da
         })
         .collect();
-    // Critical-path transfer time at the single modeled link bandwidth
-    // `mbps` (Mb/s). Scatter uses parallel links (max); composition differs by
-    // topology.
+    // Critical-path transfer time at link bandwidth `mbps` (Mb/s). Scatter
+    // uses parallel links (max); composition differs by topology.
     let model = |mbps: f64| -> f64 {
         let scatter =
             per_worker_scatter.iter().map(|&b| xfer_ms(b, mbps, rtt_ms)).fold(0.0, f64::max);
@@ -3145,7 +3038,7 @@ fn staged_wave_size() -> Option<usize> {
 /// coordinator, identical accounting to the concurrent engine): per pair
 /// `(recv, send)` — FetchRoot→send, Root→coordinator (counted once),
 /// MergeWith→recv; then one `Merged` drained per pair. Returns the round's
-/// largest transfer for the network model.
+/// largest transfer (an input to `comm_model_ms`).
 #[allow(clippy::too_many_arguments)]
 fn run_round_pairs(
     pairs: &[(usize, usize)],
@@ -3599,7 +3492,7 @@ fn measure_compose_dist_staged(
     )?;
     qlog_phase("queries_done");
 
-    // ── Network model (forest path only).
+    // ── Critical-path transfer time (forest path only).
     let root_sz = root_bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
     let per_worker_scatter: Vec<u64> = ranges
         .iter()
@@ -4039,8 +3932,8 @@ pub fn measure_compose_dist_gl(
         panic!("query workloads are not supported for the Goldilocks (_gl) families")
     };
 
-    // ── Network models (critical path): scatter (parallel links, max) +
-    // composition-path proof transfers + root delivery.
+    // ── Critical-path transfer time from the byte counts: scatter (parallel
+    // links, max) + composition-path proof transfers + root delivery.
     let root_sz = root_bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
     let leaf_sz_sum: u64 = leaf_proofs.iter().flatten().map(|p| p.len() as u64).sum();
     let per_worker_scatter: Vec<u64> = ranges
@@ -4053,9 +3946,8 @@ pub fn measure_compose_dist_gl(
             st + da
         })
         .collect();
-    // Critical-path transfer time at the single modeled link bandwidth
-    // `mbps` (Mb/s). Scatter uses parallel links (max); composition differs by
-    // topology.
+    // Critical-path transfer time at link bandwidth `mbps` (Mb/s). Scatter
+    // uses parallel links (max); composition differs by topology.
     let model = |mbps: f64| -> f64 {
         let scatter =
             per_worker_scatter.iter().map(|&b| xfer_ms(b, mbps, rtt_ms)).fold(0.0, f64::max);
@@ -5846,7 +5738,7 @@ mod tests {
         assert!(fresh.is_ok(), "{fresh:?}");
     }
 
-    /// Transfer model: bytes·8 / (Mb/s · 1e6) · 1000 + RTT.
+    /// Transfer time: bytes·8 / (Mb/s · 1e6) · 1000 + RTT.
     #[test]
     fn xfer_model_math() {
         // 25 MB at 200 Mb/s = 1.0 s (+0.2 ms rtt).

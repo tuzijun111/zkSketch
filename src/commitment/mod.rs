@@ -1,10 +1,4 @@
-//! Commitment-related traits used by the paper's per-epoch transition proofs.
-//!
-//! Phase 1 only needs a stand-in for the paper's `Com(S_t)`: the toy `FibAir`
-//! exposes its boundary `(a, b)` directly, with no real state commitment.
-//! Phase 2 will plug a Poseidon2 vector commitment over the Count-Min counter
-//! table behind the same trait so the recursive merge code does not have to
-//! change.
+//! State and batch commitments (Poseidon2; plain and hiding).
 
 pub mod boundary;
 pub mod countmin;

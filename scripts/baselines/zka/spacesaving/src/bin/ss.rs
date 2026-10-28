@@ -1,60 +1,5 @@
-// SpaceSaving on zk-Analytics' pipeline (a baseline port, not their code):
-// drives the aggr_ss / query_ss guests (and their *_prof profiling twins) on
-// real AOL epochs, executor only unless --prove. Patterned on ../../cyc/src/bin/shipped.rs.
-//
-// Records: data/aol.keys (flat little-endian u32). Epoch e holds keys
-// [e*m, (e+1)*m), m = --epoch-size (16,384), the slicing of shipped.rs and of
-// zkSketch's exp_compose, so epoch 0 is the matched CM epoch.
-//   key_id = Event::make_key_id(0, key)   (their 15-byte key id, zkvm-common/src/lib.rs:76)
-//   value  = 1                            (frequency counting, as shipped.rs's samples/cm)
-//   ts     = global record index
-// Batches: one source, stream order, --batch records per batch (8 = their
-// --commit-batch-size default), SHA-256 batch chain carried across epochs
-// (prev_source_chain_tips + continuing seq), epoch chain e-1 -> e.
-//
-// Every run checks: guest journal == ss-core run natively on the same input
-// (journal_eq_native); ss-core == independent reference (ref_eq: every epoch
-// state vs reference::NaiveSs; for queries the merge vs reference::naive_merge
-// and the journal answer vs the reference answer after their suppression rule);
-// SpaceSaving invariants vs exact counts (invariants_ok, aggregation only);
-// and accuracy vs exact counts.
-//
-// Usage:
-//   ss --header
-//   ss --image-id-of PATH        (image ID of a combined guest image, e.g. aggr_ss.bin)
-//   ss --mode aggr  --capacity S [--epoch-index 0]
-//                   [--root legacy|designed|noroot|buckets1024|perkey|buckets64|none]
-//                   [--profile] [--prove]
-//   ss --mode query --capacity S --epochs N --query topk|estimate|estimate_merged
-//                   [--limit 10] [--point-rank 1] [--profile] [--prove]
-//   common: [--keys PATH] [--epoch-size 16384] [--batch 8]
-//
-// --root (six-sketch comparison, ../../README.md "Six-sketch comparison"): which
-// Merkle root the aggregation journal carries.
-//   legacy (default)  the aggr_ss guest, SsRoot::HEADLINE = buckets64 compiled in: the
-//                     guest of the committed 2026-10-09 reference rows
-//   designed          aggr_ss_rootvar with SsRoot::Buckets64: zk-Analytics as designed,
-//                     the 64-bucket samples-pattern root that every port now builds
-//   noroot            aggr_ss_rootvar with SsRoot::None: root field zero (apples-to-apples
-//                     with zkSketch)
-//   buckets1024, perkey   aggr_ss_rootvar sensitivity rows (other root constructions)
-//   buckets64, none   older names of designed, noroot (same runs)
-// aggr_ss_rootvar reads the SsRoot before the input and commits (SsRoot, SsAggrOutput).
-// Every variant can be proved. Query guests read no root (--root is refused with
-// --mode query). Aggregation rows also check variants_agree (every root construction run
-// natively gives the same state, state commitment, epoch link, capacity, n_events and
-// source tips) and print state_commit. estimate is the measured point query
-// (their SumExactKey per-epoch scan); estimate_merged is the v1 point query
-// (full merge, then lookup), kept as a sensitivity row.
-//
-// --profile runs the *_prof twin instead of the measured guest; its row carries
-// the per-phase env::cycle_count() deltas (host-reported, not constrained by the
-// circuit). The profiling twin costs a few tens of thousands of cycles more than
-// the measured guest; its rows are for the phase breakdown only.
-//
-// --prove rows also record whether any OTHER r0vm process (any user) ran on the
-// box while proving (prove_condition = clean | contended, sampled once a second,
-// read-only) and the 1-minute load average over the proof.
+// SpaceSaving port on zk-Analytics' pipeline: runs aggr_ss / query_ss on AOL epochs, executor only unless --prove.
+// Usage: ss --mode aggr|query --capacity S [--epochs N] [--query topk|estimate|estimate_merged] [--root R] [--prove]
 
 #[path = "../reference.rs"]
 mod reference;
@@ -77,8 +22,9 @@ use ss_methods::{
     QUERY_SS_ID, QUERY_SS_PROF_ELF, QUERY_SS_PROF_ID,
 };
 
-// MODELED prove time: segments x 30.1 s, envelope 29.73..30.79 s/segment = the
-// per-anchor min/max of the four CPU CM anchors in ../README.md.
+// MODELED_prove_s = segments x S_PER_SEG (computed, not measured), from the four CPU-proved CM guest runs
+// in scripts/baselines/zka/README.md: S_PER_SEG is aggr_cm T=100, n=512 (661.3 s / 22 segments = 30.06 s)
+// rounded; _lo/_hi use 29.73 and 30.79 s, the lowest and highest s/segment of the four.
 const S_PER_SEG: f64 = 30.1;
 const S_PER_SEG_LO: f64 = 29.73;
 const S_PER_SEG_HI: f64 = 30.79;
@@ -748,7 +694,7 @@ fn main() {
             let eq = got == native;
             let p = do_prove.then(|| prove(&input, QUERY_SS_ELF, QUERY_SS_ID, &native));
 
-            // The journal answer must equal the answer derived from the independent
+            // The journal answer must equal the answer computed by the independent
             // references (naive_merge for topk / estimate_merged, a per-epoch binary
             // search for estimate), after their low-support suppression rule.
             let total_n = (n * m) as u64;

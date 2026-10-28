@@ -1,32 +1,4 @@
-//! In-circuit HyperLogLog update leaf (paper §5.3, sound max-correctness) for plonky2.
-//!
-//! Port of `../src/recursion/recursive/hll_leaf.rs`. Proves one epoch:
-//! committed initial registers + a batch of `(idx, leading_run)` selections yield
-//! the committed final registers, with `final[r] = max(initial[r], selected runs)`.
-//!
-//! ## Public inputs (in order)
-//! 1. `initial_commit[0..4]` = `Com(S_{t-1})`, 2. `final_commit[0..4]` = `Com(S_t)`,
-//! 3. `batch_commit[0..4]` = `Com(B_t)`. The batch records `(key, idx, lr)` are
-//! **private** and opened in-circuit from `batch_commit` (zk1.tex Step 1, "bind the
-//! batch"). Same `[initial | final]` 8-element prefix as the Count-Min leaf, so
-//! [`crate::recursion::merge`] treats all families uniformly.
-//!
-//! ## In-circuit routing (S2), matching the plonky3 HLL
-//! The register index and leading-run are **derived from the committed key
-//! in-circuit**, not trusted: `digest = Poseidon(key)`, `idx = digest[0] mod 2^b`
-//! (low `b` bits), `ρ = 1 + trailing_zeros(digest[1])` over `RHO_WINDOW` bits
-//! (running product). The decomposition is taken **canonically** (see
-//! [`canonical_bits_64`]) so a grinding prover cannot exploit the Goldilocks
-//! 64-bit wraparound to pick a different register. So the committed batch
-//! `Com(B_t)` (over the raw keys) fully determines the update — `sketch::
-//! hyperloglog::hash_register` is the native mirror of this exact derivation.
-//!
-//! ## Max via product-of-differences + range checks
-//! For each register `r` let the candidate set be `{initial[r]} ∪ {lr_k : selector[k][r]=1}`.
-//! - `Π (final[r] - candidate) == 0`  ⇒  `final[r]` equals **some** candidate.
-//! - each `final[r] - candidate` is range-checked to `[0, 2^REGISTER_WIDTH)` (via `split_le`)
-//!   ⇒  `final[r] ≥ every` candidate.
-//! Together ⇒ `final[r] = max(candidates)`.
+//! One-hot HyperLogLog update leaf; register index and rank are computed in-circuit from Poseidon(key).
 
 use std::sync::Arc;
 

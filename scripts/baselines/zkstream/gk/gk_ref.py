@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
-"""Native reference: textbook Greenwald-Khanna (SIGMOD'01) and the packed state of gk_op.zok.
-
-GK follows the paper's Figures 2/3 literally (list deletions, explicit descendant walk, band
-from the set definition), with the one change the paper's Sec 2.1 text requires: the COMPRESS
-loop stops at i = 1, so t_0 stays the running minimum (as ../../zka/gk/core/src/lib.rs does,
-where the reasons are documented). This file mirrors that file's `RefGk`.
-
-  observe(v): if n = 0 mod floor(1/(2 eps)): COMPRESS; INSERT v; n += 1
-  INSERT:     smallest i with v < v_i; (v, 1, floor(2 eps n)), or (v, 1, 0) at either end
-  COMPRESS:   for i = s-2 .. 1: if BAND(D_i) <= BAND(D_{i+1}) and g*_i + g_{i+1} + D_{i+1} < 2 eps n,
-              delete t_i and its descendants, adding their g's to t_{i+1}
-
-Run as a script for a self-test (band identity, invariants, the circuit's fixed-shape
-formulation against this reference on AOL and synthetic streams).
+"""Native textbook Greenwald-Khanna (SIGMOD'01; COMPRESS stops at i = 1, as RefGk in ../../zka/gk/core/src/lib.rs)
+and the packed state of gk_op.zok. Run as a script for a self-test against the circuit's fixed-shape COMPRESS.
 """
 import random
 import struct

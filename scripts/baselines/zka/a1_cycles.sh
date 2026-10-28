@@ -1,5 +1,5 @@
 #!/bin/bash
-# A1: zk-Analytics CM guest executor cycle sweep (deterministic, contention-immune)
+# A1: executor cycle counts of zk-Analytics' CM guest at CM_TOPK_SLOTS = 100, 8 and 1.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"   # PATH RESULTS build_cyc cyc_target
 OUT=$RESULTS/a1_cycles.csv
 mkdir -p $(dirname $OUT)

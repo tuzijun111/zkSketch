@@ -1,19 +1,4 @@
-//! Test-only **trace forger** for the binding soundness tests.
-//!
-//! A malicious prover is not bound by the honest runner; it can hand
-//! `prove_all_tables` any traces. The forgeries here are built by
-//! *transplanting*: run the circuit honestly on modified data (a different
-//! final state, a different record key, ...), so every constrained row is
-//! consistent with the modified data. Then put the ORIGINAL value back into
-//! the one witness the attack must not change (a hashed packed Challenge),
-//! everywhere that witness appears ([`set_wid`]), and recompute every
-//! Poseidon2 sponge chain from its patched inputs ([`rehash_all`]). The
-//! resulting trace commits to data A while every downstream constraint was
-//! evaluated on data B. It passes exactly when nothing binds the decomposed
-//! coefficients to the hashed value. That is the case in `Binding::Legacy`
-//! (only the Recompose NPO row reads the packed value, and [`set_wid`]
-//! re-derives its row values) and not in `Binding::Bound` (the ALU
-//! recomposition row breaks).
+//! Test-only trace forger for the binding tests: transplant a witness value, then rehash.
 
 use p3_circuit::ops::{
     ExposeTrace, NpoTypeId, PermuteTrace, Poseidon2Config, Poseidon2Trace, RangeTrace,

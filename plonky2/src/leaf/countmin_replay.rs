@@ -1,31 +1,4 @@
-//! In-circuit Count-Min **`replay` leaf — per-record REPLAY update + FLAT commit**
-//! (plonky2 / SNARK). Port of `../src/sketch/countmin_replay.rs`.
-//!
-//! The flat-commit counterpart of [`super::countmin_merkle`]: it uses the **same
-//! per-record replay update** (hash *every* record's key in-circuit, route it to
-//! its cell) but commits the state with a **flat** Poseidon sponge over all `d·w`
-//! cells instead of a Merkle root. It is the proper baseline against
-//! [`super::countmin_final`] (`certified`): both keep keys **private** and derive
-//! the hash positions **in-circuit**, isolating exactly the *update method*
-//! (per-record replay vs distinct-key certified) at a fixed flat commitment.
-//!
-//! The 2×2 grid this completes (the plonky3 module's grid, now on plonky2):
-//!
-//! |               | flat commit                     | Merkle commit |
-//! |---------------|---------------------------------|---------------|
-//! | replay update | **this leaf** (`replay`)         | `merkle` ([`super::countmin_merkle`]) |
-//! | certified upd | `certified` ([`super::countmin_final`]) | (`c_merkle`) |
-//!
-//! ## Public inputs
-//! `initial_commit[0..4]`, `final_commit[0..4]`, `batch_commit[0..4]`. Keys/values
-//! are **private** (bound only through `batch_commit`); positions are derived
-//! in-circuit from `Poseidon(key)`.
-//!
-//! ## Cost
-//! Per-record PRF hash (`batch` Poseidon calls) + a one-hot over all `w` cells per
-//! `(record, row)` (`Θ(d·w·batch)` selectors) + the flat `Θ(d·w)` commit. Unlike
-//! `certified` there is **no** distinct-key compaction, so every record pays the
-//! hash — that is the point of the comparison.
+//! Count-Min `replay` leaf: hash and route every record in-circuit, flat Poseidon commit of all d·w cells.
 
 use std::sync::Arc;
 

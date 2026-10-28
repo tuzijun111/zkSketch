@@ -18,7 +18,7 @@ scripts/baselines/zkstream/ss/run_ss.py --s 8 16 32 64 128 --k 4 16 64 --chunks 
 scripts/baselines/zkstream/ss/run_ss.py --s 256 1024 4096 --k 1 --compile-only   # compile-scaling probes
 scripts/baselines/zkstream/ss/run_ss.py --s 4096 --k 1 --chunks 5 --prune        # largest proven state
 scripts/baselines/zkstream/ss/run_ss.py --s 16384 --k 1 --chunks 5 --prune       # deployed state size (refused)
-scripts/baselines/zkstream/ss/fit_ss.py                                          # gates, fits, deployed model
+scripts/baselines/zkstream/ss/fit_ss.py                                          # gates, fits, deployed-size costs from the fits
 ```
 
 | Variable / flag | Default | Meaning |
@@ -41,7 +41,7 @@ A compile that hits the time or memory cap is written as a row with `ok=0` and
 | `ss_helper.zok.tpl` | witness helper: Poseidon commitments `(com_in, batch_com, com_out)` of a transition the driver computed. `compute-witness` only, never set up or proven, not charged to the prover |
 | `gen.sh <N> <S> <outdir> [CB] [SPE]` | instantiates both templates by textual constant replacement (zkStream's `zokrates.rs:85-87` idiom) |
 | `run_ss.py` | driver: native SpaceSaving reference, compile, setup, chained chunks, witness, prove (`ark`, `g16`), verify, forgeries. One CSV row per step. Imports the path, key-reader and inspect helpers of `../run_zkstream.py` |
-| `fit_ss.py` | soundness gate, exact constraint model, time and memory fits, deployed-size model |
+| `fit_ss.py` | soundness gate, exact constraint-count formula, time and memory fits, deployed-size costs from the fits |
 
 CSV columns: `run, system, s, k, cb, spe, chunk, step, constraints, wall_s,
 peak_rss_mb, bytes, public_inputs, ok, load1, foreign, note`. `load1` is the
@@ -192,14 +192,14 @@ Groth16 (ark) proves at 62K-134K constraints/s across the grid. The per-record
 cost is `31*s` constraints: about 3.8-4.9 s of 32-thread proving per record at s=2^14,
 whatever k is (3.8 s at the best measured rate, 4.7-4.9 s at the fitted
 per-constraint cost and at the rate of the largest proven point). The DEPLOYED-SIZE
-section of `fit_ss.py` (s=2^14 counters, 2^20 records) prints the model, and every
-number there is MODELED:
+section of `fit_ss.py` (s=2^14 counters, 2^20 records) prints the numbers below.
+They are computed from the fits, except where marked MEASURED:
 
 - **Prover memory limits k.** Prover RAM on this 559 GB machine gives k <= 289,
   and this bound binds first. The radix-2 FFT domain of BN254 (2^28) gives k <= 520
   records per chunk. That is not a hard cap, since mixed-radix domains may allow
   more, and it does not change the conclusions.
-- **Prover time is 46-60 days** (MODELED). A 2^20-record stream is about 5.4e11
+- **Prover time is 46-60 days** (computed, not run). A 2^20-record stream is about 5.4e11
   constraints of proving: 46 days of 32-thread Groth16 time at the best measured prove
   rate (134K constraints/s), 58-60 days at the fitted per-constraint cost and at the
   rate of the largest proven point. The measured rate rises with circuit size across
@@ -218,8 +218,8 @@ number there is MODELED:
   n inputs), run by hand and not archived (no script or log in the repo), showed the
   same superlinear growth. This is a property of the toolchain, not of Groth16 or of
   the replay method.
-- **Verdict: INFEASIBLE at the deployed size.** The verdict stands on the modeled
-  prover time. The circuit did not compile at s=2^14 within the budget in two
+- **Verdict: INFEASIBLE at the deployed size.** The verdict stands on the prover
+  time computed above. The circuit did not compile at s=2^14 within the budget in two
   attempts, and even if it did, the prover would need about 46-60 days of 32-thread
   time per 2^20-record stream (47-60 days at k=289, the largest k that fits in RAM).
   That k produces 3,629 proofs of 997 B each (128 B binary), plus 3,629 verifications.
@@ -231,7 +231,7 @@ run passed the same soundness gate.
 
 - **v1 (`spe=1`, one slot per field element, lowest-index tie-break).** Results are
   in `results/zkstream_ss_v1_spe1.csv` and `results/zkstream_ss_v1_spe1_*.log`. The
-  exact model was `31*s*k + 6*k + 84*s + 678*ceil(s/5) + 339*ceil(k/5) + 426`. At
+  exact constraint-count formula was `31*s*k + 6*k + 84*s + 678*ceil(s/5) + 339*ceil(k/5) + 426`. At
   s=4096, k=1 the compile took 765 s and 39.0 GB.
 - **v2 (`spe=3`, lowest-index tie-break through prefix sums).** Results are in
   `results/zkstream_ss_v2_spe3_tiebreak.csv` and `_*.log`. A third of the Poseidon
@@ -251,8 +251,8 @@ run passed the same soundness gate.
 
 - **Small state sizes, plus probes.** The prove/witness fits cover 3K-642K
   constraints. The largest point is s=4096, k=1, proven on a quiet box. Every figure
-  `fit_ss.py` prints for a deployed size is MODELED, with the per-constraint prove
-  cost held constant. The measured prove rate rises with size across the grid, while
+  `fit_ss.py` prints for a deployed size is computed from the fits, with the
+  per-constraint prove cost held constant. The measured prove rate rises with size across the grid, while
   at the 10^8-constraint circuits a feasible k needs, MSM and FFT grow as n log n and
   the machine becomes memory-bound. The true time may therefore differ from these
   figures by about 2x in either direction.
@@ -262,7 +262,7 @@ run passed the same soundness gate.
   second one-hot selector for the swap adds about 7 per slot. That is roughly 16s
   instead of 31s constraints per record, about 2x. In that layout, slots stay sorted
   by count, and an increment swaps the slot to the end of its equal-count block. It
-  was not built, so the estimate is unmeasured. It keeps a different data-structure
+  was not built, so the 2x is a constraint count, not a measurement. It keeps a different data-structure
   invariant, and the comparison is about the textbook scan.
 - **Keys are not range-checked.** The batch digest binds them to the source's u32
   keys, as in the CM operator. A key of `p-1` would make `v = 0` collide with empty

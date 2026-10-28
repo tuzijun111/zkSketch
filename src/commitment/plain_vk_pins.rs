@@ -1,39 +1,5 @@
-//! Regression pins: the `Plain` (non-hiding) VKs are byte-identical to the
-//! VKs of the tree before the hiding commitments (revision B2) were merged.
-//!
-//! The B2 merge routes every plain circuit through a `*_commit` builder or
-//! VK derivation with [`CommitMode::Plain`] (no salt allocated,
-//! `commit_hash_bound(None)` = the pre-B2 sponge). The other plain-VK tests
-//! compare those paths with builders that delegate to the same code, so a
-//! change to the shared commitment gadgets (`commit_hash_bound`,
-//! `salted_hash_inputs`, the tag constants) that also moved the plain path
-//! would pass them. These literals would not: each is the fingerprint
-//! `(FNV-1a of the VK commitment's coefficients, FNV-1a of the postcard'd
-//! BoundProofShape)` recorded on the pre-merge tree (main @ 3e911ff, built
-//! side by side) through the APIs that existed there (`*_decode_vk`,
-//! `*_noop_leaf_expose`), at small shapes. They cover the deployed decoders
-//! (Count-Min, HLL omc, SpaceSaving, GK bandmerge2, Bloom) and the deployed
-//! no-op leaves under both composable layouts and all three bindings, and
-//! the KMV decoder and leaf through the commitment API that the KMV hiding
-//! commitments added later (recorded on main @ e647585). A
-//! deliberate circuit change, a Plonky3-fork bump or a new `BoundProofShape`
-//! field moves a pin too; re-pin only once that is confirmed as the cause.
-//!
-//! The literals above are the non-ZK build's (`--no-default-features`); they
-//! are compiled only without the `zk` feature and stay byte-for-byte the
-//! pre-B2 values. The `zk` build (the default) proves every circuit with the
-//! hiding PCS, which commits each preprocessed trace on its doubled domain
-//! and so changes every VK commitment; each table therefore has a
-//! `#[cfg(feature = "zk")]` twin: the same shapes, checked through the same
-//! paths and assertions, recorded on the zk-logup-mask forks (Plonky3
-//! 280b1a07, Plonky3_RangeAir 3acdc06) and equal across separate processes
-//! (VK derivation is deterministic under `zk`: the preprocessed commitment is
-//! not randomized). These twins pin the hiding PCS, NOT the LogUp masks: the
-//! mask columns live in the main trace, which no leaf or decoder VK commits
-//! to, so the same values come out of a hiding build against the unmasked
-//! forks. The masks are checked by `config::tests::leaf_opens_logup_mask_columns`
-//! and `tests/zk_logup_blinding.rs` (and they do move every merge and root
-//! circuit, hence every derived root VK).
+//! VK regression pins: fingerprints of the plain VKs recorded before the hiding-commitment merge
+//! (main @ 3e911ff; KMV @ e647585), plus `zk`-build twins recorded on the zk-logup-mask forks.
 
 use p3_circuit_prover::BatchStarkProof;
 use p3_field::{BasedVectorSpace, PrimeField32};

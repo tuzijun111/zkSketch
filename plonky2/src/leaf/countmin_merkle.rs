@@ -1,38 +1,4 @@
-//! **Count-Min sparse-patch rebind via Merkle vector commitments** (plonky2),
-//! realizing zk1.tex §5.2 Step 7 — the Pattern-A rebind whose cost scales with
-//! the number of *touched* cells, not the whole array `w`.
-//!
-//! The other CM leaves commit the state with a **flat** Poseidon sponge over all
-//! `d·w` cells, so a rebind costs `Θ(d·w)`. Here each of the `d` rows is a
-//! **Merkle tree** over its `w` cells, and the rebind opens only the touched
-//! cells via a per-row **Merkle update chain**: thread the row's root
-//! `r_0 = Com(row_{t-1}) → … → r_T = Com(row_t)` through `T` single-leaf
-//! updates, each verifying the old value against `r_{c-1}` and the new value
-//! against `r_c` with the **same** sibling path. Untouched cells never appear
-//! (they carry through the shared siblings), so a rebind is `Θ(T·log w)` per row
-//! — `Θ(distinct·d·log w)` overall, **independent of `w`**. Threading is what
-//! makes repeated/overlapping touches sound: a second touch of a cell sees the
-//! first update already folded into the current root.
-//!
-//! ## d rows, d independent trees
-//! A Count-Min sketch has `d` rows of `w` counters with independent row hashes
-//! `h_i(key) = Poseidon(key)[i] mod w` (the same family the flat
-//! [`super::countmin_final`] leaf uses, so `d ≤ 4` — a `PoseidonHash` digest is
-//! four elements). Each row is its own perfect binary Merkle tree of `w` leaves;
-//! the per-row roots are combined into a single state commitment
-//! `Com(S) = Poseidon(r_0 ‖ … ‖ r_{d-1})` (and `Com(S) = r_0` when `d = 1`, so
-//! the single-row case is unchanged). The flat-commit leaves remain the baseline.
-//!
-//! ## Soundness sketch
-//! - **Batch opened:** `Com(B_t)` binds the witnessed `(key, value)` records.
-//! - **Routing (S2):** each record's per-row cell `pos_i = digest[i] mod w` is
-//!   derived in-circuit from `Poseidon(key)` (canonical low bits — see
-//!   [`canonical_bits_64`]); a one-hot selector maps each `(record, row)` to an
-//!   *active* patch op at that cell.
-//! - **Aggregate (S3):** `new_c = old_c + Σ_{records→c} value`.
-//! - **Rebind (S5):** the per-row Merkle update chain ties `old_c`/`new_c` to
-//!   the row's boundary roots; untouched cells are unchanged because only the
-//!   touched leaf moves along each path.
+//! Count-Min leaf with one Merkle tree per row; an update opens only the touched cells.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

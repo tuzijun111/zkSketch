@@ -1,7 +1,4 @@
-//! Toy Fibonacci leaf — validates the plonky2 prove/verify + recursion plumbing
-//! before the real sketch circuits (mirrors zkSketch Phase 1, `src/air/fib.rs`).
-//!
-//! Public inputs (in order): `[a0, b0, a_final, b_final]`.
+//! Toy Fibonacci leaf for testing prove/verify and recursion. PIs: [a0, b0, a_final, b_final].
 
 use anyhow::Result;
 use plonky2::iop::target::Target;

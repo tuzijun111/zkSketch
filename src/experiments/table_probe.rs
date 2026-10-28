@@ -1,39 +1,4 @@
-//! Per-table trace shapes of a batch-STARK circuit, read at build time
-//! (revision E-0: does every table of every deployed circuit fit the hiding
-//! row ceiling?).
-//!
-//! The deployed leaf builders (`countmin_omc`, `hll_omc`, `ss_final_full`,
-//! `gk_bandmerge` bandmerge2, `bloom_omc`) and the merge-VK builder
-//! (`expose_forest::aggregation_circuit_commitment`) call [`record_leaf`] /
-//! [`record_merge`] right after `get_airs_and_degrees_with_prep`, then
-//! [`maybe_stop`]. Both hooks are read-only: the shapes are read off the AIRs
-//! and preprocessed columns the builder already computed and nothing is fed
-//! back, so circuits, VKs and proofs are unchanged. With nothing armed (the
-//! default) [`record_leaf`] returns at once and [`maybe_stop`] only reads
-//! `ZKSKETCH_SHAPES_ONLY`.
-//!
-//! * [`capture`] arms the recorder on this thread around a closure (a full
-//!   build, a proof, or a root-VK derivation that builds merge circuits).
-//! * [`capture_shapes`] also stops every builder right after its shapes are
-//!   recorded, before the preprocessed commit: a shapes-only probe of a
-//!   deployed-geometry leaf costs seconds and a few GB instead of a full
-//!   build. `ZKSKETCH_SHAPES_ONLY=1` stops the builders process-wide.
-//! * `E0_QUOTIENT=1` also records each table's log quotient-chunk count,
-//!   non-ZK and ZK (a symbolic evaluation of every AIR).
-//!
-//! `log_h` is the base (non-ZK) log2 padded height of the circuit that was
-//! built (a hiding PCS commits `2^(log_h + 1)` rows). A leaf circuit is the
-//! same under both PCS; a merge circuit is not, since it verifies its
-//! children's proofs and a hiding proof has more to verify, so merge shapes
-//! describe the PCS of the build that recorded them.
-//!
-//! Every committed LDE has `2^(log_h + is_zk + LOG_BLOWUP)` rows and the
-//! quotient domain `2^(log_h + is_zk + lq)` points (`lq` = log quotient-chunk
-//! count), and BabyBear's two-adicity is 27, so a table fits iff
-//! `log_h + is_zk + max(LOG_BLOWUP, lq) <= 27` ([`TableShape::log_ceiling`]).
-//! With `lq` recorded (`E0_QUOTIENT=1`) that is checked as is; without it
-//! `lq <= LOG_BLOWUP` is assumed, i.e. `log_h <= 25` non-hiding and
-//! `log_h <= 24` hiding ([`LOG_CEILING_NONHIDING`], [`LOG_CEILING_HIDING`]).
+//! Per-table trace shapes recorded at circuit build time, checked against the hiding row ceiling.
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};

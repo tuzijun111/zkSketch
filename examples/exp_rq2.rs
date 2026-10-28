@@ -1,8 +1,5 @@
-//! RQ2 — Scalability runner (paper §Evaluation `sec:rq2`).
-//!
-//! `cargo run --release --example exp_rq2`
-//! Knobs: `EXP_RQ2_MAX_E` (audit-window max), `V3_SWEEP_THREADS`.
-//! Writes `results/rq2*.csv`.
+//! RQ2 scalability runner; writes results/rq2*.csv.
+//! Usage: [EXP_RQ2_MAX_E=.. V3_SWEEP_THREADS=..] cargo run --release --example exp_rq2
 
 use zksketch::experiments::{resolve_threads, rq2_scalability, with_pool};
 

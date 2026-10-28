@@ -1,50 +1,6 @@
 #!/bin/bash
-# FAIRNESS CONTROL: how much of zk-Analytics' per-epoch cycle count is software
-# SHA-256 that risc0's own accelerator would have removed?
-#
-# WHY (hypothesis under test; refuted, see RESULT): aggregator/core/Cargo.toml:7 pulls plain `sha2 0.10` and there is no
-# [patch.crates-io] anywhere in their tree, so their guest runs SOFTWARE
-# SHA-256 -- the fitted cost is ~1,695 cycles per 64-byte compression.  risc0
-# 3.0.6 ships a SHA-256 ECALL accelerator in the rv32im circuit
-# (HOST_ECALL_SHA2 dispatch at risc0-circuit-rv32im-4.0.5/src/execute/r0vm.rs:411
-# and :616-626; guest-side selection documented at risc0-zkvm-3.0.6/src/sha.rs:17-19),
-# reached the standard way by patching sha2 to risc0's fork.  Their guest is
-# SHA-heavy (per-batch chain hash + per-batch events_commit, 3 x 1024-leaf CM
-# row Merkle roots, the heap root, the epoch state commit), so an unpatched
-# build inflates every cycles-derived comparison against us.
-#
-# Publishing "134.8x faster" against a build that leaves the vendor's standard
-# accelerator switched off is the single easiest way for a reviewer to
-# invalidate the headline.  This control costs ZERO prover time: cycle counts
-# are deterministic executor output.
-#
-# ============================ RESULT (measured 2026-09-13) ======================
-#   topk,arm,n,keys,cycles,cycles_per_record,aggr_cm_elf_md5
-#   1,baseline,16384,1024,100696165,6146.0,90fce45d...
-#   1,accel,   16384,1024,100696165,6146.0,bab5ef8f...
-# Identical cycles from two DIFFERENT guest ELFs.  REASON: their guest ALREADY
-# uses the risc0 SHA-256 accelerator.
-#   aggregator/core/src/lib.rs:16-17  #[cfg(target_os = "zkvm")]
-#                                     use risc0_zkvm::sha::rust_crypto::{Digest, Sha256};
-#   aggregator/core/src/lib.rs:18-19  #[cfg(not(target_os = "zkvm"))] use rust_crypto::...
-#   querier/core/src/lib.rs:36-39     same pattern.
-#   aggregator/core/src/merkle.rs:22-28, querier/core/src/merkle.rs: risc0_zkvm::sha, unconditionally.
-# The plain `sha2` in aggregator/core/Cargo.toml:7 (aliased `rust_crypto`) is the
-# HOST path only.  So "no [patch.crates-io] => software SHA-256 in the guest" is
-# FALSE, and any cost model that fits a cycles-per-SHA-compression constant on
-# that premise is fitting a constant that is not a SHA cost.
-#
-# HISTORY: a first run (2026-09-12) printed the same two rows but tested nothing.
-# It appended only [patch.crates-io]; zka's Cargo.lock keeps sha2 0.10.9, the
-# 0.10.6 fork never matches, and its "accel" ELF was byte-identical to baseline
-# (90fce45d).  The =0.10.6 pins that activate the patch were added by hand later
-# and never measured.  Hence the full patch file, the ELF-md5 column, and the
-# refusal below to write a CSV when both arms ran the same ELF.
-# NOTE: $BASELINE_DIR/build/shaccel is ~3.3 GB; delete it when no longer needed.
-# ===============================================================================
-# SAFETY: works on an isolated COPY of their tree with its own CARGO_TARGET_DIR,
-# so $BASELINE_DIR/zka and its target/ are untouched.  Runs the EXECUTOR only --
-# never a prover.  A fresh copy needs network (the patch is a git dependency).
+# Cycle counts of zk-Analytics' CM guest with and without risc0's SHA-256 accelerator patch (executor only).
+# Usage: ./sha_accel_control.sh   (env: N, KEYS, CBS, CM_TOPK_SLOTS, OUT; the accel build needs network: the patched sha2 is a git dependency)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"   # HERE BASELINE_DIR ZKA RESULTS build_cyc cyc_target
 SRC=$ZKA
@@ -100,6 +56,6 @@ fi
 mv "$OUT.tmp" "$OUT"
 column -t -s, "$OUT"
 echo
-echo "Report the accel row next to the baseline row.  If the gap is large, every"
-echo "cycles-derived claim (including the 174.3 h extrapolation) must be stated"
-echo "against BOTH builds, or against the accelerated one as the steelman."
+echo "Report the accel row next to the baseline row. If their cycle counts differ,"
+echo "give every number computed from cycle counts for both builds, or for the"
+echo "accelerated one."

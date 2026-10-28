@@ -1,11 +1,4 @@
-//! `FriRecursionBackend` wired up for BabyBear + Poseidon2 width-16 / D=4.
-//!
-//! Mirrors `recursive_keccak.rs::baby_bear::run` (lines 537–541):
-//!
-//! ```ignore
-//! let backend = FriRecursionBackend::<16, 8, _>::new(Poseidon2Config::BABY_BEAR_D4_W16)
-//!     .for_extension_degree::<4>();
-//! ```
+//! FRI recursion backend for BabyBear, Poseidon2 width 16, D = 4.
 
 use p3_recursion::{FriRecursionBackend, FriRecursionBackendForExt, Poseidon2Config};
 

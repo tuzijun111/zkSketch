@@ -1,217 +1,6 @@
-//! **Streaming proof-composition comparison** — the three §Streaming-Proof-
-//! Composition modes (**per-batch chain**, **recursive linear chain**,
-//! **streaming forest**) over six sketch families, each pinned to one leaf
-//! variant: cm/omc, hll/omc, ss/certified, gk/bandmerge2 (stable compaction),
-//! plus the Bloom filter (bloom/packed by default, opt-in via
-//! `EXP_COMPOSE_FAMILY=bloom`, BabyBear only) and the KMV / bottom-`k`
-//! distinct-count sketch (kmv, opt-in via `EXP_COMPOSE_FAMILY=kmv`, BabyBear only).
-//!
-//! Fixes a total stream size `N`, derives `t = ⌈N/m⌉` leaves per batch size `m`,
-//! draws keys from a chosen dataset, and for each (family, mode, cores,
-//! machines) reports the whole-stream prove time, the verifier-facing proof size
-//! + verify time, and the per-batch proof folder. This is the family-generic
-//! sibling of `exp_stream` (which studies the CM omc-vs-merkle leaf across `w`).
-//!
-//! ## Modes (`EXP_COMPOSE_MODE`, comma-list; default per_batch,chain,forest)
-//! - `per_batch` — one independent proof per batch, NO fold; each proof is
-//!   stored under `EXP_COMPOSE_PROOF_DIR` and the verifier holds all `t`
-//!   (`proof_bytes` + `verify_ms` are `Θ(t)`).
-//! - `chain` — recursive linear chain `Π^(t)=merge(Π^(t-1),π_t)` (`O(t)` depth);
-//!   one `O(1)` root.
-//! - `forest` — streaming forest, Bentley–Saxe tree fold (`O(log t)` depth); one
-//!   `O(1)` root. (`recursive` is accepted as a back-compat alias.)
-//!
-//! ## Cores, machines & the execution engine (`EXP_COMPOSE_EXEC`)
-//! - `EXP_COMPOSE_CORES` (comma-list; default all) — cores per machine/proof.
-//! - `EXP_COMPOSE_MACHINES` (comma-list; default 1) — number of machines.
-//! - `EXP_COMPOSE_EXEC=procs|sim` — the execution engine. Default: `procs`
-//!   whenever machines > 1 is requested.
-//!   - `procs` (`experiments::dist_compose`): REAL distributed emulation —
-//!     one OS process per machine, pinned to disjoint physical cores
-//!     (numactl/taskset + NUMA membind), all cross-machine data serialized
-//!     over sockets with measured bytes + a network model at `EXP_NET_MBPS`
-//!     (default 200 Mb/s) and `EXP_NET_RTT_MS` (default 0.2). `per_batch`/
-//!     `forest` distribute leaf
-//!     proving over the machines; the `chain` is inherently sequential and
-//!     runs on ONE machine, folding in place (each fold consumes the previous
-//!     prefix proof — the `machines` knob does not apply). `forest` composes
-//!     IN-PLACE on the leaf machines (local Bentley–Saxe cascade + log₂M
-//!     cross-machine reduction rounds shipping M−1 root proofs).
-//!   - `sim` (legacy `stream_compose`): one process; the machines column is
-//!     a work-partition makespan projection; chain ignores machines.
-//!
-//! ## Shape (per family)
-//! - cm:  `EXP_D` (d, default 4), `EXP_W` (w, default 8)  — needs `d·w % 4 == 0`.
-//! - hll: `EXP_HLL_B` (register bits b, default 4)        — needs `2^b % 4 == 0`.
-//! - ss:  `EXP_SS_CAP` (capacity, default 8).
-//! - gk:  `EXP_GK_CAP` (capacity = the GK sketch size, default 64) — needs
-//!        `cap + m` even. The accuracy `s = 1/ε` is **derived from cap** (their
-//!        space-accuracy coupling `cap ≳ s·log(N/s)`), so cap alone sets the GK
-//!        size like the other families. Set `EXP_GK_S` only to override (a value
-//!        too big for the cap fragments → too_large; unset it to auto-derive).
-//!        `EXP_GK_ROUNDS=sorted|stable` picks the leaf's round certification
-//!        (M3): `sorted` = the pre-M3 bm2 circuit (per round a fused table, a
-//!        general sorted copy and its order checks), `stable` = the G1
-//!        stable-compaction circuit. Both prove the same batch rule
-//!        (`apply_batch2`), commitments and decoder; the leaf / merge / root VKs
-//!        differ. Unset = `stable` (`sorted` under `ZKSKETCH_BINDING=legacy`).
-//!        It is a public shape parameter: the CSV `variant`
-//!        (`gk_bandmerge2_stable`) and `gk_rounds` columns and env.json record
-//!        it. A step that would exceed the capacity is a hard error (the run is
-//!        recorded `too_large`).
-//! - bloom: `EXP_BLOOM_K` (slices = hash positions per key, default 7, `1..=8`),
-//!        `EXP_BLOOM_LOGW` (bits per slice `W = 2^logw`, default 14, `7..=20`)
-//!        — the deployed `M = 7·2^14` filter (~1% FPR at 12k keys). The CSV
-//!        shape reads `k{k}_logw{logw}`. There is no Goldilocks Bloom leaf
-//!        (`bloom_gl` is rejected). `EXP_BLOOM_VARIANT=omc|packed` picks the
-//!        leaf the `bloom` token runs (M2): `omc` = the bit-array leaf (one
-//!        field element per bit; the pre-M2 leaf), `packed` = the packed-byte B1
-//!        leaf (`zksketch::sketch::bloom_packed`: per-access timestamped
-//!        memory checking over bytes, commitment family 7, `k·m < 2^16`; the
-//!        default since M2, `HARNESS_DEFAULT_BLOOM_VARIANT`).
-//!        Both prove the same filter and answer every query identically; the
-//!        leaf / decode / merge / root VKs differ. The explicit tokens
-//!        `bloom_omc` / `bloom_packed` ignore the switch. It is a public
-//!        parameter: the CSV `variant` (`bloom_omc` / `bloom_packed`) and
-//!        env.json (`bloom_variant`) record it, and with `m` they pin the leaf
-//!        circuit the auditor re-derives the VKs of.
-//! - kmv: `EXP_KMV_K` (capacity `k` = the number of smallest distinct 27-bit
-//!        key hashes kept, default 1024) — needs `k` a multiple of 4 in
-//!        `4..=32768` and `k + m < 2^24` (a bad value exits 2 with the
-//!        reason). The CSV shape reads `k{k}`. There is no Goldilocks KMV
-//!        leaf (`kmv_gl` is rejected).
-//!
-//! Config: `EXP_COMPOSE_FAMILY` (cm,hll,ss,gk,bloom,kmv and the `_gl`
-//! variants of the first four; default cm,hll,ss,gk),
-//! `EXP_COMPOSE_N` (`2^k` ok; default 32), `EXP_COMPOSE_BATCHES` (m list;
-//! default 8), `EXP_DATASET` (uniform|gaussian|zipf|aol|netflix; default
-//! uniform), `EXP_OUT`/`$1` (rename CSV).
-//!
-//! ## Mixed updates + queries (`EXP_COMPOSE_QUERY_EVERY`, default 0 = off)
-//! With `EXP_COMPOSE_QUERY_EVERY=k`, one **query leaf** (the family's decode
-//! circuit: cm point count, hll cardinality, ss top-1 mass, gk rank, bloom
-//! membership, kmv distinct count) is proved
-//! after every `k`-th batch against the state commitment the update leaf just
-//! exposed. Query costs land in the `query_*` columns (kept separate from the
-//! update-side totals). The auditor verifies each query proof pinned to the
-//! decode circuit's VK derived from public parameters (`query_verify_ms`),
-//! then binds its exposed `Com(S)` to the certified history: it verifies the
-//! interval proofs live at the query's version `t'` — the leaves `1..t'`
-//! (per_batch), the running fold `Π_[1,t']` (chain), or the Bentley–Saxe
-//! peaks (forest; with `M` machines, the earlier slices' roots plus the query
-//! slice's peaks) — each pinned to the VK of its bracketing, checks that they
-//! tile `[1, t']` against the batch log, and requires the last one's final
-//! commitment to equal the query's `Com(S)`. `query_ctx_verifies` counts
-//! those proofs; `query_bind_ms` is the measured cost a stateless verifier
-//! pays for that binding (each distinct proof is verified once and its time
-//! charged to every query that relies on it). Under the legacy opt-ins
-//! (`ZKSKETCH_BINDING=legacy`, `ZKSKETCH_STATEMENT=boundary`,
-//! `EXP_ROOT_VK=self`) answers are NOT bound: `query_bind_ms` reads `unbound`
-//! and `query_ctx_verifies` is the structural count. The cm decode circuit
-//! takes any power-of-two `w` (cost ∝ `d·w`), same as the leaf. The
-//! `query_*_avg` columns report the amortized cost of ONE query
-//! (`Σ query_* / n_queries`) — the headline mixed-workload number.
-//!
-//! `EXP_COMPOSE_QUERY_EVERY_OPS=Q` (mutually exclusive with the above) runs
-//! the paper's OPERATION-STREAM model: the stream is `N` operations and a
-//! query OCCUPIES a stream position — every `Q`-th position (`Q, 2Q, …`) is a
-//! query, the rest are updates, so `N` stream points carry `N − ⌊N/Q⌋` update
-//! records (100 points with Q=10 ⇒ 10 queries + 90 updates). No batch
-//! alignment required: a query landing mid-batch seals the batch early and
-//! pads its tail with the family's provable no-op records (cm value-0 update,
-//! ss circuit dummy, gk E_MAX dummy via a short batch, bloom `act = 0` dummy
-//! via a short batch, kmv `act = 0` dummy record in place, hll repeated key
-//! — `max` is idempotent), so the state is
-//! committed at the exact stream
-//! position and the circuit shape stays uniform. The early-sealed leaves are
-//! the honest "query at any point" premium, reported in `query_split_leaves`
-//! / `query_pad_records`; the stream tail is pad-sealed too (no phantom
-//! records). The CSV `n` column = TOTAL stream operations; update records =
-//! `n − n_queries`, and `records_per_sec` counts update records only.
-//!
-//! Mixed workloads run under BOTH engines. Under `sim` the queries interleave
-//! with the update leaves in the single-process replay. Under `procs` the
-//! workers prove the distributed update leaves as usual, then the coordinator
-//! proves each interleaved decode query (single-prover, `θ(state)` each) after
-//! the update makespan — so `total_time_ms` stays update-only and the query
-//! cost lands in the separate `query_*` columns (S³'s sequential,
-//! report-separately discipline). Queries are not proved concurrently with
-//! updates on a live-stream critical path; that is a deliberate first cut.
-//!
-//! `EXP_QUERY_KEY_MODE` (default `first`) picks the probe key a KEYED query
-//! targets — cm point-count / gk rank / bloom membership (hll cardinality,
-//! ss top-1 and kmv distinct count are keyless and ignore it): `first` = the
-//! batch's first key (baseline); `uniform_stream`
-//! = a frequency-weighted sample of keys seen so far (S³-style); `hot` = the
-//! most-frequent key; `absent` = an in-domain key NOT in the stream. All modes
-//! are deterministic in the query index, so runs are reproducible.
-//!
-//! Output: results/stream_compose.csv. Legacy columns (same meanings under
-//! both engines), then the procs-engine extension block (n/a under sim):
-//!   dataset,family,variant,mode,shape,n,m,t,cores,machines,total_time_ms,
-//!   leafgen_ms,leafgen_seq_ms,merge_ms,verify_ms,proof_bytes,records_per_sec,
-//!   peak_rss_mb,n_queries,query_prove_ms,query_verify_ms,query_proof_bytes,
-//!   query_ctx_verifies,query_prove_ms_avg,query_verify_ms_avg,
-//!   query_proof_bytes_avg,query_ctx_verifies_avg,query_split_leaves,
-//!   query_pad_records,exec,procs,witness_pass_ms,scatter_ms,
-//!   scatter_state_bytes,scatter_data_bytes,leaf_busy_min_ms,leaf_busy_max_ms,
-//!   local_fold_ms,merges_local,merges_cross,cross_rounds,
-//!   comm_msgs,comm_bytes,comm_ms_measured,comm_model_ms,merge_total_ms,
-//!   query_bind_ms,query_bind_ms_avg,commit,salt_seed,pcs,logup_mask,gk_rounds,
-//!   status
-//!
-//! ## Commitments (`ZKSKETCH_COMMIT`, `ZKSKETCH_SALT_SEED`)
-//! The run's commitment mode is read ONCE (`ProverCommit::from_env`):
-//! `hiding` (the default; `plain` under `ZKSKETCH_BINDING=legacy`) builds
-//! every leaf with its hiding `*_commit` builder and opens leaf `t` with the
-//! prover's randomizers `Openings::for_leaf(seed, family, t)` (query-sealed
-//! and padded batches are real leaves too), queries at version `t` open
-//! `Com(S_t; ρ^S_t)` with the hiding decoder (pinned to the hiding decode
-//! VK), the published batch log is built prover-side, and the auditor sees
-//! only that log, the proofs and public parameters: the prefix certificate
-//! that binds each answer is checked against that published log. The seed
-//! comes from `ZKSKETCH_SALT_SEED` (64 hex characters) or the OS RNG and is
-//! never printed; the `commit` / `salt_seed` columns (and env.json) record
-//! the mode and the seed's source (`env` / `os`; `n/a` under `plain`).
-//! Separately, the `pcs` / `logup_mask` columns (and env.json) record the
-//! proof system this binary was built with: `hiding` / `on` for the default
-//! `zk` build (hiding PCS, masked LogUp sums; it only compiles against the
-//! LogUp-mask forks), `nonhiding` / `off` for `--no-default-features`.
-//! `ZKSKETCH_COMMIT=plain` runs the pre-B2 circuits, commitments and VKs byte
-//! for byte. The Bloom filter has hiding commitments too (family id 5), and
-//! so does the KMV sketch (family id 6: hiding leaf, no-op leaf and
-//! distinct-count decoder).
-//!
-//! ## Prover memory / time switches (M0; default on)
-//! None changes a circuit, a VK, a proof statement or an answer; each "off"
-//! value restores the earlier behaviour exactly, for side-by-side runs.
-//! - `EXP_FOREST_RETAIN_PREP=1` (off): forest peaks, the chain prefix and
-//!   the slice root keep each merge's prover data; default: bare proofs.
-//! - `EXP_MALLOC_TRIM=0` (off): no `malloc_trim(0)` after each leaf and
-//!   cascade step (workers) and after VK derivation / each query
-//!   (coordinator). `EXP_MALLOC_TRIM=idle`: only before a process idles
-//!   (coordinator: after VK derivation, the audit and each query; worker:
-//!   after its slice and each cross-slice merge), never between a worker's
-//!   proofs (faster; the worker's resident set creeps instead).
-//! - `EXP_EXIT_BEFORE_AUDIT=0` (off): the procs coordinator audits before
-//!   sending the workers `Exit`, deriving the root VK from a fresh no-op
-//!   leaf; default: workers exit first and the root VK is derived through
-//!   the query auditor (same VK, its derivations shared with the queries).
-//! - `EXP_MERGE_CACHE=0` (off): every forest merge rebuilds its circuit and
-//!   preprocessed data; default: a prover-side cache of
-//!   `EXP_MERGE_CACHE_ENTRIES` (default 1) built merge circuits, smallest
-//!   subtrees first. Each entry keeps its merge's prover data resident
-//!   (0.4-0.6 GB measured for GK and Bloom) through every later proof.
-//! Under `EXP_QUERY_LOG=1` the coordinator's `QLOG_PHASE` lines carry
-//! `unix_ms` (to align with an external RSS sampler) and each forest worker
-//! prints its merge-cache hits and misses, finalization included, and its
-//! trim policy (`QLOG_WORKER`).
-//!
-//! RUNTIME WARNING: every leaf and every merge is a real STARK proof. Under
-//! `sim` everything proves sequentially (the k-machine split is a makespan
-//! projection); under `procs` the machines prove concurrently for real, but
-//! each merge is still a full recursive proof (~seconds) — budget ~t·merge
-//! for the chain and ~(t/M + log M)·merge for the forest.
+//! Whole-stream composition (per-batch, chain, forest) for each sketch family; writes results/stream_compose.csv.
+//! Usage: [EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_N=32 EXP_COMPOSE_BATCHES=8] cargo run --release --example exp_compose
+//! EXP_COMPOSE_BATCHES is the batch size m; other knobs: docs/experiments.md.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -522,12 +311,11 @@ fn main() {
         .collect();
     let machines_list = env_size_list("EXP_COMPOSE_MACHINES", &[1]);
 
-    // Execution engine: `procs` = the real process-level distributed
-    // emulation (one pinned OS process per machine, serialized socket IPC,
-    // measured communication — see experiments::dist_compose); `sim` = the
-    // legacy single-process run whose machines column is a work-partition
-    // makespan projection. Default: procs whenever a multi-machine sweep is
-    // requested, since that is the claim being defended.
+    // Execution engine: `procs` = one pinned OS process per machine,
+    // serialized socket IPC, measured communication (experiments::dist_compose);
+    // `sim` = the legacy single-process run, where the M-machine leaf time is
+    // the largest sum of measured per-leaf prove times over M contiguous slices.
+    // Default: procs whenever more than one machine is requested.
     fn exec_label(mode: StreamMode, machines_eff: usize) -> &'static str {
         // Mirrors the dispatch guard in dist_compose::measure_compose_dist:
         // staged-wave execution applies to the forest when the wave is
@@ -549,8 +337,9 @@ fn main() {
     // Mixed workload now runs on BOTH engines: procs proves the interleaved
     // decode queries on the coordinator (θ(state) each) after the distributed
     // update makespan, reported in the same query_* columns as sim.
-    // Modeled network link for the procs engine's comm_model_ms column (bytes
-    // are measured; these set the bandwidth + per-message RTT of the model).
+    // Bandwidth and per-message RTT for the procs engine's comm_model_ms
+    // column, computed from the measured bytes as bytes * 8 / bandwidth + RTT
+    // per transfer, summed along the critical path.
     let net_mbps: f64 = std::env::var("EXP_NET_MBPS")
         .ok()
         .and_then(|v| v.trim().parse().ok())

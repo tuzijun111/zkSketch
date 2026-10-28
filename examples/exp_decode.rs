@@ -1,31 +1,5 @@
-//! `exp_decode` — end-to-end **query-circuit** runner for all four sketches.
-//!
-//! For each family this builds the *deployed* final state (the exact native
-//! state its chosen update variant commits — CM `omc`, HLL `omc`, SS
-//! `certified`, GK `bandmerge2`), runs the matching decode/query STARK, and
-//! checks the decoded answer against an independent native reference:
-//!
-//! | family | update variant | query circuit          | answer            |
-//! |--------|----------------|------------------------|-------------------|
-//! | CM     | omc            | `prove_cm_decode`      | point frequency   |
-//! | HLL    | omc            | `prove_hll_decode_omc` | cardinality       |
-//! | SS     | certified      | `prove_ss_decode`      | top-`c` mass      |
-//! | GK     | bandmerge2     | `prove_gk2_decode`     | approximate rank  |
-//!
-//! Each decode prover self-verifies internally, so a printed row is a proven,
-//! verified result. Run:  `cargo run --release --example exp_decode`
-//! (or via `scripts/run_decode.sh`). Any answer/native mismatch aborts non-zero.
-//!
-//! **Commitments (`ZKSKETCH_COMMIT`, revision B2).** The prover's commitment
-//! context is read once (`ProverCommit::from_env`: `hiding` by default, the
-//! seed from `ZKSKETCH_SALT_SEED` or the OS RNG, never printed). Each state
-//! here is the stream's version `t` (the number of batches applied: CM, HLL
-//! and SS `t = 1`, GK `t = 2`); under `hiding` its decoder opens
-//! `Com(S_t; ρ^S_t)` with the randomizer leaf `t` closes that state with. A
-//! row is `ok` only if the proof also EXPOSES that commitment (the auditor's
-//! `check_query_exposure`; skipped under `ZKSKETCH_BINDING=legacy`, whose
-//! decoders expose nothing). `ZKSKETCH_COMMIT=plain` runs the pre-B2
-//! decoders byte for byte.
+//! Query (decode) proofs for CM, HLL, SS and GK, each checked against the native sketch answer.
+//! Usage: cargo run --release --example exp_decode   (or scripts/run_decode.sh)
 
 use std::time::Duration;
 

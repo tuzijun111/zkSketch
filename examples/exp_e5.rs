@@ -1,17 +1,5 @@
-//! E5 — composition-ladder runner (EVAL_SPEC E5). For each rung
-//! (`no_composition`, `per_batch_chain`, `recursive_linear`, `streaming_forest`)
-//! and audit window `E`, records the prover's online merge cost and the
-//! **auditor's** cost — the headline is `verifier_checks` collapsing from `Θ(E)`
-//! to `O(1)`. Composition is leaf-shape-agnostic (synthetic leaves), so this
-//! runner is fast and offline.
-//!
-//! Run:    cargo run --release --example exp_e5
-//! Config: EXP_E5_WINDOWS=16,64,256,1024   EXP_TRIALS=5   EXP_WARMUP=1
-//!
-//! Honest caveat: this prototype has no in-circuit recursive verifier, so a
-//! "check" is a Poseidon2 boundary digest, not a recursive-SNARK fold. The
-//! `verifier_checks`/`root_proof_size_bytes` columns report the composition-layer
-//! `Θ(E)→O(1)` structure; absolute ms/bytes are the lightweight digest cost.
+//! E5: composition ladder over audit windows E; merges are Poseidon2 boundary digests, not recursive proofs.
+//! Usage: [EXP_E5_WINDOWS=16,64,256,1024 EXP_TRIALS=5] cargo run --release --example exp_e5
 
 use zksketch::experiments::e5_ladder::{measure, E5Row, Setting};
 use zksketch::experiments::metrics::{append_csv, write_env_json, BenchCfg};

@@ -1,21 +1,5 @@
-//! In-circuit Count-Min update leaf (paper §5.1 strawman) for plonky2.
-//!
-//! Port of `../src/recursion/recursive/countmin_leaf.rs`. Each leaf
-//! proves one epoch: starting from a committed `d×w` state, applying `batch`
-//! records yields the committed final state.
-//!
-//! ## Public inputs (in order)
-//! 1. `initial_commit[0..4]` — Poseidon digest of the pre-update state.
-//! 2. `final_commit[0..4]`   — Poseidon digest of the post-update state.
-//! 3. per record `k`: `key_k`, `value_k`, `pos_k[0..d]` (the public hash columns).
-//!
-//! Keeping `initial_commit` at PI `[0..4]` and `final_commit` at `[4..8]` lets the
-//! sketch-agnostic [`crate::recursion::merge`] read boundaries uniformly.
-//!
-//! ## Constraints
-//! 1. `hash(initial_cells) == initial_commit`, `hash(final_cells) == final_commit`.
-//! 2. per `(k, r)`: `selector` is boolean, `Σ_j selector = 1`, `Σ_j j·selector = pos_k[r]`.
-//! 3. per cell `(i, j)`: `final[i,j] = initial[i,j] + Σ_k selector[k][i][j] · value_k`.
+//! Count-Min update leaf with one-hot cell selectors; keys and hash positions are public inputs.
+//! PIs: initial_commit[0..4], final_commit[0..4], then (key, value, pos[0..d]) per record.
 
 use std::sync::Arc;
 

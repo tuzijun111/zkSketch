@@ -1,54 +1,14 @@
 #!/usr/bin/env bash
-# Sketch-family guests -- HyperLogLog, SpaceSaving, Greenwald-Khanna -- in
-# zk-Analytics' per-epoch aggregation / query-time-merge architecture. These are
-# OUR implementations of their design (†), not zk-Analytics code; see README.md,
-# "Sketch-family guests". One entry point that builds the three families and
-# regenerates their executor CSVs end to end. It proves nothing unless --prove.
-#
-#   hll/          run_exec.sh: hll_aggr on epoch 0; hll_query and hll_query_words at
-#                 n = 1 4 16 64                              -> zka_hll_exec.csv
-#                 run_exec.sh: hll_aggr on epochs 1 31 63     -> zka_hll_exec_datadep.csv
-#                 seed_spread.py: numpy re-implementation that must reproduce every
-#                 committed estimate                          -> zka_hll_seed_spread.csv
-#   spacesaving/  ss_exec.sh: s = 2^14 and 1024; aggregation (+ profiling twin, root
-#                 variants, epoch 63); topk / estimate / estimate_merged at
-#                 n = 1 4 16 64                               -> zka_ss_exec.csv
-#   gk/           gk_exec.sh: aggregation on epoch 0 (+ profiling twin) and epochs
-#                 1 16 63; rank, p50, p90, p99 at n = 1 4 16 64 -> zka_gk_exec.csv
-#
-# Regeneration is staged. Each family writes into a fresh directory under $RESULTS
-# (sketch_exec.<ts>.<pid>.tmp, gitignored). A family replaces its CSVs only if all
-# its runs succeed AND every row passes validation (journal == native and the
-# family's reference/accuracy checks, the expected row count, no proved row). Then:
-#   - the previous CSV is kept as <name>.csv.prev (gitignored);
-#   - the staged raw log is APPENDED to the family's log, which keeps every earlier
-#     run (including the raw record of any proved anchor);
-#   - proved rows of the previous CSV are carried over verbatim after the new rows
-#     (GK keeps its anchor in zka_gk_exec.csv), with a check that the ELF they
-#     proved is still the current one;
-#   - the deterministic columns (everything but exec_s and r0vm_peak_rss_mb) are
-#     compared with the previous CSV and the result is logged.
-# A failed family leaves its canonical files untouched and its staged files in place.
-#
-# --prove  after the executor phase, runs each family's ONE small proved anchor
-#          (hll/prove_anchor.sh, spacesaving/ss_anchor.sh, gk/gk_prove_anchor.sh:
-#          aggregation guest, first 2,048 AOL records, ProverOpts::succinct(), CPU
-#          r0vm), one at a time. Before each anchor it waits, up to WAIT_S, until the
-#          1-minute load average is <= MAX_LOAD and no r0vm of ANY user is running.
-#          Each anchor script re-checks MAX_LOAD itself and refuses (exit 3) above it;
-#          this script never raises MAX_LOAD. Anchors append to zka_hll_anchor.csv,
-#          zka_ss_anchor.csv and zka_gk_exec.csv (the families' own conventions).
+# Executor CSVs of our HLL, SpaceSaving and GK ports in zk-Analytics' pipeline (hll/, spacesaving/, gk/).
+# A family's CSVs are replaced only when all its runs succeed and every row validates.
 #
 # Usage: ./sketch_exec.sh [--only hll,ss,gk] [--skip-build] [--no-exec] [--prove] [--dry-run]
 #   --only LIST    families to run (default hll,ss,gk)
 #   --skip-build   use the existing binaries (also SKIP_BUILD=1)
-#   --no-exec      skip the executor phase (only meaningful with --prove)
-#   --prove        add the proved anchors (see above); without it nothing is proved
-#   --dry-run      print the plan and the commands; build, run and write nothing
-# Env:   MAX_LOAD=24  WAIT_S=1800  KEYS=<zkSketch>/data/aol.keys  RESULTS  BASELINE_DIR
-#
-# Signals no process. Executor runs spawn and reap their own r0vm. Nothing here uses
-# ../rss_watch.sh, which pkills every r0vm of this account.
+#   --no-exec      skip the executor runs (with --prove)
+#   --prove        then prove each family's 2,048-record anchor, once load <= MAX_LOAD and no r0vm runs
+#   --dry-run      print the commands; build, run and write nothing
+# Env: MAX_LOAD=24 WAIT_S=1800 KEYS=<zkSketch>/data/aol.keys RESULTS BASELINE_DIR
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"   # ZKS ZKA BASELINE_DIR RESULTS PATH link_zka

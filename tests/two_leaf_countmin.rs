@@ -1,11 +1,4 @@
-//! Integration test for the §4.2 recursive Count-Min chain.
-//!
-//! Mirrors `tests/two_leaf_recursive.rs` but the leaves are real Count-Min
-//! update epochs (paper §5.1 strawman: per-cell additive delta enforced in
-//! the leaf circuit). Two adjacent epochs produced by `prove_countmin_leaf`
-//! are aggregated by `merge_two_countmin` into one recursive batch-STARK,
-//! then re-verified end-to-end via `verify_chain_countmin` — exercising the
-//! whole §4.2 chain through the public API only.
+//! Two Count-Min leaves merged into one recursive proof (merge_two_countmin) and verified.
 
 use zksketch::recursion::recursive::countmin_leaf::{D, W, prove_countmin_leaf};
 use zksketch::recursion::recursive::countmin_merge::{

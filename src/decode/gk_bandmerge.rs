@@ -1,24 +1,5 @@
-//! Greenwald–Khanna **approximate-rank / quantile** decode circuit for the
-//! **two-sided §4 band-merge** state ([`crate::sketch::gk_bandmerge::Gk2State`],
-//! produced by the deployed `bandmerge2` update). The real-GK query counterpart
-//! of the group-by [`crate::decode::greenwald_khanna`] decode: where that reads
-//! the folded 4-field `GKFullState`, this reads the six-field two-sided tuple
-//! `(e, g₁, g₂, Δ₁, Δ₂, t)` and binds the SAME
-//! [`commit_gk2_state`](crate::sketch::gk_bandmerge::commit_gk2_state) digest the
-//! `bandmerge2` update recommits, so the query chains to that leaf.
-//!
-//! ### Estimator (S³ / zk1.tex `app:gk-decode`, two-sided form)
-//! For a query `q`, the bracket `k = #{tuples with e ≤ q}` selects `e_{k-1} ≤ q
-//! < e_k`, and
-//! ```text
-//!   P_i   = Σ_{e ≤ q} (g₁ + g₂ + 1)              (prefix mass)
-//!   r_min = P_i − (g₂_{k-1} + Δ₂_{k-1})          (left bracket; 0 at k=0)
-//!   r_max = P_i + (g₁_k     + Δ₁_k)              (right bracket; 0 at k=cap)
-//!   res   = ⌊(r_min + r_max) / 2⌋
-//! ```
-//! Dummies carry `e = E_MAX` and sort last; for the deployed `q < E_MAX` they
-//! have `le = 0` and `g₁=g₂=0`, so they perturb neither `P_i`, `k`, nor the
-//! bracket deviations.
+//! GK rank/quantile decode circuit over the two-sided band-merge state (`Gk2State`).
+//! Answer: `⌊(r_min + r_max) / 2⌋` for the bracket `e_{k-1} ≤ q < e_k`.
 
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_circuit::ops::{
@@ -599,8 +580,8 @@ mod tests {
     /// [`gk2_decode_vk_commit`]`(.., Hiding)`, which accepts the Hiding proof
     /// while the Plain pin rejects it. A query at version `t` opened with
     /// `ρ^S_t` exposes exactly the final commitment of the hiding band-merge
-    /// leaf `t` (the lemma in `crate::commitment::hiding`); a wrong salt still
-    /// proves, but exposes a commitment that is not the log's.
+    /// leaf `t`; a wrong salt still proves, but exposes a commitment that is
+    /// not the log's.
     #[test]
     fn hiding_decode_exposes_hiding_commit() {
         use crate::commitment::hiding::{Openings, SaltSeed, rho_state_bb};

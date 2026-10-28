@@ -1,25 +1,5 @@
-//! Test-only **malicious-prover** tooling for soundness proofs-of-concept.
-//!
-//! A STARK only enforces what its AIRs and LogUp buses enforce. The executors
-//! that fill the witness during `runner.run()` (the Permute op's σ, the
-//! extension-decomposition hint, the recompose op) are prover-side
-//! conveniences: a malicious prover may emit ANY trace the AIRs accept. These
-//! helpers simulate such a prover by swapping the executor of individual ops in
-//! an already-BUILT circuit. The verifier-side data (AIRs, preprocessed
-//! columns, `ProverData`) is computed at build time and is untouched, so a test
-//! that forges a witness this way and then runs the normal
-//! `prove_all_tables` + `verify_all_tables` measures exactly whether the
-//! constraint system rejects that witness.
-//!
-//! * [`forge_permute_outputs`] — make the `which`-th Permute op emit arbitrary
-//!   output values (not necessarily a permutation of that op's own inputs).
-//!   The PermuteAir only balances the `PermuteBus` over ALL permute rows of the
-//!   circuit, so this is what a prover can do when two ops share an encoding.
-//! * [`forge_decomposition`] — make `decompose_ext_to_base_coeffs(x)` return
-//!   caller-chosen coefficients while the packed `x` keeps its real value.
-//! * [`forge_hint`] — make any single-input hint (bit or byte decomposition)
-//!   write caller-chosen outputs, e.g. the bits of `x + p` or an
-//!   extension-valued "byte".
+//! Test-only malicious-prover helpers: swap the executor of a Permute, decomposition or
+//! hint op in an already-built circuit.
 
 use std::any::Any;
 

@@ -1,6 +1,4 @@
-# Sourced by ss_exec.sh and ss_anchor.sh. Reuses ../common.sh for locations
-# (ZKS, ZKA, BASELINE_DIR, RESULTS, PATH) and for the ../.zka symlink that the
-# path dependencies go through.
+# Shared settings for ss_exec.sh and ss_anchor.sh (paths come from ../common.sh).
 SSDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SSDIR/../common.sh"
 SS_TARGET="$BASELINE_DIR/build/zka-ss"

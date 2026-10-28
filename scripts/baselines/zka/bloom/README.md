@@ -191,9 +191,10 @@ kept for the record.
 
 - The increment from n = 1 to n = 2 is 163,219 cycles per epoch for `bloom_query`
   (read ~20K, commit recomputation ~39K, OR merge ~101K, chain link ~1.5K) and
-  760,386 for `bloom_query_words` (read ~556K, convert ~61K). Linear extrapolation to
-  the planned n = 8 gave ~1.3M cycles (2 segments) for the byte-loop `bloom_query`;
-  the word-wise merge measures 720,648 cycles (1 segment) at n = 8 (update above).
+  760,386 for `bloom_query_words` (read ~556K, convert ~61K). At that increment the
+  byte-loop `bloom_query` would reach ~1.3M cycles (2 segments) at the planned n = 8
+  (n = 1 plus 7 increments, not run); the word-wise merge measures 720,648 cycles
+  (1 segment) at n = 8 (update above).
 - Merged 2-epoch filter at 2,048 records per epoch: 15,430 bits set (13.45%),
   `fpr_fill` 8.0e-7, `fpr_theory` 8.1e-7, 0 false positives in 10,000 absent keys
   (expected 0.008). At the planned 8 x 2,048 records (8,433 distinct AOL keys) the
@@ -278,7 +279,7 @@ proved journal was asserted equal to the native output:
 - **The query cost excludes aggregation receipts.** Each query also needs the n
   per-epoch aggregation receipts, verified separately (their tree has no
   `env::verify`), so the aggregation cost recurs once per epoch.
-- **MODELED is a model.** `MODELED_prove_s = segments x 30.1 s` (envelope 29.73-30.79,
+- **`MODELED_prove_s` is not measured.** It is `segments x 30.1 s` (envelope 29.73-30.79,
   the CM anchors in `../README.md`); small and partial segments prove faster.
 - **ELF md5s and image IDs depend on the absolute source path** (panic strings carry
   it); cycle counts do not. The validation rows were built from a worktree path, so

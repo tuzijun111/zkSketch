@@ -1,10 +1,7 @@
 #![no_main]
 #![no_std]
 
-// Sensitivity variant of hll_query: identical computation and journal, but the epoch
-// states arrive with serde's default Vec<u8> encoding (one zkVM word per register)
-// instead of the packed byte string. The conversion is a move (no copy) and is counted
-// in the "read" phase.
+// hll_query with the registers sent as Vec<u8> (serde's default encoding) instead of packed bytes.
 
 extern crate alloc;
 

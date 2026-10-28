@@ -1,12 +1,7 @@
 #![no_main]
 #![no_std]
 
-// Sensitivity variant of kmv_query (the pattern of ../../../hll's hll_query_words):
-// identical query and journal, but the epoch values arrive as a Vec<u64> in serde's
-// default encoding (two zkVM words per value, read element by element), the form of
-// their CmEpochState::heap_vals, instead of the packed big-endian byte image. The
-// conversion to the query input is a move (no copy); it is timed as its own phase
-// ("convert"), so "read" is serde alone.
+// kmv_query with the values sent as Vec<u64> (serde's default encoding) instead of packed bytes.
 
 extern crate alloc;
 

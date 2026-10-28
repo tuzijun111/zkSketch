@@ -1,37 +1,6 @@
 #!/usr/bin/env bash
-# Query-circuit (decode) test harness for all four sketch families.
-#
-# Each family's *deployed* update variant produces a committed final state; the
-# matching decode/query STARK re-hashes that state (binding the commitment) and
-# proves a query answer against it. This script runs the two independent checks:
-#
-#   1. TESTS  — the per-family decode unit tests (cargo). These assert the
-#               in-circuit answer == an independent native reference AND that the
-#               proof self-verifies (verify_all_tables). This is the authoritative
-#               correctness gate.
-#   2. RUNNER — examples/exp_decode.rs. Builds each deployed final state, runs the
-#               query circuit, and prints a results table (answer vs native,
-#               prove/verify time, proof bytes). Exits non-zero on any mismatch.
-#
-# Families / mapping (paper §Decode, EVAL_SPEC E3):
-#   CM  omc        -> prove_cm_decode        (point frequency)
-#   HLL omc        -> prove_hll_decode_omc   (cardinality)
-#   SS  certified  -> prove_ss_decode        (top-c heavy-hitter mass)
-#   GK  bandmerge2 -> prove_gk2_decode       (two-sided approximate rank)
-#
-# Commitments (revision B2): the runner reads ZKSKETCH_COMMIT once (hiding by
-# default, plain under ZKSKETCH_BINDING=legacy). Under hiding each decoder opens
-# Com(S_t; rho_t) with the prover's randomizer of the state's version t (seed
-# from ZKSKETCH_SALT_SEED, 64 hex chars, or the OS RNG; never printed) and a row
-# is ok only if the proof exposes that commitment. ZKSKETCH_COMMIT=plain runs the
-# pre-B2 decoders byte for byte.
-#
-# Usage:
-#   scripts/run_decode.sh            # tests + runner (default)
-#   scripts/run_decode.sh tests      # only the decode unit tests
-#   scripts/run_decode.sh run        # only the results-table runner
-#
-# Run from the repo root.
+# Decode (query) circuits of the four families: the cargo unit tests, then the exp_decode results table.
+# Usage: scripts/run_decode.sh [all|tests|run]
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

@@ -1,21 +1,5 @@
 #!/usr/bin/env bash
-# ONE small PROVED anchor for the SpaceSaving aggregation guest (aggr_ss, the
-# headline samples-style 64-bucket root): epoch 0 cut to --epoch-size records
-# (default 2048), s = 2^14, ProverOpts::succinct() (their shipped tier), CPU r0vm.
-# Appends one row to ../results/zka_ss_anchor.csv (proved rows only; never the
-# executor CSV) with prove_s, verify_ms, receipt_bytes, s_per_segment, the
-# prover's peak RSS, and prove_condition = clean | contended: the driver counts,
-# once a second and read-only, r0vm processes of ANY user that are not its own
-# child; one sighting makes the row "contended". prove_other_r0vm_samples and
-# prove_load1_mean/max carry the evidence.
-#
-# Refuses to start when the 1-minute load average exceeds MAX_LOAD (24) or any
-# r0vm is already running on the box, and prints the command instead. Peak RSS is
-# sampled by the driver itself from its OWN r0vm child (read-only).
-# ../rss_watch.sh is not used: it refuses to start while any r0vm of this account
-# runs and pkill -9's every r0vm of this account on exit, which would kill other
-# jobs sharing the account.
-#
+# One proved run of aggr_ss (first EPOCH_SIZE AOL records, succinct, CPU) -> ../results/zka_ss_anchor.csv.
 # Usage: ./ss_anchor.sh        Env: EPOCH_SIZE=2048 CAP=16384 MAX_LOAD=24 SKIP_BUILD=1 OUT=...
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common_ss.sh"

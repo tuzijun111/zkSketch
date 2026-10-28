@@ -1,17 +1,4 @@
-//! **Input-commitment + history-fold over real batches** — the end-to-end tie
-//! between the *input commitment* and the *history root* that E5/E6 (which
-//! measure only the composition layer, over synthetic leaves) do not exercise.
-//!
-//! For a stream of `n` real batches it: (1) proves each transition with the real
-//! per-family leaf circuit, which **binds the batch's records to `Com(B_t)`** in
-//! circuit (the §5 S1 step) — its prove time is the *input-binding* cost; and
-//! (2) folds the resulting **real** `Com(B_t)` (carried in each `EpochLeaf`) into
-//! a single history root `R(t)` via the §4 streaming forest — its merge count is
-//! the *fold* cost. A soundness check confirms that tampering one real
-//! `Com(B_t)` changes `R(t)` (so the root binds the committed inputs).
-//!
-//! This is `Count-Min` in the library helper + test (always-on, fast); the
-//! runner `examples/exp_inputfold.rs` does all four families.
+//! Proves real batches with the leaf circuits, then folds their `Com(B_t)` into one history root.
 
 use crate::config::Val;
 use crate::recursion::digest::ChainDigest;

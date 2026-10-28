@@ -1,17 +1,5 @@
-// Independent host-side references for the SpaceSaving port. None of this code
-// is shared with ss-core, so agreement is a real check, not a tautology.
-//
-//   NaiveSs      SpaceSaving with a linear-scan minimum. Eviction rule: among the
-//                minimum-count counters, the one whose count last changed
-//                earliest. That is the rule ss-core's Stream-Summary implements
-//                (counters enter a bucket at the tail, eviction takes the head),
-//                so the two must produce identical states for every capacity.
-//   naive_merge  BTreeMap sum of equal keys, then top-`capacity` by (count desc,
-//                key asc) -- the specification of ss_core::ss_merge.
-//   naive_point  per-epoch binary search (the guest scans linearly) -- the
-//                specification of the SsQuery::Estimate answer.
-//   absent_min_sum  the slack in f <= count + slack for a point/top-k answer.
-//   exact_*      plain frequency counting for accuracy.
+// Independent host-side references for the SpaceSaving port; no code is shared with ss-core.
+// NaiveSs evicts, among the minimum counters, the one whose count changed earliest (ss-core's rule).
 
 use std::collections::{BTreeMap, HashMap};
 

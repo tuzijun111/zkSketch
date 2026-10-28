@@ -1,52 +1,5 @@
-//! **Canonical SpaceSaving update circuit** (zkSketch paper Appendix G).
-//!
-//! Same template as [`crate::sketch::gk_final`]: tuple-based state with
-//! per-row active flags, Poseidon2 commits on state + batch, three timing
-//! tests mirroring count-min. Specialised to SpaceSaving's Misra-Gries
-//! semantics:
-//!
-//! - **Pattern B with bounded retention**: a fixed-capacity summary of
-//!   `(key, count)` pairs. When a new active key arrives, either
-//!   increment its existing row or evict the minimum-count row and
-//!   replace it. The committed state stores the top-`s` heavy hitters
-//!   under the declared count/key total order.
-//! - **Whole-state replacement commit**: like HLL, SpaceSaving's update
-//!   isn't homomorphic over Poseidon2, so the committed state is fully
-//!   re-hashed every epoch. The transition proof is a bounded-state
-//!   replacement certificate (paper §3.3).
-//! - **Privacy**: active flags hide the actual key count and the actual
-//!   batch size. Public parameters are the capacity `s` and the per-
-//!   epoch batch `m`.
-//!
-//! ### Row / record layout (4 Vals = 1 Challenge each)
-//!
-//! - **State row**: `(key_lo, key_hi, count, active)` — `key` packs as
-//!   two `u32` halves to span the full `u64` key space.
-//! - **Batch record**: `(key_lo, key_hi, value, active)`. The `value`
-//!   field is the per-record weight (use `value = 1` for unweighted
-//!   SpaceSaving; the paper's §G assumes nonneg increments).
-//!
-//! ### In-circuit verification scope (deferred / certified)
-//!
-//! - Step 1 (bind old state + batch) — ✓
-//! - Step 2 (union table) — ✗ deferred (would need PermuteAir for
-//!   multiset equality between `S_old.active ∪ B.active` and `U`)
-//! - Step 3 (group by key + sum counts) — ✗ deferred (adjacent-equality
-//!   on `key` + running sum like count-min's counter-grouping)
-//! - Step 4 (top-`s` retention via threshold-residual) — ✗ deferred
-//! - Step 5 (recommit) — ✓ via the Poseidon2 binding
-//! - Step 6 (metadata) — ✓ via `params.validate()`
-//!
-//! **What's certified here**: Poseidon2 bindings on the three commitments;
-//! every active flag ∈ {0, 1}; active-flag monotonicity in the final
-//! state (actives first, padding tail); **mass conservation**:
-//! `Σ(final.count·final.active) = Σ(init.count·init.active) +
-//! Σ(batch.value·batch.active)` (the count-sum is preserved by
-//! SpaceSaving's update rule — eviction merges counts rather than
-//! discarding them).
-//!
-//! What's not yet certified: distinct-key invariant on the active prefix,
-//! count/key total ordering, threshold-residual bound.
+//! Structural SpaceSaving leaf (baseline): binds the commitments and checks active flags
+//! and mass conservation only.
 
 use std::rc::Rc;
 

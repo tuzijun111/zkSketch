@@ -1,20 +1,6 @@
 #!/usr/bin/env bash
-# Fetch the external comparison systems at the exact revisions used in the paper.
-# They are deliberately cloned OUTSIDE this repository: both carry their own git
-# history and many GB of build artifacts (the six-sketch comparison's zk-Analytics-side
-# builds alone take ~13 GB), and neither is ours to redistribute.
-#
-#   zk-Analytics  MIT           Zhu et al., "Zero-Knowledge Cloud Analytics", SIGCOMM '26
-#   zkStream      BSD-3-Clear   Swalens et al., Middleware '24
-#
-# Usage: fetch_baselines.sh [all|zka|zkstream]
-#   all (default)  zk-Analytics + zkStream + ZoKrates 0.8.8
-#   zka            zk-Analytics only: all the six-sketch comparison needs
-#                  (scripts/baselines/zka/six/run_all.sh)
-#   zkstream       zkStream + ZoKrates 0.8.8
-# Destination: $BASELINE_DIR (default ~/ext-baselines). Safe to re-run: an existing clone is
-# re-checked-out at the pinned revision. FETCH_NO_NEXT=1 (set by run_all.sh build) drops the
-# "Next" note printed after `zka`.
+# Clone zk-Analytics and zkStream and install ZoKrates 0.8.8 at the revisions used in the paper.
+# Usage: scripts/baselines/fetch_baselines.sh [all|zka|zkstream]   (into $BASELINE_DIR, default ~/ext-baselines)
 set -euo pipefail
 
 WHAT=${1:-all}

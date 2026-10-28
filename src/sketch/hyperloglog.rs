@@ -1,22 +1,4 @@
-//! Plaintext HyperLogLog sketch (paper §5.3 Pattern A max, Appendix F).
-//!
-//! Phase 4a only delivers the plaintext layer plus the `StateCommit` for it
-//! (`src/commitment/hyperloglog.rs`). The in-circuit `HllUpdateAir`, the
-//! recursive merge wiring, and the §5.4-shaped optimised variant land in
-//! Phases 4b, 4c, and 4d respectively.
-//!
-//! The hash family is fixed and public: one wrapping multiply + xor + mask
-//! splits a 64-bit key into the register index (low `b` bits) and the
-//! leading-run-of-zeros statistic (count-leading-zeros of the remaining
-//! `64 - b` bits, plus one — HLL's 1-indexed convention). This matches the
-//! paper's assumption that the hash profile is part of `M` (public metadata)
-//! and lets the leaf circuit recompute the same `(idx, lr)` pair from the
-//! key without any out-of-band lookups.
-//!
-//! Like Count-Min (§5.3 Pattern A linear), HyperLogLog admits per-batch
-//! delta certificates — but with `max` in place of `+`. The aggregation is
-//! still associative-commutative, so `apply_delta(prev, build_delta(prev,
-//! batch)) == replay(prev, batch)` (asserted in `delta_aggregates_batch_via_max`).
+//! Plaintext HyperLogLog sketch with a fixed public hash (register index, leading-zero rank).
 
 use crate::sketch::{DeltaCert, Sketch};
 

@@ -1,9 +1,4 @@
-# Sourced by the bloom/ scripts (the pattern of ../hll/hll_common.sh). Reuses
-# ../common.sh (PATH, BASELINE_DIR, ZKA, ZKS, RESULTS, link_zka) and adds the Bloom
-# build, which goes to $BASELINE_DIR/build/zka-bloom.
-#   host binary: --locked against bloom/Cargo.lock (derived from ../hll/Cargo.lock)
-#   guest ELFs:  RISC0_BUILD_LOCKED=1 makes risc0-build's nested cargo honour
-#                bloom/guests/Cargo.lock (derived from zk-Analytics' own Cargo.lock)
+# Sourced by the bloom/ scripts: build, log-header, CSV and PROVE=1 helpers on top of ../common.sh.
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 FAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FAM=bloom

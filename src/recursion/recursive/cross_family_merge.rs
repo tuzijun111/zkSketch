@@ -1,22 +1,5 @@
-//! **Real recursive cross-family merge** (§4.2 merge atom across heterogeneous
-//! sketch families): aggregate a Count-Min leaf proof AND a HyperLogLog leaf
-//! proof into ONE batch-STARK that recursively re-verifies *both* leaves.
-//!
-//! This is the genuine recursive counterpart of the framework's option-(i)
-//! cross-family `merge_atom` (which only combines boundary digests, without
-//! re-verifying either leaf). It works because both leaf proofs are the **same
-//! Rust type** — `RecursionOutput<ConfigWithFriParams>` wrapping a
-//! `BatchStarkProof<ConfigWithFriParams>` — produced under the same leaf config
-//! / extension degree / table packing. The aggregation prover verifies an
-//! arbitrary-shaped batch-STARK proof generically (it already merges
-//! differently-shaped proofs in `CountMinChainState::extend`, e.g. a large
-//! chain root with a small fresh leaf), so a CM leaf and an HLL leaf — both
-//! `BatchOnly` recursion inputs — aggregate the same way.
-//!
-//! Unlike a same-family chain there is **no shared-boundary equality**: CM and
-//! HLL states are independent, so this proves "both epochs are valid" composed
-//! under one root, binding both families' `(initial, final)` commitments into a
-//! single combined digest.
+//! Recursive merge of a Count-Min leaf and a HyperLogLog leaf into one aggregation
+//! proof. No shared boundary; both `(initial, final)` pairs go into one digest.
 
 use p3_circuit_prover::BatchStarkProver;
 use p3_recursion::{BatchOnly, Poseidon2Config, RecursionOutput, build_and_prove_aggregation_layer};

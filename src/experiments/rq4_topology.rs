@@ -1,24 +1,5 @@
-//! **RQ4 — Composition topology and maintenance policy** (paper §Evaluation,
-//! `sec:rq4`).
-//!
-//! Validates the §4.3 / §peak-chain policy guidance on the velocity-vs-latency
-//! plane. The composition cost is **leaf-shape-agnostic** (the paper states
-//! this), so we drive it with cheap synthetic epoch leaves to reach larger
-//! windows. Our framework composes via *option (i)* boundary-digest lifting,
-//! so a "merge" is one `merge_atom` (a Poseidon2 digest + boundary checks),
-//! not a full recursive-SNARK fold — the merge **counts** are the structural
-//! signal; the measured per-merge time `τ` is this lightweight cost (flagged).
-//!
-//! - **4-a/4-b Insert-rate scaling (chain / tree / forest).** Per-update online
-//!   merge cost: chain = 1 (serial); balanced binary tree = `⌈log₂E⌉` spine
-//!   refresh; streaming forest = amortised `O(1)` with worst-case `⌈log₂E⌉`
-//!   cascade. Single-core: chain is serial; multi-core: tree/forest expose
-//!   across-subtree parallelism.
-//! - **4-c/4-d Maintenance policy (lazy / eager / smoothed / query-burst).**
-//!   On the streaming forest, the surviving-peak count `ℓ = popcount(t)`.
-//!   Lazy on-demand finalisation folds `ℓ` peaks in `ℓ-1` **sequential**
-//!   merges; query-burst on `k ≥ ℓ/2` cores folds them in `⌈log₂ℓ⌉` — the
-//!   speedup the paper quantifies (Example peak-chain-walkthrough).
+//! RQ4: composition topology (4-a/4-b) and peak-fold policy (4-c/4-d), on synthetic leaves.
+//! `lazy_ms`/`queryburst_ms` = merge count × the measured `merge_atom` time (a Poseidon2 digest).
 
 use crate::config::Val;
 use crate::recursion::framework::{EpochLeaf, StreamingForest, lift_leaf, merge_atom};
@@ -143,7 +124,7 @@ fn panel_4cd(merge_us: f64) -> Table {
 }
 
 /// Number of surviving forest peaks after ingesting `t` epochs (`popcount(t)`),
-/// computed by actually running the cascade for small `t`, else analytically.
+/// counted by running the cascade for `t ≤ 8192`, else taken as `popcount(t)`.
 fn build_forest_peaks(t: u64) -> u64 {
     if t <= 8192 {
         let leaves = synth_chain(t);

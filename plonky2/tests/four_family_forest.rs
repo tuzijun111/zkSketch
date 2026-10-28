@@ -1,9 +1,4 @@
-//! End-to-end: each of the four **deployed-forest** families — Count-Min `omc`,
-//! HyperLogLog `omc`, SpaceSaving `certified`, Greenwald–Khanna `bandmerge2` —
-//! proves 4 chained epochs and composes them into a single streaming-forest root
-//! via `compose_tree` (§4.3(b) balanced tree), verified in `O(1)`. This is the
-//! plonky2 analog of the plonky3 `stream_compose` forest mode over the same four
-//! (family, variant) leaves.
+//! CM omc, HLL omc, SS and GK bandmerge2 each prove 4 chained epochs and compose them with compose_tree.
 
 use anyhow::Result;
 

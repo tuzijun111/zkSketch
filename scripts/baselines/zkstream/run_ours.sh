@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# run_ours.sh -- zkSketch's Count-Min leaf at the same small batch sizes as run_zkstream.py.
-# One batch (t=1) on one machine runs exec=sim, where total_time_ms is the leaf prove alone.
-# Same d, w and AOL keys as the ZoKrates side; pinned to the same 32 hardware threads.
-#   MS="16 64 256" REPS=3 scripts/baselines/zkstream/run_ours.sh
+# zkSketch's Count-Min leaf at the same batch sizes, d, w and AOL keys as run_zkstream.py; one batch (t = 1) per run.
+# Usage: MS="16 64 256" REPS=3 scripts/baselines/zkstream/run_ours.sh
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 MS="${MS:-16 64 256}"; REPS="${REPS:-3}"; D="${D:-3}"; W="${W:-1024}"

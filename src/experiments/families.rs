@@ -1,14 +1,4 @@
-//! Shared per-family single-epoch provers used by every RQ runner.
-//!
-//! Each function proves **one transition** `S_{t-1} → S_t` for a batch of
-//! `u32` keys (the dataset/Zipf streams), threading an evolving state so a
-//! caller can replay a whole stream epoch-by-epoch. They all return a uniform
-//! [`EpochOutcome`] (prove time, proof size, correctness, a state metric, a
-//! decoded answer, and the boundary commitments the §4 framework needs) plus
-//! the new state to carry forward.
-//!
-//! Domain masking per family matches the dataset tests (`src/dataset.rs`): GK
-//! values to 22 bits, SS keys to 30 bits non-zero, CM/HLL keys used directly.
+//! Single-epoch provers for each family, shared by the RQ runners.
 
 use std::time::Duration;
 

@@ -1,35 +1,15 @@
 #!/usr/bin/env bash
-# M2 -- zk-Analytics whole-prefix Count-Min QUERY sweep.
-#
-# Measures, for their cm/estimate (and optionally cm/topk) query over n epochs:
-#   prove time, verify time, receipt bytes, journal bytes, raw public-output
-#   bytes, peak r0vm RSS, and the number of receipts a verifier must check.
-#
-# One qsweep process per n  =>  resumable: n values already present in the CSV
-# (for the same mode/query/scale/CM_TOPK_SLOTS) are skipped, so the lead can Ctrl-C and rerun.
-#
-# WHY THIS SHAPE IS CHEAP (verified, see report):
-#   the CM query guest's cost is EXACTLY independent of keys-per-source,
-#   events-per-key and num-sources -- cm/estimate at n=4 is 4,706,657 cycles for
-#   all of {1 key, 1 event}, {100 keys, 1 event}, {100 keys, 50 events}.
-#   Only the epoch count moves it. So the Theta(n) slope is fully exhibited at
-#   the minimum data scale. cm/topk is the one exception: its candidate set is
-#   n * (occupied top-k slots), so topk defaults to scale = CM_TOPK_SLOTS (default 100)
-#   to fill every heap slot.
-#
-# Usage:
-#   ./q_sweep.sh [options] <n1> [n2 ...]
-# Options:
-#   --query estimate|topk|both   default: estimate
-#   --scale K                    keys-per-source; default 1 (estimate) / CM_TOPK_SLOTS (topk)
-#   --events-per-key E           default: 1
-#   --seed X                     default: 48879 (0xBEEF, their bench default)
-#   --exec                       executor only, NO PROVING (dry run, seconds)
-#   --out FILE                   default: results/zka_query_sweep.csv
-#   --dry-run                    print the plan and exit (no build, no proving)
-# Env:
-#   CM_TOPK_SLOTS=T              top-k heap slots, BUILD-TIME; default 100 (their shipped default)
-#   SKIP_BUILD=1                 run the existing qsweep binary without rebuilding
+# zk-Analytics Count-Min query proofs over n epochs: prove and verify time, receipt size, r0vm peak RSS.
+# n values already in the CSV are skipped.
+# Usage: ./q_sweep.sh [options] <n1> [n2 ...]
+#   --query estimate|topk|both   default estimate
+#   --scale K                    keys per source; default 1 (estimate) or CM_TOPK_SLOTS (topk)
+#   --events-per-key E           default 1
+#   --seed X                     default 48879 (their bench default)
+#   --exec                       executor only, no proving
+#   --out FILE                   default results/zka_query_sweep.csv
+#   --dry-run                    print the plan and exit
+# Env: CM_TOPK_SLOTS (top-k slots, build time; default 100), SKIP_BUILD=1
 set -uo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"   # RESULTS build_cyc cyc_target
@@ -53,7 +33,7 @@ while [[ $# -gt 0 ]]; do
     --out)            OUT="$2"; shift 2;;
     --exec)           MODE=exec; shift;;
     --dry-run)        DRYRUN=1; shift;;
-    -h|--help)        sed -n '2,32p' "$0"; exit 0;;
+    -h|--help)        sed -n '2,12p' "$0"; exit 0;;
     -*)               echo "unknown option $1" >&2; exit 2;;
     *)                EPOCHS+=("$1"); shift;;
   esac
@@ -102,7 +82,7 @@ POLLER_PID=""
 # MAY_KILL gates the r0vm reaper. It stays 0 until we have PROVED that no r0vm
 # of ours was already running (the refusal check below) -- otherwise the EXIT
 # trap would kill the very in-flight proving job the refusal exists to protect,
-# and a harmless --dry-run would kill the lead's run.
+# and a --dry-run would kill a proof that is already running.
 MAY_KILL=0
 cleanup() {
   [[ -n "$POLLER_PID" ]] && kill "$POLLER_PID" 2>/dev/null

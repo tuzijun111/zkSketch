@@ -1,26 +1,6 @@
-//! `cmq` — zkSketch CM **decode-query isolate**.
-//!
-//! Proves ONLY the Count-Min point-frequency decode circuit
-//! (`zksketch::decode::countmin::prove_cm_decode`, src/decode/countmin.rs:107)
-//! against a natively-materialized CM state. NO update leaf, NO composition
-//! fold, NO stream re-proof — the decode circuit's cost is Theta(d*w) (the
-//! whole-state in-circuit re-hash) and is INDEPENDENT of the stream length and
-//! of the number of batches (src/decode/mod.rs:5-12).
-//!
-//! This exists because the two in-repo decode runners hard-code shapes that
-//! cannot reach the matched geometry:
-//!   examples/exp_decode.rs:85-86   d=4, w=8    (no env knobs at all)
-//!   examples/exp_e3.rs:98-99       d=4, w in {4,8,16}
-//! and the zksketch crate is read-only for this harness.
-//!
-//! The probe-key selection replicates
-//! `stream_compose::select_query_key` + `splitmix64`
-//! (src/experiments/stream_compose.rs:372-424) bit-for-bit, because both are
-//! private to that module. `first` is the harness default
-//! (EXP_QUERY_KEY_MODE, examples/exp_compose.rs:381).
-//!
-//! Env knobs: D, W, N, TRIALS, SEEDS, DATASET, KEY_MODE, CORES, CSV, TAG.
-//! Prints one CSV line per (seed, trial-aggregate) to stdout and appends to $CSV.
+//! Proves only zkSketch's CM decode (point query) circuit on a natively built d x w state.
+//! Usage: [D=3 W=1024 N=16384 DATASET=uniform KEY_MODE=first TRIALS=1 SEEDS=1 CSV=out.csv
+//!        CORES=N (default: all threads) TAG=zks_cm_decode DRY_RUN=1 (plaintext only, no proof)] cmq
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -57,7 +37,7 @@ fn peak_rss_mb() -> f64 {
         .unwrap_or(0.0)
 }
 
-// ---- verbatim copies of the private harness helpers (cited above) ----
+// ---- copies of splitmix64 / select_query_key (private in src/experiments/stream_compose.rs; same logic, mode passed as a string) ----
 fn splitmix64(x: u64) -> u64 {
     let mut z = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -171,7 +151,7 @@ true_count,rel_err,peak_rss_mb,status";
         let st = cm_state(d, w, &keys);
 
         // ground truth + native PRF-consistent estimate (mirrors
-        // examples/exp_decode.rs:96-103)
+        // `run_cm` in examples/exp_decode.rs)
         let mut freq: BTreeMap<u64, u64> = BTreeMap::new();
         for &k in &keys {
             *freq.entry(k as u64).or_insert(0) += 1;
@@ -197,9 +177,9 @@ true_count,rel_err,peak_rss_mb,status";
                 continue;
             }
             let t0 = Instant::now();
-            // `DecodeProof` holds an `Rc` and is NOT `Send`, so — exactly as
-            // `stream_compose::QueryArt` does (src/experiments/stream_compose.rs:291-297)
-            // — only the Send metrics cross the pool boundary.
+            // `DecodeProof` holds an `Rc` and is NOT `Send`, so, as with
+            // `QueryArt` in src/experiments/stream_compose.rs, only the Send
+            // metrics cross the pool boundary.
             let (prove_ms, verify_ms, b, a) = pool.install(|| {
                 let _ = timing::take(); // clear anything left over
                 let p = prove_cm_decode(
@@ -208,8 +188,8 @@ true_count,rel_err,peak_rss_mb,status";
                     probe,
                 );
                 let tm = timing::take();
-                // prove_ms mirrors stream_compose::record_query (witness + prove),
-                // src/experiments/stream_compose.rs:315-320.
+                // prove_ms mirrors `record_query` in src/experiments/stream_compose.rs
+                // (witness + prove).
                 (
                     (tm.witness + tm.prove).as_secs_f64() * 1e3,
                     tm.verify.as_secs_f64() * 1e3,

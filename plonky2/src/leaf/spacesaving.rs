@@ -1,22 +1,4 @@
-//! In-circuit SpaceSaving update leaf for plonky2 (Pattern B top-`s`).
-//!
-//! Port of `../src/sketch/ss_final_full.rs` (the §G single-pass retention) to
-//! plonky2's gate model. Pipeline:
-//!
-//! 1. Bind old state, batch, and new state to Poseidon commitments (PIs).
-//! 2. **Union + key-sort**: `combined = old ‖ batch` is permuted (grand-product)
-//!    to a key-ascending view; sortedness is range-checked.
-//! 3. **Group by key**: adjacency-equality tags (forced by [`is_zero`]) drive a
-//!    running count/active sum; segment ends emit the grouped table `G`.
-//! 4. **Count-sort + top-`s` split**: `G` is permuted to `(active asc, count
-//!    asc)` order; the **last `capacity`** rows (heaviest) become the new state,
-//!    the first `batch` are the discarded residual.
-//! 5. **Mass conservation**: `Σ new.count + Σ residual.count == Σ old.count +
-//!    Σ batch.value`.
-//!
-//! Because top-`s` retention (unlike linear Count-Min) depends on the grouped
-//! counts being *exact*, the grouping tags are forced correct with [`is_zero`]
-//! (not the honest-prover shortcut Count-Min can afford).
+//! SpaceSaving update leaf: union, key-sort, group by key, count-sort, keep the top `capacity` rows.
 
 use std::sync::Arc;
 

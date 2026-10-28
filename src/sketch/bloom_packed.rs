@@ -1,119 +1,5 @@
-//! **Packed-byte Bloom-filter leaf (`bloom_packed`, design B1, milestone M2)**
-//! — the same partitioned Bloom filter as [`super::bloom_omc`], with its state
-//! stored as BYTES instead of one field element per bit.
-//!
-//! ## Filter (unchanged, bit for bit)
-//!
-//! `k` slices of `W = 2^log_w` bits; a record `key` is hashed ONCE with
-//! Poseidon2 (the [`record_vals`] / [`record_digest`] encoding of
-//! `bloom_omc`) and digest limb `j < k` gives slice `j`'s position
-//! `pos_j = digest[j] mod W` (canonical split). Insert sets the `k` bits, a
-//! membership query ANDs them. The bit array is exactly `bloom_omc`'s:
-//! [`bits_to_words`]`(bloom_insert(..)) == packed_insert(..)` and the query
-//! answers are equal (tests `same_filter_as_bloom_omc*`, `query_answers_*`).
-//!
-//! ## State and commitment
-//!
-//! `M_w = k·W/8` bytes; word `u = j·W/8 + q` holds the bits
-//! `j·W + 8q .. j·W + 8q + 7`, bit `i` of word `u` is global bit `8u + i`
-//! (LSB first; [`bits_to_words`]). `Com(S)` absorbs the bytes 3 per base
-//! limb (`w_0 + 2^8·w_1 + 2^16·w_2`, little-endian, zero-padded to a multiple
-//! of 4 limbs; [`words_flat`]): `MyHash(limbs)` under `Plain`,
-//! `MyHash([TAG_STATE, BloomPacked = 7, 0, 0, ρ] ‖ limbs)` under `Hiding`
-//! ([`commit_packed_with`]). The batch commitment is `bloom_omc`'s record
-//! sequence (`Plain`: byte-identical to [`super::bloom_omc::bloom_batch_commit`];
-//! `Hiding`: family 7). Genesis is `Com(0^{M_w}; 0)`.
-//!
-//! ## Update relation: per-access timestamped memory checking, no sort
-//!
-//! The `L = k·batch` (record, slice) pairs are taken in record-major order
-//! `p = r·k + j`; pair `p` reads and writes its word `u_p` once, at the public
-//! timestamp `τ_p = p + 1` (Blum et al. / Spice):
-//!
-//! ```text
-//!   WS = {(u, O_u, 0) : u < M_w}  ⊎  {(u_p, cur_p, τ_p) : p < L}
-//!   RS = {(u, N_u, ft_u) : u < M_w} ⊎ {(u_p, v_p, ts_p) : p < L}
-//!   WS == RS   (ONE Permute op over 4-coordinate elements a + b·X + c·X²)
-//!   ts_p ≤ τ_p − 1   (d_p = τ_p − 1 − ts_p ∈ [0, 2^16))
-//! ```
-//!
-//! Every coordinate of every element is pinned to the base field (`u` by
-//! constants and the routing, `O, N` by byte lookups, `v, cur` by the split
-//! below, `ts` by the gap bytes, `ft` by its two bytes), so the encoding is
-//! injective. Write timestamps are distinct (`0` once per word, `τ_p` once per
-//! pair) and every read consumes a strictly earlier write, so — by induction
-//! over the pairs touching a word — pair `p` reads exactly the latest value of
-//! `u_p` and the final read of every word consumes its last write (`N_u` is the
-//! last `cur`, or `O_u` for an untouched word). There is only one Permute op,
-//! so the fork's shared PermuteBus cannot mix multisets.
-//!
-//! The per-pair OR is proved with a **split-at-bit**: `e = 2^i` from the three
-//! position bits, `v = (2H + c)·e + L` with `c ∈ {0,1}`, `H, L ∈ [0,256)` and
-//! `e + 255 − L ∈ [0,256)` (i.e. `L < e`); since `v` is a byte (it equals a
-//! write), `(2H + c)·e + L ≤ 511·128 + 127 < 2^16 ≪ p` is an exact integer
-//! identity, so `c` is bit `i` of `v`, and
-//! `cur = v + (act − act·c)·e = v OR act·2^i` (carry-free). A repeated bit
-//! simply sees `c = 1`: no sort, no dedupe. Dummy records (`act = 0`) rewrite
-//! their word unchanged. Words of 8 bits keep the split exact; 16-bit words
-//! would wrap mod `p` (e.g. `H = 30,721`, `e = 2^15`), which is why bytes were
-//! chosen (plan §2 B1).
-//!
-//! ## Constraint list (leaf)
-//!
-//! Private inputs, in allocation order: the 9 salts (`Hiding` only); `O_u`,
-//! `N_u` (`M_w` each); `(flo_u, fhi_u)` per word; per record
-//! `[b_0..b_7, act]` (the key's 8 bytes); per record the split witnesses
-//! ([`split_count`]); per pair `[c, H, L, dlo, dhi]` ([`PAIR_WITNESSES`]).
-//!
-//! | # | constraint | gadget | test switch ([`PackedChecks`]) |
-//! |---|---|---|---|
-//! | A1 | `O_u, N_u ∈ [0,256)` | one byte lookup each | `o_pin`, `n_pin` |
-//! | A2 | `ft_u = flo + 2^8·fhi`, bytes ∈ [0,256) | 1 `mul_add`, 2 lookups | `ft_range` |
-//! | A3 | `Com(S_{t-1}) = H(pack(O))`, `Com(S_t) = H(pack(N))` | ALU packing, bound sponge | — |
-//! | B1 | `act ∈ {0,1}`, key limb `k_j = b_{2j} + 2^8·b_{2j+1}`, bytes ∈ [0,256) | BoolCheck, 4 `mul_add`, 8 lookups | `act_bool`, `key_range` |
-//! | B2 | `act = 0 ⇒ k_0 + k_1 + k_2 + k_3 = 0` | 5 ALU | `dummy_canon` |
-//! | B3 | `rec = [k0, k1, k2, k3 + 2^16·act]`, `h = Poseidon2(rec)` (zero IV) | ALU recompose, bound sponge | — |
-//! | B4 | per slice: `i_0, i_1, i_2 ∈ {0,1}` | 3 BoolCheck | `i_bool` |
-//! | B5 | per slice: `q` from its bytes, `q ∈ [0, 2^{log_w−3})` exact | Horner + lookups (+1 shifted lookup) | `q_range` |
-//! | B6 | per slice: `hi` from bytes, `HI_MAX − hi` from bytes, `(HI_MAX − hi = 0) ⇒ pos = 0` | Horner + lookups, inverse trick | `canon` |
-//! | B7 | `digest[j] = 2^log_w·hi + 8q + i_0 + 2i_1 + 4i_2`, unused limbs from 4 bytes; `recompose(limbs) = h` | ALU + lookups | `unused_limbs` |
-//! | B8 | `Com(B_t) = H(recs)`; Interval: `t` pinned, `H(TAG_LEAF, t, Com(B_t))` exposed | bound sponge | — |
-//! | D1 | `e = (1 + i_0)(1 + 3i_1)(1 + 15i_2)` | 5 ALU | — |
-//! | D2 | `c ∈ {0,1}` | BoolCheck | `c_bool` |
-//! | D3 | `H ∈ [0,256)` | lookup | `h_range` |
-//! | D4 | `L ∈ [0,256)` | lookup | `l_nonneg` |
-//! | D5 | `L + 256 − e ∈ [0,256)` | 2 ALU + lookup | `l_lt_e` |
-//! | D6 | `v = (2H + c)·e + L` | 2 ALU | — |
-//! | D7 | `cur = v + (act − act·c)·e` | 2 ALU | — |
-//! | D8 | `d = dlo + 2^8·dhi`, bytes ∈ [0,256); `ts = (τ_p − 1) − d` | 2 ALU + 2 lookups | `ts_lt_tau` |
-//! | D9 | read `u + v·X + ts·X²`, write `u + cur·X + τ_p·X²` | 4 ALU | — |
-//! | D10 | `[init writes] ‖ [pair writes]` is a permutation of `[final reads] ‖ [pair reads]` | one Permute op | — |
-//!
-//! `u = q + j·W/8` (word-address constants), `τ_p − 1` and `τ_p` are constants
-//! (pooled with the word addresses), so soundness relies on the pinned fork's
-//! ConstAir binding (constant values are in the VK; `const_values_are_bound`
-//! below is the regression test). The routing hash, canonical split, key
-//! encoding and dummy rule are `bloom_omc`'s (module doc there), computed with
-//! byte witnesses instead of hint-decomposed range checks.
-//!
-//! **Changes from the 2026-10-14 design-round prototype** (not in the repository;
-//! same relation, cheaper gadgets; at k = 7, W = 2^14, m = 1,024 the ALU
-//! table falls from 245,257 rows (0.936 of 2^18) to 185,353 (0.707), every
-//! table keeping its padded height):
-//! byte pins are direct RangeAir lookups (`add_range`, which forces the
-//! three higher coefficients to zero and the base one into `[0,256)`, 0 ALU
-//! ops) instead of `add_range_bits(x, 8)` (2 ALU ops each); every multi-byte
-//! range (`ft`, the timestamp gap, `q`, `hi`, `HI_MAX − hi`, key limbs,
-//! unused digest limbs) is recomposed from prover-witnessed bytes (1 ALU op
-//! per extra byte) instead of `add_range_bits` (2 ALU ops per byte); `v` is the
-//! split's ALU output, not a separate private input; `cur` uses one `mul_add`
-//! for `act − act·c`; the timestamp is derived from its gap
-//! (`ts = τ_p − 1 − d`); all three statement layouts ([`Expose`]) and the
-//! hiding entry points (zero-salt guards, the public no-op path) are
-//! implemented.
-//!
-//! Cost: `Θ(M_w + k·batch)`, dominated by the per-pair split and the dense
-//! byte commitments (`M_w = M/8`).
+//! Bloom-filter leaf with the bits packed into bytes (same filter as `bloom_omc`), proved
+//! by per-access timestamped memory checking without a sort.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -193,6 +79,9 @@ fn p_u64() -> u64 {
 /// from the deployed VK in exactly the circuits the check belongs to (and
 /// equals it in the other). A removed check leaves its witnesses consumed by
 /// the remaining ALU rows, so the WitnessChecks bus still balances.
+///
+/// Constraint labels: A = state words, B = per record, D = per (record, slice)
+/// pair, Q = the query circuit (`crate::decode::bloom_packed`).
 ///
 /// | switch | circuit | constraint | what it stops (test) |
 /// |---|---|---|---|

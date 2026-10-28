@@ -1,36 +1,5 @@
-// TIER-SPLIT driver for zk-Analytics' Count-Min aggregation guest.
-//
-// WHY THIS EXISTS (fairness):
-//   `cmp` proves directly at ProverOpts::succinct(), so its single prove_s
-//   bundles TWO things: (a) segment STARK proving, and (b) the lift/join
-//   recursion tree that compresses those segment receipts into one constant-
-//   size succinct receipt.  zkSketch's matched t=1 number (23,745.8 ms,
-//   763,581 B, 18.821 ms verify) is a RAW leaf STARK -- stage (a) only, no
-//   compression at all (stream_compose.rs:1073-1078 explicitly reports the
-//   leaf's own self-verify at t=1 because there is no fold to verify).
-//   Comparing their post-compression receipt against our pre-compression proof
-//   charges them for work we do not do, and charges us proof bytes / verify ms
-//   that compression would have removed.  A reviewer can invalidate the
-//   headline on exactly that ground.
-//
-// WHAT THIS DOES: proves ONCE at ReceiptKind::Composite (their stage (a)),
-// measures it, then calls Prover::compress(succinct) (their stage (b)) and
-// measures that separately.  compress() is idempotent and the composite ->
-// succinct path is the same lift/join tree prove_with_opts(succinct) runs
-// internally, so composite_s + compress_s should reproduce `cmp`'s prove_s to
-// within noise -- that agreement is itself the validity check.
-//
-// Gives three publishable rows instead of one:
-//   tier=composite : compare against our RAW leaf   (pre-compression, both sides)
-//   tier=succinct  : compare against our FOLDED root (post-recursion, both sides)
-//   compress_s     : the cost of the tier change, on their side, measured
-//
-// Usage: cmp_tier <n_records> <distinct_keys> <chunk_batch>
-// Geometry fixed by their code: CM_ROWS=3, CM_COLS=1024 (aggregator/core/src/lib.rs:39-40).
-// CM_TOPK_SLOTS is build-time (aggregator/core/build.rs:13) -- export it before `cargo build`.
-//
-// PEAK RSS: this driver's own VmHWM is meaningless (~9 MB); r0vm is a separate
-// process.  Sample /proc/<r0vm pid>/status:VmHWM externally, as compare.sh does.
+// zk-Analytics' CM aggregation guest proved as composite, then compressed to succinct; both steps timed.
+// Usage: [VERIFY_REPS=1] cmp_tier <n_records> <distinct_keys> <chunk_batch>
 use aggregator_core::{batch_chain_hash, BatchInput, CmAggrInput};
 use aggregator_methods::{AGGR_CM_ELF, AGGR_CM_ID};
 use rand::rngs::StdRng;

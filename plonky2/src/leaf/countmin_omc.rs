@@ -1,34 +1,4 @@
-//! In-circuit **offline-memory-checking Count-Min leaf (`omc`)** (plonky2 / SNARK).
-//! Port of `../src/sketch/countmin_omc.rs`.
-//!
-//! The sound, **cross-state** Count-Min rebind: it proves the transition against
-//! a *non-trivial committed prior state* (no empty-init assumption, no Merkle
-//! path) via a single read/write **multiset equality**
-//!
-//! ```text
-//!     M_old ⊎ W  ==  M_new ⊎ R       (as multisets)
-//! ```
-//!
-//! where `M_old = {(a, S_{t-1}[a])}`, `M_new = {(a, S_t[a])}` are the full dense
-//! memories (bound to `init_commit`/`final_commit`), `W = {(a_z, N_z)}` the touched
-//! writes and `R = {(a_z, O_z)}` the touched reads. Because the encoding binds the
-//! address, the multiset forces the prover's claimed old value `O_z` to be the
-//! genuinely committed old value, and `N[a_z] = O_z + Δ_z`; untouched addresses are
-//! forced `O[u] = N[u]`. This is the only variant that reconciles touched old
-//! values against a real committed prior state with no Merkle path.
-//!
-//! ## plonky2 vs plonky3
-//! plonky3 routes the rebind through a `PermuteAir` with an explicit `sigma`.
-//! plonky2's grand-product ([`assert_perm_cols`]) is **sigma-free** — it proves
-//! multiset equality directly — so both the counter-sort and the `M_old⊎W=M_new⊎R`
-//! check are a single `assert_perm_cols`. Each multiset element is the 3-column row
-//! `(addr, val, tag)`; the `tag` (1 for real, 0 for inactive dummies) keeps a real
-//! `(0,0)` element disjoint from the zero dummies that inactive W/R rows produce.
-//!
-//! ## Cost
-//! `Θ(d·w + n_ctr)` — the dense commit/decompose of both ends plus one grand-product
-//! over `d·w + n_ctr` rows. It replaces `one_hot`'s `Θ(batch·d·(d·w))` selector
-//! matrix while remaining sound against a committed prior state.
+//! Count-Min `omc` leaf: offline memory checking, M_old ⊎ W = M_new ⊎ R, against the committed prior state.
 
 use std::sync::Arc;
 

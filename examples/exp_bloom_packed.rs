@@ -1,24 +1,6 @@
-//! **M2 probe: the packed-byte Bloom leaf (B1)** — table shapes, honest
-//! prove/verify, timing and peak RSS of the leaf, the membership query and a
-//! merge, in either commitment mode. Ported from the 2026-10-14 prototype's
-//! `b1_probe.rs` onto the wired module (`zksketch::sketch::bloom_packed`).
-//!
-//! ```bash
-//! B1_KIND=leaf  B1_M=1024 cargo run --release --example exp_bloom_packed
-//! B1_KIND=shapes B1_M=256,960,1024,2048 cargo run --release --example exp_bloom_packed
-//! B1_KIND=query B1_MODE=plain cargo run --release --example exp_bloom_packed
-//! B1_KIND=merge B1_M=1024 cargo run --release --example exp_bloom_packed
-//! ```
-//!
-//! Knobs: `B1_KIND=shapes|leaf|query|merge|all` (default `leaf`), `B1_M`
-//! (comma list for `shapes`, default 1024), `B1_K` (7), `B1_LOGW` (14),
-//! `B1_MODE=hiding|plain` (default hiding), `B1_REPS` (2), `B1_PRIOR` keys
-//! inserted before the measured batch (8000). Every leaf / query proof is
-//! natively verified, its answers / final state checked against the native
-//! filter, and (leaf) against `bloom_omc`'s bit array; the leaf runs at batch
-//! index 2 over a non-empty prior with a repeated key and a dummy slot.
-//! Output lines are `SHAPE ...`, `CELLS ...`, `LEAF ...`, `QUERY ...`,
-//! `MERGE ...` (grep-friendly).
+//! Packed-byte Bloom leaf: table shapes, prove/verify time and peak RSS of the leaf, a query and a merge.
+//! Usage: [B1_KIND=leaf|shapes|query|merge|all B1_M=1024 B1_MODE=hiding|plain B1_K=7 B1_LOGW=14 B1_PRIOR=8000 B1_REPS=2]
+//!        cargo run --release --example exp_bloom_packed
 
 use std::time::Instant;
 

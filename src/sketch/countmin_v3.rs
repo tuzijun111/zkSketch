@@ -1,32 +1,5 @@
-//! Plaintext §5.2 Count-Min maintenance plan (the v3 design).
-//!
-//! The new §5.2 Count-Min update circuit refactors the per-cell strawman
-//! transition `final = initial + Σ(selector · value)` into a database-style
-//! maintenance plan:
-//!
-//! ```text
-//! B ──group by key──▶ G ──compute counter ids──▶ U_ctr ──group by counter──▶ A ──sparse patch──▶ S_t
-//! ```
-//!
-//! This module implements the plan as a pure Rust pipeline. It does NOT run
-//! inside a circuit — it is the reference oracle that the in-circuit leaf
-//! `countmin_leaf_v3` is verified against. Three round-trip tests below
-//! exercise the soundness-equivalence:
-//!
-//! 1. Pipeline output applied to `S_old` equals the naive `CountMin::update`
-//!    replay (`build_then_apply_matches_naive`).
-//! 2. Duplicate keys in `B` get aggregated into a single grouped row
-//!    (`duplicate_key_in_batch_aggregates_once`).
-//! 3. Distinct keys whose row-`i` hash collides to the same counter end up in
-//!    one `A` row (`hash_collision_aggregates_at_counter`).
-//!
-//! Per the user's clarification (and PoneglyphDB §4.3 group-by pattern), the
-//! key-sort and counter-sort do NOT need range-checked sortedness; only the
-//! group-by property — equal keys (and equal `(i, b)` pairs) are adjacent —
-//! is required. The accompanying in-circuit leaf enforces this via the fork's
-//! `PermuteAir` (multiset equality) plus PoneglyphDB-style adjacent-equality
-//! tags. The counter-aggregation step's own group-by re-merges any split
-//! duplicate-key bins because both halves compute the same `(i, b)`.
+//! Plaintext v3 Count-Min plan (group by key, group by counter, sparse patch); the
+//! in-circuit `countmin_leaf_v3` is tested against it.
 
 use crate::sketch::countmin::{CountMin, CountMinParams, CountMinState, CountMinUpdate, hash_cell};
 use crate::sketch::Sketch;
@@ -1122,8 +1095,8 @@ mod tests {
     /// collide identically for any given key residue.
     ///
     /// Hypothesis: prove time is roughly flat across `distinct`, because
-    /// v3's in-circuit leaf skips §5.2's key-grouping step (see the leaf
-    /// module docstring). The counter-grouping step at the cell level
+    /// v3's in-circuit leaf skips §5.2's key-grouping step (it groups by
+    /// counter only). The counter-grouping step at the cell level
     /// handles aggregation regardless of how many records share a key, so
     /// the n_ctr = `m * d` table size doesn't shrink with duplicate keys.
     /// A meaningful curve in the output would be a signal that wiring §5.2's

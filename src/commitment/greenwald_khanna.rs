@@ -1,8 +1,5 @@
-//! Poseidon2-backed `StateCommit` for the plaintext Greenwald-Khanna sketch.
-//!
-//! Hashes the flattened `(value, count, max_error)` tuples row-by-row.
-//! `3 * capacity` Vals total. With `capacity % 4 == 0` (enforced by
-//! `GKParams::new`), `3 * capacity` is a multiple of 4 = `CELL_ALIGNMENT`.
+//! Poseidon2 `StateCommit` for the plaintext Greenwald-Khanna sketch.
+//! Hashes the `(value, count, max_error)` tuples row by row.
 
 use p3_field::PrimeCharacteristicRing;
 use p3_symmetric::CryptographicHasher;

@@ -1,10 +1,4 @@
-//! Toy Fibonacci-style leaf AIR.
-//!
-//! For Phase 1 this stands in for a per-epoch sketch update circuit. The trace
-//! has two columns `(a, b)`; each transition does `a' = b; b' = a + b`. Public
-//! values pin down both the first row `(a0, b0)` and the last row `(aT, bT)`.
-//! In the paper's language this is the "before-state, after-state" boundary
-//! commitment of one epoch.
+//! Toy Fibonacci leaf AIR (`a' = b`, `b' = a + b`); public values are the first and last rows.
 
 use core::borrow::Borrow;
 

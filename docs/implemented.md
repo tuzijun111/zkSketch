@@ -1,6 +1,6 @@
 # What's implemented
 
-(Moved here from the top-level README on 2026-10-18. It describes the four original families; the Bloom filter (`src/sketch/bloom_packed.rs`, packed bytes, the default since 2026-10-16, and the earlier `bloom_omc.rs`) and KMV (`src/sketch/kmv.rs`) leaves with their decoders in `src/decode/` were added later and follow the same commitment discipline; the GK leaf's default round certification is now the stable-compaction circuit, `EXP_GK_ROUNDS=stable`.)
+This page describes the four original families; the Bloom filter (`src/sketch/bloom_packed.rs`, packed bytes, the default, and the earlier `bloom_omc.rs`) and KMV (`src/sketch/kmv.rs`) leaves, with their decoders in `src/decode/`, follow the same commitment discipline, and the GK leaf's default round certification is the stable-compaction circuit (`EXP_GK_ROUNDS=stable`).
 
 ### The four sketch circuits
 

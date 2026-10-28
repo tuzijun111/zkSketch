@@ -1,16 +1,5 @@
-//! `ConfigWithFriParams` — `StarkCfg` wrapper that implements
-//! [`p3_recursion::FriRecursionConfig`].
-//!
-//! Hand-translation of the `define_field_module_types!` macro from
-//! `Plonky3-recursion/recursion/examples/common/mod.rs` (lines 207–342),
-//! specialised to BabyBear + Poseidon2 width-16 + binomial extension D=4.
-//!
-//! Under `--features zk` the verified proofs come from `HidingFriPcs`
-//! (`crate::config`), so the in-circuit verifier carries
-//! `HidingFriProofTargets` (the random-codeword openings plus the inner FRI
-//! proof) and the MMCS private data is set from the inner FRI proof
-//! (`set_hiding_fri_mmcs_private_data`); the Merkle MMCS stays the plain one,
-//! as in the upstream `ConfigWithFriParamsZk` example config.
+//! `ConfigWithFriParams`: BabyBear / Poseidon2-16 / D = 4 STARK config for the
+//! recursive verifier (hiding FRI PCS with the default `zk` feature).
 
 use std::sync::Arc;
 

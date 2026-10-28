@@ -1,11 +1,7 @@
 #![no_main]
 #![no_std]
 
-// Bloom query guest: their querier-guest-cm (querier/methods/guest_cm/src/main.rs) with
-// run_cm_query replaced by run_bloom_query, keeping their low-support suppression (as
-// ../../../hll's hll_query does for HLL). The only addition is a cycle counter read at
-// each phase boundary, written to STDOUT (not the journal); it is 7 cycle_count calls
-// and one 56-byte write.
+// Bloom query guest: their querier-guest-cm with run_bloom_query; phase cycle counts go to stdout.
 
 extern crate alloc;
 

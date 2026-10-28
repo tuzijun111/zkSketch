@@ -1,22 +1,5 @@
-//! **Plonky2 streaming-composition runner** (four families + cross-family).
-//!
-//! - [`measure_fam`] — single-machine, in-process forest/chain/per_batch over
-//!   any family (used by the unit tests).
-//! - [`measure_compose_dist`] — the process-level distributed emulation: one
-//!   pinned OS process per machine (`numactl`/`taskset`, disjoint physical
-//!   cores + NUMA membind), serialized-socket IPC, the forest folding each
-//!   machine's slice in place (Bentley–Saxe) then combining the `M` slice roots
-//!   in `⌈log₂M⌉` reduction rounds shipping [`crate::recursion::MergeInput`]
-//!   (proof + `CommonCircuitData` + verifier-only — plonky2's merge circuit is
-//!   non-uniform, so the child's `common` travels with the proof). Communication
-//!   bytes are measured; transfer time modeled at `EXP_NET_MBPS`/`EXP_NET_RTT_MS`.
-//! - [`cross_family_pairs`] — compose four per-family forest roots pairwise via
-//!   the §4.2 heterogeneous merge atom
-//!   ([`merge_cross_family`](crate::recursion::topology::merge_cross_family)).
-//!   That atom is pairwise (two `Node`s → a non-composable `CrossFamilyNode`),
-//!   so all four families bind as two verified cross-family roots (cm⊕hll,
-//!   ss⊕gk); a single root over all four would need a composable cross-family
-//!   circuit (a follow-up, not the existing capability).
+//! per_batch / chain / forest composition runner, in-process or one pinned process per machine over Unix sockets.
+//! comm_model_ms is computed, not timed: each critical-path transfer costs its bytes at EXP_NET_MBPS plus EXP_NET_RTT_MS (xfer_ms).
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -1170,6 +1153,8 @@ pub fn measure_compose_dist(
             st + da
         })
         .collect();
+    // comm_model_ms = the slowest worker's scatter, plus per_batch: every leaf proof, one RTT each;
+    // chain: the final proof; forest: the largest message of each reduction round, then the root proof.
     let scatter_model = per_worker_scatter.iter().map(|&x| xfer_ms(x, mbps, rtt_ms)).fold(0.0, f64::max);
     let compose_model = match mode {
         Mode::PerBatch => xfer_ms(comm_bytes, mbps, rtt_ms * t as f64),

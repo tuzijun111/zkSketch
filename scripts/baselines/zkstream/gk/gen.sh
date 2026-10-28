@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# gen.sh <K> <S> <E> <NB> <outdir>
-# Instantiates gk_op.zok.tpl (proven) and gk_helper.zok.tpl (witness only) for K records
-# per chunk, capacity S tuples, eps = 1/E and record counts n < 2^NB, by textual constant
-# replacement -- the way zkStream sizes its circuits (nexmark/zokrates-nexmark/src/zokrates.rs:85-87).
-#   K, S, E powers of two; S >= 4; E >= 4 (COMPRESS period P = E/2); NB > log2(E).
+# Instantiate gk_op.zok.tpl (proven) and gk_helper.zok.tpl (witness only): K records, S tuples, eps = 1/E, n < 2^NB.
+# Usage: gen.sh <K> <S> <E> <NB> <outdir>   (K, S, E powers of two; S, E >= 4; NB > log2(E))
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ $# -eq 5 ]] || { echo "usage: gen.sh <K> <S> <E> <NB> <outdir>" >&2; exit 2; }

@@ -1,51 +1,5 @@
-//! Compact-G v9 Count-Min update leaf (Phase 9h).
-//!
-//! Side-by-side with [`countmin_leaf_v9`] (Phase 9g). The Phase 9g leaf
-//! verifies §5.2's in-circuit key-grouping over the *raw* batch of size
-//! `m = params.batch`, then hashes every sorted row — so the hash gadget
-//! runs `m · d` times regardless of how many keys actually differ.
-//! Duplicate-heavy batches pay the same cost as fully-distinct batches.
-//!
-//! Phase 9h fixes this by **compacting the segment-end values into a
-//! fixed-size G table** of compile-time-known length `distinct_bound`
-//! (≤ `params.batch`). The compaction is bound to the segment-end values
-//! via a second PermuteAir whose multiset equality forces the prover's
-//! supplied `G_table` to match the true aggregation. Then the hash and
-//! counter-grouping pipelines operate on `distinct_bound · d` payload
-//! rows instead of `m · d` — realizing the §5.2 promise that "only
-//! distinct keys pay the hash cost".
-//!
-//! ### What's new vs. Phase 9g
-//!
-//! - **`CountMinLeafParamsV9h`** carries an extra `distinct_bound` field.
-//!   The verification key depends on it: two v9h leaves chain-merge via
-//!   the existing `merge_two_countmin_v9` only when their `distinct_bound`
-//!   values match.
-//! - **Stage 6 (compaction)**: a second `add_permute` rearranges the
-//!   length-`m` segment-end vector so the `actual_distinct` non-zero
-//!   payloads land at positions `[0, actual_distinct)`. Constrained
-//!   equal to `(key_table[j] · SHIFT + val_table[j])` for `j < distinct_bound`
-//!   and `0` for `j ≥ distinct_bound`.
-//! - **Stage 7 (hash)**: loop bound drops from `m` to `distinct_bound`.
-//!   Padding rows (`j ≥ actual_distinct`) hash zero (a known position) but
-//!   their `val_table[j] = 0` zeroes their contribution to U_ctr.
-//! - **Stage 8 (counter-grouping + sparse patch)**: same machinery as
-//!   Phase 9g, but operating on `n_ctr = distinct_bound · d` rows.
-//!
-//! ### Edge cases
-//!
-//! - `distinct_bound = batch`: no compaction; baseline parity with
-//!   Phase 9g modulo one extra PermuteAir layer (~10% overhead, not
-//!   measured yet).
-//! - `actual_distinct > distinct_bound`: proof generation fails (compaction
-//!   PermuteAir multiset balance is unsatisfiable).
-//! - `key = 0` with `value > 0`: safe — its segment-end SE payload is
-//!   `0 · SHIFT + key_acc ≠ 0`, no collision with the zero padding sentinel.
-//! - `key = 0` with all values `= 0`: degenerate (zero-update); not
-//!   distinguishable from a padding slot. Updates have no effect either way.
-//!
-//! All other constraints — `d ≤ 16`, `w ∈ {2, 4, 8, 16}`, `d·w % 4 == 0` —
-//! are inherited from Phase 9g (see `countmin_leaf_v9` module docstring).
+//! Count-Min leaf v9h: v9 with the key-grouped batch compacted to `distinct_bound`
+//! rows, so hashing and counter grouping run over `distinct_bound * d` rows, not `m * d`.
 
 use std::rc::Rc;
 

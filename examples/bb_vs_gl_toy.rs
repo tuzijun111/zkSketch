@@ -1,19 +1,5 @@
-//! Toy BabyBear-vs-Goldilocks comparison of the four update (leaf) circuits.
-//!
-//! For each sketch family the SAME canonical record stream (via the
-//! `stream_compose` mappers) is proven by the BabyBear leaf (D=4 challenges,
-//! Poseidon2 width 16) and the Goldilocks leaf (D=2, Poseidon2 width 8). The
-//! FRI budgets are identical by construction (54 queries, log_blowup 2,
-//! query pow 15, final poly 2^6), so the measured differences isolate the
-//! field / extension degree / hash width.
-//!
-//! Each case builds the leaf circuit once and re-proves the same epoch
-//! (warmup + REPS timed), reporting the median witness/prove/verify split
-//! from `recursion::recursive::timing` plus the postcard-serialized proof
-//! size. Note prove_epoch self-verifies, so `verify` is part of its wall
-//! clock; the split separates it back out.
-//!
-//! Run: RAYON_NUM_THREADS=16 cargo run --release --example bb_vs_gl_toy
+//! BabyBear vs Goldilocks leaf proofs for CM, HLL, SS and GK (median times and proof bytes as CSV on stdout).
+//! Usage: RAYON_NUM_THREADS=16 [ZKS_FAMS=hll,cm,ss,gk] cargo run --release --example bb_vs_gl_toy
 
 use std::time::Instant;
 

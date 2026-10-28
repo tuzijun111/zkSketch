@@ -1,23 +1,5 @@
-//! Two-leaf recursive merge for privacy-preserving v9 Count-Min update
-//! epochs (Phase 9d).
-//!
-//! Structurally mirrors `countmin_merge.rs` (the v1/v2/v3 merge), but:
-//!
-//! - Takes `CountMinLeafProofV9` (PI shape: `(initial, final, batch_commit)`)
-//!   instead of `CountMinLeafProof` (PI shape: `(initial, final,
-//!   [per-record])`).
-//! - Tracks each epoch's `CountMinBatchCommit` rather than the raw
-//!   `Vec<CountMinUpdate>` batch — preserving the privacy guarantee that
-//!   per-record contents never escape the proof.
-//! - Otherwise identical: same `build_and_prove_aggregation_layer` call,
-//!   same digest scheme over state-commit boundaries (the batch_commits
-//!   are *recorded* alongside the chain proof but not yet folded into
-//!   the digest; a future iteration could absorb them via the §4.3
-//!   history-composition layer if desired).
-//!
-//! v9 leaves are **not** cross-mergeable with v1/v2/v3 leaves — their PI
-//! shapes diverge, so the aggregation layer can't bundle them. This is
-//! the intentional trade-off for adopting the paper's §5.2 PI surface.
+//! Two-leaf recursive merge for v9 Count-Min leaves; keeps each epoch's batch
+//! commitment instead of the raw batch.
 
 use core::fmt;
 

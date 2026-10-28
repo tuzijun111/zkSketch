@@ -1,14 +1,6 @@
-//! Prints the verification keys (`vk_pin_values`: the preprocessed commitment
-//! and proof metadata every proof of a prebuilt leaf carries) of the deployed
-//! Count-Min `omc`, Misra--Gries (`ss_final_full`) and Greenwald--Khanna stable leaves at the given shapes,
-//! one line per leaf with a short digest, so that a change to a builder can
-//! be checked for VK drift: run it before and after and diff the output.
-//!
-//! ```bash
-//! cargo run --release --example leaf_vk
-//! # shapes as examples/exp_operator.rs: EXP_D=3 EXP_W=1024 EXP_M_CM=1024
-//! #   EXP_SS_CAP=1024 EXP_M_MG=4096  EXP_GK_CAP=768 EXP_GK_S=51 EXP_M_GK=512
-//! ```
+//! Prints VK digests of the deployed CM omc, MG and GK leaves; diff the output before and after a builder change.
+//! Usage: [EXP_D=3 EXP_W=1024 EXP_M_CM=1024 EXP_SS_CAP=1024 EXP_M_MG=4096 EXP_GK_CAP=768 EXP_GK_S=51 EXP_M_GK=512]
+//!        cargo run --release --example leaf_vk
 use zksketch::commitment::hiding::CommitMode;
 use zksketch::recursion::recursive::statement::composition_expose;
 use zksketch::sketch::bind::default_binding;

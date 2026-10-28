@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# gen.sh <N> <S> <outdir> [CB] [SPE]
-# Instantiates ss_op.zok.tpl (proven) and ss_helper.zok.tpl (witness only) for N
-# records per chunk, S SpaceSaving slots, CB-bit counts (default 21) and SPE slots
-# packed per committed field element (default 3), by textual constant replacement --
-# the way zkStream sizes its circuits (nexmark/zokrates-nexmark/src/zokrates.rs:85-87).
+# Instantiate ss_op.zok.tpl (proven) and ss_helper.zok.tpl (witness only) for N records and S slots.
+# Usage: gen.sh <N> <S> <outdir> [CB, count bits, default 21] [SPE, slots per field element, default 3]
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ $# -ge 3 && $# -le 5 ]] || { echo "usage: gen.sh <N> <S> <outdir> [CB] [SPE]" >&2; exit 2; }

@@ -1,0 +1,6 @@
+sweep=scripts/baselines/zka/results/sweep-20261024-195453 started=2026-10-24T19:54:53+08:00
+memmatch=scripts/baselines/zka/results/memmatch-20261022-205419 started=2026-10-22T20:54:19+08:00
+gk768=scripts/baselines/zka/results/sweep-gk768-20261028-143107 started=2026-10-28T14:31:07+08:00
+batches=scripts/baselines/zka/results/batches-20261028-153827 started=2026-10-28T15:42:57+08:00
+zks=total_time_ms of a measured forest run per point
+gk_from_cycles=padded cycles x 44.51 s per 2^20 (the capacity-768 receipts at m=64, 2048)

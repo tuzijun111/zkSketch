@@ -1,16 +1,5 @@
-//! Two-leaf recursive merge for **sparse-Merkle** Count-Min update epochs.
-//!
-//! Structurally mirrors [`super::countmin_merge_v9`], but the leaf is a
-//! [`CountMinMerkleProof`] whose state commitment is the `d`-tuple of per-row
-//! Merkle roots (see [`crate::sketch::countmin_merkle`]). The boundary between
-//! two epochs is checked on the **full root tuple** (`left.final_roots ==
-//! right.initial_roots`, exact); the chain digest folds each boundary's
-//! *combined* commit ([`combined_commit`]) the same way the v9 merge folds its
-//! `CountMinCommit` boundaries. The recursive aggregation itself is the
-//! identical `build_and_prove_aggregation_layer` call — the merkle leaf's
-//! `output` is the same `RecursionOutput<ConfigWithFriParams>` batch-STARK
-//! proof, so it aggregates just like any other leaf (the merge circuit
-//! recursively verifies both children regardless of their internal AIR set).
+//! Two-leaf recursive merge for sparse-Merkle Count-Min leaves; the boundary is the
+//! tuple of per-row Merkle roots.
 
 use core::fmt;
 

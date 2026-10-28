@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
-# Run a command and report the peak RSS (VmHWM) of the r0vm processes IT spawns.
-#
-# Why not ../rss_watch.sh: that script refuses to start while ANY r0vm of this uid is
-# running and pkills every r0vm of this uid on exit. Other jobs of the same account
-# (for example the sibling SS/GK baselines) may be executing or proving at the same
-# time, so here only r0vm processes that descend from our own command are sampled,
-# and nothing is ever killed except this script's own sampler subshell.
-#
-# risc0 proves inside a separate `r0vm` process (the driver's own RSS is meaningless);
-# VmHWM is the kernel's high-water mark, so a late sample still sees the true peak.
-#
-# Usage: ./rss_child.sh <label> <cmd...>     (stdout/stderr of cmd pass through)
+# Run a command and report the peak RSS (VmHWM) of the r0vm processes it spawns.
+# Usage: ./rss_child.sh <label> <cmd...>
 set -uo pipefail
 LBL=${1:?usage: rss_child.sh <label> <cmd...>}; shift
 MAXF=$(mktemp); echo 0 > "$MAXF"

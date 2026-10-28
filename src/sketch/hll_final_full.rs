@@ -1,49 +1,5 @@
-//! **Complete HyperLogLog update circuit** (paper Appendix F, Pattern A
-//! max) — the optimized counterpart to the [`crate::sketch::hll_final`]
-//! baseline, mirroring how [`crate::sketch::gk_final_full`] completes
-//! [`crate::sketch::gk_final`].
-//!
-//! Where `hll_final` only certified the Poseidon2 commits + active flags +
-//! per-register monotonicity (Steps 2–5 deferred), this module enforces
-//! the distinctive HLL update semantics in-circuit:
-//!
-//! 1. **Bind** state arrays + batch to their commitments (Poseidon2).
-//! 2. **Generate register contributions** — each active batch record's key
-//!    is hashed in-circuit (`add_hash_slice`), and the register index is
-//!    routed as `reg = digest mod m` (bottom `b` bits of the first digest
-//!    limb). This is the anti-forgery property that matters most: the
-//!    prover **cannot choose which register** a key lands in.
-//! 3.–4. **Group by register + aggregate by max** and **5. apply the
-//!    sparse max-patch** — realized together as a register-wise scatter:
-//!    one-hot selectors route each contribution to its register, a running
-//!    `max` folds the contributions, and the new register is
-//!    `N[b] = max(O[b], batch_max[b])`. Every `max` is a gated
-//!    range-checked comparator. So the new state is verified to be the
-//!    canonical HLL max-patch — closing the baseline's "any monotone
-//!    replacement" soundness gap.
-//! 6. **Metadata** via `params.validate()`.
-//!
-//! ### ρ is derived and bound in-circuit (no free-witness gap)
-//!
-//! The rank `ρ_j` is **re-derived from the hash digest inside the
-//! circuit** and bound to the prover's witness (Stage 2b), so a malicious
-//! prover can neither pick the register (routing is verified) nor inflate
-//! ρ (it equals `1 + trailing_zeros(digest[1])` by constraint). We use
-//! **trailing zeros** rather than the textbook leading-ones because it's a
-//! clean running-product over the digest bits
-//! (`a_k = ∏_{i≤k}(1−bit_i)`, `ρ = 1 + Σ_k a_k`) — and it is an equally
-//! valid hash-derived geometric rank (`P(ρ=k) ≈ 2^{-k}`), so HLL's
-//! estimator is unchanged. This makes HLL as sound as the SS/GK full
-//! circuits (no documented honest-prover gap on the update relation).
-//!
-//! ### Cost note
-//!
-//! The register-wise scatter uses `O(m · batch)` one-hot selectors +
-//! `max` gates (the unoptimized but fully-verifying form). The paper's
-//! Step 3–4 sort-then-segment-max (and Opt A "hash once per distinct key")
-//! would cut this to `O((m+batch)·log)` and `O(distinct)` hashes; that's
-//! the same sort-group lever count-min's `v9h` uses. Kept simple here
-//! (small `m`); documented as the optimization path.
+//! HLL leaf with in-circuit hashing and ρ derivation; the max update goes through a one-hot
+//! register scatter, O(m·batch).
 
 use std::rc::Rc;
 

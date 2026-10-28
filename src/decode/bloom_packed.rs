@@ -1,36 +1,5 @@
-//! Membership **query** circuit of the packed-byte Bloom filter
-//! ([`crate::sketch::bloom_packed`], design B1): proves
-//! `answer = AND_j bit(i_j) of S[j·W/8 + q_j(key)]` against the committed
-//! byte state, with the same verifier-visible statement as the bit-array
-//! decoder ([`super::bloom`]): the Expose op `(Com(S), record(key), answer)`,
-//! 16 values, `record(key) = [k0, k1, k2, k3 + 2^16]`
-//! ([`super::bloom::bloom_query_input`]), so
-//! [`crate::decode::verify_decode_proof`] pins a proof to
-//! [`bloom_packed_decode_vk_commit`] and returns the standard
-//! [`crate::decode::QueryStatement`].
-//!
-//! ## Constraint list (query)
-//!
-//! | # | constraint | gadget | test switch ([`PackedChecks`](crate::sketch::bloom_packed::PackedChecks), test-only) |
-//! |---|---|---|---|
-//! | Q1 | every state byte `S_u ∈ [0,256)` | one byte lookup | `cell_pin` |
-//! | Q2 | `Com(S) = H(pack(S))` (3 bytes per limb, salted under `Hiding`, family 7) | ALU packing, bound sponge | — |
-//! | Q3 | the key is routed as an ACTIVE record (`act = 1`): key bytes, record, bound Poseidon2 digest, canonical split `digest[j] = 2^log_w·hi + 8q_j + i_j` | the leaf's routing gadget | `key_range` and the leaf's B4–B7 switches |
-//! | Q4 | per slice a TENSOR one-hot selector: `s1 ∈ {0,1}^{na}`, `s2 ∈ {0,1}^{nb}` (`na·nb = W/8`), `Σ s1 = Σ s2 = 1`, `nb·Σ a·s1_a + Σ b·s2_b = q_j` | BoolCheck + ALU | `sel_bool`, `onehot_sum` |
-//! | Q5 | `o_j = Σ_b s2_b Σ_a s1_a S[j·W/8 + a·nb + b]` (exactly `S[j·W/8 + q_j]`) | ALU | — |
-//! | Q6 | split-at-bit of `o_j` at `e_j = 2^{i_j}`: `o_j = (2H + c_j)·e_j + L`, `c_j ∈ {0,1}`, `H, L ∈ [0,256)`, `L < e_j` | the leaf's split gadget | the leaf's D2–D5 switches |
-//! | Q7 | `answer = ∏_j c_j` | ALU | — |
-//!
-//! The selector and the split are exact (both one-hots select one cell; a
-//! byte splits uniquely), so the answer is the AND of the `k` filter bits.
-//! The circuit is `Θ(M_w)` (the dense re-hash plus `k` tensor selections of
-//! `W/8` products) and is rebuilt per query; its VK depends only on
-//! `(k, log_w)` and the commitment mode (the state, key, splits and
-//! selectors are private witnesses).
-//!
-//! Changes from the 2026-10-14 prototype: byte pins are direct RangeAir
-//! lookups (no ALU rows); the routing gadget is the leaf's (byte-witnessed
-//! ranges); the zero-salt guard, VK derivation and switches are added.
+//! Membership decode circuit for the packed-byte Bloom filter (`crate::sketch::bloom_packed`).
+//! Q1 byte pins, Q2 `Com(S)`, Q3 key routing, Q4–Q5 one-hot byte select, Q6 bit split, Q7 AND.
 
 use std::rc::Rc;
 

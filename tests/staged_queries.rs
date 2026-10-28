@@ -1,21 +1,5 @@
-//! Procs regression test of the staged-wave engine
-//! (`EXP_COMPOSE_WAVE_SIZE`, `dist_compose::measure_compose_dist_staged`)
-//! with interleaved queries, under both commitment modes.
-//!
-//! The staged engine spawns its workers by re-executing the current binary,
-//! so this test has its own `main` (`harness = false` in `Cargo.toml`): a
-//! child spawned as a worker serves its role through
-//! [`maybe_run_child`] and never reaches the scenarios. Each scenario folds a
-//! small forest over 4 pinned machines in 2 waves of 2 (intra-wave and
-//! cross-wave rounds), for Count-Min, the Bloom filter and the KMV sketch
-//! under both commitment modes, then requires every query to be pinned to the decoder VK
-//! of the run's commitment mode and bound (`query_bind_ms` set) against the
-//! batch log the prover published (salted under `Hiding`). A few minutes on
-//! a many-core machine (each machine gets up to 4 cores).
-//!
-//! ```bash
-//! cargo test --release --test staged_queries
-//! ```
+//! Staged-wave procs engine with interleaved queries (CM, Bloom, KMV; plain and hiding commitments).
+//! Run: cargo test --release --test staged_queries
 
 use zksketch::commitment::hiding::SaltSeed;
 use zksketch::experiments::dist_compose::{ExeSnapshotGuard, maybe_run_child, measure_compose_dist};

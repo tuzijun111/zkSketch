@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
-# ONE small proved anchor for the GK aggregation guest: aggr_gk on the first
-# $EPOCH_SIZE (default 2048) AOL records, ProverOpts::succinct() (their tier), CPU
-# r0vm. Records prove_s, segments, s/segment, receipt bytes, verify ms (best of 5)
-# and r0vm peak RSS (VmHWM of the driver's own child processes, sampled by the
-# driver; nothing is signalled). Asserts the proved journal equals the native output.
-# The driver also samples /proc for r0vm processes that are NOT its own descendants
-# (other users' or agents' provers and executors) and writes them to the `contention`
-# column; arm=proved_contended when they burned >= 10 CPU seconds during the prove.
-# Nothing is signalled.
-#
-# Refuses to start when the 1-minute load average exceeds $MAX_LOAD (default 24):
-# prove time on a shared box is only meaningful when it is quiet.
+# Proves aggr_gk once (succinct, CPU r0vm) on the first EPOCH_SIZE AOL records; appends to zka_gk_exec.csv.
+# Usage: [EPOCH_SIZE=2048] [MAX_LOAD=24] gk_prove_anchor.sh   (refuses when the 1-minute load > MAX_LOAD)
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common_gk.sh"
 

@@ -1,31 +1,6 @@
 #!/usr/bin/env python3
-"""Per-phase proving cost of the Count-Min and Greenwald--Khanna leaves
-(the paper's operator-performance figure, PoneglyphDB Fig. 8 style:
-one horizontal bar per proof-generation step).
-
-Input: results/operator/{cm_mg_phases.csv, cm_mg_tables.csv, cm_mg_spans.csv,
-operator_summary.csv} (OP_FAMS=cm,mg selects the families) written by `examples/exp_operator.rs`.
-
-Attribution model (stated in the paper's caption/text):
-  * The prover proves all tables of a leaf in one batch STARK. Per table,
-    the directly attributable work is its trace building (`*::build_trace`),
-    its LogUp permutation trace, its constraint-degree inference and its
-    quotient evaluation (`compute quotient{air_idx}`), all measured as
-    tracing spans.
-  * The joint work (LDEs, Merkle commitments, FRI, openings, grinding) is
-    apportioned to the tables by their committed cells (padded rows x width).
-  * A table's time is then split among the paper phases by the rows each
-    phase contributes to it (exact, from prefix builds); the rows a table
-    pads to a power of two are the "padding" bar. The hiding PCS commits
-    twice every table's height (zero-knowledge blinding); that doubling is
-    a proportional overhead of every row and is not separated out.
-  * Witness generation (native update + trace filling) and the query proof
-    (witness + prove) are measured directly.
-
-Output: latex/pics/zkSketch_eval_operator.pdf (or results/) and
-results/operator/operator_breakdown.csv.
-
-Style follows scripts/plot_sweep.py.
+"""Operator figure: per-phase proving time of the Count-Min and Misra-Gries leaves, from exp_operator's CSVs.
+Usage: [OP_FAMS=cm,mg] [OP_LAYOUT=column|wide] python3 scripts/plot_operator.py [<input dir, default results/operator>]
 """
 import csv
 import os
@@ -155,6 +130,7 @@ def analyse(fam, phases_rows, tables_rows, spans_rows, summary_rows):
     direct = {t: med([d.get(t, 0.0) for d in direct_by_rep]) for t in tables}
     joint = med(joint_by_rep)
     prove_all = med(prove_by_rep)
+    # a table's time: its own spans plus the joint work (LDEs, commitments, FRI) in proportion to its committed cells
     time_t = {t: direct[t] + joint * cells[t] / tot_cells for t in tables}
 
     # --- phases ---

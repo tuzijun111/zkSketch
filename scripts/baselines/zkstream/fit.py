@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
-"""Fit and compare the small-scale runs. Every figure is labelled MEASURED or MODELED.
-
-Small chunks are dominated by fixed cost on BOTH sides (the ZoKrates operator's two
-commitment chains and digest; zkSketch's per-batch table term), so a per-record ratio
-taken at k=16 is NOT the ratio at 2^14. We therefore fit cost = a + b*records on each
-side, report intercept and slope separately, and only extrapolate through the fit.
-zkSketch's fit is checked against its MEASURED m=2^14 leaf before anything is quoted.
+"""Count-Min operator (ZoKrates) vs zkSketch leaf: per-chunk tables and least-squares lines a + b * records on both sides.
+Usage: python3 scripts/baselines/zkstream/fit.py   (after run_zkstream.py and run_ours.sh)
 """
 import csv, math, statistics, sys
 from collections import defaultdict
@@ -53,7 +48,7 @@ if bad:
 tam = [r for r in zok if r["step"].startswith("tamper_")]
 print(f"soundness: {len(tam)} forged inputs rejected; every chained witness and verify ok\n")
 
-# ---- constraint model (packed8, d=3 w=1024 only) --------------------------
+# ---- closed-form constraint count (packed8, d=3 w=1024 only) -------------
 per_k = defaultdict(dict)
 for r in zok:
     k = int(r["k"])
@@ -83,7 +78,7 @@ zy = [statistics.median(per_k[k]["witness_op"]) + statistics.median(per_k[k]["pr
 za, zb = ols(zx, zy)
 rate = [per_k[k]["cons"] / statistics.median(per_k[k]["prove"]) for k in ks]
 print(f"\nGroth16 (ark) prove rate: {', '.join(f'{x:,.0f}' for x in rate)} constraints/s at k={ks}   (MEASURED)")
-print(f"fit, witness+prove per chunk = {za:.3f} s + {zb * 1000:.3f} ms/record                (MODELED)")
+print(f"fit, witness+prove per chunk = {za:.3f} s + {zb * 1000:.3f} ms/record                (FIT)")
 
 # ---- zkSketch --------------------------------------------------------------
 by_m = defaultdict(list)
@@ -101,7 +96,7 @@ for m in sorted(by_m):
     sx.append(float(m)); sy.append(tot)
     print(f"{m:>5} {len(rs):>5} {tot:>8.2f}s {ver:>7.2f}ms {pb:>10,}B {rss:>7.0f}MB")
 sa, sb = ols(sx, sy)
-print(f"\nfit, leaf prove = {sa:.3f} s + {sb * 1000:.3f} ms/record                          (MODELED)")
+print(f"\nfit, leaf prove = {sa:.3f} s + {sb * 1000:.3f} ms/record                          (FIT)")
 
 # ---- validate our fit against the measured 2^14 leaf ------------------------
 m14 = 1 << 14
@@ -110,7 +105,7 @@ pred14 = sa + sb * m14
 print(f"check: fit predicts {pred14:.2f} s at m=2^14; MEASURED {meas14:.2f} s "
       f"({(pred14 - meas14) / meas14:+.1%})")
 if abs(pred14 - meas14) / meas14 > 0.25:
-    print("  -> small-m fit does NOT extrapolate to 2^14 within 25%; use the measured point, not the fit")
+    print("  -> the small-m fit misses the measured 2^14 point by more than 25%; use the measured point")
 
 # ---- head to head at the measured sizes ------------------------------------
 m14_rate = meas14 / m14
@@ -137,10 +132,10 @@ elif za <= sa and zb <= sb:
 else:
     bstar = (sa - za) / (zb - sb)
     lo, hi = ("Groth16", "zkSketch") if za < sa else ("zkSketch", "Groth16")
-    print(f"break-even: ~{bstar:,.0f} records per batch; {lo} is cheaper below it, {hi} above      (MODELED)")
+    print(f"break-even: ~{bstar:,.0f} records per batch; {lo} is cheaper below it, {hi} above      (FIT)")
 
-# ---- initial conclusion ------------------------------------------------------
-print("\nINITIAL CONCLUSION, 2^20 records (ZoKrates side MODELED from its fit; zkSketch forest MEASURED)")
+# ---- the 2^20-record stream ---------------------------------------------------
+print("\n2^20 records (ZoKrates side from its fit; zkSketch forest MEASURED)")
 forest = one(ZKA / "zks_matched_t64_forest.csv", "total_time_ms") / 1000
 forest_v = one(ZKA / "zks_matched_t64_forest.csv", "verify_ms")
 forest_b = one(ZKA / "zks_matched_t64_forest.csv", "proof_bytes")
@@ -152,5 +147,5 @@ for k in ks:
     print(f"  k={k:<4} {chunks:>6} Groth16 proofs: prove {stream / 3600:5.2f} h ({stream / forest:4.1f}x) | "
           f"verify all {chunks * zv:5.1f} s CLI | {chunks * per_k[k]['proof_b'] / 1e6:5.2f} MB JSON")
 floor = N_STREAM * zb
-print(f"  as k grows the prover ratio tends to the slope ratio: {floor / 3600:.2f} h, {floor / forest:.1f}x   (MODELED)")
+print(f"  as k grows the prover ratio tends to the slope ratio: {floor / 3600:.2f} h, {floor / forest:.1f}x   (FIT)")
 print("  Name the ZoKrates side 'a Count-Min operator following zkStream's design (our circuit)', never 'zkStream'.")

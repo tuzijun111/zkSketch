@@ -1,155 +1,5 @@
-//! **Ungrouped offline-memory-checking Count-Min leaf (`omc_ungrouped`)** —
-//! a time-boxed spike (revision Step 4) of the [`super::countmin_omc`] leaf
-//! with the **counter sort, segment scan and payload packing removed**.
-//!
-//! `countmin_omc` first sorts the `m·d` per-record counter accesses by
-//! address (Stage G: pack `comb·2^20 + val`, one `PermuteAir`, a 31-bit
-//! sortedness decomposition per row), folds each address's increments with a
-//! running sum (Stage H), and only then emits one read/write pair per touched
-//! address. For an **additive** update none of that is needed: every access
-//! can emit its own read/write pair, in stream order, with a free read value.
-//!
-//! ## The relation
-//!
-//! Memory = the `d×w` counter array, address `a = i·w + b ∈ [0, dw)`. Access
-//! `z = (k, i)` (record `k`, row `i`, `z = k·d + i`) has
-//!
-//! * address `a_z = i·w + pos_{k,i}`, where `pos_{k,i}` = the low `log2 w`
-//!   bits of the **canonical** 31-bit decomposition of digest coefficient `i`
-//!   of `Poseidon2(key_k)` — derived in-circuit, so the prover cannot choose it;
-//! * increment `v_z = value_k`, bound to the batch commitment;
-//! * read value `r_z` — a **free** witness (honest prover: the running value of
-//!   cell `a_z` just before access `z`, processing accesses in order `z = 0,1,…`).
-//!
-//! With `enc(a, v) = a + v·X + X²` (the extension element with base
-//! coordinates `(a, v, 1, 0)`), the leaf proves one multiset equality
-//!
-//! ```text
-//!   { enc(a, O[a]) }_{a<dw} ⊎ { enc(a_z, r_z + v_z) }_z   ==   { enc(a, N[a]) }_{a<dw} ⊎ { enc(a_z, r_z) }_z
-//!        M_old                      W (writes)                      M_new                       R (reads)
-//! ```
-//!
-//! where `O[a]` / `N[a]` are the cells hashed into the public `init_commit` /
-//! `final_commit`. There is no sort, no segment flag, no running sum, no
-//! packing of `(addr, val)` into one base element, and no dummy rows: a
-//! padding record is simply `value = 0` (its read and write are equal and
-//! cancel).
-//!
-//! ## Soundness argument
-//!
-//! **Assumptions.**
-//! * (A1) *Injective, coordinate-wise encoding over base-field coordinates.*
-//!   `enc` maps `(a, v, 1, 0)` to the extension element with exactly those
-//!   base coordinates, so `enc` is injective on `F_p × F_p` **provided `a` and
-//!   `v` are base-field elements**. If `v` could carry extension limbs, `v·X`
-//!   would leak `W·v_3` (`X^4 = W`) into the address coordinate and a prover
-//!   could re-route an access to any cell (demonstrated by
-//!   [`tests::r_extension_reroute_accepted_without_range_check`]). Hence:
-//!   `a_z` is a sum of boolean bits times constants (base by construction);
-//!   `r_z` is range-checked to 31 bits with the byte-table `RangeAir`, whose
-//!   lookup rows force the higher extension limbs to zero (`add_range_bits`);
-//!   `O[a]`, `N[a]`, `v_z` and the digest coefficient are
-//!   `decompose_ext_to_base_coeffs` outputs of committed/hashed elements.
-//!   **Backend caveat (read before relying on this):** in this fork, with the
-//!   standard `recompose` table (`recompose_preprocessor(false)`, the setting
-//!   every leaf in this crate uses), the decomposed coefficients are *hint*
-//!   witnesses that the recompose AIR never reads on the `WitnessChecks` bus:
-//!   they are NOT bound to the packed value (nor forced into the base field).
-//!   [`tests::probe_decompose_coeff_binding`] forges a digest coefficient and
-//!   the proof still verifies. So `O[a]`, `N[a]`, `v_z` and the bucket bits
-//!   are, in this backend, NOT tied to the commitments / the key hash — the
-//!   same holds for `countmin_omc`, `hll_omc` and every other leaf that uses
-//!   `decompose_ext_to_base_coeffs`. This leaf does not fix that; the argument
-//!   below is conditional on a sound decomposition (and on circuit constants —
-//!   `i·w`, `2^j`, `X`, `a + X²` — being fixed by the verifying key, which
-//!   this fork's `ConstAir` also does not do: constant values live in the main
-//!   trace).
-//! * (A2) *Canonical bucket bits.* The 31 bits of the digest coefficient are
-//!   boolean, reconstruct it, and are asserted `< p`
-//!   ([`assert_canonical_bits`]). Without this, the alternate decomposition
-//!   `x + p` exists for `x < 2^31 − p` and, because `p ≡ 1 (mod w)`, shifts the
-//!   bucket by +1 ([`tests::noncanonical_bits_accepted_without_check`] shows
-//!   the resulting mis-routed state is otherwise accepted).
-//! * (A3) *Fiat–Shamir after commitment.* The multiset equality is the fork's
-//!   `PermuteBus` LogUp argument; its challenges are drawn after the main
-//!   traces (which hold every element's four coordinates) are committed, so a
-//!   cheating prover must satisfy `Σ 1/(α − φ(x)) = Σ 1/(α − φ(y))` at a random
-//!   `α, β ∈ F_{p^4}` — Schwartz–Zippel error `≲ 2L·(deg)/|F_{p^4}|` with
-//!   `L = dw + md` elements per side.
-//! * (A4) *Additive (translation) update.* Each access maps the cell value
-//!   `x ↦ x + v_z`. Multiplicities are `< p` because each side has
-//!   `L = dw + md < p` elements.
-//!
-//! **Claim.** If the multiset equality holds, then for every address `a`
-//! `N[a] = O[a] + Σ_{z : a_z = a} v_z` (in `F_p`), for **every** choice of the
-//! free reads `r_z`.
-//!
-//! **Proof.** Equal multisets (multiplicities `< p`, so LogUp equality is
-//! exact multiset equality) stay equal after restricting both sides to the
-//! elements whose first coordinate is `a` (by A1 the first coordinate *is* the
-//! address). Every element is real (tag 1), and each access contributes one
-//! element to each side at its own address, so the restriction to `a` is
-//! `{O[a]} ⊎ {r_z + v_z}_{a_z=a}` vs `{N[a]} ⊎ {r_z}_{a_z=a}` (second
-//! coordinates). Equal multisets have equal sums:
-//! `O[a] + Σ (r_z + v_z) = N[a] + Σ r_z`, so the `r_z` cancel and
-//! `N[a] = O[a] + Σ_{a_z = a} v_z`. For an untouched address this is
-//! `N[a] = O[a]`. ∎
-//!
-//! Completeness: the honest `r_z` (running value per address in stream order)
-//! make the two sides equal element-for-element (`O[a] = r_{z_1}`,
-//! `r_{z_j} + v_{z_j} = r_{z_{j+1}}`, `r_{z_last} + v_{z_last} = N[a]`).
-//! Counters live in `F_p`, as in `countmin_omc`; they coincide with the native
-//! `u32` counters while every cell stays `< p` (a property of the data, not
-//! a prover choice — `N` is uniquely determined by `O` and the batch).
-//!
-//! Why this needs an *additive* update: the sum identity above only pins the
-//! **sum** of each address's writes minus reads. For a non-injective update
-//! (max, OR, min, replace) the read/write values are not related by a fixed
-//! translation, so equal sums do not pin `N[a]`; those need the Spice-style
-//! timestamp coordinate that [`super::hll_omc`] carries.
-//!
-//! ## Cost
-//!
-//! Per access (measured by [`tests::op_count_breakdown`], after the builder's
-//! dedup/fusion passes): ~88 ALU ops with the `countmin_omc` recompose gadget
-//! (~85 with the affine gadget, [`CmOmcUngroupedParams::affine_enc`]) and 4
-//! byte lookups. Of those, ~62 are the 31-bit bucket decomposition (boolean
-//! checks + reconstruction), `log2 w` the address, ~4 the canonical check
-//! (its low-bit sum is deduplicated against the reconstruction chain), ~5 +
-//! 4 lookups the `r_z` range check. Per record: one Poseidon2 hash. Dense
-//! side: `2·dw` encodings (3 scheduled ALU ops each, i.e. `6·dw`, or 1 each
-//! with the affine gadget) plus the two state hashes, as in `countmin_omc`.
-//! **No** counter `PermuteAir`, **no** per-access 31-bit sortedness
-//! decomposition, **no** running sum.
-//!
-//! Scheduled ALU ops per record (unpadded; the prover's own `AIR shape` log,
-//! slope between `m = 64` and `m = 1024`, `examples/cm_omc_ungrouped_measure`):
-//!
-//! | shape          | `countmin_omc` | ungrouped | ungrouped + affine |
-//! |----------------|---------------:|----------:|-------------------:|
-//! | d=3, w=1024    | 718            | 263       | 255                |
-//! | d=7, w=16384   | 1077           | 639       | 611                |
-//!
-//! `countmin_omc` also 31-bit-decomposes the `8 − d` UNUSED digest
-//! coefficients (≈61 ALU each; the `decompose_unused` test knob mirrors it:
-//! 263 → 568 at d=3). Net of that confound, ungrouping alone removes ≈50–54
-//! ALU ops per access (≈1.57–1.59× fewer per access), adds `4·md` byte-range
-//! rows, and removes `md` counter-`PermuteAir` rows. **Padded** trace rows
-//! (`Σ 2^{log_height}`) and prove time move in power-of-two steps of the ALU
-//! table (2 ops per row), so a single shape can show anything from 1× to
-//! 3.4× for the same per-access saving — e.g. at d=7, w=16384 the padded
-//! rows/prove time are ≈1× at `m = 12288` (both ALU tables pad to 2^23) and
-//! ≈1.9× at `m = 16384` (only `countmin_omc` crosses to 2^24). Compare
-//! variants by unpadded ALU ops / cells, not by one padded point.
-//!
-//! ## Merge note
-//!
-//! [`assert_canonical_bits`] is a local copy of `hll_omc.rs`'s gadget (Track A
-//! is extracting a shared canonical helper in parallel); swap it for the shared
-//! one at merge. The bucket bits are allocated as private inputs and
-//! constrained exactly as `decompose_to_bits` does (boolean check + `Σ 2^j`
-//! reconstruction + connect), at identical row cost — this only exists so the
-//! tamper tests can inject a non-canonical decomposition.
+//! Count-Min `omc` leaf without the counter sort: each access emits its own read/write pair
+//! with a free read value. Sound for additive updates only.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -189,7 +39,7 @@ use crate::sketch::countmin_final::{apply_update_prf, hash_cell_prf};
 
 const LOG_FINAL_POLY_LEN: usize = 6;
 /// Range-check width for the free read values `r_z`. Its job is to force `r_z`
-/// into the base field (A1); 31 bits (`= Val::bits()`) admits every canonical
+/// into the base field (so `enc` stays injective); 31 bits (`= Val::bits()`) admits every canonical
 /// BabyBear value, so it imposes no bound on honest counters.
 const R_BITS: usize = 31;
 
@@ -216,7 +66,7 @@ enum Tamper {
     /// `i`) and commit the state that results from the shifted routing.
     NonCanonical { k: usize, i: usize },
     /// Give access `z` an extension-valued read `r_z = r0 + r3·X³` that
-    /// re-routes it to cell `c` (see A1), and commit the re-routed state.
+    /// re-routes it to cell `c` (through `X^4 = W`), and commit the re-routed state.
     RExtension { z: usize, c: usize },
     /// Inflate a touched cell by +1 by exploiting the FREE reads (the freedom
     /// this leaf hands the prover). Accesses `z1 < z2` hit the same cell and
@@ -232,9 +82,9 @@ enum Tamper {
 #[derive(Copy, Clone, Debug, Default)]
 struct Knobs {
     tamper: Tamper,
-    /// Build without the canonical-bits constraint (A2).
+    /// Build without the canonical-bits constraint.
     skip_canonical: bool,
-    /// Build without the `r_z` range check (A1).
+    /// Build without the `r_z` range check.
     skip_r_range: bool,
     /// Cost-accounting only: decompose the `8 − d` unused digest coefficients
     /// to 31 bits exactly as `countmin_omc` does, so op counts can separate
@@ -303,7 +153,7 @@ impl CmOmcUngroupedParams {
             self.num_cells().is_multiple_of(4),
             "d·w must be a multiple of 4 (Challenge packing)"
         );
-        // A3/A4: each multiset side has L = dw + md elements; LogUp equality
+        // Each multiset side has L = dw + md elements; LogUp equality
         // is exact multiset equality only while every multiplicity is < p.
         let l = (self.num_cells() as u128) + (self.num_accesses() as u128);
         assert!(
@@ -341,8 +191,8 @@ pub struct CmOmcUngroupedLeafCircuit {
 
 impl CmOmcUngroupedLeafCircuit {
     /// `Σ 2^{log_height}` over all tables (same metric as `countmin_omc`).
-    /// Power-of-two padded, so it jumps ~2× when one table crosses a
-    /// boundary; see the module doc's Cost section before comparing variants.
+    /// Power-of-two padded: it jumps ~2× when one table crosses a boundary,
+    /// so compare variants by unpadded ALU ops, not by one padded point.
     pub fn trace_rows(&self) -> u64 {
         self.trace_rows
     }
@@ -655,7 +505,7 @@ pub fn build_countmin_omc_ungrouped_leaf(
             for j in 0..w_log2 {
                 addr = b.mul_add(bits[j], pow2_all[j], addr);
             }
-            // r_z ∈ base field (A1): byte-table range check to 31 bits.
+            // r_z ∈ base field: byte-table range check to 31 bits.
             if !kn.skip_r_range {
                 b.add_range_bits::<Val>(r_w[z], R_BITS)
                     .expect("r_z range");
@@ -681,10 +531,10 @@ pub fn build_countmin_omc_ungrouped_leaf(
         // Consume the unused digest coefficients through one ALU lhs each, as
         // in hll_omc. This only gives each hint coefficient a `WitnessChecks`
         // creator (so the bus balances); it pins nothing — in this backend
-        // the coefficients are not bound to the packed digest at all (A1
-        // caveat). Test knob `decompose_unused` instead mirrors
-        // `countmin_omc` (lines 404-408: a full 31-bit `decompose_to_bits` of
-        // each unused coefficient) to measure that confound in op counts.
+        // the coefficients are not bound to the packed digest at all. Test
+        // knob `decompose_unused` instead mirrors the `Legacy` path of
+        // `countmin_omc` (a full 31-bit `decompose_to_bits` of each unused
+        // coefficient) to measure that confound in op counts.
         for &c in &hv[d..8] {
             if kn.decompose_unused {
                 let _ = b
@@ -1235,7 +1085,7 @@ mod tests {
         a == b
     }
 
-    /// **Exhaustive check of the Claim** (module doc), independent of the
+    /// **Exhaustive check of the soundness claim**, independent of the
     /// honest witness: over a small domain, enumerate EVERY choice of the free
     /// reads `r` and EVERY claimed final value `N`, and check that
     /// `M_old ⊎ W == M_new ⊎ R` (on `(address, value)` pairs) holds only if
@@ -1244,7 +1094,7 @@ mod tests {
     ///
     /// Case 1: one address, three accesses. Case 2: two addresses, two
     /// accesses, every address pattern (so values cannot be traded across
-    /// addresses). Case 3 (the A4 boundary): the same search for a
+    /// addresses). Case 3 (non-additive update): the same search for a
     /// non-additive update `write = max(r, v)` DOES find a multiset-balanced
     /// wrong `N` — which is why max/OR/min/replace need a timestamp.
     #[test]
@@ -1587,7 +1437,7 @@ mod tests {
     /// Same shifted-address witness with the canonical check REMOVED: the proof
     /// verifies and certifies a final state that differs from the true
     /// Count-Min (the record is credited one bucket over). Demonstrates that
-    /// A2 is load-bearing, and that the tamper really moves the address.
+    /// the canonical-bits check is load-bearing, and that the tamper really moves the address.
     #[test]
     fn noncanonical_bits_accepted_without_check() {
         let (params, prior, batch, k) = noncanonical_setup(1);
@@ -1629,7 +1479,7 @@ mod tests {
     }
 
     /// …and with the range check REMOVED the re-routed state is accepted:
-    /// the base-field constraint on `r_z` is load-bearing (A1).
+    /// the base-field constraint on `r_z` is load-bearing.
     #[test]
     fn r_extension_reroute_accepted_without_range_check() {
         for affine in [false, true] {
@@ -1740,7 +1590,7 @@ mod tests {
         assert!(rejected(p));
     }
 
-    // ── Backend probe for the A1 caveat (not specific to this leaf) ─────────
+    // ── Backend probe: are decompose coefficients bound? (not specific to this leaf) ──
 
     /// Tiny circuit: `h = Poseidon2(const 123)`, `c = decompose(h[0])`;
     /// `c[0]` feeds `t = c0·key` and `u = c0 + key` (so it has a creator AND a
@@ -1923,6 +1773,8 @@ mod tests {
                 "fork binds decompose coefficients (probe), yet the forged c0 verified"
             );
         } else {
+            // A1: this leaf's soundness assumes decomposed coefficients are
+            // base-field values bound to the packed digest.
             assert!(
                 f.is_ok(),
                 "gap no longer reproduces — decompose coefficients now look bound; revisit A1"

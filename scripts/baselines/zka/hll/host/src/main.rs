@@ -1,47 +1,5 @@
-// HyperLogLog baseline in zk-Analytics' architecture: host driver.
-//
-// Patterned on ../../cyc/src/bin/shipped.rs (the shipped-structure arm). The epochs,
-// the source batch hash chain and the epoch chain are built exactly as there:
-//   records  data/aol.keys (flat little-endian u32). Epoch e = keys [e*m, (e+1)*m),
-//            m = --epoch-size (16,384 = zkSketch's matched epoch; epoch 0 is our CM epoch).
-//   key_id   Event::make_key_id(0, key)  (zkvm-common/src/lib.rs:88, as shipped.rs)
-//   value    1 (ignored by HLL);  ts = global record index
-//   batches  one source (id 0), stream order, --batch records per batch (default 8, their
-//            --commit-batch-size default); SHA-256 batch chain continued across epochs
-//            (prev_source_chain_tips carried, source_batch_seq continues); epoch e's
-//            prev_chain_hash = epoch e-1's final_chain_hash.
-//
-// Modes:
-//   --mode aggr  : execute the HLL AGGREGATION guest on epoch --epoch-index (earlier
-//                  epochs are aggregated natively only to carry the chain tips).
-//   --mode query : aggregate epochs 0..n natively, then execute the HLL QUERY guest
-//                  over all n epoch states (chain links + state commits re-verified).
-// EXECUTOR ONLY unless --prove (succinct receipt, their ProverOpts::succinct()).
-//
-// Checks on every run:
-//   journal_eq_native  the guest journal equals the same core function run natively
-//   ref_check          an independent host HLL (own index/rank code, f64 sum of 2^-M,
-//                      std ln) over the raw keys matches the guest's registers/estimate
-//   exact / rel_err    the exact distinct count of the covered keys
-//
-// Usage:
-//   hll --header
-//   hll --mode aggr  [--epoch-index 0] [--root legacy|designed|noroot] [--epoch-size 16384] [--batch 8]
-//                    [--keys PATH] [--prove]
-//   hll --mode query --epochs N [--words] [--epoch-size 16384] [--batch 8] [--keys PATH] [--prove]
-//   --words: run the hll_query_words guest (same computation and journal; registers sent
-//            in serde's default Vec<u8> encoding, one zkVM word each) -- sensitivity row.
-//   --root:  which Merkle root the aggregation journal carries (six-sketch comparison,
-//            ../../README.md "Six-sketch comparison"; ../core/src/lib.rs "root variants"):
-//              legacy    (default) the hll_aggr guest, no root at all: the guest of the
-//                        committed 2026-10-09 reference rows
-//              designed  hll_aggr_root, 64-bucket samples-pattern root (zk-Analytics as designed)
-//              noroot    hll_aggr_root, root field zero (apples-to-apples with zkSketch)
-//            Query guests read no root: --root is refused with --mode query.
-//   Extra checks of an aggregation row: variants_agree = the legacy, designed and noroot
-//   aggregations run natively on the same input give the same state, state commitment, epoch
-//   link, n_events and source tips (the designed journal carries a non-zero root, the noroot
-//   journal a zero one); state_commit = the journal's state commitment (hex).
+// Host driver for the HLL port: executes the guests (and proves them with --prove), one CSV row per guest run.
+// Usage: hll --header | hll --mode aggr|query [--epochs N] [--epoch-index I] [--words] [--prove] ...
 
 use std::collections::HashSet;
 use std::time::Instant;
@@ -59,8 +17,9 @@ use zka_hll_methods::{
 };
 use zkvm_common::Event;
 
-/// MODELED prove time: segments x s/segment. Central value and envelope are the four
-/// CPU CM prove anchors in ../README.md ("Modeled prove time and the anchors behind it").
+/// MODELED_prove_s = segments x S_PER_SEG (computed, not measured), from the four CPU-proved CM guest runs
+/// in scripts/baselines/zka/README.md: S_PER_SEG is aggr_cm T=100, n=512 (661.3 s / 22 segments = 30.06 s)
+/// rounded; _lo/_hi use 29.73 and 30.79 s, the lowest and highest s/segment of the four.
 const S_PER_SEG: f64 = 30.1;
 const S_PER_SEG_LO: f64 = 29.73;
 const S_PER_SEG_HI: f64 = 30.79;

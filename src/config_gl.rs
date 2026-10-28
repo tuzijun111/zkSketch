@@ -1,34 +1,5 @@
-//! Goldilocks + Poseidon2-width-8 + D=2 two-adic FRI StarkConfig for leaf STARKs.
-//!
-//! Parallel to [`crate::config`] (BabyBear D=4 width-16). Used by the `_gl`
-//! SpaceSaving / Greenwald-Khanna circuits so callers can select the Goldilocks
-//! field instead of BabyBear.
-//!
-//! ### Poseidon2 constants — must match the fork's in-circuit AIR
-//!
-//! The permutation is the **seeded** `Poseidon2Goldilocks::<8>::new_from_rng_128`
-//! (`SmallRng::seed_from_u64(1)`) — the *same* constants the fork's
-//! `GoldilocksD2Width8` in-circuit AIR uses (`poseidon2-circuit-air`'s
-//! `goldilocks_d2_width8_round_constants`). Using upstream *canonical*
-//! `default_goldilocks_poseidon2_8` would disagree with the AIR and break the
-//! in-circuit aggregation with a `WitnessConflict` (the same failure mode the
-//! BabyBear [`crate::config`] header documents). Mirrors the fork's
-//! `recursion/tests/goldilocks.rs` reference wiring exactly.
-//!
-//! ### Zero knowledge (the `zk` feature, on by default)
-//!
-//! Mirrors [`crate::config`]: `HidingFriPcs` over the plain Merkle MMCS, the
-//! OS-seeded [`crate::zk_rng::ZkRng`], and `NUM_RANDOM_CODEWORDS`
-//! `= [Challenge : Val] = 2` random codewords per committed matrix. As on the
-//! BabyBear side the FRI batch is masked by batch-stark's randomization
-//! polynomial, not by these; they give each committed Merkle leaf row 2
-//! random Goldilocks values (about 128 bits) for the plain-MMCS argument. The
-//! revealed LogUp sums are masked per global interaction exactly as there,
-//! here with `D = 2` mask columns per interaction; the hiding budget is
-//! `2(54 + 2·2) = 116 → 128 <= 512` rows (a `const` assertion below). The
-//! compile-time fork guard, the salted-MMCS caveat and the remaining
-//! heuristic / not-hidden items documented there apply here too; the cost of
-//! the masks was measured on BabyBear only.
+//! Goldilocks + Poseidon2 (width 8) + D=2 FRI StarkConfig for the `_gl` circuits.
+//! Poseidon2 constants are seeded (`SmallRng::seed_from_u64(1)`) to match the fork's in-circuit AIR.
 
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;

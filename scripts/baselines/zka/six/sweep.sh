@@ -1,65 +1,28 @@
 #!/usr/bin/env bash
-# Batch-size sweep of the six-sketch comparison: zkSketch vs zk-Analytics on ONE batch of m = 2^E
-# records per size, six families (cm hll ss gk bloom kmv), E from --min to --max (default 6..14),
-# one cross-size table at the end.
-#   zkSketch:     one leaf per batch (SIX_T=1, k = 1: EXP_COMPOSE_N = EXP_COMPOSE_BATCHES = m), forest,
-#                 procs engine, 1 machine x SIX_CORES cores, a query after the leaf (run_zks.sh)
-#   zk-Analytics: one aggregation receipt per batch (epoch 0, root variant noroot; no shipped-CM
-#                 reference: SIX_ZKA_CM_REF=0), its matched GK with --m-sub m (run_zka.sh)
+# Batch-size sweep: zkSketch and zk-Analytics each prove one batch of m = 2^E AOL records per size, six sketches,
+# then sweep_table.py writes sweep.csv and sweep_table.md.
 #
-#   sweep.sh [--min E] [--max E] [--sizes 6,8,10] [--quick] [--dry-run] [--resume]
-#     --min E, --max E   exponents E of m = 2^E (defaults 6 and 14; 1 <= E <= 20, the keys file)
-#     --sizes E,E,...    an explicit list of exponents instead of --min..--max
-#     --quick            sizes 6 and 7 only (unless --sizes), GATE_WAIT_S=0, SIX_FAIL_FAST=1, GK capacity 512 unless
-#                        SIX_GK_CAP is set (as run_all.sh quick; at 2048 the two GK proofs alone take ~12 min): a
-#                        ~15-20 min smoke
-#     --dry-run          print the plan (sizes, per-size shape, jobs, time estimates) and run nothing
-#     --resume           RESULTS must be an existing sweep directory: sizes whose m<EE>/six_sketch_comparison.csv
-#                        exists are skipped; an unfinished size directory is moved to m<EE>.incomplete-<stamp>
-#                        and that size runs again from scratch (re-assemble a finished raw directory with
-#                        run_all.sh assemble <dir> instead)
-# Per size E, in $RESULTS/m<EE> (two-digit E), with RESULTS=<that dir> SIX_M=m SIX_T=1 SIX_GK_CAP SIX_BLOOM_VARIANT
-# SIX_ZKA_CM_REF=0 exported to the child scripts:
-#   1. run_zks.sh cm hll ss gk bloom kmv     six zkSketch runs (no bloom_absent)
-#   2. run_zka.sh exec                       executor, all six, epoch 0 (root variants SIX_ZKA_ROOTS)
-#   3. run_zka.sh prove <fam>:aggr:0:<variant> x 6 (x the variants of SIX_ZKA_ROOTS)
-#   4. assemble.py <dir> data/aol.keys --zka six_zka --zks six_zksketch --m m --t 1 --out <dir>/six_sketch_comparison.csv
-#      + table.py -> <dir>/six_sketch_table.md (--m/--t: the shape even when every zkSketch CSV of the size failed)
-# then python3 -I sweep_table.py $RESULTS -> $RESULTS/sweep.csv + sweep_table.md (printed at the end).
-# Env:
-#   RESULTS          sweep directory (default <repo>/results/six/sweep-<YYYYmmdd-HHMMSS>, sweep-quick-<stamp> with
-#                    --quick; git-ignored); must be new or empty unless --resume
-#   BASELINE_DIR     zk-Analytics clone + builds (default ~/ext-baselines)
-#   SIX_CORES        zkSketch cores (default: physical cores, at most 32)
-#   GATE_WAIT_S      seconds each timed job waits for a quiet box (default 600; --quick 0); GATE_MAX_LOAD, GATE_MAX_BUSY
-#   SIX_GK_CAP       GK capacity, both sides (default 2048, --quick 512; cap + m must be even); SIX_GK_ROUNDS (stable)
-#   SIX_BLOOM_VARIANT  zkSketch Bloom leaf: default per size, packed while 7 x m < 2^16, else omc (the packed leaf's
-#                    16-bit timestamps); set it to force one variant for every size (packed is refused at 7 x m >= 2^16)
-#   SIX_ZKA_ROOTS    zk-Analytics aggregation variants (default noroot); SIX_ZKA_GK (matched), SIX_ZKA_GK_IMPL (literal)
-#   SIX_FAIL_FAST=1  stop at the first failed step (--quick sets it); otherwise a failed run or proof leaves '-'
-#                    in the tables, the sweep goes on and its exit status is 1
-#   SIX_ALLOW_STALE=1  use binaries older than their sources (refused by default; run_all.sh build refreshes them)
-#   EXP_VERIFY_REPEATS and the M0 switches (EXP_FOREST_RETAIN_PREP, EXP_MALLOC_TRIM, EXP_EXIT_BEFORE_AUDIT,
-#                    EXP_MERGE_CACHE, EXP_MERGE_CACHE_ENTRIES) pass through to run_zks.sh
-#   SIX_M, SIX_T, SIX_N, SIX_QNS, SIX_M_<FAM>, SIX_LEAF, SIX_LEAF_<FAM>, SIX_GK_MSUB, SIX_ZKA_CM_REF, SIX_WORK are set
-#                    per size here and ignored from the environment (a note says so)
-# Memory: a size's zkSketch leaf is one monolithic proof of m records (the memory-matched budget does not apply):
-# the GK and HLL leaves at 2^13-2^14 records take tens of GiB. Times: see --dry-run (an estimate from the memmatch
-# leaf rates, the executor's cycle counts and r0vm's 33-44 s per 2^20-cycle segment: about 12-16 h for E = 6..14,
-# the 2^14 size alone 5-7 h; the large zkSketch leaves run slower than linear).
-# Exit status 0 only if every step of every size succeeded (and the sweep table was written).
+# Usage: sweep.sh [--min E] [--max E] [--sizes 6,8,10] [--quick] [--dry-run] [--resume]
+#   --min E, --max E   exponents of m = 2^E (default 6 and 14)
+#   --sizes E,E,...    explicit exponents instead of --min..--max
+#   --quick            sizes 6 and 7, GK capacity 512, no gate wait, stop at the first failure (about 15-20 min)
+#   --dry-run          print the plan and run nothing
+#   --resume           continue in an existing RESULTS directory, skipping the finished sizes
+# Env: RESULTS, BASELINE_DIR, SIX_CORES, GATE_WAIT_S (600), SIX_GK_CAP (2048), SIX_BLOOM_VARIANT, SIX_ZKA_ROOTS,
+#   SIX_FAIL_FAST=1, SIX_ALLOW_STALE=1
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZKS="$(cd "$HERE6/../../../.." && pwd)"
 BASELINE_DIR="$(realpath -m -- "${BASELINE_DIR:-$HOME/ext-baselines}")"
+source "$HERE6/../sizes.sh"   # SIX_SIZES (zka | default): SIX_CM_W, SIX_SS_CAP, SIX_KMV_K, SIX_KMV_SUFFIX
 export BASELINE_DIR
 RZ_HOME=${RISC0_HOME:-$HOME/.risc0}
 export PATH="$HOME/.cargo/bin:$RZ_HOME/bin:$PATH"
 KEYS=$ZKS/data/aol.keys
 KEYS_MD5=01dd7d5c8a73
 EB=$BASELINE_DIR/build
-ZKA_BINS=("$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-mg/release/mg" "$EB/zka-gk/release/gk"
-          "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv" "$EB/zka-gk-matched/release/gk_matched")
+ZKA_BINS=("$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/$SIX_ZKA_HH_BIN" "$EB/zka-gk/release/gk"
+          "$EB/zka-bloom/release/bloom" "$EB/zka-kmv$SIX_KMV_SUFFIX/release/kmv" "$EB/zka-gk-matched/release/gk_matched")
 ZKS_BIN=$ZKS/target/release/examples/exp_compose
 ROOT_COLS=root_variant,root_construction,variants_agree,state_commit
 FAMS=(cm hll ss gk bloom kmv)
@@ -166,7 +129,7 @@ jobs_of() {  # jobs_of: the zk-Analytics prove jobs of one size (every family's 
 mapfile -t JOBS < <(jobs_of)
 NROOTS=$(tr ',' '\n' <<< "$SIX_ZKA_ROOTS" | wc -l)
 
-# ------------------------------------------------------------------ time estimates (the --dry-run plan; rough)
+# ------------------------------------------------------------------ expected run times (the --dry-run plan)
 # zk-Analytics: user cycles of one aggregation = cycles per record x m + ~0.3M fixed, from the memmatch executor rows
 # (cm 5,400, hll 5,000, ss 5,900, bloom 5,400, kmv 5,200); the matched GK guest is dominated by its apply_batch2 step
 # over the T = capacity + m table, not by m: ~290 x T x log2(T) + ~3,700 per record read + ~0.8M fixed (measured
@@ -216,7 +179,7 @@ if (( DRY )); then
     echo "         zk-Analytics GK: SIX_ZKA_GK=textbook (textbook Greenwald-Khanna: a reference, not zkSketch's algorithm)"
   fi
   echo "         Bloom leaf: $( [[ -n $BLOOM_ENV ]] && echo "SIX_BLOOM_VARIANT=$BLOOM_ENV for every size (env)" || echo "packed while 7 x m < 2^16 (m <= 8192), else omc (SIX_BLOOM_VARIANT unset)")"
-  echo "  per size (estimates: zk-Analytics 5,000-5,900 cycles/record + 0.3M (gk: 290 x T log2 T + 3,700/record + 0.8M, T = capacity $GK_CAP + m),"
+  echo "  expected time per size (zk-Analytics 5,000-5,900 cycles/record + 0.3M (gk: 290 x T log2 T + 3,700/record + 0.8M, T = capacity $GK_CAP + m),"
   echo "            2^20-cycle segments x ${SEG_LO}-${SEG_HI} s, 6 proofs x $NROOTS variant(s); zkSketch the memmatch leaf rates linear in m (gk in capacity + m)"
   echo "            + 25 s per run (hll 60 s), a lower bound for the large HLL / GK leaves; gate waits excluded):"
   printf '    %-3s %-9s %-4s %-7s %-20s %-16s %-44s %s\n' E m dir bloom 'gk cap (s=51 needs ~)' 'zkSketch ~6 runs' "zk-Analytics ~6 proofs (${SEG_LO}-${SEG_HI} s/segment)" '~size'
@@ -227,7 +190,7 @@ if (( DRY )); then
     printf '    %-3s %-9s %-4s %-7s %-20s %-16s %-44s %s\n' "$e" "$m" "m$(printf '%02d' "$e")" "$(bloom_variant "$m")" \
       "$GK_CAP ($(gk_need "$m"))" "$(hms "$zs")" "$(hms "$za_lo")-$(hms "$za_hi") ($segs segments, $seg each)" "$(hms $((zs + za_lo)))-$(hms $((zs + za_hi)))"
   done
-  echo "  total: ~$(hms "$TOT_LO")-$(hms "$TOT_HI") of running (estimate), plus gate waits (<= ${GATE_WAIT_S}s before each of the $(( (6 + ${#JOBS[@]}) * ${#ES[@]} )) timed jobs)"
+  echo "  total: ~$(hms "$TOT_LO")-$(hms "$TOT_HI") of running, plus gate waits (<= ${GATE_WAIT_S}s before each of the $(( (6 + ${#JOBS[@]}) * ${#ES[@]} )) timed jobs)"
   echo "  steps per size E (RESULTS=\$RESULTS/m<EE>; env RESULTS=<that dir> SIX_M=m SIX_T=1 SIX_GK_CAP=$GK_CAP SIX_GK_ROUNDS=$SIX_GK_ROUNDS SIX_BLOOM_VARIANT=<per size>"
   echo "                    SIX_ZKA_CM_REF=0 SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS SIX_ZKA_GK=$SIX_ZKA_GK SIX_ZKA_GK_IMPL=$SIX_ZKA_GK_IMPL SIX_CORES=$SIX_CORES GATE_WAIT_S=$GATE_WAIT_S SIX_FAIL_FAST=$SIX_FAIL_FAST):"
   echo "    1. zkSketch, 6 timed runs:   $HERE6/run_zks.sh ${FAMS[*]}"
@@ -246,7 +209,7 @@ fi
 stale_builds() {
   local z=$ZKS/scripts/baselines/zka i src bin
   local -a pairs=("$z/cyc" "${ZKA_BINS[0]}" "$z/cm_noroot" "${ZKA_BINS[0]}" "$z/hll" "${ZKA_BINS[1]}"
-                  "$z/mg" "${ZKA_BINS[2]}" "$z/gk" "${ZKA_BINS[3]}" "$z/bloom" "${ZKA_BINS[4]}"
+                  "$z/$SIX_ZKA_HH_SRC" "${ZKA_BINS[2]}" "$z/gk" "${ZKA_BINS[3]}" "$z/bloom" "${ZKA_BINS[4]}"
                   "$z/kmv" "${ZKA_BINS[5]}" "$z/gk_matched" "${ZKA_BINS[6]}" "$z/gk_bm2/core" "${ZKA_BINS[6]}")
   local stale=" "
   for ((i = 0; i < ${#pairs[@]}; i += 2)); do
@@ -303,6 +266,7 @@ write_manifest() {
     echo "mode=$MODE"
     echo "started=$(date -Is)"
     echo "sizes=$SIZES (E; m = 2^E records, one batch per size: SIX_T=1, one zkSketch leaf = the batch, k = 1)"
+    echo "sketch_sizes=$SIX_SIZES (cm w=$SIX_CM_W d=3; ss cap=$SIX_SS_CAP; kmv k=$SIX_KMV_K; hll b=14; gk cap=$GK_CAP s=$GK_S; bloom 7x2^14; zk-Analytics' Count-Min stays its 3x1024)"
     echo "gk_cap=$GK_CAP gk_cap_from=$GK_CAP_FROM gk_rounds=$SIX_GK_ROUNDS gk_s=$GK_S bloom_variant=$( [[ -n $BLOOM_ENV ]] && echo "$BLOOM_ENV (env)" || echo "auto (packed while 7 x m < 2^16, else omc; per size below)") query_points=1 aggr_epochs=0 cores=$SIX_CORES"
     echo "zka_roots=$SIX_ZKA_ROOTS (aggregation root variants executed and proved) zka_cm_ref=0 (no separate CM reference)"
     if [[ $SIX_ZKA_GK == matched ]]; then

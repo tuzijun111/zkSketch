@@ -1,13 +1,5 @@
-//! Datasets for the plonky2 backend — the **same S³ suite** as the plonky3
-//! crate (`../src/dataset.rs`), so both stacks run on identical inputs.
-//!
-//! Synthetic streams are generated here to match S³'s `DataGenerator`
-//! (Gaussian μ=2³¹ σ=2¹³ at distribution level; Uniform 32-bit) and a tunable
-//! Zipf for skew sweeps. The real AOL/Netflix streams are **shared** with the
-//! plonky3 crate: this module reads the same processed key files from the
-//! parent repo's `data/` directory (`../data/<name>.keys`, produced by
-//! `../scripts/fetch_datasets.py` with S³'s exact CRC32/customer-id recipe), so
-//! there is no duplicate download.
+//! Key streams: synthetic Gaussian/Uniform/Zipf, and AOL/Netflix read from ../data/*.keys
+//! (written by ../scripts/fetch_datasets.py).
 
 use std::path::PathBuf;
 

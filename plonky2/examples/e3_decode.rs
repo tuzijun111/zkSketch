@@ -1,17 +1,5 @@
-//! E3 — decode/query cost runner for the **plonky2 (SNARK)** backend
-//! (EVAL_SPEC E3). For each `(family, query_type)` it benches the decode proof
-//! against a committed state, **sweeping the state size `s`** (the decode cost's
-//! only structural dependence — it re-hashes the whole committed state) and
-//! adding a **release-policy** variant. Uses the shared metrics harness.
-//!
-//! Output: `plonky2/results/e3_decode.csv`
-//!   `backend, family, query_type, s, release_policy, constraint_count,
-//!    prove_total_ms_median, verify_ms_median, proof_size_bytes, peak_rss_mb_median`
-//!
-//! Run: `cargo run --release --example e3_decode`
-//! Env: EXP_DATASET (uniform), EXP_TRIALS (5).
-//! Note: decode circuits exist on plonky2 here; the plonky3 decode (AIR) is
-//! future work, so E3 is plonky2-only for now.
+//! E3 on plonky2: decode (query) proof cost per family vs. state size s, written to plonky2/results/e3_decode.csv.
+//! Usage: cd plonky2 && EXP_DATASET=uniform EXP_TRIALS=5 cargo run --release --example e3_decode
 
 use plonky2::field::types::PrimeField64;
 

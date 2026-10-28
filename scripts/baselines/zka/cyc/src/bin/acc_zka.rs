@@ -1,19 +1,4 @@
-//! Accuracy harness, ZK-ANALYTICS side.
-//!
-//! Reads a key stream (one decimal u64 key index per line) on stdin, turns each
-//! into their canonical 15-byte key id (`Event::make_key_id(source_id=0, idx)`,
-//! zkvm-common/src/lib.rs:76), builds real `BatchInput`s with their own
-//! `batch_chain_hash`, runs THEIR aggregation entry point
-//! `aggregator_core::process_cm_aggr_with_state` (aggregator/core/src/lib.rs:1215)
-//! and then answers a point query per distinct key through THEIR query engine
-//! `querier_core::run_cm_query` with `CmQuery::Estimate` (querier/core/src/lib.rs:249).
-//!
-//! Nothing about the sketch is reimplemented here: CM_ROWS=3, CM_COLS=1024 and
-//! CM_SEEDS (splitmix64) all come from their crate (aggregator/core/src/lib.rs:39-41).
-//!
-//! Value per record is 1 (frequency counting) so the error is directly
-//! comparable to the classical eps*||f||_1 bound with ||f||_1 = n_records.
-//!
+//! CM accuracy, zk-Analytics side: their aggregation and CM point query on a key stream.
 //! Usage: acc_zka [--batch 8] < stream.txt      (prints key,exact,estimate)
 
 use std::collections::BTreeMap;

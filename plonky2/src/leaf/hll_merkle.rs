@@ -1,27 +1,4 @@
-//! **HyperLogLog sparse-rebind via a Merkle vector commitment** (plonky2) —
-//! the Pattern-A rebind for HLL, the §5.2 sparse-opening commit applied to the
-//! register array.
-//!
-//! HLL's register array `m = 2^b` grows with the accuracy target (≈2¹⁴ for ~1%
-//! error), just like Count-Min's width `w`. The flat HLL leaf
-//! ([`super::hyperloglog`]) re-hashes all `m` registers per epoch (`Θ(m)`) and
-//! scatters every record over every register (`O(m·batch)`). Here `Com(S)` is a
-//! **Merkle root** over the `m` registers, and a batch touches only the
-//! `T ≤ min(batch, m)` distinct registers its keys route to — so the rebind is
-//! `Θ(T·log m)`, **independent of `m`**.
-//!
-//! It is structurally the single-tree (`d = 1`) Count-Min Merkle leaf
-//! ([`super::countmin_merkle`]), with two differences dictated by HLL:
-//! - the cell "value" is the **derived rank** `ρ = 1 + trailing_zeros(digest[1])`
-//!   (re-derived in-circuit — the prover can neither pick the register nor
-//!   inflate ρ), not a supplied count; and
-//! - the per-register aggregation is a **max** (`new = max(old, routed ρ)`),
-//!   enforced by the flat HLL leaf's product-of-differences + range gadget,
-//!   instead of a sum.
-//!
-//! Register routing (`idx = digest[0] mod m`) and ρ derivation mirror
-//! [`crate::sketch::hyperloglog::hash_register`] exactly, so the leaf is a
-//! faithful HLL update. The flat HLL leaf remains the baseline.
+//! HyperLogLog leaf over a Merkle tree of registers; an update opens only the touched registers.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

@@ -1,42 +1,4 @@
-//! HyperLogLog **cardinality** decode circuit (E3), estimator mode.
-//!
-//! Implements the paper's HLL query relation (zk1.tex app:hll, "HLL estimator
-//! mode") in **fixed-point** arithmetic. Unlike the previous integer harmonic
-//! surrogate `Σ 2^(B−reg)`, this certifies the fixed-point cardinality
-//!
-//! ```text
-//!   Z   = Σ_b Pow2Neg[S_t[b]]            (fixed-point harmonic sum, scale 2^β)
-//!   res = α_s · s² · Inv_β(Z)            (fixed-point cardinality, scale 2^β)
-//!   ans = release(res)
-//! ```
-//!
-//! where `Pow2Neg[x] = round(2^β / 2^x)` is a **public** fixed-point lookup table
-//! selected per register by a one-hot over the register value `0..=MU_MAX`, and
-//! `Inv_β(Z)` is a **witnessed** reciprocal `invZ` certified by the
-//! range-checked rounding residual `Z·invZ − T ∈ [0, Z)` with reciprocal target
-//! `T = 2^(2β)` (so `invZ ≈ 2^β / Z` retains β fractional bits). `res` is then
-//! the exact in-circuit product `K_num · invZ`, `K_num = round(α_s · s²)` a
-//! public integer constant; `ans = release(res)`.
-//!
-//! Goldilocks (`p ≈ 2^64`) leaves ample headroom for a **fully sound** in-circuit
-//! reciprocal at `BETA = 20` (the BabyBear/STARK counterpart in the plonky3 crate
-//! uses `BETA = 8` for the same soundness inside the ~31-bit field):
-//! * `Z ≤ m·2^β ≤ 2^(6+20) = 2^26`;
-//! * `T = 2^(2β) = 2^40`, `invZ = ceil(T/Z) ≤ T/Pow2Neg[0] = 2^β = 2^20`;
-//! * `Z·invZ < T + Z < 2^41`  (residual range check sound);
-//! * `res = K_num·invZ ≤ round(0.78·64²)·2^20 ≈ 2^11.7·2^20 ≈ 2^31.7 ≪ p`.
-//!
-//! Stages:
-//! 1. Re-hash the `m` registers → bind to the committed digest (the `Θ(s)` cost).
-//! 2. Per register: a one-hot selector over `[0, MU_MAX]` picks `Pow2Neg[reg]`
-//!    and binds the selected index to the register value.
-//! 3. Sum the picked fixed-point weights → `Z`.
-//! 4. Reciprocal: witness `invZ`, certify `Z·invZ − T ∈ [0, Z)`, then
-//!    `res = K_num · invZ`.
-//! 5. Apply the release policy and bind the released value to the public answer.
-//!
-//! Proven answer = `release(res)`. The `(params, state)` prove signature is kept
-//! (no query key for cardinality).
+//! HyperLogLog cardinality decode circuit, in fixed point with BETA fractional bits.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

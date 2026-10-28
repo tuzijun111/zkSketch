@@ -1,13 +1,5 @@
-//! Cost-shape verification for the four deployed-forest leaves. Confirms the
-//! framework's predicted shape empirically: the leaf circuit size is governed by
-//! the declared **sketch capacity** (d·w for Count-Min, 2^b for HyperLogLog,
-//! `capacity` for SpaceSaving/GK), and is fixed by the public parameters — it does
-//! not depend on the stream length or which epoch a leaf certifies
-//! (history-independent: the circuit is built once per shape and reused for every
-//! epoch). We measure `degree_bits` (log₂ of the padded execution-trace length),
-//! the plonky2 cost proxy, and assert it grows with capacity.
-//!
-//! Run with `--nocapture` to see the numbers.
+//! Leaf circuit size (degree_bits) of the four forest leaves vs. capacity and batch size.
+//! Run with --nocapture to print the numbers.
 
 use zksketch_snark::leaf::countmin_omc::{build_countmin_omc_leaf, CmOmcParams};
 use zksketch_snark::leaf::gk_bandmerge2::build_gk2_bm2_leaf;

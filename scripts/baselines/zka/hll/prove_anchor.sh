@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
-# ONE small PROVED anchor for the HLL aggregation guest (hll_aggr): epoch 0 at
-# EPOCH_SIZE=2048 AOL records, ProverOpts::succinct() (their shipped prove tier),
-# CPU r0vm. Records prove_s, segments, s/segment, receipt bytes, verify ms (best of 5),
-# total/paging cycles and the peak RSS of the r0vm this run spawns (rss_child.sh).
-# The proved journal is asserted equal to the native output inside the driver.
-#
-# Refuses to prove when the 1-minute load average exceeds MAX_LOAD (default 24): the
-# box is shared, and a loaded box would inflate prove_s. It then prints the command.
-#
-# Env: SKIP_BUILD=1  EPOCH_SIZE=2048  MAX_LOAD=24  OUT=$RESULTS/zka_hll_anchor.csv
+# Prove hll_aggr on epoch 0 once (CPU r0vm) and append prove time, segments and r0vm peak RSS to OUT.
+# Usage: [EPOCH_SIZE=2048] [MAX_LOAD=24] [OUT=...] ./prove_anchor.sh
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/hll_common.sh"
 refuse_dev_mode

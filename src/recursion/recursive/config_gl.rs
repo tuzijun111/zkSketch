@@ -1,13 +1,4 @@
-//! `ConfigWithFriParamsGl` — Goldilocks `StarkCfg` wrapper that implements
-//! [`p3_recursion::FriRecursionConfig`].
-//!
-//! Goldilocks analog of [`crate::recursion::recursive::config`] (BabyBear).
-//! Specialised to Goldilocks + Poseidon2 width-8 + binomial extension D = 2,
-//! matching the fork's `GoldilocksD2Width8` / `Poseidon2Config::GOLDILOCKS_D2_W8`
-//! path (see `recursion/tests/goldilocks.rs`).
-//!
-//! Under `--features zk` it carries `HidingFriProofTargets` and sets the MMCS
-//! private data from the inner FRI proof, exactly as the BabyBear config.
+//! `ConfigWithFriParamsGl`: Goldilocks / Poseidon2-8 / D = 2 version of `config`.
 
 use std::sync::Arc;
 

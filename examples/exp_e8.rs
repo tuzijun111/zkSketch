@@ -1,22 +1,5 @@
-//! E8 — cross-stack head-to-head, **plonky3 (STARK)** side (EVAL_SPEC E8). Same
-//! certified Count-Min leaf shape on both backends, plus a recursive merge of two
-//! leaves and one cross-family (cm+hll) merge. Pairs with the plonky2 runner
-//! `plonky2/examples/e8_crossstack.rs`; the two CSVs merge into
-//! `results/e8_crossstack.csv` (a `backend` column distinguishes them).
-//!
-//! Three ops:
-//! - `leaf` — prove one CM leaf (§1 metrics).
-//! - `recursive_merge` — `merge_two_countmin_v9` of two chainable CM leaves. This
-//!   is a **real recursive batch-STARK** (it re-verifies both leaves in-circuit).
-//! - `cross_family_merge` (cm+hll) — composed via the §4 framework's option-(i)
-//!   boundary digest (`merge_atom`), **not** a recursive STARK: the recursive
-//!   cross-family merge is a gap (CM and HLL have different state commitments /
-//!   PI shapes), so the framework digest path is the only cross-family composition
-//!   the prototype supports. Flagged accordingly.
-//!
-//! Run:    cargo run --release --example exp_e8
-//! Config: EXP_E8_M=64 (spec target 1000; scaled down — the recursive v9 merge is
-//!         ~10s+ each at this prototype) EXP_E8_DB=32 EXP_E8_TRIALS=2
+//! E8 (Plonky3 side): one CM leaf, a recursive merge of two CM leaves, and a CM+HLL merge as a digest and as a recursive proof.
+//! Usage: [EXP_E8_M=64 EXP_E8_DB=32 EXP_E8_TRIALS=2] cargo run --release --example exp_e8
 
 use std::hint::black_box;
 use std::time::Duration;

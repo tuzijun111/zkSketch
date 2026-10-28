@@ -1,76 +1,5 @@
-//! HyperLogLog **cardinality** decode circuit (E3, plonky3/STARK), estimator mode.
-//!
-//! Implements the paper's HLL query relation (zk1.tex app:hll, "HLL estimator
-//! mode") in **fixed-point** arithmetic on the STARK backend, mirroring the
-//! plonky2 `decode::hyperloglog` relation. Unlike the previous integer
-//! harmonic surrogate `Σ 2^(B−reg)`, this certifies the fixed-point cardinality
-//!
-//! ```text
-//!   Z   = Σ_b Pow2Neg[S_t[b]]            (fixed-point harmonic sum, scale 2^β)
-//!   res = floor(K_num · 2^(2β) / Z)      (fixed-point cardinality, scale 2^β)
-//!   ans = release(res)
-//! ```
-//!
-//! where `Pow2Neg[x] = round(2^β / 2^x)` is a **public** fixed-point lookup
-//! table (identically 0 past `x = β + 1`) and `K_num = round(α_s · s²)` is a
-//! public integer constant. The division is certified by a **witnessed
-//! quotient**: `res` and the remainder `rem` are supplied in range-checked
-//! base-2^11 limbs and the integer identity `res·Z + rem = N`
-//! (`N = K_num·2^(2β)`, up to 44 bits at `b = 14`) is enforced digit-by-digit
-//! with range-checked carries, so every in-field term stays far below the
-//! BabyBear modulus (see the budget below).
-//!
-//! Reusing the `hll_final_full` commit layout and the `countmin` decode harness
-//! (Poseidon2 + Recompose, no Permute — decode does not sort).
-//!
-//! Stages:
-//! 1. Re-hash the `m` registers → bind to the committed digest (the `Θ(s)` cost).
-//! 2. Per register: a one-hot selector over `[0, SEL_MAX]` picks `Pow2Neg[reg]`,
-//!    with a boolean **catch-all** for `reg > SEL_MAX` (weight 0 — the exact
-//!    table value there); the selected index (or the catch-all's gated range
-//!    check) binds the selector to the register value.
-//! 3. Sum the picked fixed-point weights → `Z`.
-//! 4. Division certificate: witness `res`/`rem` in limbs, enforce
-//!    `res·Z + rem = N` over ℤ (base-2^11 digits + carries) and `rem ∈ [0, Z)`.
-//! 5. Apply the release policy and bind the released value to the public answer.
-//!
-//! There is no query-key public input for cardinality: the answer depends only
-//! on the committed state, so PIs are `(committed-state, answer)`.
-//!
-//! ### Field-size / soundness budget (BabyBear, p ≈ 2^30.9), b ≤ 14
-//! Every range-checked value and every product fed to a range check must stay
-//! `< p`. With `BETA = 8` and `m = 2^b ≤ 2^14`:
-//! * `Z ≤ m·2^β ≤ 2^22` — by construction (one-hot/catch-all selected public
-//!   weights, each `≤ 2^β`), no range check needed;
-//! * `N = K_num·2^(2β) < 2^44` with `K_num = round(α_s·s²) < 2^28`;
-//! * `res < 2^RES_BITS = 2^29`, pinned by its three range-checked limbs
-//!   `(r0, r1) ∈ [0, 2^11)`, `r2 ∈ [0, 2^7)`;
-//! * `Z` is re-decomposed as `z1·2^11 + z0` (`z0 ∈ [0, 2^11)`,
-//!   `z1 ∈ [0, 2^12)` — covers `Z = 2^22` exactly), `rem = m1·2^11 + m0`
-//!   with `Z − 1 − rem` range-checked to `Z_BITS = 22` bits (⇒ `rem < Z`);
-//! * convolution digits `c_k = Σ_{i+j=k} r_i·z_j < 2^24` and digit equations
-//!   `c_k + rem_k + γ_{k-1} = n_k + γ_k·2^11` with carries `γ_k ∈ [0, 2^14)`:
-//!   every term `< 2^26 ≪ p`, so each field equation is an integer equation
-//!   and telescoping gives `res·Z + rem = N` over ℤ — with `rem ∈ [0, Z)`
-//!   this pins `res = floor(N/Z)` **uniquely** (all witnesses range-checked;
-//!   nothing relies on an implicitly-small witness);
-//! * release: `res < 2^29` (limb-pinned), threshold window
-//!   `DIFF_BITS = 29` is sound since `p − 2^29 > 2^29` (a wrapped "negative"
-//!   difference always lands above the window).
-//!
-//! The bounds above leave slack on purpose: `add_range_bits` with a
-//! non-byte-aligned width checks its shifted top byte, which admits values a
-//! factor `≤ (1 + 2^−r)` past `2^n_bits` (`r` = top-byte bits). Every budget
-//! line survives that looseness with room to spare (terms stay `< 2^26·1.13`,
-//! the digit equations remain integer equations, and `res·Z + rem = N` pins
-//! the same unique `res`).
-//!
-//! Completeness cap: `res < 2^29` ⇔ estimate `< 2^(29−β) = 2^21` — ample for
-//! the `n ≤ 2^20` experiment scale (asserted natively with a clear message).
-//! Registers may take any value `≤ MU_MAX = 63` (the update leaves produce
-//! `ρ = 1 + trailing_zeros ≤ 32`); values past `SEL_MAX = β + 1` carry weight
-//! 0 via the catch-all, so no register value reachable from the updates can
-//! make the decode unprovable.
+//! HyperLogLog cardinality decode: `res = floor(K_num·2^(2β) / Z)`, `Z = Σ_b Pow2Neg[S[b]]`.
+//! Budget (b ≤ 14): `res·Z + rem = N` holds over ℤ via base-2^11 digits, all terms < 2^27 ≪ p.
 
 use std::rc::Rc;
 
@@ -149,7 +78,7 @@ const RES_TOP_BITS: usize = RES_BITS - 2 * LIMB_BITS;
 const Z_TOP_BITS: usize = Z_BITS - LIMB_BITS + 1;
 
 /// Range window for the division-certificate carries `γ_k` (honest carries
-/// stay `< 2^13 + 4`; see the module budget).
+/// stay `< 2^13 + 4`).
 const CARRY_BITS: usize = 14;
 
 /// Range-check window for the release-policy threshold compare. Must cover
@@ -1323,9 +1252,8 @@ mod tests {
     /// and the full-state decoder (a baseline) is untouched (VKs recorded on
     /// the unmodified code); the Hiding VK does not depend on the salt. A
     /// query at version `t` opened with leaf `t`'s final salt exposes exactly
-    /// the final commitment of the hiding leaf `t` (the lemma in
-    /// `crate::commitment::hiding`); a wrong salt still proves, but exposes a
-    /// commitment that is not the log's.
+    /// the final commitment of the hiding leaf `t`; a wrong salt still
+    /// proves, but exposes a commitment that is not the log's.
     #[test]
     fn hiding_decode_exposes_hiding_commit() {
         use crate::commitment::hiding::{Openings, SaltSeed, rho_state_bb as state_salt};

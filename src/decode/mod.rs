@@ -1,24 +1,5 @@
-//! plonky3 (STARK) **decode / query circuits** — prove `answer =
-//! release(decode(committed state))`, the STARK-backend counterpart of the
-//! plonky2 `decode` family (EVAL_SPEC E3).
-//!
-//! Unlike the update leaves (which prove a *transition* `Com(S_{t-1}) →
-//! Com(S_t)`), a decode circuit proves a **query answer against one committed
-//! state**: it re-hashes the whole state in-circuit (binding it to the
-//! published `Com(S)`), then proves the family's query relation over the
-//! witnessed cells. Cost is therefore `Θ(s)` in the state size `s` (the
-//! whole-state re-hash) plus the small per-query relation — exactly the E3
-//! dependence on `s`, not on stream length.
-//!
-//! Decode proofs are **self-contained** (not chained): each prover self-verifies
-//! (`verify_all_tables`) internally and returns a [`DecodeProof`] wrapping the
-//! batch-STARK output plus the released answer. The per-phase timing split is
-//! recorded via [`crate::recursion::recursive::timing`] (read it right after the
-//! prove, as the E1/E3 runners do).
-//!
-//! Families: [`countmin`] (point-frequency = min of `d` cells). SS/HLL/GK decode
-//! mirror the same harness over their respective relations; [`kmv`] certifies
-//! the bottom-`k` distinct-count estimate.
+//! Decode (query) circuits: prove `answer = release(decode(S))` against a committed `Com(S)`.
+//! Each re-hashes the whole state, so its cost depends on the state size, not the stream length.
 
 pub mod bloom;
 pub mod bloom_packed;

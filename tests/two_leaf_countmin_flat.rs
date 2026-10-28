@@ -1,9 +1,4 @@
-//! Integration test for the §4.1 flat Count-Min chain (Phase 3a).
-//!
-//! Mirrors `tests/two_leaf_countmin.rs` (§4.2 recursive) but uses the
-//! `flat_merge_two_countmin` / `verify_chain_flat_countmin` API. Verifier
-//! work scales as `Θ(E)` here (we re-run each leaf's batch-STARK verify),
-//! contrasted against the §4.2 path's `O(1)`.
+//! Flat Count-Min chain: flat_merge_two_countmin and verify_chain_flat_countmin.
 
 use zksketch::recursion::countmin_flat::{
     CountMinFlatError, flat_merge_two_countmin, verify_chain_flat_countmin,

@@ -1,11 +1,4 @@
-//! Native (off-circuit) state commitments and the §4.2 boundary digests.
-//!
-//! The in-circuit equivalents (in [`crate::leaf`]) must reproduce [`commit`]
-//! exactly: it is plain Poseidon over the flattened state cells, matching
-//! `CircuitBuilder::hash_n_to_hash_no_pad::<PoseidonHash>`.
-//!
-//! Mirrors `../src/commitment/` (Poseidon2 commit) and
-//! `../src/recursion/digest.rs` (leaf / combine digests, paper §4.2).
+//! Native Poseidon state commitments and the leaf/merge interval digests.
 
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::HashOut;

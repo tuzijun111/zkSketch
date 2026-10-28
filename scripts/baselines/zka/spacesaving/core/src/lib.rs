@@ -1,32 +1,7 @@
 #![no_std]
 
-// SpaceSaving (Metwally, Agrawal, El Abbadi, ICDT 2005) as a zk-Analytics-style
-// epoch summary: the zk-Analytics pipeline (Zhu et al., SIGCOMM '26; code at
-// d4a5a9a) with only the summary swapped in.
-//
-//   aggregation (one epoch, rebuilt from scratch):
-//     verify the sources' SHA-256 batch hash chains      -- their code, verbatim
-//     flatten the batches into events                     -- their pattern
-//     textbook SpaceSaving update per record              -- ours (plain Rust)
-//     canonical state (entries sorted by key_id)          -- their pattern
-//     Merkle root over 64 hash buckets of entries         -- their samples pattern (samples_buckets_root)
-//     unsalted SHA-256 state commitment                   -- their pattern
-//     epoch chain link                                    -- their EpochChainLink
-//   query (n epochs):
-//     re-verify epoch chain links                         -- their code, verbatim
-//     recompute each epoch's state commitment             -- their pattern
-//     top-k: merge the per-epoch summaries at query time  -- ours (sum equal keys, keep top s)
-//     point query: one scan over every epoch's entries    -- their SumExactKey pattern (no merge)
-//     low-support suppression                             -- their rule (MIN_SUPPORT)
-//
-// Nothing here is oblivious: no padding, no memory checking, no sorting
-// certificates, no Poseidon. The guest's cycle count therefore depends on the data.
-//
-// Functions marked "VERBATIM" are private in zk-Analytics and are copied
-// unchanged from the named file:line of the clone at commit d4a5a9a.
-//
-// Security note (theirs, aggregator/core/src/lib.rs:3-5, applies here too):
-// "commitments" are deterministic, unsalted hashes.
+// Textbook SpaceSaving as a zk-Analytics epoch summary: their pipeline (d4a5a9a) with the summary swapped.
+// Functions marked VERBATIM are copied unchanged from the cited file:line of their clone.
 
 extern crate alloc;
 

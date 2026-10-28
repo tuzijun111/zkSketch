@@ -1,16 +1,4 @@
-//! Plaintext **simple per-record** Greenwald–Khanna (GK) quantile sketch
-//! (paper §5.3 Pattern B), ported from `../src/sketch/greenwald_khanna.rs`.
-//!
-//! This is the *simplified* GK summary — a bounded-capacity sorted list of
-//! `(value, count, max_error)` tuples — kept as a baseline alongside the
-//! **batched** §5.4 fusion pipeline in [`crate::sketch::greenwald_khanna`]
-//! (which is the in-circuit shape). Insertion places `(value, 1, 0)` at the
-//! sorted position; on overflow the two adjacent tuples with the smallest
-//! combined `count + max_error` are merged (a cheap stand-in for GK's band rule).
-//!
-//! Unlike the plonky3 original, there is **no `capacity % 4` constraint**: that
-//! was a BabyBear 4-cells-per-extension-element packing artifact, and over
-//! Goldilocks each cell is a single field element (see `plonky2/README.md`).
+//! Per-record GK baseline: on overflow, merge the adjacent pair with the smallest count + max_error.
 
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::HashOut;

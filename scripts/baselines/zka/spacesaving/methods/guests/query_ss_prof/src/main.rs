@@ -1,10 +1,8 @@
 #![no_main]
 #![no_std]
 
-// PROFILING twin of query_ss: the same ss-core code, with env::cycle_count()
-// (host-reported, unconstrained) recorded after each phase. Journal = the
-// query_ss journal followed by the (phase, cycle_count) marks. Used only for the
-// phase breakdown; query_ss is the measured guest.
+// query_ss plus env::cycle_count() marks (host-reported, unconstrained) after each phase, for
+// the phase breakdown only. Journal: the query_ss journal, then the (phase, cycles) marks.
 
 extern crate alloc;
 

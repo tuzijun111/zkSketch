@@ -1,8 +1,4 @@
-//! Plaintext HyperLogLog sketch (paper §5.3, Pattern A max).
-//!
-//! Port of `../src/sketch/hyperloglog.rs`. Each register stores the
-//! maximum observed leading-run; updates are idempotent and the per-register
-//! merge is `max`, so epochs aggregate recursively just like Count-Min.
+//! Plaintext HyperLogLog sketch; register routing uses Poseidon(key) so the leaf circuits can recompute it.
 
 use plonky2::field::types::{Field, PrimeField64};
 use plonky2::hash::hash_types::HashOut;

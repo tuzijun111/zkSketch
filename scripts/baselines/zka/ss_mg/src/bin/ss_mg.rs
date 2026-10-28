@@ -1,66 +1,6 @@
-// zkSketch's SpaceSaving batch rule (mergeable Misra-Gries) as a RISC Zero guest:
-// executor-only cost runs plus an equivalence check against zkSketch's own
-// native code. See ../../README.md.
-//
-// Records: the stream is cut exactly as zkSketch's harness cuts it
-// (examples/exp_compose.rs batches_from): epoch e holds keys
-// base[(e*m + j) % len], j < m, m = --epoch-size (16,384).
-//   aol      data/aol.keys (flat little-endian u32, 2^20 keys)
-//   uniform  zksketch::dataset::synthetic_stream(Uniform, 64*m, 1), the stream
-//            exp_compose / exp_stream / exp_e1 load for EXP_DATASET=uniform
-//            (seed 1; prefix-stable, so epoch e does not depend on the length)
-// Each raw key is mapped by zkSketch's ss_updates_of inside the guest.
-//
-// Native reference (the zksketch crate of this checkout, by path):
-//   S_0 = SsFullState::empty(SsFullParams { capacity: s, batch: m })
-//   S_{e+1} = apply_batch_ss_full(&S_e, &ss_updates_of(batch_e)).0
-// exactly the loop of src/experiments/stream_compose.rs (SsCertified arms).
-//
-// Modes:
-//   exec   S_E computed natively (epochs 0..E-1), ONE guest run on (S_E, batch_E).
-//   chain  guest runs on epochs 0..K-1, each fed the GUEST's previous output;
-//          also checks Com_old(e) == Com_new(e-1).
-// Every guest run is checked, and any failed check aborts with exit code 1
-// before a row is printed:
-//   state_eq_native        guest S_new (host-only stdout channel) == zkSketch's
-//                          S_{e+1}, row by row and field by field (key, count, active)
-//   journal_eq_native      guest journal == ss-mg-core run natively on the same input
-//   com_eq_native          Com_old / Com_batch / Com_new == SHA-256 of zkSketch's
-//                          native S_e / ss_updates_of(batch_e) / S_{e+1}
-//   core_eq_native_prefix  (exec) ss-mg-core run natively == zkSketch on every
-//                          epoch 0..E, plus the mapped batch == ss_updates_of
-//   link_ok                (chain) Com_old(e) == Com_new(e-1)
-//   probes_ok              the guest's env::cycle_count() marks increase, and they
-//                          agree with the executor's user-cycle count: fewer than
-//                          PROBE_SLACK cycles before the first mark (pre_main) and
-//                          0 <= user_cycles - last mark < PROBE_SLACK (post).
-//                          pre_main + the phase deltas + post == user_cycles holds
-//                          by construction (post is the remainder); the bounds
-//                          are the check.
-//
-// Cycle columns: user_cycles is the executor's count of executed guest cycles
-// (the probes split it into phases); padded_cycles = sum over segments of
-// 2^po2, what the prover pays; overhead_cycles = padded - user = paging
-// (page-in/out of every page a segment touches), the per-segment reserve and
-// the po2 padding. The overhead belongs to no phase: transition_pct_user is
-// transition / user, transition_pct_padded is transition / padded.
-//
-// Usage:
-//   ss_mg --header
-//   ss_mg --image-id [--guest G]
-//   ss_mg --mode exec  --dataset aol|uniform --capacity S [--epoch-index E]
-//   ss_mg --mode chain --dataset aol|uniform --capacity S [--epochs K]
-//   common: [--guest ss_mg|ss_mg_serde] [--sort radix|std] [--keys PATH] (aol) [--epoch-size 16384]
-//
-// --guest ss_mg (default, the headline) reads its input with env::read_slice;
-// ss_mg_serde reads the same data as an SsMgInput through risc0 serde
-// (env::read), the zka guests' read path. Everything after the read is the
-// same ss-mg-core code; the read-path sensitivity rows use ss_mg_serde.
-// --sort radix (default, the headline) or std picks ss-mg-core's sort (an input
-// word, not committed); std is the comparison-sort sensitivity row.
-//
-// Executor only: this driver never proves. MODELED prove time = segments x 30.1 s
-// (envelope 29.73..30.79), the CM-guest CPU anchors of ../../README.md. NOT measured.
+// Executor runs of the ss_mg guests, each checked against zkSketch's native apply_batch_ss_full.
+// Usage: ss_mg --mode exec|chain --dataset aol|uniform --capacity S [--epoch-index E | --epochs K]
+//        [--guest ss_mg|ss_mg_serde] [--sort radix|std]   (all flags: VALUE_FLAGS, BOOL_FLAGS)
 
 use std::time::Instant;
 
@@ -74,8 +14,9 @@ use zksketch::dataset::{synthetic_stream, Synthetic};
 use zksketch::experiments::stream_compose::ss_updates_of;
 use zksketch::sketch::ss_final_full::{apply_batch_ss_full, SsFullParams, SsFullState, SsFullUpdate};
 
-// MODELED prove time: segments x 30.1 s, envelope 29.73..30.79 s/segment = the
-// per-anchor min/max of the four CPU CM anchors in ../../README.md.
+// MODELED_prove_s = segments x S_PER_SEG (computed, not measured), from the four CPU-proved CM guest runs
+// in scripts/baselines/zka/README.md: S_PER_SEG is aggr_cm T=100, n=512 (661.3 s / 22 segments = 30.06 s)
+// rounded; _lo/_hi use 29.73 and 30.79 s, the lowest and highest s/segment of the four.
 const S_PER_SEG: f64 = 30.1;
 const S_PER_SEG_LO: f64 = 29.73;
 const S_PER_SEG_HI: f64 = 30.79;

@@ -1,26 +1,5 @@
-//! §5.4-shaped Count-Min update leaf (Phase 3d step 1).
-//!
-//! This module exposes the §5.4 pipeline data flow — explicit per-record
-//! delta entries `D[k, r]`, sorted delta `D†`, per-cell aggregate `A` — as
-//! in-circuit witnesses. Compared to the §5.1 strawman in
-//! `countmin_leaf.rs`, the constraints are reorganised so the per-cell
-//! transition reads `final = initial + A` instead of computing the sum of
-//! per-record selectors inline at each cell. That makes the place where a
-//! future lookup-based / sparse-Merkle optimisation lands explicit.
-//!
-//! What this module **does not** do: reduce the *witness count*. The
-//! `(d * w)` cells of both states still appear as private inputs because
-//! the commitment is Poseidon2 over the flat state (same as v1). The
-//! genuine §5.4 witness reduction to `O(m·d + T)` requires either a
-//! homomorphic-additive vector commitment (so `Com(S_t) = Com(S_{t-1}) +
-//! Com(Δ)` collapses to one EC equation) or a Merkle-tree commitment with
-//! sparse opens. Both are substantial follow-ups; this module is the
-//! structural scaffold they would build on.
-//!
-//! The produced proof has the same public-inputs layout as v1, so it
-//! plugs into the existing §4.2 `merge_two_countmin`, the §4.3
-//! `CountMinChainState::extend`, and the §4.1
-//! `flat_merge_two_countmin` paths without any changes.
+//! Count-Min leaf v2: same public inputs as `countmin_leaf`, but the transition is
+//! `final = initial + A` with an explicit per-cell aggregate `A`.
 
 use std::rc::Rc;
 

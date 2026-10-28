@@ -1,20 +1,5 @@
-//! E9 — optimisation ablations (EVAL_SPEC E9, appendix). Each ablation isolates
-//! one of the paper's circuit optimisations. Output: results/e9_optim.csv with
-//! `ablation, params, metric, value, kind` (kind = measured | analytical).
-//!
-//! - **hll_dedup** — under Zipf skew, hashing once per *distinct* key instead of
-//!   per record. The hash-invocation saving is `n / u` (records / realised
-//!   distinct); reported analytically from the realised distinct count, since the
-//!   prototype's HLL circuit hashes per record (the dedup is the §F optimisation).
-//! - **hll_wide_output** — one wide-output hash split into two lanes vs. two
-//!   separate hashes per distinct key (hash count: 1 vs 2).
-//! - **ss_single_round** — SpaceSaving's single-pass retention vs. GK's
-//!   multi-round fusion (measured prove time at matched capacity).
-//! - **sparse_rebind** — re-committing only the `T_max` touched cells vs. the
-//!   whole `s`-cell state (the RQ2-c finding: needs a sparse-opening commit;
-//!   reported analytically as the cell-count ratio).
-//!
-//! Run: cargo run --release --example exp_e9
+//! E9: optimisation ablations; writes results/e9_optim.csv (kind = measured prove times or analytical counts/ratios).
+//! Usage: cargo run --release --example exp_e9
 
 use std::collections::HashSet;
 

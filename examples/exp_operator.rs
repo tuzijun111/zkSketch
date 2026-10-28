@@ -1,39 +1,5 @@
-//! Per-phase proving cost of the deployed Count-Min (`countmin_omc`) and
-//! Greenwald--Khanna (`gk_bandmerge2_stable`) leaves: the data behind the
-//! paper's "operator performance" breakdown (one bar per paper phase, as
-//! PoneglyphDB's Fig. 8 shows one bar per proof-generation step).
-//!
-//! Two measurements per family (`EXP_FAMILIES=cm,mg`, `gk` optional), at the
-//! six-sketch comparison's leaf shapes:
-//!
-//! 1. **Rows per table per phase.** Shapes-only prefix builds
-//!    (`table_probe::capture_prefix_shapes(k, ..)`, `k = 1..K`): prefix `k`
-//!    holds the first `k` paper phases, so phase `k`'s rows in each table are
-//!    the difference between prefixes `k` and `k-1`. Nothing is proved (a
-//!    prefix build is stopped after its shapes are recorded).
-//! 2. **Prover time per table and per stage.** One warm-up leaf proof (the
-//!    genesis leaf, `t = 1`), then `EXP_REPEATS` timed leaf proofs on a
-//!    non-empty state, under a `tracing` layer that times every span of the
-//!    fork's prover (per-table `*::build_trace`, per-AIR `compute quotient`,
-//!    the joint `commit` / `FRI prover` / `query phase` spans), plus the
-//!    witness / prove / verify split of `timing::take()`; then one query
-//!    (decode) proof per family, timed the same way.
-//!
-//! Output (`EXP_OUT_DIR`, default `results/operator/`):
-//! `<fam>_phases.csv` (fam,phase,table,rows), `<fam>_tables.csv`
-//! (fam,idx,table,log_h,rows,width,lanes), `<fam>_spans.csv`
-//! (fam,run,repeat,seq,depth,target,name,fields,ms), `operator_summary.csv`
-//! (fam,run,repeat,witness_ms,prove_ms,verify_ms,trace_rows).
-//!
-//! ```bash
-//! RAYON_NUM_THREADS=32 taskset -c 0-31 cargo run --release --example exp_operator
-//! # knobs: EXP_FAMILIES=cm,mg[,gk] EXP_D=3 EXP_W=16384 EXP_M_CM=16384
-//! #        EXP_SS_CAP=16384 EXP_M_MG=16384 EXP_SS_C=1
-//! #        EXP_GK_CAP=768 EXP_GK_S=51 EXP_M_GK=512 EXP_REPEATS=3 EXP_CORES=32
-//! ```
-//! Defaults are the paper's default parameters (Section 8.1: Count-Min d = 3,
-//! w = 2^14; Misra--Gries s = 2^14; batches of m = 2^14 records); GK keeps the
-//! six-sketch comparison's leaf shape.
+//! Per-phase table rows and prover time of the CM and MG leaves (EXP_FAMILIES=cm,mg,gk adds GK); writes results/operator/.
+//! Usage: RAYON_NUM_THREADS=32 taskset -c 0-31 cargo run --release --example exp_operator
 
 use std::fmt::Write as _;
 use std::path::PathBuf;

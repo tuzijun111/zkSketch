@@ -1,15 +1,5 @@
-//! §4.3 recursive chain over Count-Min update epochs.
-//!
-//! `CountMinChainState` is the accumulating root of the paper's recursive
-//! chain schedule: `Π^(t) = merge(Π^(t-1), π_t)`. After every `extend(leaf)`
-//! call, the carried `CountMinChainProof` certifies the whole interval
-//! `[1, t]`. Verifier work stays `O(1)` regardless of `t` — only the
-//! prover pays per merge.
-//!
-//! For `E = 2` this collapses to the two-leaf merge of
-//! `countmin_merge::merge_two_countmin`. For `E > 2` each new leaf folds
-//! the previous chain root and the fresh leaf into one batch-STARK via
-//! the same `build_and_prove_aggregation_layer` call.
+//! Recursive chain over Count-Min leaves: each `extend` folds the current root and
+//! a new leaf into one aggregation proof covering `[1, t]`.
 
 use core::fmt;
 

@@ -1,22 +1,6 @@
 #!/usr/bin/env python3
-"""Generate the evaluation figures for zk1.tex from results/*.csv.
-
-Reads the e1 per-family batch sweeps (results/{cm,hll,ss,gk}_batch_*.csv,
-produced by scripts/run_experiments.sh e1) and renders zkSketch_eval_batch.pdf:
-
-a 4-panel log-log figure: PER-UPDATE prover time (prove_total_ms / m) vs batch
-size m, one panel per sketch family, one line per circuit variant, named as in
-the paper: Pattern A (cm, hll) one-hot / Merkle / memory-checked; Pattern B
-(ss, gk) replay / certified. A dotted whisker ending in an 'x' marks the first
-infeasible batch size (a too_large row: the padded trace exceeds the backend's
-2^27 FRI-domain cap or, for the Count-Min one-hot leaf, its m*d*(d*w) selector
-cells exceed the prototype's memory guard, COUNTMIN_MAX_SEL_CELLS = 1.6e7).
-
-Output goes to latex/pics/ when that directory exists (the paper tree, which is
-not part of the public repo), else to results/.
-
-Run from anywhere:  python3 scripts/plot_eval.py
-Needs matplotlib (pip install --user matplotlib).
+"""Batch-size figure (zkSketch_eval_batch.pdf): prover time per update vs m, from results/{cm,hll,ss,gk}_batch_*.csv.
+Usage: python3 scripts/plot_eval.py   (writes to latex/pics/ if it exists, else results/; needs matplotlib)
 """
 
 import csv

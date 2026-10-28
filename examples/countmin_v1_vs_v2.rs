@@ -1,19 +1,5 @@
-//! v1 (§5.1 strawman) vs v2 (§5.4-shaped) Count-Min leaf comparison.
-//!
-//! Both leaves produce the same `CountMinLeafProof` shape and chain through
-//! the same `merge_two_countmin`. The difference is internal: v1 computes
-//! the per-cell sum inline at the cell-transition constraint; v2 exposes
-//! the §5.4 aggregate table `A` as an explicit witness and the transition
-//! reads from it.
-//!
-//! No witness *reduction* yet — that's blocked by the Poseidon2 commit
-//! scheme over flat cells. A future variant with Merkle-tree commits and
-//! sparse opens (or homomorphic-additive vector commit) would actually
-//! drop the `d*w` cell witnesses; v2's structural change makes that next
-//! step a local edit. Today this demo just confirms the structural change
-//! doesn't regress correctness or proof shape.
-//!
-//! Run with: `cargo run --release --example countmin_v1_vs_v2`.
+//! Count-Min leaf v1 (inline per-cell sums) vs v2 (explicit aggregate table): prove time and proof size.
+//! Usage: cargo run --release --example countmin_v1_vs_v2
 
 use std::time::Instant;
 

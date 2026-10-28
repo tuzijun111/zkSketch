@@ -1,0 +1,15 @@
+started=2026-10-28T14:31:07+08:00 out=/home/binbin/zkSketch/results/six/sweep-gk768-20261028-143107 cpus=ffffffff
+gk_cap=768 gk_s=51 gk_rounds=stable zks_bin_md5=e4a2a04653ef zka_bin=/home/binbin/ext-baselines/build/zka-gk-matched/release/gk_matched
+step rc=0 seconds=16 zkSketch gk m=64
+step rc=0 seconds=17 zkSketch gk m=128
+step rc=0 seconds=15 zkSketch gk m=256
+step rc=0 seconds=17 zkSketch gk m=512
+step rc=0 seconds=10 zk-Analytics gk executor 9 sizes
+step rc=0 seconds=155 zk-Analytics gk proof m=64
+finished=2026-10-28T14:34:57+08:00
+# 2026-10-28 18:3x full-stream capacity check (executor only, no proof): gk768_full_stream_epochs.csv (+ .err, empty)
+# for e in 0 255 511; for impl in literal fixed_linear fast tuned:
+#   gk_matched --mode aggr --epoch-index $e --root noroot --epoch-size 2048 --batch 8 --keys data/aol.keys --capacity 768 --m-sub 512 --s 51 --impl $impl
+# --epoch-index e first chains epochs 0..e natively with zkSketch's apply_batch2 per 512-record batch and reports any
+# capacity overflow ("GK CAPACITY OVERFLOW", none in the .err): epoch 511 covers all 2,048 batches of N = 2^20 AOL records.
+# Live tuples at the end of epochs 0 / 255 / 511: 48 / 47 / 47 (column actives).

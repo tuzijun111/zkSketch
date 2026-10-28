@@ -1,21 +1,5 @@
-//! Coefficient binding of the recompose NPO.
-//!
-//! Every circuit here opens committed packed values with
-//! `decompose_ext_to_base_coeffs`, and the fork lowers that decomposition's
-//! reconnect through the recompose NPO. By default the fork
-//! (`CircuitBuilder::set_bind_recompose_coeffs`) uses the `recompose/coeff`
-//! table, whose row publishes every coefficient on the WitnessChecks bus as
-//! `[idx, v_i, 0, 0, 0]` next to `[x_idx, v_0..v_3]`. The coefficients a
-//! circuit constrains are then exactly the base-field coefficients of the
-//! packed value it hashes or permutes. The pre-fix lowering (the plain
-//! `recompose` table, fork rev 19dcb37) published only `[x_idx, v_0..v_3]`
-//! from free columns: nothing tied the decomposed fields to the committed
-//! value, so a leaf could commit to one state while its constraints ran on
-//! another.
-//!
-//! [`configure`] applies the calling thread's mode to a fresh builder (bound
-//! unless inside [`with_unbound_recompose`]). The unbound mode exists only for
-//! soundness proofs-of-concept and cost comparisons.
+//! Binds the recompose NPO's coefficients to the packed value (fork table `recompose/coeff`).
+//! `with_unbound_recompose` gives the old unbound lowering (soundness PoCs, cost comparisons).
 
 use std::cell::Cell;
 use std::hash::Hash;

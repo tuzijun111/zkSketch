@@ -1,27 +1,5 @@
-//! **RQ3 — Pattern-A and Pattern-B optimisations** (paper §Evaluation, `sec:rq3`).
-//!
-//! Each per-family optimisation measured in isolation on the workload that
-//! activates it. Runnable panels:
-//!
-//! - **3-a Optimised CM vs `naive-zkSketch`: the structural gap.** The §5.1
-//!   strawman leaf (`countmin_leaf`, per-record-per-cell replay, witness
-//!   `Θ(d·w·batch)`) vs the optimised §5.2 leaf (`countmin_final`, witness
-//!   `Θ(distinct·d + d·w)`). Same parameters; report prove time + proof size.
-//! - **3-d Hash-once-per-distinct / sparse rebind under skew (Pattern A).**
-//!   On the CM array (the Pattern-A array sketch the optimisation also targets
-//!   for HLL), sweep Zipf skew `α`; the realised distinct-key count `u` falls
-//!   with `α`, so provisioning `distinct_bound = u` shrinks the hash gadget
-//!   from `batch·d` to `u·d`. Report the oblivious saving factor
-//!   `batch/u` vs the full (`distinct_bound = batch`) circuit.
-//! - **3-e SpaceSaving single-round retention vs GK multi-round fusion.** SS
-//!   retains top-`s` in **one** pass (no log rounds); GK fuses over
-//!   `⌈log₂(total)⌉` rounds. Compare SS against GK at full rounds and at a
-//!   reduced round count (the GK round-count lever) at matched union size —
-//!   the structural Pattern-B-retention vs Pattern-B-fusion distinction.
-//! - **3-f SpaceSaving capacity sweep.** Sweep SS capacity `s`; report total
-//!   prove time + proof size. (The paper's per-component comparator-share
-//!   breakdown needs in-circuit introspection — noted as future work; here we
-//!   report the total-cost scaling.)
+//! RQ3 panels: naive vs optimised CM leaf (3-a), Zipf skew (3-d),
+//! SS retention vs GK rounds (3-e), SS capacity sweep (3-f).
 
 use crate::dataset::{Synthetic, synthetic_stream};
 use crate::sketch::countmin::{CountMin, CountMinParams, CountMinUpdate};

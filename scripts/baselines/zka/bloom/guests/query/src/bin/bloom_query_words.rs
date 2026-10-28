@@ -1,12 +1,7 @@
 #![no_main]
 #![no_std]
 
-// Sensitivity variant of bloom_query (the pattern of ../../../hll's hll_query_words):
-// identical query and journal, but the epoch filters arrive as Vec<u32> bitsets in
-// serde's default encoding (one zkVM word per 32 bits, read element by element), the
-// form of their CmEpochState::counts, instead of the packed byte string. The words are
-// then copied into the packed bytes; that copy is timed as its own phase ("convert"),
-// so "read" is serde alone.
+// bloom_query with the filters sent as Vec<u32> (serde's default encoding) instead of packed bytes.
 
 extern crate alloc;
 

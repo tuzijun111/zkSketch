@@ -18,9 +18,13 @@ src/
   experiments/    # Experiment code shared by the runners
 examples/
   exp_compose.rs  # Proof-forest runs: composition, machines, stream length, query rate
+  exp_operator.rs # Per-phase proving cost (Figure 6)
 scripts/
   run_compose.sh        # Runs exp_compose; CSVs go to results/
+  sweep_memmatch.py     # Figure 5 data: joins the batch-size sweep with the Table 2 run
   plot_sweep.py         # Figure 5
+  plot_operator.py      # Figure 6
+  forest_tables.py      # Tables 4 and 5 from the Table 2 run
   run_m1_busy_sibling.sh  # One machine next to a busy neighbour (appendix)
   baselines/zka/        # zk-Analytics baseline (RISC Zero); six/run_all.sh runs the comparison
 data/             # Key streams: AOL and Netflix (real), synthetic streams
@@ -31,20 +35,22 @@ tests/            # Integration tests
 
 ## Benchmarks
 
-| Sketch | Parameters | Query |
-|--------|-----------|-------|
-| Count-Min | d = 7, w = 2^14 (d = 3 in Tables 4 and 5) | Point frequency |
+| Sketch | Default size | Query |
+|--------|-------------|-------|
+| Count-Min | d = 3, w = 2^14 | Point frequency |
 | HyperLogLog | 2^14 registers | Distinct count |
 | Misra-Gries (MG; `ss` in the code) | s = 2^14 slots | Top-K counter sum |
 | Greenwald-Khanna | capacity 2^11, 1/eps = 51 | Rank |
 | Bloom | k = 7 slices of 2^14 bits | Membership |
 | KMV | s = 2^14 | Distinct count |
 
-The default stream is N = 2^20 AOL records in batches of m = 2^14. The zk-Analytics
-comparisons (experiments 1-3) use zk-Analytics' sizes: Count-Min 3 x 1024, s = 1024 for
-Misra-Gries and KMV, and GK capacity 768 in experiments 1 and 3. Except for Count-Min, zk-Analytics'
-side runs our ports inside its pipeline: textbook HLL, Misra-Gries (`scripts/baselines/zka/mg`), Bloom
-and KMV, and zkSketch's own GK batch rule.
+Figure 6 uses the default sizes with batches of m = 2^14. Tables 2-5 and Figure 5 use zk-Analytics'
+sizes (Count-Min 3 x 1024, s = 1024 for MG and KMV, GK capacity 768, the others as above) and keep
+zkSketch within zk-Analytics' 9 GiB of prover memory: an epoch of 2^14 records (2^11 for GK) is proved
+as leaves of 1,024 records (Count-Min, HLL, Bloom), 4,096 (MG, KMV) or 512 (GK) and their compositions.
+The stream is N = 2^20 AOL records (2^17 for Table 3). zk-Analytics' side runs its own Count-Min and our ports inside its
+pipeline: textbook HLL, Bloom and KMV, SpaceSaving for the MG row (`SIX_ZKA_HH=spacesaving`; new runs
+default to the Misra-Gries port in `scripts/baselines/zka/mg`), and zkSketch's GK batch rule.
 
 Datasets: **AOL** (default) and **Netflix** (2^20 keys each, in `data/`), and synthetic
 **Uniform** and **Gaussian** streams.
@@ -65,11 +71,10 @@ Datasets: **AOL** (default) and **Netflix** (2^20 keys each, in `data/`), and sy
   ```
 
 - `python3` (>= 3.8), plus `matplotlib` for the figures.
-- Hardware: experiments 1-3 ran on a 32-core AMD Threadripper PRO 9975WX, experiments 4-8 on
-  an AMD EPYC 9555 server (two sockets, four NUMA nodes; each "machine" is one process pinned
-  to the 32 cores of one node). Experiments 1 and 3 need 16 GiB of RAM and experiment 2 about
-  80 GiB; experiments 4-8 need up to ~120 GiB per machine (a Count-Min leaf at d = 7 and
-  m = 2^14 peaks at 117 GiB).
+- Hardware: items 1-4 ran on a 32-core AMD Threadripper PRO 9975WX, items 6-8 on an AMD EPYC 9555
+  server (two sockets, four NUMA nodes; each "machine" is one process pinned to the 32 cores of one
+  node). Items 1 and 2 need 16 GiB of RAM, item 3 about 80 GiB, item 4 about 64 GiB, and items 6-8 up
+  to ~120 GiB per machine.
 
 ### Build
 
@@ -86,61 +91,57 @@ scripts/baselines/zka/six/run_all.sh quick    # ~10 min smoke test of the compar
 Run from the repository root. zkSketch CSVs are written to `results/`; each zk-Analytics
 comparison writes its tables (`*_table.md`) and CSVs to `results/six/<mode>-<date>/`.
 The `taskset -c 0-31` mask gives both systems the same 32 physical cores (zk-Analytics'
-prover otherwise uses every hardware thread).
+prover otherwise uses every hardware thread). The runs behind the paper are kept in
+`scripts/baselines/zka/results/`.
 
-**1. zkSketch vs zk-Analytics** on one epoch per sketch (Table 2; ~8 h):
+**1. zkSketch vs zk-Analytics, whole stream** (Table 2; ~8 h):
 
 ```bash
-taskset -c 0-31 scripts/baselines/zka/six/run_all.sh memmatch
+SIX_ZKA_HH=spacesaving taskset -c 0-31 scripts/baselines/zka/six/run_all.sh memmatch
 ```
 
-**2. Batch size, zkSketch vs zk-Analytics**, one batch of m = 2^6 .. 2^14 records (Figure 5; ~20 h):
+**2. Query rate** (Table 3; ~18 h). zk-Analytics' cost per Q is computed from its epoch and query
+proofs and their cycle counts by `six/queryrate_model.py`, which the command runs:
 
 ```bash
-taskset -c 0-31 scripts/baselines/zka/six/run_all.sh sweep
-python3 scripts/plot_sweep.py results/six/sweep-<date>
+SIX_ZKA_HH=spacesaving taskset -c 0-31 scripts/baselines/zka/six/run_all.sh queryrate
 ```
 
-**3. Query rate, zkSketch vs zk-Analytics** (Table 6; ~18 h; the zk-Analytics side is modeled
-from its measured proofs and cycle counts):
+**3. Batch size** (Figure 5). The sweep proves one batch of m = 2^6 .. 2^14 records per size on both
+systems (~20 h; Figure 5 uses its zk-Analytics receipts); `batches.sh` proves zkSketch's batch of every
+size in Table 2's setting and one zk-Analytics GK receipt at capacity 768 (~1.5 h); `sweep_memmatch.py`
+joins them with item 1's run:
 
 ```bash
-taskset -c 0-31 scripts/baselines/zka/six/run_all.sh queryrate
+SIX_ZKA_HH=spacesaving taskset -c 0-31 scripts/baselines/zka/six/run_all.sh sweep
+taskset -c 0-31 scripts/baselines/zka/six/batches.sh --zka-gk
+python3 scripts/sweep_memmatch.py --sweep results/six/sweep-<date> --batches results/six/batches-<date> --memmatch results/six/memmatch-<date>
+python3 scripts/plot_sweep.py
 ```
 
-**4. Per-batch chain vs proof forest** (Table 3):
+**4. Proving cost by phase** (Figure 6):
 
 ```bash
-EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=per_batch EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_plonky3_perbatch.csv
+RAYON_NUM_THREADS=32 taskset -c 0-31 cargo run --release --example exp_operator
+python3 scripts/plot_operator.py
+```
+
+**5. Stream length, machine count and datasets** (Tables 4 and 5), computed from item 1's run with
+the speedups of item 6 and the per-dataset ratios of item 7:
+
+```bash
+python3 scripts/forest_tables.py
+```
+
+**6. Forest on M = 1-4 machines** (speedups in Table 4's machine rows; needs a two-socket server, `EXP_COMPOSE_NODES=0,2`
+puts the machines on different sockets):
+
+```bash
 EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_plonky3.csv
-```
-
-**5. Forest on M = 1-4 machines** (Table 4). The published four-sketch runs are item 4's forest run (M = 1) and this
-run (needs a two-socket server; `EXP_COMPOSE_NODES=0,2` puts the machines on different sockets of the paper's server):
-
-```bash
 EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=2,3,4 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs EXP_COMPOSE_NODES=0,2 EXP_COMPOSE_WAVE_SIZE=2 scripts/run_compose.sh frame_out_staged_m234_plonky3.csv
 ```
 
-All six sketches, Count-Min at d = 3 (about a day):
-
-```bash
-EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=3 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc EXP_KMV_K=16384 EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1,2,3,4 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs EXP_COMPOSE_NODES=0,2 EXP_COMPOSE_WAVE_SIZE=2 scripts/run_compose.sh frame_out_m1234_plonky3_6fam.csv
-```
-
-**6. Stream length N = 2^16 .. 2^20** (Table 5). The published four-sketch runs are item 4's forest run (N = 2^20) and:
-
-```bash
-for k in 16 17 18 19; do EXP_DATASET=aol EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_N=2^$k EXP_COMPOSE_BATCHES=16384 EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh forest_plonky3_1machine_verify_2e$k.csv; done
-```
-
-All six sketches, Count-Min at d = 3 (~15 h):
-
-```bash
-for k in 16 17 18 19 20; do EXP_DATASET=aol EXP_D=3 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=omc EXP_KMV_K=16384 EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest EXP_COMPOSE_N=2^$k EXP_COMPOSE_BATCHES=16384 EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh forest_plonky3_1machine_6fam_2e$k.csv; done
-```
-
-**7. Datasets** (Table 8; its AOL column is item 4's forest run):
+**7. Datasets** (per-dataset ratios of Table 5, relative to item 6's one-machine run on AOL):
 
 ```bash
 EXP_DATASET=uniform,gaussian,netflix EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_datasets_plonky3.csv
@@ -153,12 +154,6 @@ for M in 2 3 4; do EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=163
 scripts/run_m1_busy_sibling.sh frame_out_1machine_plonky3_busysib.csv ss
 ```
 
-The published runs behind Tables 3, 4, 5 and 8 used an earlier version of the circuits without
-zero knowledge. These commands run the current zero-knowledge circuits, so
-their times differ from the paper's. The zk-Analytics MG numbers of Table 2, Figure 5 and
-Table 6 were measured with the older SpaceSaving port (`scripts/baselines/zka/spacesaving`);
-experiments 1-3 now run the Misra-Gries port. How each table is read from the CSVs, and every knob:
+Items 6-8 ran before zero knowledge became the default (commit 98de654), with Count-Min at d = 7;
+the paper uses only their speedups and ratios. How each table is read from the CSVs, and every knob:
 [docs/experiments.md](docs/experiments.md) and [docs/six_sketch_comparison.md](docs/six_sketch_comparison.md).
-
-
-

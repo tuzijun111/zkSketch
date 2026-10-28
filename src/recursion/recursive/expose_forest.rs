@@ -1,38 +1,5 @@
-//! In-circuit **boundary-bound** recursive streaming forest, via the Expose NPO.
-//!
-//! [`countmin_forest_v9`](super::countmin_forest_v9) already folds the
-//! intermediates away (O(1) root, no `Com(S_i)` exposed) but binds the *outer*
-//! boundaries natively. This module closes that gap: each leaf surfaces its
-//! `(Com_before, Com_after)` via the Expose NPO, and each merge
-//!
-//! 1. recursively verifies both children in-circuit,
-//! 2. reads the children's surfaced boundaries as `air_public_targets`,
-//! 3. binds `left.final == right.initial` **in-circuit** (`connect`),
-//! 4. re-exposes only `(left.initial, right.final)` via its *own* Expose NPO.
-//!
-//! Composed in a Bentley–Saxe cascade, the single root proof's public values
-//! are exactly `(Com(S_0), Com(S_E))` — bound to the verified leaves, with the
-//! intermediates neither exposed nor natively trusted.
-//!
-//! The leaf here ([`prove_boundary_leaf`]) is a *minimal* leaf that exposes a
-//! claimed `(initial, final)` boundary — it demonstrates the binding mechanism
-//! independent of any sketch's internal update logic. Any real leaf (e.g. the
-//! v9 Count-Min leaf) participates by adding the same `add_expose` of its
-//! boundary commitments; the merge/forest below compose it unchanged.
-//!
-//! ## Interval statement (revision B6(b))
-//!
-//! The `(initial, final)` statement above (the **Boundary** layout) certifies
-//! only that SOME batch sequence maps `S_0` to `S_E`. Leaves built with
-//! `Expose::Interval` (see [`crate::recursion::recursive::statement`]) expose
-//! `(init, final, idx = (t, t), H = Poseidon2(TAG_LEAF, t, Com(B_t)))`, and the
-//! merge atom is layout-dispatched: over Interval children it additionally
-//! enforces `right.lo - left.hi == 1` in-circuit and exposes
-//! `(left.init, right.final, (left.lo, right.hi), Poseidon2([TAG_MERGE, i, h, j], H_L, H_R))`.
-//! The auditor ([`verify_bound_stark_proof_against_log`]) pins the root VK,
-//! verifies the STARK, and checks the root statement against the public batch
-//! log under the declared bracketing. Boundary-layout children still get the
-//! pre-B6(b) merge circuit op for op (side-by-side runs, the toy leaves).
+//! Recursive forest with in-circuit boundary binding: each merge checks
+//! `left.final == right.initial` and exposes only the outer statement.
 
 use std::rc::Rc;
 

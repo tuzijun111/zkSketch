@@ -1,18 +1,5 @@
-//! Poseidon2-backed `StateCommit` for the plaintext Count-Min sketch.
-//!
-//! The Count-Min state is a `d × w` matrix of `u32` counters. We hash the
-//! flattened row-major counters via the canonical `MyHash` (the leaf STARK's
-//! `PaddingFreeSponge<Perm, 16, 8, 8>`). That hasher and the in-circuit
-//! `CircuitBuilder::add_hash_slice` over the Challenge extension field agree
-//! on aligned inputs — inputs whose count is a multiple of the challenge
-//! extension degree `D = 4`. The Count-Min update AIR
-//! (`crate::recursion::recursive::countmin_leaf`) absorbs the same cells
-//! in-circuit and reproduces the same digest, so the commit chains across
-//! the §4.2 recursive merge boundary.
-//!
-//! Phase 2 demos use `(d, w) = (2, 4)` so `d * w = 8` is aligned.
-//! Wider profiles need explicit zero padding to the next multiple of 4 —
-//! the assertion in `commit_countmin` catches misuses early.
+//! Poseidon2 `StateCommit` for the plaintext Count-Min sketch (row-major counters).
+//! `d * w` must be a multiple of 4 so the native hash matches the in-circuit `add_hash_slice`.
 
 use p3_field::PrimeCharacteristicRing;
 use p3_symmetric::CryptographicHasher;

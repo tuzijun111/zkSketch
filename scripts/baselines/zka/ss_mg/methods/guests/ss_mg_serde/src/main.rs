@@ -1,10 +1,8 @@
 #![no_main]
 #![no_std]
 
-// SENSITIVITY twin of ss_mg: identical except that it reads its input as an
-// SsMgInput through risc0 serde (env::read), the way the zka guests read
-// theirs, instead of env::read_slice. Same journal, same S_new. Used only for
-// the read-path sensitivity rows; ss_mg is the headline guest.
+// ss_mg with its input read as an SsMgInput through risc0 serde (env::read), as the zka
+// guests read theirs. Same journal and S_new.
 
 extern crate alloc;
 

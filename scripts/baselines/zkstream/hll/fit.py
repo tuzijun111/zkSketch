@@ -1,20 +1,6 @@
 #!/usr/bin/env python3
-"""Fit the HyperLogLog operator runs and model the deployed size. Every figure is
-labelled MEASURED or MODELED.
-
-  * soundness gate: every chained witness, helper==native check, proof and forgery row
-    must be ok, or no cost figure is printed;
-  * constraints: the exact closed form native.constraints(k, s, P, CK), checked against
-    every compile;
-  * witness+prove time: linear in constraints (fitted on all measured points), and the
-    per-s intercept/slope in k that it implies;
-  * compile wall/RSS: a0 + a1*S + k*(b0 + b1*S) least squares over all measured
-    compiles (small k), and at the deployed s = 2^14 time = a + b*k + c*k^2 (ZoKrates'
-    reducer is superlinear in k) and memory = a + b*k, checked against any measured
-    refusal; the deployed verdict uses the s = 2^14 model;
-  * deployed size s = 2^14 registers, m = 2^14 records per batch, 2^20-record stream:
-    constraints (exact formula), compile (modeled, against the 45 min / 150 GB wall),
-    setup/prove/pk (modeled), and the stream cost at the largest chunk that compiles.
+"""HyperLogLog operator: the measured runs (results/zkstream_hll.csv) and least-squares fits evaluated at s = m = 2^14.
+Usage: python3 scripts/baselines/zkstream/hll/fit.py [CK, default 8]
 """
 import csv, math, statistics, sys
 from collections import defaultdict
@@ -161,7 +147,7 @@ if rp.exists():
     print(f"  v1 program growth per record between successive k: {', '.join(inc)} MB (grows with k: quadratic total)")
 
 # ---- packing justification ------------------------------------------------------
-print("\nPacking (registers per field element), per-chunk constraints from the exact formula      (MODELED, "
+print("\nPacking (registers per field element), per-chunk constraints from the exact formula      (FIT, "
       "formula checked on the P sweep)")
 for s, k in ((1024, 64), (DEPLOY_S, 64), (DEPLOY_S, DEPLOY_M)):
     line = ", ".join(f"P={P}: {cons_model(k, s, P, CKSEL):,}" for P in (1, 4, 8, 16, 32) if P <= s)
@@ -179,7 +165,7 @@ wa, wb, wr2 = ols(xs, wi_)
 sa, sb, sr2 = ols(xs, [pts[k]["setup_s"] for k in keys])
 ka, kb, kr2 = ols(xs, [pts[k]["pk_b"] for k in keys])
 rssa, rssb, rssr2 = ols(xs, [pts[k]["prove_mb"] for k in keys])
-print("\nTime and size vs constraints n, least squares over all measured points                    (MODELED)")
+print("\nTime and size vs constraints n, least squares over all measured points                    (FIT)")
 print(f"  witness+prove = {ta:.3f} s + {tb * 1e6:.3f} us * n   (R^2 {tr2:.4f}; {1 / tb:,.0f} constraints/s marginal)")
 print(f"    prove       = {pa:.3f} s + {pb * 1e6:.3f} us * n   (R^2 {pr2:.4f})")
 print(f"    witness     = {wa:.3f} s + {wb * 1e6:.3f} us * n   (R^2 {wr2:.4f})")
@@ -189,9 +175,9 @@ print(f"  prove RSS     = {rssa:.0f} MB + {rssb * 1e3:.3f} KB * n   (R^2 {rssr2:
 big_i = [i for i, x in enumerate(xs) if x >= 50000]
 pl_c, pl_g, pl_r2 = powerlaw([xs[i] for i in big_i], [wp[i] for i in big_i])
 print(f"  cross-check, power law on the {len(big_i)} points with n >= 50k: witness+prove = {pl_c:.3e} * n^{pl_g:.3f} (R^2 {pl_r2:.4f})")
-print(f"  largest measured n = {max(xs):,}; beyond it these lines are extrapolations")
+print(f"  largest measured n = {max(xs):,}; beyond it these lines leave the measured range")
 
-print("\nPer chunk, in k (from the fits above and the exact formula): witness+prove = a_s + b_s * k    (MODELED)")
+print("\nPer chunk, in k (from the fits above and the exact formula): witness+prove = a_s + b_s * k    (FIT)")
 for s in sorted({k[0] for k in keys} | {DEPLOY_S}):
     a_s = ta + tb * cons_model(0, s, None, CKSEL)
     b_s = tb * (per_record(s, None, CKSEL) + 339 / 5)
@@ -203,7 +189,7 @@ for s in sorted({k[0] for k in keys} | {DEPLOY_S}):
 # ---- compile wall -----------------------------------------------------------------
 # Compile is single-threaded. Its time and memory track the unrolled program: a fixed
 # part per commitment word and a per-record part that grows with the S-word state
-# arrays the record's mux/decoder loops rewrite. Model both as a0 + a1*S + k*(b0 + b1*S)
+# arrays the record's mux/decoder loops rewrite. Fit both as a0 + a1*S + k*(b0 + b1*S)
 # (least squares over every measured compile), and cross-check the growth in k at
 # s = 2^14 with a power law, which would expose superlinear compiler behaviour.
 import numpy as np
@@ -228,7 +214,7 @@ small = [k for k in keys if k[2] <= 64]
 F = [feat(k[2], k[0]) for k in small]
 c_t, c_t_r2, c_t_w = lsq(F, [pts[k]["compile_s"] for k in small])
 c_m, c_m_r2, c_m_w = lsq(F, [pts[k]["compile_mb"] for k in small])
-print("\nCompile (single-threaded; wall 45 min / 150 GB)                                             (MODELED)")
+print("\nCompile (single-threaded; wall 45 min / 150 GB)                                             (FIT)")
 print(f"  all s, k <= 64 ({len(small)} compiles; describes the small grid only, not large k):")
 print(f"    compile_s  = {c_t[0]:.2f} + {c_t[1]:.4f}*S + k*({c_t[2]:.4f} + {c_t[3] * 1e3:.4f}e-3*S)   "
       f"(R^2 {c_t_r2:.4f}, worst point {c_t_w:.0%})")
@@ -236,7 +222,7 @@ print(f"    compile_MB = {c_m[0]:.1f} + {c_m[1]:.3f}*S + k*({c_m[2]:.3f} + {c_m[
       f"(R^2 {c_m_r2:.4f}, worst point {c_m_w:.0%})")
 dk = sorted(k for k in keys if k[0] == DEPLOY_S)
 if len(dk) < 3:
-    sys.exit("fit.py: need >= 3 measured compiles at s=2^14 for the deployed model")
+    sys.exit("fit.py: need >= 3 measured compiles at s=2^14 for the deployed-size fit")
 # At the deployed geometry the compiler's time is superlinear in k (ZoKrates' reducer,
 # see README), so fit time = a + b*k + c*k^2 there; memory stays linear in k.
 dq, dq_r2, dq_w = lsq([[1.0, k[2], k[2] ** 2] for k in dk], [pts[k]["compile_s"] for k in dk])
@@ -250,7 +236,7 @@ print(f"  largest measured compile: s={big[0]} k={big[2]}: {pts[big]['cons']:,} 
 
 
 def compile_model(k, s=DEPLOY_S):
-    """Deployed-geometry compile model (s = 2^14 only)."""
+    """Compile seconds and MB at s = 2^14 from the fits above: a + b*k + c*k^2 and a + b*k."""
     assert s == DEPLOY_S
     return dq[0] + dq[1] * k + dq[2] * k * k, dm[0] + dm[1] * k
 
@@ -274,11 +260,11 @@ for k in range(1, 1 << 16):
     elif k > 64:
         break
 t_k, mb_k = compile_model(kmax)
-print(f"  largest k whose modeled compile fits the wall at s=2^14: ~{kmax:,} records per chunk "
-      f"({t_k / 60:.0f} min, {mb_k / 1024:.0f} GB modeled; bound by {'time' if t_k / WALL_S > mb_k / WALL_MB else 'memory'})")
+print(f"  largest k whose fitted compile fits the wall at s=2^14: ~{kmax:,} records per chunk "
+      f"({t_k / 60:.0f} min, {mb_k / 1024:.0f} GB from the fit; bound by {'time' if t_k / WALL_S > mb_k / WALL_MB else 'memory'})")
 
 # ---- deployed size ----------------------------------------------------------------
-print(f"\nDEPLOYED SIZE: s=2^14 registers, one Groth16 proof per m=2^14-record batch      (MODELED unless marked)")
+print(f"\nDEPLOYED SIZE: s=2^14 registers, one Groth16 proof per m=2^14-record batch      (FIT unless marked)")
 n = cons_model(DEPLOY_M, DEPLOY_S, None, CKSEL)
 t_c, mb_c = compile_model(DEPLOY_M)
 print(f"  constraints            {n:,}  (exact formula; {per_record(DEPLOY_S, None, CKSEL):,.0f}/record + {cons_model(0, DEPLOY_S, None, CKSEL):,} fixed + digest)")
@@ -296,7 +282,7 @@ if kmax:
     nk = cons_model(kmax, DEPLOY_S, None, CKSEL)
     chunks = math.ceil(N_STREAM / kmax)
     tk = ta + tb * nk
-    print(f"  FEASIBLE CHUNKING: k={kmax:,} (largest modeled compile under the wall): {nk:,} constraints/chunk,")
+    print(f"  FEASIBLE CHUNKING: k={kmax:,} (largest fitted compile under the wall): {nk:,} constraints/chunk,")
     print(f"     {chunks:,} chained proofs for 2^20 records: prove {chunks * tk / 3600:,.2f} h, "
           f"{chunks * 997 / 1e6:.2f} MB of JSON proofs, {chunks} verifications")
 for k in sorted({k[2] for k in keys if k[0] == DEPLOY_S}):
@@ -305,5 +291,5 @@ for k in sorted({k[2] for k in keys if k[0] == DEPLOY_S}):
     print(f"  MEASURED chunking k={k:<5}: {v['cons']:,} constraints, witness+prove {tw:.2f} s/chunk -> "
           f"{N_STREAM // k:,} proofs, {N_STREAM // k * tw / 3600:,.2f} h for 2^20 records (linear in chunks)")
 print(f"  as k grows the stream prover cost tends to 2^20 x {per_record(DEPLOY_S, None, CKSEL) + 339 / 5:,.0f} constraints x {tb * 1e6:.2f} us "
-      f"= {N_STREAM * (per_record(DEPLOY_S, None, CKSEL) + 339 / 5) * tb / 3600:,.2f} h (floor, MODELED)")
+      f"= {N_STREAM * (per_record(DEPLOY_S, None, CKSEL) + 339 / 5) * tb / 3600:,.2f} h (floor, FIT)")
 print("\nName the ZoKrates side 'a HyperLogLog operator following zkStream's design (our circuit)', never 'zkStream'.")

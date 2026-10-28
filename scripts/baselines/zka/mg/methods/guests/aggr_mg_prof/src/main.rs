@@ -1,10 +1,7 @@
 #![no_main]
 #![no_std]
 
-// PROFILING twin of aggr_mg: the same mg-core code, with env::cycle_count()
-// (host-reported, unconstrained) recorded after each phase. Journal = the
-// aggr_mg journal followed by the (phase, cycle_count) marks. Used only for the
-// phase breakdown; aggr_mg is the measured guest.
+// Profiling copy of aggr_mg: commits its journal, then the (phase, env::cycle_count()) marks.
 
 extern crate alloc;
 

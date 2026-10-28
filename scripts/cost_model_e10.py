@@ -1,29 +1,6 @@
 #!/usr/bin/env python3
-"""E10 — cost-model validation (EVAL_SPEC E10).
-
-Reads the measured E1/E3/E4 CSVs, computes the paper's closed-form per-family
-constraint prediction for each config, and checks that the measured **circuit
-size** tracks the prediction (target deviation <= 1.5x).
-
-Unit
-----
-The paper's cost model (App. constraint-budget) is stated in *arithmetic-circuit
-constraints*. We validate it against each backend's real measured **circuit
-size** (``constraint_count``), which is now a genuine size on both backends:
-- plonky3: total padded trace rows summed across the batch-STARK tables
-  (``Sigma 2^ext_degree_i`` — the documented "sum of padded heights").
-- plonky2: ``degree * num_wires`` (the constraint-polynomial cell count).
-
-Both are real determinants of prover work (not the earlier ``Sigma log2`` proxy),
-so the predicted-vs-measured ratio is meaningful. The per-(experiment, backend,
-family) affine fit ``size ≈ c_lin + k·predicted`` absorbs the backend's
-fixed-overhead rows (c_lin) and the per-family gadget constants (k); the residual
-ratio is what the 1.5x target bounds. ``measured_prove_total_ms`` is still
-reported for reference.
-
-Output: results/e10_costmodel.csv
-  experiment, backend, family, config, predicted_constraints,
-  measured_constraint_count, measured_prove_total_ms, ratio_size, within_1.5x, note
+"""E10: fit the paper's per-family constraint formula to the measured circuit sizes of the e1, e3 and e4 runs.
+Usage: python3 scripts/cost_model_e10.py   (reads results/, writes results/e10_costmodel.csv)
 """
 import csv
 import math

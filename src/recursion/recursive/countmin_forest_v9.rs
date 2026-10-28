@@ -1,42 +1,5 @@
-//! §4.3(c) **recursive** streaming forest over privacy-preserving v9
-//! Count-Min update epochs.
-//!
-//! This is the recursive-proof realization of the paper's Bentley–Saxe /
-//! Merkle-Mountain-Range streaming forest. Where [`framework::StreamingForest`]
-//! composes per-epoch *digests* (the "option (i)" boundary-digest lift, leaves
-//! self-verify), this module composes the actual STARK proofs: every merge
-//! recursively verifies its two children inside one
-//! [`build_and_prove_aggregation_layer`] call, so the single root proof
-//! recursively verifies **all** leaves.
-//!
-//! ### Schedule
-//!
-//! Leaves are ingested left-to-right. A binary-counter cascade merges
-//! equal-sized adjacent subtree proofs (a carry), so at any moment the
-//! surviving subtree sizes are the powers of two in `popcount(t)` — identical
-//! to [`framework::StreamingForest`]'s schedule, but each node now carries a
-//! real `RecursionOutput`. `finalize` chains the surviving roots
-//! left-to-right into one root proof `Π[1, E]`.
-//!
-//! ### What the root proof exposes (verified, see
-//! `recursion::recursive::tests::probe_aggregation_public_inputs`)
-//!
-//! An aggregation proof's public inputs are **FRI proof-structure values
-//! only** — fixed by the FRI config, independent of how many leaves are
-//! folded underneath. The per-epoch state commitments `Com(S_i)` are bound by
-//! the in-circuit STARK verification (trace commitments) but are **not**
-//! surfaced as public inputs. So the root is `O(1)` and carries **no
-//! intermediate state commitments** — exactly the "fold the intermediates
-//! away" property. The outer boundaries `Com(S_0)` / `Com(S_E)` and the
-//! tree-schedule digest are carried alongside the proof and checked natively
-//! at `O(1)` cost (the same scheme as [`countmin_merge_v9`]); binding them
-//! *into* the proof's public statement in-circuit is the separate NPO
-//! public-value spike (see `docs/framework.md`).
-//!
-//! v9 leaves are the only mergeable shape here (their PI surface is the
-//! paper's §5.2 privacy-preserving `(initial, final, batch_commit)`); the
-//! cascade also folds aggregation outputs (`agg+agg`), which the linear
-//! [`countmin_chain`] never exercises.
+//! Recursive streaming forest over v9 Count-Min leaves: equal-size subtree proofs are
+//! merged as leaves arrive, then the surviving roots are folded into one root proof.
 
 use core::fmt;
 

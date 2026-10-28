@@ -1,14 +1,4 @@
-//! Plaintext Count-Min sketch (paper §5.4 Pattern A linear).
-//!
-//! Phase 2a only delivers the plaintext layer plus the `StateCommit` for it
-//! (`src/commitment/countmin.rs`). The in-circuit `CountMinUpdateAir` and the
-//! wiring into `recursion::recursive::merge_two` are Phase 2b and 2c.
-//!
-//! The hash profile is fixed and public: row `i` uses a hard-coded odd prime
-//! and offset, mixing the key via wrapping multiplication and XOR, then
-//! reducing modulo `w`. This matches the paper's assumption that the hash
-//! profile is part of `M` (the public metadata) and lets us reproduce the
-//! exact cell addresses inside the eventual update AIR without surprises.
+//! Plaintext Count-Min sketch with a fixed public hash profile.
 
 use crate::sketch::{DeltaCert, Sketch};
 

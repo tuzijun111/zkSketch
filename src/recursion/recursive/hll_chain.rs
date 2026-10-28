@@ -1,10 +1,4 @@
-//! §4.3 recursive chain over HyperLogLog update epochs.
-//!
-//! `HllChainState` is the accumulating root of the paper's recursive
-//! chain schedule for HLL leaves: `Π^(t) = merge(Π^(t-1), π_t)`. Structurally
-//! identical to `CountMinChainState` — only the leaf-proof type differs.
-//! After every `extend(leaf)` call, the carried `HllChainProof` certifies the
-//! whole interval `[1, t]`; verifier work stays `O(1)` regardless of `t`.
+//! Recursive chain over HyperLogLog leaves; same as `countmin_chain` with the HLL leaf.
 
 use core::fmt;
 

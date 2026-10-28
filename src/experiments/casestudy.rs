@@ -1,22 +1,5 @@
-//! **End-to-end case study** (paper §Evaluation, `sec:rq5-casestudy`).
-//!
-//! Runs the full pipeline on the real S³ datasets (AOL user-click stream,
-//! Netflix-Prize rating stream), treating each as a single-operator
-//! deployment. We exercise all four families over each stream, ingesting it in
-//! epochs while maintaining the committed sketch object + a per-epoch history
-//! chain, then an independent verifier replays the public log:
-//!
-//! - **Ingest** (`casestudy_ingest`): total prover wall-clock, mean/max
-//!   per-epoch latency, the final decoded answer, and an all-epochs-correct
-//!   flag, for each (dataset, family).
-//! - **Audit** (`casestudy_audit`): the verifier replays the CM history —
-//!   `Θ(E)` per-epoch chain check vs `O(1)` root-digest check — and a
-//!   tamper-injection trial (corrupt one epoch boundary) that the chain
-//!   verifier rejects.
-//!
-//! Real datasets are used when fetched (`scripts/fetch_datasets.py`); the
-//! synthetic Gaussian/Uniform streams are always included so the case study
-//! runs offline.
+//! End-to-end case study: every family over AOL/Netflix (if fetched) and synthetic streams,
+//! then an audit of the Count-Min history with a tampered-epoch trial.
 
 use crate::dataset::{self, Synthetic};
 use crate::recursion::framework::{

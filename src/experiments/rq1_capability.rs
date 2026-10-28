@@ -1,27 +1,4 @@
-//! **RQ1 — Capability** (paper §Evaluation, `sec:rq1`).
-//!
-//! Validates the framework's correctness guarantees on each of the four
-//! families. We implement the runnable subset of the paper's four panels:
-//!
-//! - **1-a History-independent per-epoch cost.** Replay `E` consecutive CM
-//!   epochs threading the evolving state; per-epoch prove time and proof size
-//!   are constant in the epoch index `t` (Property C1). CM state is fixed-size
-//!   (`d·w`), so per-epoch cost cannot grow with history length.
-//! - **1-c Tamper detection.** For each family, corrupt ~5% of a batch's rows
-//!   and show the public commitments (`batch_commit`, `Com(S_t)`) diverge from
-//!   the honest ones — so any proof bound to the honest history root is
-//!   rejected against the tampered data. (Constraint-level rejection inside
-//!   the circuit is separately covered by the `*_soundness_rejects_*` unit
-//!   tests; this panel measures the binding-layer detection rate, which the
-//!   experiments lib can exercise without `#[cfg(test)]` tamper hooks.)
-//! - **1-d ZK-verified answer == plaintext sketch answer.** For each family,
-//!   the leaf's committed final state equals the natively recomputed state
-//!   (bit-identical decode), and we report the sketch's error vs ground truth
-//!   (a sketch property, not a ZK property).
-//!
-//! 1-b (constant-size root proof / constant-time verifier under audit-window
-//! sweep) is implemented in [`super::rq2_scalability`] (panel 2-d), since both
-//! sweep the audit window `E` over the §4 framework.
+//! RQ1: per-epoch cost vs epoch (1-a), tamper detection (1-c), proved vs plaintext answer (1-d).
 
 use std::collections::HashMap;
 

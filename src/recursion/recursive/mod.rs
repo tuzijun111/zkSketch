@@ -1,17 +1,5 @@
-//! Phase 1.5 — in-circuit recursive merge atom (paper §4.2 Lite).
-//!
-//! Two CircuitBuilder-based leaf proofs are verified inside one recursive
-//! batch-STARK proof via [`p3_recursion::build_and_prove_aggregation_layer`].
-//! The aggregated proof's public inputs expose both leaves' boundary values;
-//! we natively assert `left.final_ == right.initial` (§4.2 shared-boundary
-//! check, Lite form) and recompute the digest after verification.
-//!
-//! Why the CircuitBuilder leaf instead of Phase 1's uni-stark `FibAir`?
-//! Upstream's `RecursionInput::UniStark` aggregation path is exercised only
-//! with empty PIs (`recursive_keccak`); passing FibAir's 4 PIs through it
-//! triggers a WitnessConflict deep in the recursive verifier. The
-//! CircuitBuilder leaf style (`recursive_fibonacci.rs`) is the
-//! well-tested path for non-trivial public inputs.
+//! Recursive proof composition (leaves, merges, chains, forests, root VKs). This file
+//! holds the two-leaf recursive merge of Fibonacci `CircuitBuilder` leaves.
 
 pub mod backend;
 pub mod backend_gl;

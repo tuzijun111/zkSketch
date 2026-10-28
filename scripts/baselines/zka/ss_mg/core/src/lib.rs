@@ -1,59 +1,7 @@
 #![no_std]
 
-// zkSketch's SpaceSaving batch transition (mergeable Misra-Gries, top-s
-// retention) as plain Rust for a RISC Zero guest: the matched-semantics
-// counterpart of ../../spacesaving (which runs textbook per-record
-// SpaceSaving with a sum-and-truncate merge, NOT what zkSketch certifies).
-//
-// One guest run = one zkSketch SS leaf statement:
-//
-//   read (S_old, raw batch keys)                    -- env::read_slice (headline guest ss_mg)
-//                                                      or risc0 serde env::read, as the zka
-//                                                      guests read (sensitivity guest ss_mg_serde)
-//   Com_old   = SHA-256(tag, s, m, S_old rows)      -- unsalted, risc0-accelerated SHA-256
-//   map keys                                        -- zkSketch ss_updates_of
-//   Com_batch = SHA-256(tag, m, mapped batch rows)
-//   S_new     = zkSketch apply_batch_ss_full(S_old, batch)
-//   Com_new   = SHA-256(tag, s, m, S_new rows)
-//   journal   = Com_old || Com_batch || Com_new     -- 96 bytes
-//
-// The rule and the representation are zkSketch's, read from
-// src/sketch/ss_final_full.rs (build_ss, group_by_key, compress_from_gsorted,
-// apply_batch_ss_full) and src/experiments/stream_compose.rs (ss_updates_of):
-//
-//   * state: exactly `capacity` rows of (key_lo, key_hi, count, active), u32
-//     each -- zkSketch's flat_state_vals layout. Dummy rows are (0, 0, 0, 0).
-//     Order: dummies first, then active rows by (count asc, key asc).
-//   * batch record for raw key k: PAD_KEY (u32::MAX) -> the dummy (0, 0, 0, 0);
-//     otherwise ((k & 0x1FFF_FFFF) | 1, 0, 1, 1). zkSketch's plain batches
-//     (examples/exp_compose.rs batches_from) do not remap a real u32::MAX key,
-//     so such a key is a dummy there too.
-//   * union old rows || batch rows, group by key summing counts, count-sort the
-//     grouped table by (active, count, key) ascending, tau = the count just
-//     below the top-`capacity` cut (the (s+1)-th largest grouped count; 0 when
-//     the union has at most `capacity` distinct keys), keep the top
-//     `capacity`, subtract tau, and turn every counter that reaches 0 into a
-//     dummy.
-//
-// The implementation is not a line-by-line port of build_ss. It sorts only
-// active rows (dummy rows contribute nothing to any group) and packs each row
-// into one u64 sort key. Two interchangeable sorts, chosen by an input word:
-//   * SortAlgo::Radix (headline): stable LSD radix sorts of at most 11-bit
-//     digits over one u32 word: the union by key, then the key-ordered grouped
-//     table by count only (stability keeps ties key-ascending);
-//   * SortAlgo::Std (sensitivity): core's sort_unstable (pdqsort) and, when the
-//     union overflows, select_nth_unstable for the cut before sorting the kept
-//     rows.
-// Both produce zkSketch's exact row sequence on well-formed input (the host
-// driver checks every run field by field against
-// zksketch::sketch::ss_final_full::apply_batch_ss_full). The guest asserts
-// well-formedness:
-//   * an inactive row (or record) is the all-zero dummy;
-//   * an active row has active = 1, key_hi = 0 and key != 0.
-// zkSketch's keys are < 2^29 (its circuit range-checks them) and its dummy key is
-// 0, so honest states and batches always satisfy both.
-//
-// Nothing here is oblivious: cycles depend on the data, as in every zka guest.
+// zkSketch's SpaceSaving batch rule (mergeable Misra-Gries, keep top s) in plain Rust for a RISC Zero
+// guest. One run = one SS leaf (src/sketch/ss_final_full.rs); journal = Com_old || Com_batch || Com_new.
 
 extern crate alloc;
 

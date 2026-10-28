@@ -1,7 +1,4 @@
-//! End-to-end smoke test for the Phase-1 two-leaf chain.
-//!
-//! Mirrors the paper's running example at the level of plumbing: prove two
-//! adjacent epochs, merge them, and verify the resulting `ChainProof`.
+//! Two toy Fibonacci leaves merged by the flat chain and verified.
 
 use zksketch::prover::{Boundary, prove_fib_leaf};
 use zksketch::recursion::{merge_two, verify_chain};

@@ -1,52 +1,5 @@
-//! **Canonical HyperLogLog update circuit** (zkSketch paper Appendix F).
-//!
-//! Same template as [`crate::sketch::gk_final`] and
-//! [`crate::sketch::countmin_final`], specialised to HLL semantics:
-//!
-//! - **Pattern A max**: per-key contribution `ρ_j = LeadingOnes(h_2(k_j))`
-//!   is folded into register `b_j = h_1(k_j)` via the **max** operator. The
-//!   committed state is updated by a sparse max-patch — `N[b] = max(O[b],
-//!   M_b)`. Unlike Count-Min's additive structure, HLL needs a whole-state
-//!   replacement commitment because `max` doesn't compose into a
-//!   homomorphic Poseidon2 commit.
-//! - **Privacy**: active flags on the batch hide the actual number of
-//!   inserts per epoch (`m_t ≤ params.batch`). The register count
-//!   `m = 2^b` is public.
-//! - **PRF hash family**: Poseidon2 — same primitive that backs the
-//!   commitments. The 8-Val digest provides the `(b_j, ρ_j)` pair without
-//!   the bit-local XOR family that the v1 baseline used.
-//!
-//! ### Tuple / record layout
-//!
-//! - **Register**: one Challenge per register (only first base coefficient
-//!   carries the `lr` value; the rest are zero).
-//! - **Batch record**: one Challenge per record packing
-//!   `(key_lo, key_hi, active, 0)` where `active ∈ {0, 1}`.
-//!
-//! ### Scope of in-circuit verification (this file)
-//!
-//! - Step 1 (bind state + batch) — ✓
-//! - Step 2 (register contributions via Poseidon2 hash) — ✗ deferred (full
-//!   per-record hashing in-circuit would mirror count-min's PRF approach;
-//!   here the contributions are computed natively and bound via the
-//!   batch commit only).
-//! - Step 3 (sort by register id) — ✗ deferred
-//! - Step 4 (max-aggregate per register) — ✗ deferred
-//! - Step 5 (sparse max-patch apply) — ✗ deferred
-//! - **What IS checked**: Poseidon2 commits on `(initial_state, final_state,
-//!   batch)`; active flags ∈ {0,1}; **per-register monotonicity**
-//!   `final[i] ≥ initial[i]` enforced via a non-negative-difference
-//!   range proof (HLL's `max` is monotone non-decreasing).
-//!
-//! Privacy guarantees the simplified version still delivers:
-//! - batch contents are private (only `batch_commit` is public);
-//! - actual active count in the batch is private;
-//! - register values are private (only `initial_commit` / `final_commit`
-//!   bind them).
-//!
-//! The deferred steps would close the soundness gap by additionally
-//! certifying that the new state really is `apply_max_patch(O, M)` rather
-//! than any monotone-non-decreasing replacement.
+//! Structural HLL leaf (baseline): binds the commitments and checks active flags and
+//! per-register monotonicity only.
 
 use std::rc::Rc;
 
@@ -337,7 +290,7 @@ pub fn commit_hll_batch(batch: &[HllFinalUpdate]) -> HllFinalBatchCommit {
 
 /// Prove one HLL update epoch under the simplified Appendix F design.
 ///
-/// See module docstring for what's certified vs. deferred. Core invariant:
+/// The per-record hashing and the max-patch are not checked. Core invariant:
 /// every active flag is `∈ {0, 1}` and every register in the new state is
 /// monotone non-decreasing relative to the old state.
 pub fn prove_hll_final(

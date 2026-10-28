@@ -1,12 +1,5 @@
-//! Side-by-side comparison of the §4.1 flat chain and the §4.2 recursive
-//! merge on the **real** Count-Min sketch — Phase 3a demo.
-//!
-//! Runs both paths on the same two Count-Min update epochs (`d = 2`,
-//! `w = 4`, batch = 2 records), prints prove times, merge times, verify
-//! times, and proof sizes, and ends with a one-line summary of the
-//! observed asymptotic delta.
-//!
-//! Run with: `cargo run --release --example countmin_chain_two`.
+//! Flat chain vs recursive merge over two Count-Min leaves.
+//! Usage: cargo run --release --example countmin_chain_two
 
 use std::time::Instant;
 

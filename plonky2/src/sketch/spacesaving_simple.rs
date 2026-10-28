@@ -1,15 +1,4 @@
-//! Plaintext **simple per-record** SpaceSaving sketch (paper §5.3 Pattern B,
-//! Appendix G), ported from `../src/sketch/spacesaving.rs`.
-//!
-//! The canonical Misra-Gries top-`s` summary — a fixed-capacity list of
-//! `(key, count)` rows — kept as a baseline alongside the **batched** §G
-//! group-sort-split pipeline in [`crate::sketch::spacesaving`] (the in-circuit
-//! shape). On insert `(key, value)`: bump a matching row, else fill a free slot,
-//! else evict the min-count row and write `(key, min_count + value)`.
-//!
-//! Unlike the plonky3 original there is **no `capacity_s % 2` constraint** —
-//! that was a BabyBear cell-alignment artifact; over Goldilocks each cell is a
-//! single field element.
+//! Per-record SpaceSaving baseline: bump a matching row, fill a free slot, or replace the min-count row.
 
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::HashOut;

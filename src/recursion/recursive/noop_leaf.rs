@@ -1,23 +1,5 @@
-//! Public **no-op leaves** for root-VK derivation (BabyBear families).
-//!
-//! Each function proves the family's boundary-exposing leaf circuit for the
-//! given public parameters over data-free input: the empty state and a batch
-//! of the family's provable no-op records (the same no-ops the streaming
-//! harness pads split batches with — `stream_compose::PAD_KEY`). The result
-//! exposes `initial == final`, so it can stand in for every leaf when a
-//! [`crate::recursion::recursive::root_vk::ShapeVkDeriver`] rebuilds a
-//! forest's merge circuits (see
-//! [`crate::recursion::recursive::expose_forest::root_vk_deriver`]).
-//!
-//! Its VK ([`derive_leaf_vk`]) equals the VK of every real leaf of the same
-//! parameters: the leaf circuits take the sketch data only as witnesses
-//! (asserted per family by `expose_forest::tests::real_*_vks_are_data_independent`
-//! and the derivation tests below).
-//!
-//! The `*_expose` / `*_interval` variants prove the family's
-//! Interval-statement leaf (B6(b)) at batch index 1; the index is a witness,
-//! so every real Interval leaf of the same parameters has the same VK
-//! (asserted by `interval_tests`).
+//! No-op leaves (empty state, no-op batch) per BabyBear family; they have the same VK
+//! as real leaves of the same parameters and stand in for them when deriving root VKs.
 
 use p3_circuit_prover::BatchStarkProof;
 

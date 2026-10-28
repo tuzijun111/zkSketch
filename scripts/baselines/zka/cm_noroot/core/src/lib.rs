@@ -1,33 +1,6 @@
 #![no_std]
-//! zk-Analytics' Count-Min aggregation WITHOUT its per-epoch Merkle roots (the "noroot"
-//! variant of the six-sketch comparison, ../../README.md "Six-sketch comparison").
-//!
-//! Their aggregation guest aggr_cm (aggregator/methods/guest_cm @ d4a5a9a) runs
-//! `process_cm_aggr_with_state` (aggregator/core/src/lib.rs:1215-1301). Besides the flat
-//! SHA-256 `state_commit` that the epoch chain and every query guest use, it builds three
-//! Merkle roots that no query guest or verifier reads: `row_roots` (one SHA-256 leaf per
-//! counter, 3 x 1024 leaves), `cm_root` and `heap_root`. Executed, they cost about 11.3M
-//! cycles per epoch whatever the number of records. zkSketch publishes no such root, so the
-//! apples-to-apples zk-Analytics number is the same aggregation without them:
-//!
-//! * [`noroot`]  `process_cm_aggr_with_state` with ONLY the Merkle block (lines 1262-1274)
-//!   replaced by zeros: same chain verification, flattening, table and heap update, state
-//!   commitment, epoch link and journal type (`CmAggrOutput`). For the same input its
-//!   journal equals theirs with row_roots, cm_root and heap_root set to zero.
-//! * [`twin`]    the same functions with nothing replaced. VALIDATION ONLY (guest
-//!   aggr_cm_twin, never a reported number): it shows that copying their code into this
-//!   crate leaves its cost unchanged outside the Merkle work. Measured 2026-10-13 (executor,
-//!   AOL, epoch 0): aggr_cm_twin = aggr_cm + 402,100 / 402,052 / 401,956 cycles at 64 / 128 /
-//!   256 records, a constant. A pprof profile (RISC0_PPROF_OUT) at 128 records puts all of it
-//!   inside their generic `merkle::MerkleTree<Digest>`, which the twin monomorphizes in this
-//!   crate with different inlining (ShaHasher's Hasher impl +415K flat, MerkleTree::new -129K
-//!   flat, Hashable::hash no longer inlined); everything else costs the same (crate-local flat
-//!   cycles 154,486 vs 155,055; memset, SHA-256, input deserialisation identical). So the
-//!   noroot copy costs what their aggregation costs without its Merkle work, and
-//!   aggr_cm - aggr_cm_noroot (11.09M cycles at 64-256 records) is that work.
-//!
-//! Both modules include!, byte for byte, the line ranges that ../gen_upstream.sh cuts from
-//! the clone (`gen_upstream.sh --check` re-verifies them).
+//! zk-Analytics' CM aggregation without the Merkle roots no query reads (`noroot`), plus an
+//! unedited copy (`twin`, validation only). Both include! code cut by ../gen_upstream.sh.
 
 extern crate alloc;
 

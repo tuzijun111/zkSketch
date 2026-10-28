@@ -1,29 +1,5 @@
-//! **Datasets for testing — same as `paper/Streaming_MPC.pdf` §6.2.3.**
-//!
-//! The Streaming-MPC paper evaluates its sketches on two synthetic
-//! distributions and two real datasets, all with 32-bit keys drawn from the
-//! domain `[2^32]`. This module reproduces that dataset suite so the four
-//! zkSketch circuits can be tested on the **same data**:
-//!
-//! - **Synthetic** (generated deterministically here, no download):
-//!   - [`Synthetic::Gaussian`] — `μ = 2^31`, `σ = 2^13` (the paper's params).
-//!   - [`Synthetic::Uniform`] — uniform over `[0, 2^32)`.
-//! - **Real** (downloaded + processed by `scripts/fetch_datasets.py` into
-//!   `data/<name>.keys`, a flat little-endian `u32` stream):
-//!   - [`aol`] — AOL "user-ct-collection" web log; each record's request
-//!     URL hashed to a 32-bit key ("hash the website … into 32-bit").
-//!   - [`netflix`] — Netflix-Prize ratings; the user-ID number as the key.
-//!
-//! Synthetic streams always work offline. The real loaders return `None`
-//! when the files haven't been fetched, so tests degrade gracefully:
-//!
-//! ```bash
-//! python3 scripts/fetch_datasets.py            # fetch AOL + Netflix
-//! AOL_MAX_KEYS=200000 NETFLIX_MAX_KEYS=200000 python3 scripts/fetch_datasets.py
-//! ```
-//!
-//! Per the goal, the four-circuit tests consume only a **small slice**
-//! ([`take`]) of a dataset — enough to exercise one proving epoch.
+//! Test key streams: synthetic Gaussian (μ = 2^31, σ = 2^13) and uniform, real AOL and Netflix.
+//! Real keys are read from `data/<name>.keys`, written by `scripts/fetch_datasets.py`.
 
 use std::path::PathBuf;
 

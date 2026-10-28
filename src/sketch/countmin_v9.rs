@@ -1,56 +1,5 @@
-//! Field-friendly Count-Min hash family (Phase 9b — the §5.2 privacy-
-//! preserving design).
-//!
-//! ### Why a new hash family
-//!
-//! v1, v2, and the original v3 leaf use `src/sketch/countmin.rs::hash_cell`,
-//! which mixes via `key.wrapping_mul(prime) ^ offset ` mod w`. **XOR is bit-
-//! local and hostile to BabyBear arithmetic** — verifying that hash
-//! in-circuit would require bit-decomposing the wrapping product (~64
-//! booleans per record), which dominates the prover cost.
-//!
-//! In v1/v2/v3 we sidestep this by computing positions natively off-circuit
-//! and exposing them as public inputs — the verifier independently
-//! recomputes the hash to bind the position PIs to the public hash family.
-//! That's fine for soundness but **leaks the input keys**.
-//!
-//! For the paper's true §5.2 design, keys must be *private* — and that
-//! means the verifier cannot recompute positions; the circuit must do it.
-//! That requires a field-friendly hash.
-//!
-//! ### The family
-//!
-//! `h_i(k) = (k · a_i + b_i)  in BabyBear, then mod w as an integer`.
-//!
-//! - `a_i` and `b_i` are public, per-row constants — 16 entries (the same
-//!   `d ≤ 16` cap as the original family).
-//! - The multiply-add happens in `Val = BabyBear`. `key: u64` is reduced
-//!   modulo BabyBear's prime on conversion, which is fine for distribution
-//!   (BabyBear ≈ 2³¹ is far larger than any practical `w`, so the modular
-//!   bias `w / p` is negligible).
-//! - The final `mod w` step is the only piece that's not pure field
-//!   arithmetic. In-circuit this is verified by the prover supplying a
-//!   quotient `q` and remainder `r`, with `q · w + r = mixed` constrained
-//!   and `0 ≤ r < w` enforced via a bit-decomposition of `r` (cheap when
-//!   `w` is small — ⌈log₂ w⌉ booleans).
-//!
-//! ### Relationship to v1/v2/v3
-//!
-//! The v9 hash family is **different** from the XOR family — for the same
-//! key, `hash_cell_v9` and `hash_cell` map to different positions. So a v9
-//! state and a v1 state diverge after the first update, even when they
-//! start equal. This is intentional: v9 is the §5.2 privacy-preserving
-//! line, not a drop-in replacement for v1/v2/v3.
-//!
-//! The Count-Min upper-bound property still holds for v9 (every per-row
-//! function distributes reasonably), so query semantics are unchanged.
-//!
-//! ### Reused types
-//!
-//! `CountMinState`, `CountMinParams`, `CountMinUpdate` from
-//! `src/sketch/countmin.rs` are reused as-is. Only the hash function and
-//! the `Sketch` trait impl (via the new `CountMinV9` unit struct) are
-//! distinct.
+//! Field-friendly Count-Min hash (v9): `h_i(k) = (a_i·k + b_i) mod p mod w`, so the circuit
+//! can recompute bucket positions from private keys.
 
 use p3_field::PrimeCharacteristicRing;
 

@@ -1,13 +1,8 @@
-# Sourced by the kmv/ scripts (the pattern of ../hll/hll_common.sh). Reuses
-# ../common.sh (PATH, BASELINE_DIR, ZKA, ZKS, RESULTS, link_zka) and adds the KMV
-# build, which goes to $BASELINE_DIR/build/zka-kmv.
-#   host binary: --locked against kmv/Cargo.lock (derived from ../hll/Cargo.lock)
-#   guest ELFs:  RISC0_BUILD_LOCKED=1 makes risc0-build's nested cargo honour
-#                kmv/guests/Cargo.lock (derived from zk-Analytics' own Cargo.lock)
+# Sourced by the kmv/ scripts: build, log-header, CSV and PROVE=1 helpers on top of ../common.sh.
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 FAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FAM=kmv
-FAM_TARGET="$BASELINE_DIR/build/zka-kmv"
+FAM_TARGET="$BASELINE_DIR/build/zka-kmv${SIX_KMV_SUFFIX:-}"   # per k: KMV_K is a build-time constant (../common.sh SIX_SIZES)
 FAM_BIN="$FAM_TARGET/release/kmv"
 FAM_ELF_DIR="$FAM_TARGET/riscv-guest/zka-kmv-methods"
 # <guest package>/<ELF>: the query package also builds the words variant (src/bin)
@@ -16,7 +11,7 @@ KEYS=${KEYS:-$ZKS/data/aol.keys}
 
 build_fam() {
   link_zka || return
-  ( cd "$FAM_DIR" && CARGO_TARGET_DIR="$FAM_TARGET" RISC0_BUILD_LOCKED=1 \
+  ( cd "$FAM_DIR" && KMV_K="${SIX_KMV_K:-1024}" CARGO_TARGET_DIR="$FAM_TARGET" RISC0_BUILD_LOCKED=1 \
       cargo build --release --locked --bin "$FAM" )
 }
 

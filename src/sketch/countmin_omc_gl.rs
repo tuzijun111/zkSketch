@@ -1,66 +1,5 @@
-//! **Goldilocks (D=2) offline-memory-checking Count-Min leaf** — the
-//! selectable Goldilocks counterpart of [`super::countmin_omc`], mirroring how
-//! [`super::hll_omc_gl`] / [`super::ss_final_full_gl`] / [`super::gk_bandmerge_gl`]
-//! shadow their BabyBear originals. The BabyBear module stays byte-for-byte
-//! untouched; this file only adds the `cm_gl` option.
-//!
-//! Same `M_old ⊎ W == M_new ⊎ R` check as the BabyBear leaf (see
-//! [`super::countmin_omc`]'s header). The port-relevant differences:
-//!
-//! - **Config**: `crate::config_gl` (Goldilocks, D=2, width-8 Poseidon2,
-//!   digest 4) via `GOLDILOCKS_D2_W8`; `::<2>` / `_d2` registration forms.
-//! - **Cell packing**: 2 counters per `Challenge` (D=2) instead of 4.
-//! - **Key encoding**: under `Binding::Legacy` Goldilocks holds the u64 key
-//!   in ONE base element, so a batch record packs as `[key, value]` in one
-//!   Challenge (the BabyBear Legacy batch row is `[key_lo, key_hi, value,
-//!   0]`). That element is the key mod `p` (`p = 2^64 − 2^32 + 1 < 2^64`), so
-//!   `k` and `k + p` collide for every `k < 2^32 − 1`. Under
-//!   `Semantic`/`Bound` the key is two exact 32-bit limbs `[lo, hi]` (one
-//!   Challenge, range-checked, [`bind::key_from_limbs`]) that the routing
-//!   hash and the batch commitment both absorb; a record commits as `[lo,
-//!   hi, value, 0]` (two Challenges). Commitments are field-specific.
-//! - **PRF routing**: the key digest is 4 Goldilocks coefficients instead of
-//!   8 BabyBear ones, but the PRF family still needs up to 8 row streams
-//!   (`d ≤ 8`). Row `i` draws its bucket from the 32-bit HALF-coefficient
-//!   `i`: `bucket_i = ((digest[i/2] >> 32·(i mod 2)) mod 2^32) mod w`
-//!   ([`hash_cell_prf`]) — in-circuit, bits `[32·(i mod 2), 32·(i mod 2) +
-//!   log2 w)` of coefficient `i/2`'s 64-bit decomposition. Distinct rows use
-//!   disjoint bit ranges, preserving the 8-stream PRF shape. NOTE: this is a
-//!   DIFFERENT hash family from BabyBear's, so `cm_gl` sketch states are a
-//!   distinct (statistically equivalent) Count-Min instance — chains/forests
-//!   must not mix fields.
-//! - **Multiset encoding**: BabyBear packs `(addr, val, tag, 0)` into one
-//!   D=4 challenge. D=2 has two coords and CM counter values are unbounded
-//!   by design (no range checks on committed cells — exactly BabyBear's
-//!   contract), so the dummy-separating tag moves to the ADDRESS coordinate:
-//!   `enc(a, v) = recompose([2a+1, v])`; the value coordinate stays RAW.
-//!   `recompose` is injective in `(2a+1, v)`, so distinct real elements never
-//!   collide. Caveat vs BabyBear's dedicated constant tag coordinate: `2a+1`
-//!   is nonzero only for `a ≠ (p−1)/2`, so real/dummy disjointness is
-//!   conditional on the address witness — adversarial review found no
-//!   standalone exploit (a `(p−1)/2` address cannot satisfy gap-sortedness
-//!   next to canonical neighbors without collapsing into the shared split
-//!   gap below), but it is defense-in-depth BabyBear has and this encoding
-//!   lacks. On Goldilocks the payload packing `addr·2^SHIFT + val` cannot
-//!   wrap for any admissible shape (`< 2^55 ≪ p`), unlike BabyBear where it
-//!   exceeds `p` at the deployed `d·w`.
-//!
-//! ### KNOWN SHARED SOUNDNESS GAP (inherited from [`super::countmin_omc`])
-//!
-//! The sorted-view split `combined_sorted[r]·2^SHIFT + val_sorted[r] ==
-//! payload_sorted[r]` is ONE in-field equation in TWO free witnesses:
-//! `val_sorted` is never range-checked and `combined_sorted[0]` has no
-//! absolute bound (only gaps are checked). A malicious prover can therefore
-//! trade value bits against address bits in the split — redirecting an
-//! increment to a different (gap-consistent) cell with an attacker-chosen
-//! magnitude — and certify a final commitment that is not the honest
-//! Count-Min fold. The BabyBear original has the IDENTICAL structure
-//! (`countmin_omc.rs` Stage G), so this port is soundness-envelope-matched
-//! to it (deliberately: the leaf is a same-arithmetization field-comparison
-//! artifact). The fix — range-check `val_sorted[r] < 2^SHIFT_VAL_BITS` and
-//! `combined_sorted[r] < 2^addr_bits` at every row — costs ~(SHIFT_VAL_BITS
-//! + addr_bits) bit witnesses per counter-touch row in BOTH files and is
-//! tracked as a separate work item.
+//! Goldilocks (D = 2) port of the Count-Min `omc` leaf (`cm_gl`). Its hash family differs
+//! from the BabyBear one, so chains and forests must not mix the two fields.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -417,17 +356,16 @@ pub fn build_countmin_omc_leaf(params: CmOmcParams, expose_boundary: bool) -> Cm
 ///
 /// [`Binding::Legacy`] is the pre-fix circuit, unchanged. It is unsound: the
 /// cells, batch fields and digest coefficients are unbound, sponge IVs are
-/// free, digest bits may be non-canonical, and the "known shared soundness
-/// gap" of the module header applies: the `address·2^SHIFT + value` split is
-/// one equation in two free witnesses.
+/// free, digest bits may be non-canonical, and the `address·2^SHIFT + value`
+/// split is one equation in two free witnesses.
 ///
 /// [`Binding::Semantic`] / [`Binding::Bound`] fix the circuit-semantic parts:
 /// - canonical bits on every digest coefficient that carries a row position;
 /// - the coordinate-wise sort key `address + value·e₁`;
 /// - an exact range on `combined_sorted[0]`;
-/// - base pins on `val_sorted` and `op_old`, which closes that header gap
-///   (an extension-valued `op_old` redirects an update to any cell under
-///   `Legacy`; `tests::op_old_redirect_*`).
+/// - base pins on `val_sorted` and `op_old`, which closes the `Legacy` split
+///   gap above (an extension-valued `op_old` redirects an update to any cell
+///   under `Legacy`; `tests::op_old_redirect_*`).
 ///
 /// - the key as two exact 32-bit limbs `[lo, hi]`, range-checked and
 ///   ALU-recomposed into the one Challenge the routing hash and the batch
@@ -746,8 +684,8 @@ pub fn build_countmin_omc_leaf_commit(
     }
 
     // Stage F — per-record PRF hash → payload. Row `i` draws its bucket from
-    // the 32-bit half `i` of the 64-bit digest coefficients (see the module
-    // header): bits [32·(i mod 2), 32·(i mod 2) + w_log2) of coeff i/2.
+    // the 32-bit half `i` of the 64-bit digest coefficients (as in
+    // `hash_cell_prf_with`): bits [32·(i mod 2), 32·(i mod 2) + w_log2) of coeff i/2.
     let mut h_w = Vec::with_capacity(m);
     for _ in 0..m {
         h_w.push((b.alloc_private_input("h0"), b.alloc_private_input("h1")));

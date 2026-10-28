@@ -1,8 +1,5 @@
-// Four-metric driver for zk-Analytics' Count-Min aggregation guest:
-// prover time, verifier time, receipt bytes, peak RSS.
+// Proves zk-Analytics' CM aggregation guest (succinct): cycles, prove/verify time, receipt size.
 // Usage: cmp <n_records> <distinct_keys> <chunk_batch>
-// Guest geometry is fixed by their code: CM_ROWS=3, CM_COLS=1024.
-// CM_TOPK_SLOTS is a build-time env knob (aggregator/core/build.rs).
 use aggregator_core::{batch_chain_hash, BatchInput, CmAggrInput};
 use aggregator_methods::{AGGR_CM_ELF, AGGR_CM_ID};
 use rand::rngs::StdRng;
@@ -10,6 +7,7 @@ use rand::{RngCore, SeedableRng};
 use risc0_zkvm::{default_executor, default_prover, ExecutorEnv, ProverOpts};
 use zkvm_common::Event;
 
+// VmHWM of this driver only; r0vm proves in its own process (compare.sh samples that one).
 fn peak_rss_kb() -> u64 {
     std::fs::read_to_string("/proc/self/status")
         .ok()

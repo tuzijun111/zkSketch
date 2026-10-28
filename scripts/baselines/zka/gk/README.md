@@ -239,7 +239,9 @@ CARGO_TARGET_DIR=~/ext-baselines/build/zka-gk cargo test --release --locked -p g
   - `SKIP_BUILD=1` skips the build.
   - `DD_EPOCHS="1 16 63"` sets the extra aggregation epochs.
   - `KEYS`, `OUT` and `MAX_LOAD` override their defaults.
-- **Driver.** Its usage is in the header comment of `host/src/main.rs`.
+- **Driver.** `gk --mode aggr [--epoch-index I] [--root legacy|designed|noroot|pertuple] [--profile|--prove]`
+  or `gk --mode query --epochs N --query rank|p50|p90|p99 [--rank-value V] [--prove]` (V defaults to 2^20);
+  common flags `[--keys PATH] [--epoch-size 16384] [--batch 8]`; `gk --header` prints the CSV header.
   `--mode aggr --root legacy|designed|noroot|pertuple` selects the six-sketch root variants (`../README.md`, "Six-sketch comparison", "Root variants"):
   `legacy` (the default) is `aggr_gk` with its per-tuple root, the guest of every row in this
   README; the others run `guests/aggr_root` (`aggr_gk_root`), which reads the variant before
@@ -259,12 +261,13 @@ sources `5bf6a50f2b80`. The final sources `d0142d1c717e` differ only in the
 driver's `proved_contended` rule, and they reproduce every exec row byte for
 byte except `exec_s`; the anchor ran with them.
 
-`MODELED` means segments x 30.1 s/segment, the CPU CM anchors of `../README.md`,
-with an envelope of 29.73 to 30.79 s. It is a model, not a measurement.
+Prove times in this section are segments x 30.1 s/segment, the rate of the CPU CM anchors
+of `../README.md` (envelope 29.73 to 30.79 s); none of these runs was proved (the one
+proved run is under "Proved anchor" below).
 
 ### Aggregation guest `aggr_gk`, one 16,384-record epoch
 
-| epoch | tuples | user cycles | cycles/rec | segments | padded cycles | MODELED prove |
+| epoch | tuples | user cycles | cycles/rec | segments | padded cycles | prove (segments x 30.1 s) |
 |---|---|---|---|---|---|---|
 | 0 (matched epoch) | 55 | 103,407,361 | 6,311 | 107 | 111,673,344 | 3,221 s |
 | 1 | 52 | 103,106,294 | 6,293 | 106 | 111,149,056 | 3,191 s |
@@ -312,7 +315,7 @@ summary type, and dominate the cost.
 
 | query | n=1 | n=4 | n=16 | n=64 (2^20 records) | cycles fit (R^2) |
 |---|---|---|---|---|---|
-| rank(2^20) | 78,723 / 1 seg | 272,027 / 1 | 1,075,954 / 2 | 4,208,405 / 5 (150 s MODELED) | 65,544 n + 15,958 (0.99998) |
+| rank(2^20) | 78,723 / 1 seg | 272,027 / 1 | 1,075,954 / 2 | 4,208,405 / 5 (150 s at 30.1 s/segment) | 65,544 n + 15,958 (0.99998) |
 | p50 | 92,589 / 1 | 344,457 / 1 | 1,398,080 / 2 | 5,565,627 / 6 (181 s) | 86,928 n + 2,976 (0.999997) |
 | p90 | 92,771 / 1 | 344,908 / 1 | 1,399,910 / 2 | 5,572,368 / 6 (181 s) | 87,032 n + 3,062 (0.999997) |
 | p99 | 92,789 / 1 | 344,999 / 1 | 1,400,279 / 2 | 5,573,939 / 6 (181 s) | 87,057 n + 3,049 (0.999997) |
@@ -347,11 +350,11 @@ summary type, and dominate the cost.
     minute I ran a short `nice -n 19` incremental build and run of this crate's
     native tests. It was a single-crate rebuild; its effect on `prove_s` is small
     but not zero.
-- **Model check.**
+- **Check of the 30.1 s/segment rate.**
   - 29.61 s/segment is 0.4% below the lower edge of the CM-anchor envelope
-    (29.73 to 30.79 s), and 1.6% below the 30.1 s used for MODELED.
-  - The executor model at this size is 14 segments = 421.4 s (416.2 to
-    431.1 s). The measured 414.5 s is 1.6% below 421.4.
+    (29.73 to 30.79 s), and 1.6% below the 30.1 s used in the tables.
+  - At this size the executor counts 14 segments: 421.4 s at 30.1 s/segment
+    (416.2 to 431.1 s over the envelope). The measured 414.5 s is 1.6% below 421.4.
 - **Other results.**
   - The proved journal equals the native output. The row also passes every
     accuracy check: rank 40/40 against eps n = 40.16, `min_kept`, and `q_ok`
@@ -412,11 +415,11 @@ byte-identical with `diff` against the clone.
   COMPRESS's work depend on the summary size, which depends on the values. The
   four measured epochs span 102.10M to 103.41M cycles (105 to 107 segments).
   Other data, or another epsilon, will move the GK share (currently 24%).
-- **MODELED is a model.**
+- **Most prove times are computed, not measured.**
   - All four s/segment anchors are CM guests.
   - GK has one proved anchor on the fixed build, at 2,048 records: 29.61
-    s/segment, which agrees with the model (see above). The 16,384-record rows
-    remain extrapolations.
+    s/segment, 1.6% below the 30.1 s used (see above). The 16,384-record rows
+    are segments x 30.1 s; none was proved.
   - `exec_s` is wall-clock on a shared box and is not a metric.
 - **The receipts are separate.** A query also needs the n per-epoch aggregation
   receipts, verified separately; there is no `env::verify` in their design. The

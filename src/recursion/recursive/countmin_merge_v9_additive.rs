@@ -1,40 +1,5 @@
-//! Parallel / additive merge for v9 Count-Min leaves.
-//!
-//! Unlike the sequential [`countmin_merge_v9`] which threads two leaves
-//! via shared-boundary identity (`l_1.final == l_2.initial`), this module
-//! **adds** two sketches cell-wise. Both leaves are proven from an empty
-//! initial state — so each leaf certifies `0 → A_i`. The additive merge
-//! then proves
-//!
-//! > `M[i][j] = A_1[i][j] + A_2[i][j]   for all i ∈ [0, d), j ∈ [0, w)`
-//!
-//! *in-circuit*, and publishes `Com(M)`. The merged state `M` is also
-//! materialized natively in the returned proof so the caller can answer
-//! queries against it directly.
-//!
-//! This is the "merge two count-min sketches by adding their corresponding
-//! cells" pattern — the standard linearity property of Count-Min, lifted
-//! into a verifier-checkable form.
-//!
-//! ### What the returned proof certifies
-//!
-//! - **`recursive_proof`**: a batch-STARK that recursively verifies both
-//!   leaf STARKs (the same `build_and_prove_aggregation_layer` call the
-//!   sequential merge uses).
-//! - **`cell_sum_proof`**: a small standalone STARK that opens `Com(A_1)`,
-//!   `Com(A_2)`, and `Com(M)` via Poseidon2, then asserts the per-cell
-//!   sum relation. Total ~`d·w` field additions plus 3 Poseidon2 hashes —
-//!   small compared to a leaf prove.
-//! - Together: the two proofs certify that **both leaves were valid** *and*
-//!   **their final-state cells sum to `M` cell-wise**.
-//!
-//! ### Usage shape
-//!
-//! Each leaf must be proven from `CountMinV9::new(&params)` (empty initial
-//! state) and you must hand the leaf's resulting cell array back to the
-//! merge so the cell-sum circuit can use it as a private witness. The
-//! merge then exposes `Com(A_1)`, `Com(A_2)`, `Com(M)`, and the cells of
-//! `M` natively.
+//! Additive merge of two v9 Count-Min leaves proven from the empty state: recursive
+//! verification of both leaves plus a small STARK showing `M = A_1 + A_2` cell-wise.
 
 use std::rc::Rc;
 

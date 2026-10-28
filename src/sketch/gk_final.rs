@@ -1,78 +1,5 @@
-//! **Canonical Greenwald–Khanna update circuit** (zkSketch paper §5.4).
-//!
-//! Mirrors the file layout of [`crate::sketch::countmin_final`] but for the
-//! bounded-GK quantile sketch family. The headline differences vs.
-//! count-min:
-//!
-//! - **Tuple-based state.** A GK summary is a sorted list of tuples
-//!   `(value, count, max_error, active)` — *not* a flat counter grid.
-//!   Each tuple is one Challenge element (4 Vals).
-//! - **Active flag built into every row.** Both the state and the batch
-//!   carry per-row `active ∈ {0, 1}` flags. Padded slots have `active = 0`
-//!   and contribute nothing to the sketch — they exist solely to hide
-//!   the *actual* sketch size and batch size from the verifier.
-//! - **No row-hash family.** GK doesn't hash keys into buckets the way
-//!   Count-Min does; values are sorted directly. So there's no `h_i(k)`
-//!   gadget. Privacy comes entirely from the padding.
-//!
-//! ### Privacy guarantees (the user's "protect sensitive information"
-//! goal)
-//!
-//! Everything that's *not* in the commitments is private:
-//!
-//! - The actual number of distinct values in the state (`≤ capacity`).
-//! - The actual number of active records in the batch (`≤ params.batch`).
-//! - The individual values in the batch — only `batch_commit` is exposed.
-//! - The individual tuple contents — only `initial_commit` / `final_commit`
-//!   bind them.
-//!
-//! What the verifier *can* infer from the public side:
-//!
-//! - The **public capacities** `params.capacity` (state) and `params.batch`
-//!   (batch). These are deployment parameters, fixed at compile time and
-//!   shared across all leaves that chain-merge.
-//! - Whatever the release policy `ρ` decides to publish for queries (rank,
-//!   median, etc.).
-//!
-//! So the leakage profile is "public capacities, not actual fill". This
-//! matches the paper's §3.6 leakage discussion for the GK family.
-//!
-//! ### Scope of in-circuit verification
-//!
-//! This file implements the **structural** part of §5.4:
-//!
-//! - Step 1 (bind state + batch via Poseidon2 commits) — ✓
-//! - Steps 2–3 (insert epoch values, initialize new tuple fields) — ✗ deferred
-//! - Step 4 (fix fusion threshold) — ✓ public metadata
-//! - Step 5 (L-round adjacent fusion) — ✗ **deferred** (the most intricate
-//!   piece of the paper; ~⌈log M⌉ rounds of conditional adjacent-pair
-//!   updates with a parity-alternating schedule).
-//! - Step 6 (compact + recommit) — ✓ via active-flag re-ordering
-//! - Step 7 (metadata compatibility) — ✓ via `params.validate()`
-//!
-//! The circuit enforces:
-//!
-//! 1. Poseidon2 bindings between packed state/batch and the three public
-//!    commitments.
-//! 2. Every `active` flag is in `{0, 1}` (`active · (active − 1) = 0`).
-//! 3. Active rows in the new state are sorted (active flag weakly
-//!    decreasing, so padding is at the tail).
-//! 4. **Mass preservation**: total active count in `final_state` equals
-//!    total active count in `initial_state` plus active records in the
-//!    batch. This is a necessary condition for the GK update; not
-//!    sufficient by itself, but observable from the commitments alone.
-//!
-//! What's *not* enforced (would need PermuteAir + adjacent-equality on the
-//! `(value, t)` lexicographic key to mirror §5.4 fully):
-//!
-//! - Strict per-value-sorted ordering of active tuples.
-//! - That every `(value, count)` in `final_state` derives from a unique
-//!   subset of `initial_state` ∪ `batch`.
-//! - The fusion threshold inequality from Step 5.
-//!
-//! These are intentional simplifications, documented for follow-up. The
-//! native side computes the full GK update; the in-circuit proof certifies
-//! only the structural invariants above.
+//! Structural GK leaf (baseline): binds the commitments and checks active flags, padding
+//! order and mass conservation, but not the insert or fusion steps.
 
 use std::rc::Rc;
 
@@ -430,8 +357,7 @@ pub fn apply_update(state: &mut GKFinalState, u: &GKFinalUpdate) {
 
 /// Prove one GK update epoch under the simplified §5.4 design.
 ///
-/// **What's certified** (under the simplifications listed in the module
-/// docstring):
+/// **What's certified** (the insert and fusion steps are not):
 ///
 /// - `initial_state` opens to `proof.initial` (Poseidon2 binding).
 /// - `final_state` opens to `proof.final_` (Poseidon2 binding).

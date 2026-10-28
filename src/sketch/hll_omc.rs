@@ -1,62 +1,4 @@
-//! **Offline-memory-checking HyperLogLog leaf (`omc`)** — the sound,
-//! cross-state realization of the §"Pattern A" Step-5 rebind applied to
-//! HyperLogLog, the max-update analogue of [`super::countmin_omc`].
-//!
-//! HLL keeps `m = 2^b` registers; a record routes to one register
-//! `idx = digest[0] mod m` and contributes a rank `ρ = 1 +
-//! trailing_zeros(digest[1])`. The per-register update is a **max**
-//! (`S_t[idx] = max(S_{t-1}[idx], {ρ routed})`), not the additive patch of
-//! Count-Min — that is the only semantic difference from `countmin_omc`.
-//!
-//! ## The check
-//!
-//! Treat the `m` registers as timestamped memory; each element is `(addr,
-//! value, ts)`. The rebind is one **offline-memory-checking** multiset
-//! equality between a write set and a read set:
-//!
-//! ```text
-//!   WS = {(a, S_{t-1}[a], 0)}  ⊎  {(a_z, N_z, 1)}      (init writes ⊎ update writes)
-//!   RS = {(a, S_t[a], ft_a)}   ⊎  {(a_z, O_z, 0)}      (final reads ⊎ update reads)
-//!   WS  ==  RS        (as multisets over (addr, value, ts))
-//! ```
-//!
-//! with `ft_a ∈ {0,1}`. The time coordinate is what makes it sound under a
-//! **max** update: at a touched register the `ts=0` init write can only
-//! cancel the `ts=0` update read, forcing `O_z == S_{t-1}[a]` (the genuinely
-//! committed old value); the `ts=1` update write then forces `S_t[a] == N_z`.
-//! Every untouched register is pinned `S_{t-1}[u] = S_t[u]` (its init write
-//! cancels its `ts=0` final read). Without `ts` a max whose write equals its
-//! read (`N_z = O_z`) admits a degenerate pairing that lets a prover suppress
-//! updates — the additive Count-Min avoids this only because its delta ≥ 1
-//! keeps write ≠ read.
-//!
-//! A companion **max gate** (`N_z ≥ O_z`, `N_z ≥ A_z`, `(N_z−O_z)(N_z−A_z)=0`,
-//! all operands range-checked to `RANK_BITS`) explains the touched update,
-//! where `A_z = max{ρ routed to a_z}` is a per-register running max over the
-//! keys sorted by register. `O[a]/N[a]` are bound to the public
-//! `(init_commit, final_commit)` by decomposing the same Poseidon-committed
-//! register cells (the dense commitment [`super::countmin_omc`] uses).
-//!
-//! ## Cost
-//!
-//! The rebind is one [`CircuitBuilder::add_permute`] over `m + batch`
-//! tagged `(addr, val, ts)` elements plus the dense commit/decompose of both
-//! ends and the `Θ(batch)` sort + per-record hash: **`Θ(m + batch)`**,
-//! flat in the batch's sparsity (unlike the sparse Merkle leaf, whose
-//! `Θ(t_max·log m)` routing grows with the touched-register count).
-//!
-//! ## Hiding commitments (revision B2)
-//!
-//! [`build_hll_omc_leaf_commit`] with [`CommitMode::Hiding`] salts the three
-//! commitments (`Com(S_{t-1})`, `Com(S_t)`, `Com(B_t)`) as described in
-//! [`crate::commitment::hiding`], under the [`CommitFamily::HyperLogLog`]
-//! tag; the natives are [`commit_hll_omc_with`] and
-//! [`hll_omc_batch_commit_salted`], the prover entry point is
-//! [`HllOmcLeafCircuit::prove_epoch_commit`] and the no-op leaf's is
-//! [`HllOmcLeafCircuit::prove_epoch_public_zero`]. In this module the
-//! commitment randomizers are called salts or openings: `ρ` is the HLL
-//! rank. [`CommitMode::Plain`] (every pre-B2 API) is byte-identical to the
-//! pre-B2 leaf.
+//! HLL `omc` leaf: timestamped offline memory checking for the max update, Θ(m + batch).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -1251,7 +1193,7 @@ impl HllOmcLeafCircuit {
         // The `ts` breaks the max-degenerate pairing: a touched cell's ts=0 init
         // write can only cancel the ts=0 update read, forcing O == committed old
         // value (a plain additive Count-Min needs no `ts`, but max's write==read
-        // case does — see the soundness note in the module header).
+        // case does: without `ts` a prover could suppress an update).
         let o_cells_native: Vec<u32> = init_state.counters[0].clone();
         let n_cells_native: Vec<u32> = committed_final.counters[0].clone();
         // ft_a = 1 iff register a is touched (its final value was written at ts=1).

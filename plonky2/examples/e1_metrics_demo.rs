@@ -1,22 +1,5 @@
-//! E1 — circuit-cost runner for the **plonky2 (SNARK)** backend (EVAL_SPEC E1/§1).
-//!
-//! Benches each family leaf (CM `one_hot`; HLL `one_hot` + sparse `merkle`;
-//! SS/GK certified) over a configurable
-//! S³-dataset slice with `1 warm-up + N trials`, capturing the full §1 metric
-//! set via [`zksketch_snark::metrics`] — witness/prove/verify split (the leaves'
-//! `prove_timed`), `prove_total` median+p95, proof size, trace_rows·num_columns,
-//! and **peak RSS** — and appends one row per `(family, m)` to
-//! `plonky2/results/e1_circuit.csv` plus an `env.json`. The schema matches the
-//! plonky3 runner (`../examples/exp_e1.rs`) so the two CSVs merge directly,
-//! including its per-row `commit` column (the commitment mode a row was proved
-//! under): always `plain` here, since this backend has no hiding commitments.
-//!
-//! Run (small slice, default): `cargo run --release --example e1_metrics_demo` (from plonky2/; the pinned nightly is auto-selected)
-//! Configure (env): EXP_DATASET=uniform|gaussian|zipf|aol|netflix
-//!   EXP_M=4,8,16,32   EXP_TRIALS=5   EXP_WARMUP=1
-//! Real datasets need `python3 ../scripts/fetch_datasets.py` first (shared
-//! `../data/*.keys`). The runner consumes `max(EXP_M)` keys per family (a small
-//! testing slice); raise EXP_M for larger runs.
+//! E1 on plonky2: leaf circuit cost per family (time, proof size, RSS), appended to plonky2/results/e1_circuit.csv.
+//! Usage: cd plonky2 && EXP_DATASET=uniform EXP_M=4,8,16,32 cargo run --release --example e1_metrics_demo
 
 use zksketch_snark::dataset::{aol, netflix, synthetic_stream, take, zipf_stream, Synthetic};
 use zksketch_snark::leaf::countmin_final::{build_countmin_final_leaf, empty_state as cm_empty, CmFinalParams};

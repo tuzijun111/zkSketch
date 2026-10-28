@@ -45,8 +45,8 @@ guest outside their pipeline.
 `../six/run_all.sh build` builds it into `~/ext-baselines/build/zka-mg`. Its unit
 tests: `cargo test --release` in this directory (needs the `../.zka` link that
 `../common.sh` creates). The six-sketch runs (`../six/run_all.sh memmatch |
-sweep | queryrate`) call `release/mg` for family `ss`.
+sweep | queryrate`) call `release/mg` for family `ss` (the default, `SIX_ZKA_HH=mg`).
 
-The paper's published zk-Analytics heavy-hitter numbers (Table 2, the batch-size
-figure, Table 6) were measured with `../spacesaving/` before this port existed;
-re-running those modes measures this port.
+The paper's zk-Analytics heavy-hitter numbers (Tables 2 and 3, Figure 5) were
+measured with `../spacesaving/` before this port existed; `SIX_ZKA_HH=spacesaving`
+re-runs that port, and the default measures this one.

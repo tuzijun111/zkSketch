@@ -1,6 +1,6 @@
 # Reproducing the zkSketch vs zk-Analytics comparison (six sketches, one machine): full guide
 
-(Moved here from the top-level README on 2026-10-18; the README keeps the short version. The reference numbers and the step-by-step configuration are in [`scripts/baselines/zka/README.md`](../scripts/baselines/zka/README.md), section "Six-sketch comparison (small scale)".)
+Reference numbers and the step-by-step configuration are in [`scripts/baselines/zka/README.md`](../scripts/baselines/zka/README.md), section "Six-sketch comparison (small scale)".
 
 **What it measures.** zkSketch against zk-Analytics (Zhu et al., "Zero-Knowledge
 Cloud Analytics", SIGCOMM '26; a RISC Zero zkVM pipeline, cloned at `d4a5a9a`) on
@@ -10,8 +10,8 @@ six sketches: Count-Min (3 x 1024), HyperLogLog (b = 14), Misra-Gries
 nothing to download). zk-Analytics ships only Count-Min. **For the other five
 sketches the zk-Analytics side is our code inside their per-epoch RISC Zero pipeline
 (marked † in every table), not zk-Analytics code: plain textbook per-record HLL,
-Misra-Gries (`scripts/baselines/zka/mg`; until 2026-10-26 SpaceSaving,
-`scripts/baselines/zka/spacesaving`, which produced the published runs), Bloom and KMV,
+Misra-Gries (`scripts/baselines/zka/mg`, `SIX_ZKA_HH=mg`, the default) or SpaceSaving
+(`scripts/baselines/zka/spacesaving`, `SIX_ZKA_HH=spacesaving`, which produced the paper's runs), Bloom and KMV,
 and for Greenwald-Khanna zkSketch's own GK algorithm.**
 GK is the one sketch where "the same sketch" leaves the algorithm open (zkSketch
 certifies a two-sided band-merge batch rule, textbook GK is per-record INSERT /
@@ -139,8 +139,8 @@ then query proving), followed by the list of result files. With `GATE_WAIT_S=0` 
 |---|---|---|---|---|
 | `check` | tools and versions, RAM, cores, disk, dataset, builds | seconds | - | - |
 | `build` | clones zk-Analytics (5 MB); builds the 7 zk-Analytics-side drivers (their CM, which also embeds the CM `noroot` guest; our † ports, each with its `designed` / `noroot` guest; GK twice: the matched port and the textbook reference) and zkSketch's `exp_compose` | about 7-8 min on the 32-core reference machine, including the first-time download of crates, the pinned forks and zk-Analytics (a cold build with an empty cargo cache took 7 min 16 s, measured before the matched GK driver was added: the six zk-Analytics-side drivers of then 5 min 10 s, `exp_compose` 2 min 5 s); much faster when nothing changed | 1.8 GB for `exp_compose` (zk-Analytics side not measured) | ~13 GB under `$BASELINE_DIR/build`, ~0.3 GB in `target/` |
-| `quick` | zkSketch: 7 runs at N = 512 (2 batches of 256). zk-Analytics: executor for all six (`noroot`, plus `designed` for the Count-Min reference and the root-work table), 4 real proofs (`cm:aggr:0:noroot`, `kmv:aggr:0:noroot`, `gk:query:1:<v>`, `bloom:query:1:key:<k>`), the other 24 of 28 planned jobs ESTIMATED (their shipped Count-Min among them: 14 segments of 2^20 cycles at 256 records, about 7 min if proved) | 5-11 min here (2026-10-18, stable GK + packed Bloom defaults: 5 min 27 s in all, zkSketch 3 min 16 s; before M2/M3 9-11 min, zkSketch 6.5-8 min; zk-Analytics executor ~10 s, the 4 proofs ~2 min) | ~9.2 GiB (one r0vm proof; zkSketch runs up to 6.6 GiB today, 8.4 GiB before M2/M3) | < 1 MB |
-| `full` | zkSketch: 7 runs at N = 16,384 (8 batches of 2,048). zk-Analytics: executor (`noroot`, plus `designed` for the reference), then 42 proofs: aggregation epochs 0 and 7 of every family as `noroot` (12), queries at n = 1, 2, 4, 8, Bloom with an inserted and an absent key (28), and their shipped Count-Min at epochs 0 and 7 as the reference (2, last) | about 3 h 15 min of running, an ESTIMATE: zkSketch's 7 runs ~15-25 min (extrapolated per leaf and per merge from the 2-batch probe of 2026-10-19 in Notes, 6.1 min for all 7 runs at 2 batches; the reference run's non-ZK build took ~10 min), the zk-Analytics executor ~2 min, and the 42 proofs about 2 h 50 min, from segment counts x ~30 s per segment of 2^20 cycles (the rate of the reference run): the 12 `noroot` aggregation proofs 150 segments (147 x 2^20 padded cycles), ~74 min; the 2 Count-Min reference proofs 48 segments, ~24 min (the same guest took 712 and 713 s in the 2026-10-09 reference run); the 28 queries ~58 min, as in that run (the 74 min uses the textbook GK's segment counts; the matched GK's two noroot aggregation proofs at (2048, 2048) with the default `literal` are about 29.25 + 30.0 x 2^20 padded cycles, against about 13.25 x 2^20 each for textbook GK, so about 17 min more, included in the totals here; its queries open one compact state instead of merging n summaries). Plus the quiet-machine waits (1 h 17 min for 47 jobs in the reference run, so about 1 h 20 min for 49; see Notes). `SIX_ZKA_CM_REF=0`: 40 proofs, about 3 h 5 min in all; `SIX_ZKA_ROOTS=designed,noroot`: 52 proofs (the 12 `designed` ones add 176 segments, ~88 min), about 4 h 30 min | zkSketch GK run ~15 GiB (ZK build, default circuits; see Notes); r0vm ~9.2 GiB per proof; one job at a time | < 100 MB |
+| `quick` | zkSketch: 7 runs at N = 512 (2 batches of 256). zk-Analytics: executor for all six (`noroot`, plus `designed` for the Count-Min reference and the root-work table), 4 real proofs (`cm:aggr:0:noroot`, `kmv:aggr:0:noroot`, `gk:query:1:<v>`, `bloom:query:1:key:<k>`); the other 24 of 28 planned jobs are executed only, their time = padded cycles x the seconds per 2^20 padded cycles of the 4 proofs, marked `est` (their shipped Count-Min among them: 14 segments of 2^20 cycles at 256 records, about 7 min if proved) | 5-11 min here (2026-10-18, stable GK + packed Bloom defaults: 5 min 27 s in all, zkSketch 3 min 16 s; before M2/M3 9-11 min, zkSketch 6.5-8 min; zk-Analytics executor ~10 s, the 4 proofs ~2 min) | ~9.2 GiB (one r0vm proof; zkSketch runs up to 6.6 GiB today, 8.4 GiB before M2/M3) | < 1 MB |
+| `full` | zkSketch: 7 runs at N = 16,384 (8 batches of 2,048). zk-Analytics: executor (`noroot`, plus `designed` for the reference), then 42 proofs: aggregation epochs 0 and 7 of every family as `noroot` (12), queries at n = 1, 2, 4, 8, Bloom with an inserted and an absent key (28), and their shipped Count-Min at epochs 0 and 7 as the reference (2, last) | about 3 h 15 min of running, the sum of these parts (`full` has not been run as a whole on the zero-knowledge build): zkSketch's 7 runs ~15-25 min (the per-leaf and per-merge times of the 2-batch probe of 2026-10-19 in Notes, 6.1 min for all 7 runs at 2 batches, scaled to 8 batches; the reference run's non-ZK build took ~10 min), the zk-Analytics executor ~2 min, and the 42 proofs about 2 h 50 min, from segment counts x ~30 s per segment of 2^20 cycles (the rate of the reference run): the 12 `noroot` aggregation proofs 150 segments (147 x 2^20 padded cycles), ~74 min; the 2 Count-Min reference proofs 48 segments, ~24 min (the same guest took 712 and 713 s in the 2026-10-09 reference run); the 28 queries ~58 min, as in that run (the 74 min uses the textbook GK's segment counts; the matched GK's two noroot aggregation proofs at (2048, 2048) with the default `literal` are about 29.25 + 30.0 x 2^20 padded cycles, against about 13.25 x 2^20 each for textbook GK, so about 17 min more, included in the totals here; its queries open one compact state instead of merging n summaries). Plus the quiet-machine waits (1 h 17 min for 47 jobs in the reference run, so about 1 h 20 min for 49; see Notes). `SIX_ZKA_CM_REF=0`: 40 proofs, about 3 h 5 min in all; `SIX_ZKA_ROOTS=designed,noroot`: 52 proofs (the 12 `designed` ones add 176 segments, ~88 min), about 4 h 30 min | zkSketch GK run ~15 GiB (ZK build, default circuits; see Notes); r0vm ~9.2 GiB per proof; one job at a time | < 100 MB |
 
 `full --dry-run` prints the plan, including the 42 zk-Analytics jobs, and runs
 nothing. Times are for the 32-core machine above.
@@ -181,8 +181,8 @@ What changes in the tables:
 
 | step | what it does | time | peak RAM | disk |
 |---|---|---|---|---|
-| `memmatch` | T = 1 epoch per family (`--epochs T` for more): zkSketch 7 runs, CM / HLL / Bloom 16,384 records = 16 leaves of 1,024 + 15 merges, SS / KMV 16,384 = 4 x 4,096 + 3, GK 2,048 = 4 x 512 + 3 at capacity 768; zk-Analytics executor, then 14 proofs: aggregation epoch 0 of every family as `noroot` (6; the matched GK with `--m-sub 512`), queries at n = 1 (7, Bloom with an inserted and an absent key), their shipped Count-Min at epoch 0 (1, last) | about 5 h 30 min of running, an ESTIMATE: the 16,384-record aggregation proofs ~2,500-3,100 s each (85-104 segments of 2^20 cycles x ~30 s; memmatch-20261014), GK ~930 s (31 segments; M3), the queries and zkSketch's 7 runs (~13 min of proving) ~40 min; plus the quiet-machine waits. `--epochs 2`: 28 proofs, about twice that | each zkSketch process < 9 GiB (the M2/M3 shapes: 4.9-5.2 GiB combined for Bloom and GK; HLL's coordinator reaches 8.5 GiB in its query phase); r0vm ~9.4 GiB per proof | < 50 MB |
-| `memmatch --quick` | the same pipeline at tiny scale, T = 2: CM / HLL / Bloom epochs of 256 = 2 leaves of 128, SS / KMV 256 = one leaf, GK 512 = 4 x 128 at capacity 384; zk-Analytics executor, 5 real proofs (`SIX_QUICK_PROVE`, as `quick`; `bloom:query:1:key` selects both Bloom queries, since with k > 1 the inserted key is named too), the other 23 of 28 planned jobs ESTIMATED | 8 min 10 s here (2026-10-19, `c9d38fb`, an otherwise idle machine: zkSketch's 7 runs 5 min 48 s, the zk-Analytics executor, query executor and profile 6 s, the 5 proofs 2 min 16 s) | ~9.4 GiB (one r0vm proof) | < 1 MB |
+| `memmatch` | T = 1 epoch per family (`--epochs T` for more): zkSketch 7 runs, CM / HLL / Bloom 16,384 records = 16 leaves of 1,024 + 15 merges, SS / KMV 16,384 = 4 x 4,096 + 3, GK 2,048 = 4 x 512 + 3 at capacity 768; zk-Analytics executor, then 14 proofs: aggregation epoch 0 of every family as `noroot` (6; the matched GK with `--m-sub 512`), queries at n = 1 (7, Bloom with an inserted and an absent key), their shipped Count-Min at epoch 0 (1, last) | 8 h 12 min for the reference run under `taskset -c 0-31` (2026-10-22: zkSketch 29 min, the 14 zk-Analytics proofs 7 h 42 min; a 16,384-record aggregation proof is 85-104 segments of 2^20 cycles, GK 31). `--epochs 2`: 28 proofs, about twice that | each zkSketch process < 9 GiB (the M2/M3 shapes: 4.9-5.2 GiB combined for Bloom and GK; HLL's coordinator reaches 8.5 GiB in its query phase); r0vm ~9.4 GiB per proof | < 50 MB |
+| `memmatch --quick` | the same pipeline at tiny scale, T = 2: CM / HLL / Bloom epochs of 256 = 2 leaves of 128, SS / KMV 256 = one leaf, GK 512 = 4 x 128 at capacity 384; zk-Analytics executor, 5 real proofs (`SIX_QUICK_PROVE`, as `quick`; `bloom:query:1:key` selects both Bloom queries, since with k > 1 the inserted key is named too); the other 23 of 28 planned jobs are executed only and marked `est`, as in `quick` | 8 min 10 s here (2026-10-19, `c9d38fb`, an otherwise idle machine: zkSketch's 7 runs 5 min 48 s, the zk-Analytics executor, query executor and profile 6 s, the 5 proofs 2 min 16 s) | ~9.4 GiB (one r0vm proof) | < 1 MB |
 
 `memmatch` needs no more machine than `quick` (16 GiB RAM). `memmatch --dry-run` prints
 the per-family plan (epoch, k x leaf, the exp_compose shape, the zk-Analytics GK's
@@ -203,7 +203,7 @@ environment variable would not reach r0vm):
 
 ```bash
 taskset -c 0-31 scripts/baselines/zka/six/run_all.sh memmatch             # one epoch per sketch: the paper's comparison table
-taskset -c 0-31 scripts/baselines/zka/six/run_all.sh memmatch --epochs 64 # N = 2^20 records (GK 2^17), about two days (estimate; not yet run)
+taskset -c 0-31 scripts/baselines/zka/six/run_all.sh memmatch --epochs 64 # N = 2^20 records (GK 2^17); not run yet
 ```
 
 Verified with a 2-segment KMV proof: unrestricted, r0vm used 129 threads on all 64 CPUs
@@ -215,13 +215,40 @@ kept in `scripts/baselines/zka/results/memmatch-20261022-205419/`. The second co
 plan (`--dry-run`): zkSketch 1,024 leaves + 1,023 merges per family (256 + 255 for SS,
 KMV and GK), zk-Analytics 63 proofs (aggregation epochs 0 and 63 of every family, 49
 queries at n = 1, 2, 4, ..., 64 (seven per query series), the Count-Min reference at both
-epochs), the stream total derived as 64 x the mean of the two proved epochs; it has only
+epochs), the stream total being 64 x the mean of the two proved epochs; it has only
 been smoke-tested at `--quick --epochs 2`.
 
-**The batch-size sweep (`sweep`).** `run_all.sh sweep [--min E] [--max E] [--sizes 6,8,10] [--quick] [--dry-run] [--resume]` (`six/sweep.sh`) compares both systems on ONE batch of m = 2^E records per size, E = 6..14 by default, for all six sketches: zkSketch proves the batch as one leaf (`SIX_T=1`, k = 1, a query after it; GK capacity 2,048 with s = 51 on both sides, the matched zk-Analytics GK with `--m-sub m`; the Bloom leaf is `packed` while 7 x m < 2^16 and `omc` at m = 16,384, `SIX_BLOOM_VARIANT` forces one), zk-Analytics as one `noroot` epoch-0 receipt (no shipped-CM reference, `SIX_ZKA_CM_REF=0`). Each size runs the usual chain in its own directory `$RESULTS/m<EE>` (`run_zks.sh` for the six families, `run_zka.sh exec`, `run_zka.sh prove` of the six aggregation jobs, `assemble.py --m m --t 1` + `table.py`), so every `m<EE>/six_sketch_table.md` is an ordinary one-epoch comparison (`run_all.sh assemble <dir>` re-tables it); `sweep_table.py` then writes `sweep.csv` and `sweep_table.md`: a cross-size table of the prove-time ratio zkA / zkS, prove time per record, and per family m as rows with prove, ms per record, verify, proof bytes and peak RSS of both sides, their ratios and the zkSketch circuit variant (omc Bloom rows marked; the conventions line reports the cores and verify repeats the runs used, a single-call zkS verify is marked `1st`). A failed run or proof leaves `-` and makes the exit status 1 (`SIX_FAIL_FAST=1` stops at the first failure; a zkSketch run that reports `too_large` is set aside as `.csv.failed` so the other families, and the zk-Analytics proofs, are still tabled); `--resume` skips finished sizes and redoes an unfinished one; `--dry-run` prints the plan with time estimates (about 12-16 h for E = 6..14, the 2^14 size alone 5-7 h, from the executor's cycles per record, the matched GK guest's cost in capacity + m, r0vm's measured 33-44 s per 2^20-cycle segment and the memmatch leaf rates; the large HLL and GK leaves run slower than linear). The sweep is a scaling probe, not the paper's memory-matched comparison: a 2^13-2^14-record zkSketch leaf is one monolithic proof and takes tens of GiB (GK, HLL), where `memmatch` stays under 8 GiB. `--quick` is its ~15-20 min smoke test (m = 64 and 128, GK capacity 512 as `quick` unless `SIX_GK_CAP` is set, since the matched GK guest's cost grows with the capacity: ~25 min at 2,048; no gate wait, stop at the first failure); the manifest records the per-size shape, where the capacity came from, and every step's time. The reference run
+**The batch-size sweep (`sweep`).** `run_all.sh sweep [--min E] [--max E] [--sizes 6,8,10] [--quick] [--dry-run] [--resume]` (`six/sweep.sh`) compares both systems on ONE batch of m = 2^E records per size, E = 6..14 by default, for all six sketches: zkSketch proves the batch as one leaf (`SIX_T=1`, k = 1, a query after it; GK capacity 2,048 with s = 51 on both sides, the matched zk-Analytics GK with `--m-sub m`; the Bloom leaf is `packed` while 7 x m < 2^16 and `omc` at m = 16,384, `SIX_BLOOM_VARIANT` forces one), zk-Analytics as one `noroot` epoch-0 receipt (no shipped-CM reference, `SIX_ZKA_CM_REF=0`). Each size runs the usual chain in its own directory `$RESULTS/m<EE>` (`run_zks.sh` for the six families, `run_zka.sh exec`, `run_zka.sh prove` of the six aggregation jobs, `assemble.py --m m --t 1` + `table.py`), so every `m<EE>/six_sketch_table.md` is an ordinary one-epoch comparison (`run_all.sh assemble <dir>` re-tables it); `sweep_table.py` then writes `sweep.csv` and `sweep_table.md`: a cross-size table of the prove-time ratio zkA / zkS, prove time per record, and per family m as rows with prove, ms per record, verify, proof bytes and peak RSS of both sides, their ratios and the zkSketch circuit variant (omc Bloom rows marked; the conventions line reports the cores and verify repeats the runs used, a single-call zkS verify is marked `1st`). A failed run or proof leaves `-` and makes the exit status 1 (`SIX_FAIL_FAST=1` stops at the first failure; a zkSketch run that reports `too_large` is set aside as `.csv.failed` so the other families, and the zk-Analytics proofs, are still tabled); `--resume` skips finished sizes and redoes an unfinished one; `--dry-run` prints the plan with expected run times (about 12-16 h for E = 6..14, the 2^14 size alone 5-7 h, computed from the executor's cycles per record, the matched GK guest's cost in capacity + m, r0vm's measured 33-44 s per 2^20-cycle segment and the memmatch leaf rates; the large HLL and GK leaves run slower than linear). The sweep is a scaling probe, not the paper's memory-matched comparison: a 2^13-2^14-record zkSketch leaf is one monolithic proof and takes tens of GiB (GK, HLL), where `memmatch` stays under 8 GiB. `--quick` is its ~15-20 min smoke test (m = 64 and 128, GK capacity 512 as `quick` unless `SIX_GK_CAP` is set, since the matched GK guest's cost grows with the capacity: ~25 min at 2,048; no gate wait, stop at the first failure); the manifest records the per-size shape, where the capacity came from, and every step's time. The reference run
 (2026-10-24/25, 19 h 47 min: zkSketch 1 h 27 min, zk-Analytics 54 proofs 18 h 20 min) is kept in
-`scripts/baselines/zka/results/sweep-20261024-195453/`; `scripts/plot_sweep.py <dir>` renders its `sweep.csv` as the
-paper's figure `latex/pics/zkSketch_eval_sweep.pdf` (needs matplotlib).
+`scripts/baselines/zka/results/sweep-20261024-195453/`; `scripts/plot_sweep.py <dir>` renders a raw `sweep.csv`
+(needs matplotlib).
+
+**The paper's batch-size figure (Figure 5) is the sweep in Table 2's memory-matched setting**, every
+zkSketch point measured. `six/batches.sh [--families LIST] [--sizes 6,...,14] [--zka-gk] [--dry-run] [--resume]`
+runs the zkSketch side: for each sketch and m = 2^6 .. 2^14, ONE batch of m records proved within
+zk-Analytics' memory, as one leaf when m <= L and otherwise as m/L leaves of the `memmatch` leaf L (1,024
+records for CM/HLL/Bloom, 4,096 for MG/KMV, 512 for GK at capacity 768) plus compositions, each through
+`run_zks.sh` with the `memmatch` environment except the epoch size (54 runs, about 1 h 25 min: 51 min of
+proving and about 30 min of quiet-box gate waits between runs). It first waits while another prover or
+harness script is running, so it can be queued behind a run that is finishing. `--zka-gk` adds the
+zk-Analytics matched GK receipt at capacity 768 for m = 2^6 (`run_zka.sh prove`, about 3 min).
+`scripts/sweep_memmatch.py [--sweep DIR] [--memmatch DIR] [--batches DIRS] [--gk768 DIR] [--out DIR]` then
+takes, per sketch and batch size, zkSketch's `total_time_ms` (leaves + compositions + setup, queries
+excluded: Table 2's definition of an epoch's proving time) from the newest batches run holding the point
+(the sweep's single leaves are a fallback for m <= L), and at Table 2's epoch from the `memmatch` run itself,
+so the figure's last point equals Table 2 (a batches run of that epoch is printed beside it as a check);
+zk-Analytics' measured receipt comes from the sweep and, at m = 2^14, from `memmatch`. The zk-Analytics GK
+receipts at capacity 768 other than m = 2^6 and Table 2's 2^11 are not proved: their time is padded cycles / 2^20 x
+the seconds per 2^20 padded cycles of those two measured receipts, with the cycle counts of the matched GK executor at
+steps of min(m, 512) records (`gk768_exec.csv`, produced by the script when missing); the same rule reproduces the
+sweep's nine capacity-2,048 receipts within 1.2%. The script refuses a missing or mis-shaped zkSketch run. Its
+output `scripts/baselines/zka/results/sweep-memmatch/sweep_memmatch.csv` marks each point's `zks_basis` /
+`zka_basis`, its source run and `anchor = 1` at Table 2's epoch; `scripts/plot_sweep.py` draws every series solid, titles
+each panel with the sketch name only and prints no speedup labels; `sweep_memmatch.md` lists every point. The kept
+run behind the paper's figure is `scripts/baselines/zka/results/batches-20261028-153827/` (54 runs, 86 min,
+all quiet-gated, worker peaks 0.4-7.3 GiB); it re-measured Table 2's six epochs 2.0-10.5% faster than the
+`memmatch` run, whose values the figure keeps at those points. The capacity-768 zk-Analytics GK receipt at
+m = 2^6 and `gk768_exec.csv` are in `scripts/baselines/zka/results/sweep-gk768-20261028-143107/`.
 
 **The query-rate experiment (`queryrate`).** The paper's mixed operation stream, one query every Q positions, for
 all six families: `run_all.sh queryrate [--q LIST] [--n N] [--quick] [--dry-run]` (`six/queryrate.sh`) proves N = 2^17 AOL positions with zkSketch at Q = 1,000,
@@ -229,14 +256,18 @@ all six families: `run_all.sh queryrate [--q LIST] [--n N] [--quick] [--dry-run]
 (`EXP_COMPOSE_QUERY_EVERY_OPS=Q`, `EXP_QUERY_KEY_MODE=uniform_stream`); a query landing mid-leaf seals and pads the
 leaf (`query_split_leaves`, `query_pad_records`). zk-Analytics answers a query only at an epoch end, by a query proof
 merging the n epoch summaries so far, so a query every Q positions means epochs of Q records and N/Q query proofs of
-growing cost: a total that cannot be run and is MODELED by `queryrate_model.py` from measured parts, A(Q) = its
-aggregation proof at E = Q (real receipts at E <= 10,000, else executor padded cycles x k, k = s per 2^20 cycles calibrated
-over all real proofs of the run) and q(n) = a + bn fitted to its query executor at n = 1..64 over 4,096-record epochs
-(real proofs at n = 1 and 8; the SS/KMV summaries are saturated there as at every Q >= 10,000, so Q = 1,000 is slightly
-overstated), total(Q) = T A(Q) + aT + bT(T+1)/2 for T = floor(N/Q), flagged `extrapolated` beyond n = 64 and `estimated`
-without a receipt; every epoch is charged at epoch 0's cost and each period's last update is counted in the next epoch.
-Treat the zk-Analytics column as a derived bound, not a measurement; a GK capacity preflight (gk_matched executor
-over all N records at capacity 768) runs first, since the deployed capacity is empirical. `--quick` (N = 1,024, Q = 100
+growing cost. That total is too long to run, so `queryrate_model.py` computes it from measured parts: A(Q) = its
+aggregation proof at E = Q (real receipts at E <= 10,000, else executor padded cycles x k, k = seconds per 2^20 padded
+cycles over all real proofs of the run) and q(n) = a + bn, a least-squares line through its query executor rows (padded
+cycles x k) at n = 1..64 over 4,096-record epochs (real proofs at n = 1 and 8; the SS/KMV summaries are saturated there as
+at every Q >= 10,000, so Q = 1,000 is slightly overstated), total(Q) = T A(Q) + aT + bT(T+1)/2 + (N - TQ) A(Q)/Q for
+T = floor(N/Q); the last term charges the records after the last query at the epoch's cost per record (`queryrate_model.py
+--tail skip` drops it, as the archived 2026-10-23 table does). The CSV column `zka_total_flag` is `beyond_measured_n` when T
+exceeds the largest measured n (64), else `within`; `zka_A_source` is `measured` (a receipt), `cycles` (padded cycles x k,
+no receipt) or `n/a` (the archived run predates these two names). Every epoch is charged at epoch 0's cost,
+and each period's last update is counted in the next epoch. The zk-Analytics column is computed from these parts, not
+measured end to end. A GK capacity preflight (gk_matched executor over all N records at capacity 768) runs first, since
+the deployed capacity is empirical. `--quick` (N = 1,024, Q = 100
 and 1,000, zk-Analytics epochs of 100 records over n = 1..8, aggregation proofs at E = 100 and query proofs at n = 1 only)
 is its ~40 min smoke test. Outputs: `queryrate.csv`, `queryrate_table.md`, the per-run `qr_zks_<group>_q<Q>.csv` and the
 `zka_epoch_E<Q>/`, `zka_query_E<Eq>_T<Tq>/` subdirectories. The reference run (2026-10-23/24, 17 h 40 min: zkSketch
@@ -268,8 +299,12 @@ tables at the end.
 - `six_sketch_comparison.csv`: one row per (family, system, root variant,
   operation); `variant` and `root_construction` name the zk-Analytics variant of the
   update and accept rows (`-` on query and zkSketch rows; the Count-Min reference rows
-  are `designed`, and their `note` says they are the reference); `provenance` says
-  measured, sampled, derived or ESTIMATED, and `detail` says how.
+  are `designed`, and their `note` says they are the reference); `provenance` is
+  `measured`, `sampled` (the mean of the proved epochs), `computed` (from other
+  rows, e.g. T x the per-epoch time) or `FROM CYCLES` (not proved: padded cycles x the
+  seconds per 2^20 padded cycles of the run's proofs; tables mark these `cyc`), and
+  `detail` gives the computation. Runs assembled before 2026-10-29 write the last two
+  as `derived` and `ESTIMATED` (marked `est`).
 - `manifest.txt` (configuration, commits, tool versions, per-step times),
   `run_all.log` (the console), and the raw files: zkSketch
   `six_zksketch_<tag>.csv/.log` and `six_zksketch_runs.csv`; zk-Analytics
@@ -278,7 +313,7 @@ tables at the end.
   `six_zka_<family>_prove.csv/.log` (proved families only) + `six_zka_jobs.csv`,
   `six_zka_prof_ss.csv` (+ `six_zka_prof_gk.csv` only with `SIX_ZKA_GK=textbook`) + `six_zka_prof.log` (guest profile), `zka_plan.txt`,
   and in `quick` also `six_zka_<family>_qexec.csv`, `six_zka_qexec.log`,
-  `six_zka_qexec_jobs.csv` (the cycle counts behind the estimates). Per-batch proofs
+  `six_zka_qexec_jobs.csv` (the cycle counts the `est` times are computed from). Per-batch proofs
   go to a `work/` scratch subdirectory that is deleted after each zkSketch run.
   Outside the results directory, each zkSketch run also (over)writes
   `results/env.json` at the repository root (exp_compose's machine snapshot;
@@ -287,7 +322,7 @@ tables at the end.
 `quick` checks the pipeline end to end; it is not a measurement. With 2 batches of
 256 records its costs and ratios differ from `full`, and its `est` cells are the
 executor's padded cycle count of that job's variant x the seconds per 2^20 padded
-cycles of that run's 4 proofs. Over the 40 proofs of the reference run this model gave
+cycles of that run's 4 proofs. Over the 40 proofs of the reference run, this computation gave
 between 5% below and 9% above the measured time for proofs of at least 2^19 padded
 cycles, and 19-37% below for proofs of at most 2^18 (fixed overhead).
 
@@ -303,6 +338,7 @@ cycles, and 19-37% below for proofs of at most 2^18 (fixed overhead).
 | `SIX_ZKA_ROOTS` | `noroot` | the zk-Analytics aggregation variants executed and proved (any comma list of `designed`, `noroot`, `legacy`); `full` proves 12 aggregation jobs per variant + the 28 queries (+ 2 for the Count-Min reference): 42 at the defaults; `designed,noroot` gives the earlier 52-job plan |
 | `SIX_ZKA_CM_REF` | `1` | `1`: also prove their shipped Count-Min aggregation (`cm:aggr:0:designed`, `cm:aggr:7:designed`) as the reference, and execute `designed` for all six (executor only, cheap: the reference's cycle counts and the root-work table); skipped when `SIX_ZKA_ROOTS` already has `designed` or `legacy` (the same Count-Min guest). `0`: neither (`full`: 40 jobs) |
 | `SIX_ZKA_GK` | `matched` | the zk-Analytics side's GK: `matched` = zkSketch's GK rule in their pipeline (same algorithm both sides); `textbook` = textbook Greenwald-Khanna, the reference (needed with `SIX_ZKA_ROOTS=legacy`) |
+| `SIX_ZKA_HH` | `mg` | the zk-Analytics side's heavy-hitter sketch (family `ss`): `mg` = the Misra-Gries port (`../mg`); `spacesaving` = the SpaceSaving port (`../spacesaving`), which produced Tables 2-3 and Figure 5. `build` builds both |
 | `SIX_ZKA_GK_IMPL` | `literal` | implementation of the matched GK guest, all with the same output. `literal` = zkSketch's GK algorithm as its original code (`apply_batch2` statement for statement): the baseline, because the zkVM side must run the algorithm, not a program re-engineered with zkSketch's circuit-design insights. `tuned`, `fast`, `fixed_linear` are our rewrites (they compact survivors instead of re-sorting, the idea of zkSketch's planned stable-compaction circuit) and are sensitivity rows only |
 | `SIX_GK_ROUNDS` | `stable` | zkSketch's GK circuit: `stable` = the stable-compaction circuit (M3), `sorted` = the earlier circuit that re-sorts every round; same GK rule, commitments and answers, different verification keys |
 | `SIX_BLOOM_VARIANT` | `packed` | zkSketch's Bloom circuit: `packed` = the packed-byte circuit (M2, commitment family 7), `omc` = the earlier one-field-element-per-bit circuit; same filter and answers, different verification keys |
@@ -389,9 +425,9 @@ Notes:
   | KMV | 27 | 3.4 | 4.6 | 4.3 |
 
   The coordinator peaks while it derives the auditor's verifying keys, before the worker
-  starts, so the two peaks do not add up. The ~15-25 min estimate for `full`'s 7 runs
-  extrapolates these per leaf and per merge; `full` as a whole has not been run on the
-  zero-knowledge build yet. Memory does not grow with the number of batches (the M0
+  starts, so the two peaks do not add up. The ~15-25 min for `full`'s 7 runs is these
+  per-leaf and per-merge times scaled from 2 to 8 batches; `full` as a whole has not been
+  run on the zero-knowledge build yet. Memory does not grow with the number of batches (the M0
   harness frees each proof's prover data; the M3 report measured the same peak at 4
   and 8 batches). To see each sketch's time and memory at the full batch size on a new
   machine (~6 min here) before starting `full`:

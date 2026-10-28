@@ -1,68 +1,7 @@
 #!/usr/bin/env bash
-# ---------------------------------------------------------------------------
-# M3 — zkSketch QUERY side at the zk-Analytics-matched Count-Min geometry.
-#
-#   matched geometry : d = 3, w = 1024      (zka/aggregator/core/src/lib.rs:39-42
-#                                            CM_ROWS=3, CM_COLS=1024)
-#   matched batch    : m = 16384            (their epoch = 16,384 logs)
-#   family/variant   : cm / cm_omc
-#
-# Emits  $RESULTS/zks_query_matched.csv   (default: results/ next to this script;
-#        ZKSKETCH_COMMIT=hiding -> zks_query_matched_hiding.csv, see below)
-#
-# TWO PHASES, both driven by one SCALE knob:
-#
-#  Q0  "isolate"  — zksq/ next to this script  (bin `cmq`)
-#      Proves ONLY `prove_cm_decode` against a natively-materialized CM state.
-#      No update leaf, no fold, no stream re-proof.  Legitimate because the
-#      decode circuit is Theta(d*w) in the STATE size and independent of the
-#      stream length / batch count (zkSketch/src/decode/mod.rs:5-12), and it
-#      binds Com(S) in-circuit exactly as the in-composition query does
-#      (stream_compose.rs:303-321 asserts the two agree).
-#      Needed because the in-repo decode runners hard-code shapes that cannot
-#      reach d=3/w=1024:  examples/exp_decode.rs:85-86 (d=4,w=8, NO env knobs)
-#      and examples/exp_e3.rs:98-99 (d=4, w in {4,8,16}).
-#
-#  Q1  "integrated" — zkSketch examples/exp_compose.rs with
-#      EXP_COMPOSE_QUERY_EVERY=1.  Proves the t update leaves AND one query
-#      leaf after every batch, so it fills query_prove_ms / query_verify_ms /
-#      query_proof_bytes / query_ctx_verifies and their _avg variants, and
-#      exhibits query_ctx_verifies per composition mode:
-#         per_batch -> t'     (the Theta(n)-prefix analogue of their querier)
-#         chain     -> 1
-#         forest    -> popcount(t')
-#      (stream_compose.rs:583-598).
-#
-# WHY EXP_COMPOSE_QUERY_EVERY AND NOT ..._QUERY_EVERY_OPS:
-#      _QUERY_EVERY_OPS runs the operation-stream model, where a query OCCUPIES
-#      a stream position and mid-batch queries force an EARLY SEAL + tail PAD
-#      (build_query_schedule_batches, stream_compose.rs:503-565).  That is the
-#      padding tax: at m=16384/Q=100000 it cost 147,466 pad records and 9 extra
-#      leaves for 10 queries (results/s3_mixed_q100000.csv).  The batch-aligned
-#      knob sets pad_records = split_leaves = 0 by construction
-#      (exp_compose.rs:651-659) and is what the matched comparison wants anyway:
-#      a zk-Analytics query is a separate querier program, not a stream record.
-#      Use QPOS=<Q> below only if you explicitly want the operation-stream
-#      variant; the script then REFUSES any Q with (Q-1) % m != 0 (non-zero pad).
-#
-# EXEC ENGINE: procs (one pinned OS process per machine).  `sim` accumulates
-# RSS across the whole single-process replay, so its peak_rss_mb is an
-# ACCUMULATION ARTIFACT at t>1 (468,731 MB reported at t=64 vs ~81 GB real
-# under procs, results/frame_out_1machine.csv).  Only t=1 is clean under sim.
-# We therefore force EXP_COMPOSE_EXEC=procs whenever t>1.
-#
-# CLEANUP: ours is an in-process Rust prover (no r0vm).  The ONE thing that can
-# outlive us is a pinned worker child of the procs engine
-# (dist_compose.rs:715-729, ZKS_COMPOSE_ROLE=worker, spawned via
-# numactl/taskset from a /tmp/zks_dc_exe_<pid> snapshot).  The trap below kills
-# those and removes the snapshots.
-#
-# Usage:
-#   ./our_query.sh                 # SCALE=1   (~1 min,  isolate + 1 leaf)
-#   SCALE=8 ./our_query.sh         # SCALE=8   (~35 min, 3 modes)
-#   SCALE=8 MODES=chain ./our_query.sh
-#   PHASES=q0 SEEDS=20 ./our_query.sh   # query isolate only, ~minutes
-# ---------------------------------------------------------------------------
+# zkSketch Count-Min query proofs at zk-Analytics' geometry (d = 3, w = 1024, m = 16,384) -> zks_query_matched.csv.
+# Phase q0 proves the decoder alone on a native state; q1 runs exp_compose with a query after every batch.
+# Usage: [SCALE=1] [PHASES=q0,q1] [MODES=per_batch,chain,forest] ./our_query.sh
 set -uo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"   # ZKS = the checkout this script lives in
@@ -144,7 +83,7 @@ if [ "$QPOS" -gt 0 ]; then
   if [ $(( (QPOS - 1) % M )) -ne 0 ]; then
     per=$(( (M - ((QPOS - 1) % M)) % M ))
     echo "REFUSING: QPOS=$QPOS with m=$M pays $per pad records per query" >&2
-    echo "  (build_query_schedule_batches, stream_compose.rs:503-565)." >&2
+    echo "  (build_query_schedule_batches in src/experiments/stream_compose.rs)." >&2
     echo "  Pick QPOS with (QPOS-1) % $M == 0, e.g. $((M+1)), $((2*M+1))." >&2
     exit 2
   fi
@@ -196,7 +135,7 @@ if [[ ",$PHASES," == *,q1,* ]] && [ "$FORCE" != 1 ]; then
 fi
 
 if [[ ",$PHASES," == *,q0,* ]]; then
-  # aol/netflix are FILE-BACKED fixed streams (zkSketch/src/dataset.rs:164-170
+  # aol/netflix are FILE-BACKED fixed streams (zkSketch/src/dataset.rs, `aol()`/`netflix()`
   # -> take(&keys, n) = the first n keys, seed-independent). SEEDS>1 on those
   # yields IDENTICAL states and identical probe keys: useful as timing repeats,
   # but NOT seed variance. Only gaussian/zipf/uniform actually vary with seed.
@@ -236,7 +175,7 @@ if [[ ",$PHASES," == *,q1,* ]]; then
   echo "-- Q1 integrated: exp_compose modes=$MODES exec=$EXEC QEVERY=$QEVERY QPOS=$QPOS"
 
   # A rebuild RELINKS target/release/examples/exp_compose.  dist_compose
-  # snapshots its own exe to survive that (dist_compose.rs:1190-1220), but do
+  # snapshots its own exe to survive that (`take_exe_snapshot` in dist_compose.rs), but do
   # not relink under another live sweep if you can avoid it:  SKIP_BUILD=1.
   if [ "${SKIP_BUILD:-0}" != "1" ]; then
     ( cd "$ZKS" && cargo build --release --example exp_compose >/dev/null 2>&1 ) || {
@@ -245,8 +184,8 @@ if [[ ",$PHASES," == *,q1,* ]]; then
     echo "Q1: SKIP_BUILD=1 but target/release/examples/exp_compose is missing" >&2; exit 1
   fi
 
-  # exp_compose writes into $ZKS/results (results_dir() is hard-coded,
-  # src/experiments/mod.rs:170-172).  Keep a UNIQUE EXP_OUT name so nothing
+  # exp_compose writes into $ZKS/results (hard-coded in `results_dir()` in
+  # src/experiments/mod.rs).  Keep a UNIQUE EXP_OUT name so nothing
   # existing is touched, and save/restore the untracked env.json it rewrites.
   ENVBAK=$(mktemp /tmp/zks_envjson.XXXXXX)
   [ -f "$ZKS/results/env.json" ] && cp -f "$ZKS/results/env.json" "$ENVBAK"
@@ -274,7 +213,7 @@ if [[ ",$PHASES," == *,q1,* ]]; then
 
   RAWPATH="$ZKS/results/$RAWNAME"
   if [ $rc -eq 0 ] && [ -f "$RAWPATH" ]; then
-    # exp_compose column indices (exp_compose.rs:580-604):
+    # exp_compose column indices (the `hdr` list in examples/exp_compose.rs):
     #  1 dataset 2 family 3 variant 4 mode 5 shape 6 n 7 m 8 t 9 cores
     # 10 machines 11 total_time_ms ... 18 peak_rss_mb 19 n_queries
     # 20 query_prove_ms 21 query_verify_ms 22 query_proof_bytes
@@ -291,7 +230,7 @@ if [[ ",$PHASES," == *,q1,* ]]; then
     if [ "$added" -eq 0 ]; then
       echo "Q1 ERROR: exp_compose produced $(( $(wc -l < "$RAWPATH") - 1 )) raw rows but NONE had >30 fields" >&2
       echo "  -> column schema drifted; the awk mapping in $0 must be re-checked against" >&2
-      echo "     examples/exp_compose.rs:583-597 before any row is trusted." >&2
+      echo "     the hdr column list in examples/exp_compose.rs before any row is trusted." >&2
       exit 4
     fi
     # Sanity: QEVERY>0 must yield n_queries>0, else the query columns are all zero

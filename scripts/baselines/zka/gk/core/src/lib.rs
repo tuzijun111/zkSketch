@@ -1,29 +1,6 @@
 #![no_std]
 
-//! Greenwald-Khanna (GK) quantile summary run inside zk-Analytics' own epoch
-//! pipeline (Zhu et al., "Zero-Knowledge Cloud Analytics", SIGCOMM '26; code at
-//! commit d4a5a9a). zk-Analytics does not ship a GK summary. This crate is OUR
-//! instantiation of their general-purpose method for one:
-//!
-//!   aggregation (one guest run per epoch)
-//!     1. verify the data source's SHA-256 batch hash chain  -- their code, verbatim
-//!     2. build the epoch's summary FROM SCRATCH             -- textbook GK, plain Rust
-//!     3. Merkle root over the state entries                 -- their per-type pattern
-//!     4. unsalted SHA-256 state commitment                  -- their pattern
-//!     5. link the commitment into the epoch hash chain      -- their EpochChainLink
-//!   query (one guest run per query)
-//!     1. re-verify the epoch chain links                    -- their code, verbatim
-//!     2. recompute every epoch's state commitment           -- their pattern
-//!     3. MERGE the per-epoch summaries at query time        -- one-shot GK union
-//!     4. answer; low-support suppression                    -- their MIN_SUPPORT rule
-//!
-//! Only the summary update (step 2), its merge and its query are ours. Nothing here
-//! uses zkSketch's circuit techniques (no oblivious padding, no memory checking, no
-//! sorting certificates, no Poseidon). Every cycle the guest spends is ordinary
-//! RISC-V execution of the code below, so the cycle count is data-dependent.
-//!
-//! Upstream items that are `pub` are imported. Items that are private upstream are
-//! copied VERBATIM below, each with its upstream file:line at commit d4a5a9a.
+//! Textbook Greenwald-Khanna summary in zk-Analytics' epoch pipeline (our port; upstream commit d4a5a9a).
 
 extern crate alloc;
 

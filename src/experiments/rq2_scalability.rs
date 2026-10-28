@@ -1,25 +1,5 @@
-//! **RQ2 — Scalability** (paper §Evaluation, `sec:rq2`).
-//!
-//! Sweeps one cost dimension at a time. Runnable panels:
-//!
-//! - **2-a Batch-size linearity (`m`).** Sweep batch size per family; report
-//!   prove time and proof size. Expect ~linear in `m`.
-//! - **2-c State-size scaling (`s`).** Sweep CM width `w` and HLL register
-//!   count `m`. *Honest finding:* our prototype commits to the **whole** state
-//!   with a flat Poseidon2 hash (no sparse opening), so per-batch cost grows
-//!   with `s` here; the paper's sublinear-in-`s` claim needs the sparse-rebind
-//!   commitment (a Merkle/IPA opening of only touched cells), which is
-//!   future work. Reported as-measured so the cost model can be re-calibrated.
-//! - **2-d Audit-window length (`E`) — also RQ1 panel 1-b.** Compose `E`
-//!   epoch leaves through the §4 framework (chain / tree / streaming forest);
-//!   report root-digest size (constant in `E`), root-verify time (`O(1)`),
-//!   per-epoch chain-verify time (`Θ(E)`), and the per-topology merge counts.
-//!
-//! Panels needing baselines this prototype does not implement — **2-e**
-//! (optimised exact ZK index), **2-f** (RISC0/SP1 zkVM), and the separate
-//! decode-circuit costs of **2-g** — are emitted as *analytical* rows derived
-//! from the cost model (Appendix `app:cost-derivations`), clearly flagged
-//! `kind=analytical`.
+//! RQ2 panels: batch size (2-a), state size (2-c), audit-window length (2-d).
+//! Rows 2-e/2-f are not measured: a formula ratio and a fixed 100-1000x range (`kind=analytical`).
 
 use crate::config::Val;
 use crate::dataset::{Synthetic, synthetic_stream};
@@ -191,12 +171,12 @@ fn panel_2d() -> Table {
     t
 }
 
-// ─── 2-e/2-f: analytical projections (baselines not implemented) ─────────────
+// ─── 2-e/2-f: not measured (no exact-index or zkVM baseline here) ───────────
 
 fn panel_2ef_analytical() -> Table {
-    // Cost-model constants from the paper (Appendix app:cost-derivations):
-    //   exact-index per-record ≈ H·log2(n) hashing; optimised CM per-record
-    //   ≈ d + L (lookup) per record. Ratio = H·log2(n) / (d + L).
+    // 2-e: the ratio H·log2(n) / (d + L) of per-record costs, exact index
+    // (H·log2(n) hashing) vs optimised CM (d + L lookups), with the fixed
+    // constants below; a formula, not a measurement.
     let mut t = Table::new(
         "rq2ef_analytical",
         "2-e/2-f: analytical projections (exact-index ratio, zkVM gap) — NOT measured here",
@@ -215,7 +195,8 @@ fn panel_2ef_analytical() -> Table {
             "analytical".into(),
         ]);
     }
-    // 2-f zkVM gap: ZK-Value-style 2–3 orders of magnitude on per-batch prove.
+    // 2-f: a fixed constant, 100-1000x per-batch prove gap (2–3 orders of
+    // magnitude, ZK-Value-style); not measured.
     t.push(vec![
         "2-f".into(),
         "RISC0".into(),

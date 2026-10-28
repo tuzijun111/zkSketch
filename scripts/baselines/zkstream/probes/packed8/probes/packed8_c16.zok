@@ -1,7 +1,5 @@
-// Packed-lane Count-Min update, zkStream Sec 4.4 commit-in/commit-out shape.
-// State: D rows x S slots; each slot packs 8 lanes of 21-bit counters (8*21=168 < 254 bits).
-// Column (10 bits at W=1024) = slot (LOGS bits, tree decoder) + lane (3 bits, weight 2^(21*lane)).
-// Records bound to a public batch digest (Poseidon-6 chain) like zkSketch's batch_commit PI.
+// Packed-lane Count-Min update with commit-in/commit-out and a public batch digest (zkStream's operator shape).
+// D rows x S slots of 8 lanes x 21-bit counters; column = slot (tree decoder) + lane (weight 2^(21*lane)).
 import "hashes/poseidon/poseidon" as poseidon;
 import "utils/pack/bool/unpack" as unpack;
 const u32 N = 16;

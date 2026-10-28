@@ -1,8 +1,5 @@
-//! RQ1 — Capability runner (paper §Evaluation `sec:rq1`).
-//!
-//! `cargo run --release --example exp_rq1`
-//! Knobs: `EXP_RQ1_EPOCHS` (1-a window), `EXP_RQ1_TRIALS` (1-c trials),
-//! `V3_SWEEP_THREADS` (Rayon pool size). Writes `results/rq1*.csv`.
+//! RQ1 capability runner; writes results/rq1*.csv.
+//! Usage: [EXP_RQ1_EPOCHS=.. EXP_RQ1_TRIALS=.. V3_SWEEP_THREADS=..] cargo run --release --example exp_rq1
 
 use zksketch::experiments::{resolve_threads, rq1_capability, with_pool};
 

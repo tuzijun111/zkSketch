@@ -1,18 +1,4 @@
-//! Poseidon2-backed `StateCommit` for the plaintext HyperLogLog sketch.
-//!
-//! The HyperLogLog state is an `m`-element array of `u8` leading-run-of-zeros
-//! registers (`m = 2^b`). We hash the flattened registers via the canonical
-//! `MyHash` (the leaf STARK's `PaddingFreeSponge<Perm, 16, 8, 8>`). That
-//! hasher and the in-circuit `CircuitBuilder::add_hash_slice` over the
-//! Challenge extension field agree on aligned inputs — inputs whose count is
-//! a multiple of the Challenge extension degree `D = 4`. `HyperLogLogParams`
-//! enforces `b ≥ 2`, so `m ≥ 4` is always a multiple of 4 and the
-//! `CELL_ALIGNMENT` assertion below is a defensive guard, not a real
-//! constraint.
-//!
-//! The HLL update AIR (Phase 4b) absorbs the same registers in-circuit and
-//! reproduces the same digest, so the commit chains across the §4.2
-//! recursive merge boundary exactly the way `CountMinCommit` does.
+//! Poseidon2 `StateCommit` for the plaintext HyperLogLog sketch (the `m = 2^b` registers).
 
 use p3_field::PrimeCharacteristicRing;
 use p3_symmetric::CryptographicHasher;

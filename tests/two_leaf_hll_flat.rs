@@ -1,8 +1,4 @@
-//! Integration test for the §4.1 flat HyperLogLog chain (Phase 4c).
-//!
-//! Mirrors `tests/two_leaf_countmin_flat.rs`. Verifier work scales as `Θ(E)`
-//! here (each leaf's batch-STARK is re-verified), contrasted against the §4.2
-//! recursive path's `O(1)` per merged proof.
+//! Flat HyperLogLog chain: flat_merge_two_hll and verify_chain_flat_hll.
 
 use zksketch::recursion::hll_flat::{
     HllFlatError, flat_merge_two_hll, verify_chain_flat_hll,

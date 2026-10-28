@@ -1,47 +1,6 @@
 #!/usr/bin/env bash
-# zk-Analytics side of the six-sketch comparison (their CM + our ports of HLL, Misra-Gries (family ss), GK,
-# Bloom, KMV in their per-epoch architecture), AOL, SIX_T epochs x SIX_M records, batches of 8
-# (paper configuration, the defaults: 8 epochs x 2,048 records).
-# GK (SIX_ZKA_GK, six_common.sh): matched (default) = ../gk_matched, zkSketch's GK rule in their
-# pipeline (state carried from epoch to epoch; --capacity SIX_GK_CAP --m-sub SIX_GK_MSUB --s 51
-# --impl SIX_ZKA_GK_IMPL; root variants designed / noroot / pertuple, no legacy); textbook =
-# ../gk, textbook Greenwald-Khanna, the labelled reference (and the committed 2026-10-09 rows).
-# A family's epoch is SIX_M_<FAM> when set (six_common.sh; e.g. GK 2,048 next to 16,384 for the
-# others in the memory-matched shape); the zkSketch leaf size (SIX_LEAF*) changes nothing here
-# except the matched GK's default --m-sub (= the zkSketch GK leaf).
-#
-#   run_zka.sh exec             executor only: aggregation epochs 0..T-1 of every family, once per
-#                               root variant of SIX_ZKA_ROOTS (default noroot), plus designed when
-#                               their shipped CM runs as a reference (SIX_ZKA_CM_REF=1, the default;
-#                               six_common.sh): designed is then executed for all six families
-#                               (Bloom/KMV: their --mode exec pipeline per variant, incl. the query
-#                               executes at SIX_QNS; the query rows, which no root reaches, are kept
-#                               once and checked identical across the variants)
-#   run_zka.sh qexec <jobs...>  executor only, no proof, for the given query jobs: the cycle counts
-#                               `assemble.py --plan` uses to ESTIMATE jobs that were not proved
-#   run_zka.sh prove <jobs...>  proved jobs, sequential, each behind the quiet-box gate.
-#                               job = <fam>:aggr:<epoch>[:<variant>] | <fam>:query:<n>[:<arg>]
-#                               variant = designed | noroot | legacy (also ss: buckets1024, perkey;
-#                               gk: pertuple), passed to the driver as --root; omitted = legacy (the
-#                               guests of the committed 2026-10-09 run, the drivers' default; the
-#                               matched GK has no legacy guest: its jobs need a variant).
-#                               Query proofs take no variant (query guests read no root).
-#                               (gk query arg = rank value; bloom query arg = first|key:<u32>)
-#                               `jobs.py` prints the job list (42 jobs at the defaults).
-# ProverOpts::succinct(), CPU r0vm. Every proof is wrapped by rss_tree.sh (r0vm peak RSS).
-# Env: RESULTS, SIX_M, SIX_M_<FAM>, SIX_T, SIX_QNS, SIX_ZKA_ROOTS, SIX_ZKA_CM_REF (six_common.sh); GATE_* (gate.sh);
-#   SIX_ZKA_PREFIX  output prefix (default six_zka): <prefix>_<fam>_{exec,qexec,prove}.csv/.log,
-#                   <prefix>_jobs.csv, <prefix>_qexec_jobs.csv. Rows of every variant share a
-#                   family's CSV; its root_variant / root_construction columns tell them apart.
-#   SIX_FAIL_FAST=1 stop at the first failed job
-# exec and qexec rewrite their CSVs; prove appends (a job list can be split over several calls,
-# e.g. to retry the jobs of a plan that have no rc=0 line in <prefix>_jobs.csv yet). A proof's
-# row is appended only when its driver exits 0 having printed exactly one row; any other
-# outcome is recorded in <prefix>_jobs.csv with a non-zero rc and adds no row. The jobs file's
-# `arg` column holds an aggregation job's variant ('-' = none given = legacy).
-# exec also checks, per family, that every variant gives the same state_commit for each epoch
-# (the drivers check journal_eq_native and variants_agree themselves and exit 1 otherwise).
-# Exit status 0 only if every driver call succeeded (and every proof appended its row).
+# zk-Analytics side of the six-sketch comparison: their CM and our HLL, MG, GK, Bloom and KMV ports.
+# Usage: run_zka.sh exec | qexec <jobs...> | prove <jobs...>   (jobs.py lists the jobs)
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case ${1:-} in
@@ -64,10 +23,10 @@ source "$HERE6/gate.sh"
 declare -A BIN=(
   [cm]=$EB/cyc-t1/release/shipped
   [hll]=$EB/hll/release/hll
-  [ss]=$EB/zka-mg/release/mg   # Misra-Gries port (../mg)
+  [ss]=$EB/$SIX_ZKA_HH_BIN   # SIX_ZKA_HH (../sizes.sh): the Misra-Gries or the SpaceSaving port
   [gk]=$EB/zka-gk/release/gk
   [bloom]=$EB/zka-bloom/release/bloom
-  [kmv]=$EB/zka-kmv/release/kmv
+  [kmv]=$EB/zka-kmv$SIX_KMV_SUFFIX/release/kmv
 )
 # the zk-Analytics GK of this run: the matched port by default (six_common.sh, SIX_ZKA_GK)
 [[ $SIX_ZKA_GK == matched ]] && BIN[gk]=$EB/zka-gk-matched/release/gk_matched
@@ -94,7 +53,7 @@ provenance() {
     [[ $(six_fam_m "$f") == "$M" ]] || { echo "# per-family epochs: $(six_shape_desc)"; break; }
   done
   echo "# zkSketch=$(git -C "$WT" rev-parse --short=9 HEAD) dirty_files=$(git -C "$WT" status --porcelain | wc -l) build_dir=$EB"
-  echo "# $(six_gk_desc) gk_driver=${BIN[gk]}"
+  echo "# $(six_gk_desc) gk_driver=${BIN[gk]} hh_driver=${BIN[ss]} (SIX_ZKA_HH=$SIX_ZKA_HH)"
   elf_md5s
 }
 
@@ -103,7 +62,7 @@ common() {
   local em; em=$(six_fam_m "$1")
   case $1 in
     cm)    COMMON=(--family cm --epoch-size "$em" --batch 8 --keys "$KEYS") ;;
-    ss)    COMMON=(--capacity 1024 --epoch-size "$em" --batch 8 --keys "$KEYS") ;;
+    ss)    COMMON=(--capacity "$SIX_SS_CAP" --epoch-size "$em" --batch 8 --keys "$KEYS") ;;
     bloom) COMMON=(--epoch-size "$em" --batch 8 --keys "$KEYS" --absent 10000) ;;
     gk)    COMMON=(--epoch-size "$em" --batch 8 --keys "$KEYS")
            [[ $SIX_ZKA_GK == matched ]] &&

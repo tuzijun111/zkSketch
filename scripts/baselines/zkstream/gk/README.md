@@ -19,13 +19,13 @@ is applied to the summary one at a time, exactly as the textbook algorithm does.
 # the measured grid (15 points, 4-chunk chains, 12 forgery checks per point)
 scripts/baselines/zkstream/gk/run_gk.py --E 8 16 --k 4 16 64 --cap 16 32 64 \
     --chunks 4 --tamper --prune --overflow-demo
-# compile-only constraint sweep (the model's data), e.g.
+# compile-only constraint sweep (the data of the constraint-count fit), e.g.
 scripts/baselines/zkstream/gk/run_gk.py --compile-only --E 32 --k 1 4 16 --cap 16 32 64 --nb 14
 # large-capacity probes (the compile scaling toward s' = 2^11)
 scripts/baselines/zkstream/gk/run_gk.py --E 64 --k 32 --cap 512 --nb 21 --chunks 4 --tamper --prune
 # circuit == native reference over ~1000 records, witness only
 scripts/baselines/zkstream/gk/run_gk.py --E 8 --k 16 --cap 32 --chunks 0 --validate-chunks 250 --stream fewdistinct
-scripts/baselines/zkstream/gk/fit_gk.py        # gate, tables, fits, deployed-size model
+scripts/baselines/zkstream/gk/fit_gk.py        # gate, tables, fits, deployed-size costs from the fits
 scripts/baselines/zkstream/gk/gk_ref.py        # native reference self-test
 ```
 
@@ -51,7 +51,7 @@ scripts/baselines/zkstream/gk/gk_ref.py        # native reference self-test
 | `gen.sh` | `gen.sh <K> <S> <E> <NB> <outdir>` textual instantiation, as zkStream sizes its circuits (`zokrates.rs:85-87`) |
 | `gk_ref.py` | native textbook GK (mirrors `../../zka/gk` `RefGk`), state packing, self-test of the fixed-shape formulation |
 | `run_gk.py` | driver: capacity check, compile, setup, chained prove/verify, tamper, validation. Patterned on `../run_zkstream.py` |
-| `fit_gk.py` | soundness gate, per-point table, constraint model, time fits, deployed-size model |
+| `fit_gk.py` | soundness gate, per-point table, constraint-count fit, time fits, deployed-size costs from the fits |
 | `../results/zkstream_gk.csv` | one row per measured step |
 | `../results/zkstream_gk_*.log` | raw console record behind the CSV |
 
@@ -210,7 +210,7 @@ passed the chain check (4 of 4) and rejected all 12 forgeries.
   Proving-key size is about 414 B per constraint.
 - The three dropped points (s' = 16 too small) are listed under Configuration.
 
-### Constraint model (MEASURED, 40 compiles)
+### Constraint count (least squares over 40 measured compiles)
 
 Least squares over every compile: the grid, a compile-only sweep over 1/eps in {4, 8, 16, 32,
 64}, k in {1..64}, s' in {8..2048} and NB in {10..22}, and the probes. The fit is within 11
@@ -246,7 +246,8 @@ evaluates each point at its own NB.
   prove ~ c^1.47 and witness ~ c^1.66.
   - The k = 25 deployed shape (0.96x the largest point) is costed from the s' = 2048 probe,
     scaled linearly.
-  - The deployed-chunk prove times below are bounds from measured rates, not extrapolations.
+  - The deployed-chunk prove times below are the constraint count divided by a measured
+    rate (the best one, and the largest point's), so they are bounds.
 - **Compile.** The one-pass series (1/eps = 64, k = 32) compiles as s'^1.38 overall:
   - 11 s / 1.0 GB at s' = 64;
   - 44 s / 3.2 GB at s' = 256;
@@ -257,7 +258,7 @@ evaluates each point at its own NB.
   The step from 1024 to 2048 is 4.3x in time, about s'^2. The O(s'^2) array copying of
   pitfall 2 comes back at the largest size, even in the v2 template.
 
-### Deployed size (MODELED): eps = 1/51, s' = 2^11, m = 2^14 records per chunk
+### Deployed size (computed from the fits, not compiled): eps = 1/51, s' = 2^11, m = 2^14 records per chunk
 
 The inputs are 656 COMPRESS passes per chunk (one every 25 records) and 17-bit
 g/Delta/p (n < 2^21).
@@ -285,7 +286,7 @@ g/Delta/p (n < 2^21).
     constraints (O(s') INSERT plus O(s' log^2 s') COMPRESS). A 2^20 stream therefore needs
     about 42 G constraints of proving in any chunking. At the smallest compilable shape
     that is about 561 h of witness+prove.
-- **Capacity sensitivity** (MODELED, same fitted terms and deployed widths). s' = 2^11
+- **Capacity sensitivity** (computed with the same fitted terms and deployed widths). s' = 2^11
   matches the capacity zkSketch's GK is measured at, so the comparison does not inflate
   the baseline's capacity. A smaller s' shrinks the cost but not the verdict:
   - at s' = 256 a 2^14-record chunk is about 76 M constraints, still about 57x the
@@ -302,7 +303,7 @@ g/Delta/p (n < 2^21).
   requires (see `../../zka/gk/README.md` for why the Figure 2 loop to i = 0 loses it).
 - **eps = 1/2^j.** The circuit computes p = floor(2n/E) by a bit shift, so E must be a power of
   two. eps = 1/51 (the deployed setting) would need a floor-division hint, two range checks per
-  pass. The deployed model keeps every other term at the deployed widths.
+  pass. The deployed-size computation keeps every other term at the deployed widths.
 - **Capacity.**
   - s' is a public constant sized from the AOL prefix that was measured. The textbook
     worst-case bound (11/(2 eps)) log(2 eps n) is far larger.

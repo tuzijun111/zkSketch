@@ -1,19 +1,5 @@
-//! E2 — integrity runner for the **plonky2 (SNARK)** backend (EVAL_SPEC E2).
-//!
-//! Same two properties as the plonky3 runner (`../examples/exp_e2.rs`), same
-//! CSV schema (so the rows merge):
-//! - **Tamper:** 5% random-row tamper over `EXP_TAMPER_TRIALS` (default 50)
-//!   trials; reject rate measured at the binding layer (tampered batch ⇒
-//!   different `Com(S_t)` / batch fingerprint ⇒ honest-root proof rejected).
-//!   In-circuit constraint-level rejection is covered by the leaves'
-//!   `*_rejects_wrong_final` unit tests.
-//! - **Fidelity:** the proof binds `Com(S_t)` to the native final state, so the
-//!   ZK-decoded answer equals the plaintext sketch answer; we also report the
-//!   sketch error vs. the exact ground truth.
-//!
-//! Output: `plonky2/results/e2_integrity.csv`.
-//! Run: `cargo run --release --example e2_integrity`  (nightly auto-selected)
-//! Env: EXP_DATASET (uniform), EXP_M (16), EXP_TAMPER_TRIALS (50).
+//! E2 on plonky2: tamper rejection (commitment check) and the answer from the proven final state vs. exact truth.
+//! Usage: cd plonky2 && EXP_DATASET=uniform EXP_M=16 EXP_TAMPER_TRIALS=50 cargo run --release --example e2_integrity
 
 use std::collections::HashSet;
 
@@ -80,6 +66,8 @@ fn key_fp(keys: &[u32]) -> HashOut<F> {
     PoseidonHash::hash_no_pad(&keys.iter().map(|&k| F::from_canonical_u64(k as u64)).collect::<Vec<_>>())
 }
 
+/// Every caller passes the same native answer as `zk` and `plain` (read from the final state after the batch
+/// the verified leaf covers), so `zk_eq_plaintext` is always true.
 fn row(family: &str, qt: &str, trials: usize, rate: f64, zk: f64, plain: f64, truth: f64) -> Vec<String> {
     vec![
         "plonky2".into(), family.into(), qt.into(),

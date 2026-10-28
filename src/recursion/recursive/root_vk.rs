@@ -1,33 +1,5 @@
-//! Root verification keys for boundary-bound forests, derived from **public
-//! parameters only**.
-//!
-//! A boundary-bound root proof (see [`super::expose_forest`]) is anchored by
-//! pinning its verification key (VK): the preprocessed commitment of the root
-//! merge circuit. Each merge circuit bakes its children's VKs in as constants,
-//! so the root VK transitively fixes every circuit in the tree. The pin is only
-//! meaningful if the auditor obtains the VK **without** reading it from the
-//! (untrusted) proof. This module provides that:
-//!
-//! * [`ForestShape`] — the binary tree a composer builds for `t` leaves
-//!   (the Bentley–Saxe forest, the left-leaning chain, and the multi-machine
-//!   forest of `experiments::dist_compose`), a pure function of public
-//!   parameters.
-//! * [`ShapeVkDeriver`] — recomputes the VK of any shape's root from a single
-//!   **no-op dummy leaf** (a leaf proof over public, data-free input whose
-//!   initial and final boundary coincide). Every merge circuit depends only on
-//!   its children's proof shape and VKs, never on their data, so the no-op
-//!   leaf stands in for every real leaf; and because a no-op leaf's boundary is
-//!   contiguous with itself, one dummy proof per distinct subtree shape is
-//!   enough (`O(log t)` dummy merges for the forest, `O(t)` for the chain).
-//!   Under the Interval statement (B6(b)) the real atom's index adjacency
-//!   (`right.lo - left.hi == 1`) forbids merging a dummy with itself, so the
-//!   dummies are proofs of the adjacency-relaxed TWIN atom (same trace shape,
-//!   different VK) and each real merge VK is computed without proving, from
-//!   the dummies' shapes and the real child VKs (see [`ShapeVkDeriver`]).
-//! * [`BoundProofShape`] — the proof metadata the native verifier otherwise
-//!   takes from the proof (table packing, row counts, non-primitive manifest,
-//!   degree bits, preprocessed layout); pinned alongside the commitment in
-//!   [`RootVk`], in the spirit of upstream `CircuitVerifier::validate_metadata`.
+//! Root VKs of boundary-bound forests, computed from public parameters only (forest
+//! shape and a no-op leaf), so the auditor never takes the VK from the proof.
 
 use std::collections::HashMap;
 

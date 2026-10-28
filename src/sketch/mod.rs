@@ -1,9 +1,4 @@
-//! Sketch-family traits and Phase-2 stubs.
-//!
-//! Phase 1 carries the trait shapes so the wiring into the rest of the project
-//! (boundary commitments, leaf AIRs, recursive merge) is already there. The
-//! concrete `CountMin` implementation lives in `countmin.rs` and is empty for
-//! now — Phase 2 fills it in following §5.4 of the paper.
+//! Sketch traits plus the plaintext sketches and their leaf circuits.
 
 pub mod bind;
 pub mod bloom_omc;

@@ -1,25 +1,4 @@
-//! **HyperLogLog sparse-rebind leaf with a Merkle-root state commitment**
-//! (plonky3 / STARK) — the §5.2 sparse-opening commit applied to HLL.
-//!
-//! HLL's register array `m = 2^b` grows with the accuracy target (≈2¹⁴ for ~1%
-//! error), like Count-Min's width `w`. The flat HLL circuit
-//! ([`super::hll_final_full`]) re-hashes all `m` registers per epoch (`Θ(m)`)
-//! and scatters every record over every register (`O(m·batch)`). Here `Com(S)`
-//! is a **Merkle root** over the `m` registers, and a batch touches only the
-//! `T ≤ min(batch, m)` distinct registers its keys route to — so the rebind is
-//! `Θ(T·log m)`, **independent of `m`**.
-//!
-//! It is structurally the single-tree Count-Min Merkle leaf
-//! ([`super::countmin_merkle`] at `d = 1`), with two HLL-specific changes:
-//! - the cell "value" is the **derived rank** `ρ = 1 + trailing_zeros(digest[1])`
-//!   (re-derived in-circuit, so the prover can neither pick the register nor
-//!   inflate ρ), not a supplied count; and
-//! - the per-register aggregation is a **max** — `new = max(old, {ρ routed})`,
-//!   enforced by a product-of-differences + range gadget — instead of a sum.
-//!
-//! Register routing (`idx = digest[0] mod m`) and ρ derivation come from the
-//! first hash output half `c0 = decompose(hashed[0])` (`digest[i] = c0[i]`),
-//! matching [`super::hll_final_full`]. The flat HLL circuit remains the baseline.
+//! HLL leaf with a Merkle-root register commitment; the rebind opens only the touched registers.
 
 use std::rc::Rc;
 

@@ -1,29 +1,5 @@
-//! §4.3 **linear** recursive chain over privacy-preserving v9 Count-Min epochs.
-//!
-//! The paper's simplest recursive schedule, `Π^(t) = merge(Π^(t-1), π_t)`: each
-//! [`CountMinChainStateV9::extend`] folds the accumulating chain root (an
-//! aggregation proof) with one fresh leaf into a new aggregation that
-//! recursively verifies **both** children — so the single carried proof
-//! certifies the whole interval `[1, t]` at `O(1)` verifier cost. The chain
-//! therefore only ever performs `agg + leaf` merges and never the `agg + agg`
-//! that [`countmin_forest_v9`](super::countmin_forest_v9)'s Bentley–Saxe tree
-//! hits.
-//!
-//! This mirrors [`countmin_chain::CountMinChainState`](super::countmin_chain),
-//! which folds the original flat `CountMinLeafProof`, but operates on
-//! [`CountMinLeafProofV9`] — the envelope the streaming runner's `omc`
-//! and `merkle` (c_merkle) leaves wrap into (see
-//! `experiments::e6_forest::prove_leaf_full`). That makes the linear chain a
-//! drop-in **comparison baseline** against
-//! [`prove_countmin_forest_v9`](super::countmin_forest_v9::prove_countmin_forest_v9)'s
-//! `O(log t)`-depth tree fold: identical leaves and merge atom, different
-//! schedule (linear `O(t)` depth vs tree `O(log t)` depth).
-//!
-//! It reuses [`countmin_merge_v9`](super::countmin_merge_v9)'s two-leaf base
-//! case ([`merge_two_countmin_v9`]) and its verifier
-//! ([`verify_chain_countmin_v9`]) unchanged — that verifier already replays the
-//! linear digest schedule (`H_{[1,E]} = combine(1, E-1, E, H_{[1,E-1]}, d_E)`),
-//! so a chain built here verifies without a new verifier.
+//! Linear recursive chain over v9 Count-Min leaves (`root = merge(root, leaf)`),
+//! the baseline for the tree-shaped fold in `countmin_forest_v9`.
 
 use p3_recursion::{build_and_prove_aggregation_layer, BatchOnly};
 

@@ -1,9 +1,5 @@
-//! RQ4 — Composition topology + maintenance policy runner
-//! (paper §Evaluation `sec:rq4`).
-//!
-//! `cargo run --release --example exp_rq4`
-//! Knob: `EXP_RQ4_MAX_E` (max audit window). Writes `results/rq4*.csv`.
-//! Composition is leaf-shape-agnostic, so this runs in milliseconds.
+//! RQ4 composition topology and maintenance-policy runner; writes results/rq4*.csv.
+//! Usage: [EXP_RQ4_MAX_E=..] cargo run --release --example exp_rq4
 
 use zksketch::experiments::rq4_topology;
 

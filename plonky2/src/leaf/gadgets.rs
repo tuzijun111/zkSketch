@@ -1,20 +1,4 @@
-//! Shared in-circuit gadgets for the Pattern-B leaves (SpaceSaving, GK).
-//!
-//! These mirror the primitives the §5.2 Count-Min leaf
-//! ([`crate::leaf::countmin_final`]) builds inline, lifted out so the
-//! SpaceSaving and Greenwald–Khanna leaves can share them:
-//!
-//! - [`vhash`] — a virtual 4-element hash target (commitment slot).
-//! - [`assert_perm_cols`] — multiset-equality (grand-product) over **multi-column
-//!   rows**, the plonky2 stand-in for the plonky3 `PermuteAir`. Folds each row's
-//!   columns with powers of a Fiat-Shamir challenge `α`, then asserts the two
-//!   `β`-shifted products match, with `α, β` drawn from the degree-2 extension of
-//!   Goldilocks (soundness `≤ n·max(1, k−1)/p² ≈ 2⁻¹⁰⁵` at `n = 2²⁰` rows,
-//!   `k = 6` columns).
-//! - [`is_zero`] — the standard `x == 0` flag, **forced** correct via a prover
-//!   inverse witness (`x·zf == 0`, `zf = 1 − x·inv`). Pattern-B grouping must be
-//!   exact (unlike linear Count-Min), so we use this rather than the
-//!   honest-prover tag shortcut.
+//! Gadgets shared by the leaves: hash slots, commitment binding, grand-product multiset check, is_zero.
 
 use plonky2::hash::hash_types::HashOutTarget;
 use plonky2::hash::poseidon::PoseidonHash;

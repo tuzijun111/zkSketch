@@ -1,27 +1,5 @@
-// M2: whole-prefix Count-Min QUERY sweep for zk-Analytics (rev d4a5a9a9).
-//
-// One process == one data point (n epochs), so the shell harness can be resumed.
-// State generation is a verbatim port of their own bench harness so the numbers
-// are directly comparable:
-//   zka/querier/host/src/bin/bench_queries.rs:93-135  select_epoch_sources
-//   zka/querier/host/src/bin/bench_queries.rs:145-158 cm_bucket_index
-//   zka/querier/host/src/bin/bench_queries.rs:225-292 generate_cm_epoch_multi_source
-//   zka/querier/host/src/bin/bench_queries.rs:300-347 order_by_aggregator / build_chain_links
-//   zka/querier/host/src/bin/bench_queries.rs:489-556 run_cm_benchmark (prove/verify/size)
-//
-// Differences from their bench_queries, all additive:
-//   * only the CM guest runs, and only ONE CmQuery per process (theirs always
-//     runs BOTH cm/estimate and cm/topk -- there is no --skip-cm-topk).
-//   * full-precision journal bytes + raw public-output bytes are emitted
-//     (theirs prints journal size only through format_size(), lossy, and drops
-//     it entirely from its CSVROW line, bench_queries.rs:1191-1198).
-//   * executor-only mode (default) so nothing proves unless --prove is passed.
-//
-// Usage:
-//   qsweep --epochs N [--query estimate|topk] [--keys-per-source K]
-//          [--events-per-key E] [--num-sources S] [--sources-per-epoch P]
-//          [--num-aggregators A] [--seed X] [--prove] [--header]
-// Default is EXECUTOR ONLY. --prove is opt-in.
+// zk-Analytics CM query sweep (state built as in their bench_queries.rs): one point (n epochs) per run.
+// Usage: qsweep --epochs N [--query estimate|topk] [--seed X] [--prove] [--header]   (all flags: VALUE_FLAGS)
 
 use aggregator_core::{
     cm_epoch_state_commit, CmEpochState, EpochChainLink, CM_COLS, CM_ROWS, CM_SEEDS,

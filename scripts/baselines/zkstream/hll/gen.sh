@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# gen.sh <N> <s> <outdir> [P]
-# Instantiates hll_lib.zok.tpl (shared body), hll_op.zok.tpl (proven) and
-# hll_helper.zok.tpl (witness only) for N records per chunk and s = 2^b registers, by
-# textual constant replacement -- the way zkStream sizes its circuits
-# (nexmark/zokrates-nexmark/src/zokrates.rs:85-87).
-# P = registers packed per field element (6 bits each); default min(32, s).
-# CK (environment, default 8) = re-allocate the state as fresh wires every CK records.
+# Instantiate hll_lib/hll_op/hll_helper.zok.tpl for N records and s registers, P per field element (default min(32, s)).
+# Usage: [CK=8] gen.sh <N> <s> <outdir> [P]   (CK: fresh state wires every CK records)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ $# -eq 3 || $# -eq 4 ]] || { echo "usage: gen.sh <N> <s> <outdir> [P]" >&2; exit 2; }

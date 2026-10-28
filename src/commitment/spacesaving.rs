@@ -1,14 +1,5 @@
-//! Poseidon2-backed `StateCommit` for the plaintext SpaceSaving sketch.
-//!
-//! Hashes the flattened `(key, count)` pairs row-by-row. `2 * capacity_s`
-//! Vals total, which must align to `CELL_ALIGNMENT = 4`; the plaintext
-//! sketch enforces `capacity_s % 2 == 0` so this holds for any valid
-//! `SpaceSavingParams`.
-//!
-//! Keys are u64 in plaintext but hashed as a single Val (wrapping mod
-//! BabyBear's prime). For the strawman tests, keep keys < 2^30 to avoid
-//! wrap-around collisions; this is enforced informally by the test data,
-//! not by the type.
+//! Poseidon2 `StateCommit` for the plaintext SpaceSaving sketch.
+//! Keys are hashed as one field element (mod p), so test keys stay below 2^30.
 
 use p3_field::PrimeCharacteristicRing;
 use p3_symmetric::CryptographicHasher;

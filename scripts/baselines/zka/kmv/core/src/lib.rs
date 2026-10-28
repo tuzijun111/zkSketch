@@ -1,33 +1,5 @@
 #![no_std]
-//! KMV (k minimum values / bottom-k) epoch summary for the zk-Analytics pipeline
-//! (baseline port, ours †).
-//!
-//! zk-Analytics (SIGCOMM'26, commit d4a5a9a) ships three epoch summary types (samples,
-//! histogram, cm) and no distinct-count sketch. This crate adds a KMV summary in THEIR
-//! architecture and with THEIR plumbing, exactly as ../../hll/core does for HyperLogLog:
-//!
-//! * aggregation (`process_kmv_aggr_with_state`) is `process_cm_aggr_with_state`
-//!   (aggregator/core/src/lib.rs:1215-1301) with the CM table + heap replaced by the k
-//!   smallest distinct 64-bit key hashes: verify the source SHA-256 batch hash chain
-//!   (`verify_and_compute_chain`, verbatim), flatten the batches, build the epoch's
-//!   bottom-k set from scratch one record at a time, hash the state with an unsalted,
-//!   tagged SHA-256, and link it into the epoch chain with their `EpochChainLink::new`.
-//! * query (`run_kmv_query`) is `run_cm_query` (querier/core/src/lib.rs:249-371) with
-//!   the CM merge + lookup replaced by the KMV union (bottom-k of the union of the n
-//!   epoch sets) + the distinct-count estimator: verify the epoch chain links
-//!   (`verify_epoch_chain_integrity`, verbatim), recompute every epoch's state
-//!   commitment, merge, answer, and publish the chain boundaries + state commits +
-//!   result, with their low-support suppression.
-//!
-//! The sketch is the textbook KMV of Bar-Yossef, Jayram, Kumar, Sivakumar and Trevisan
-//! (RANDOM 2002) / bottom-k of Cohen and Kaplan (PODC 2007), with the unbiased
-//! estimator (k-1)/U_(k) of Beyer et al. (SIGMOD 2007). Plain Rust executed as a RISC
-//! Zero guest, exactly as their three summaries are: no oblivious padding, no memory
-//! checking, no sorting certificate, no algebraic hash.
-//!
-//! The functions that are private upstream are include!d verbatim from
-//! `upstream_verbatim.rs` (generated and checked by ../gen_upstream.sh; byte-identical
-//! to ../../hll/core/src/upstream_verbatim.rs).
+//! KMV (bottom-k) epoch summary in zk-Analytics' architecture (our port).
 
 extern crate alloc;
 
@@ -52,8 +24,22 @@ pub use querier_core::MIN_SUPPORT;
 include!("upstream_verbatim.rs");
 
 // ------------------------------------------------------------------ parameters
-/// Number of minimum hash values kept (zkSketch's KMV k = 1024).
-pub const KMV_K: usize = 1024;
+/// Number of minimum hash values kept. A build-time constant from the KMV_K environment
+/// variable (build.rs; default 1024, zk-Analytics' size in the six-sketch comparison; the
+/// paper's default size is 16384).
+pub const KMV_K: usize = parse_usize(env!("KMV_K"));
+
+const fn parse_usize(s: &str) -> usize {
+    let b = s.as_bytes();
+    let mut i = 0;
+    let mut v: usize = 0;
+    while i < b.len() {
+        assert!(b[i] >= b'0' && b[i] <= b'9', "KMV_K must be a decimal integer");
+        v = v * 10 + (b[i] - b'0') as usize;
+        i += 1;
+    }
+    v
+}
 /// Seed of the key hash. Their CM row-0 seed (aggregator/core/src/lib.rs:41), the same
 /// hash as the HLL port's `hll_hash64`.
 pub const KMV_SEED: u32 = CM_SEEDS[0];

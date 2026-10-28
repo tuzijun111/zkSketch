@@ -1,115 +1,30 @@
 #!/usr/bin/env bash
-# zkSketch vs zk-Analytics on six sketches (Count-Min, HyperLogLog, Misra-Gries (family ss),
-# Greenwald-Khanna, Bloom, KMV), on ONE machine. One entry point; run it from anywhere.
+# zkSketch vs zk-Analytics on six sketches (Count-Min, HyperLogLog, Misra-Gries, GK, Bloom, KMV) on one machine.
 #
-#   run_all.sh check            check the prerequisites; exit 1 if something blocking is missing
-#   run_all.sh build            fetch zk-Analytics @ d4a5a9a into $BASELINE_DIR, build both sides
-#   run_all.sh quick            smoke test of the whole pipeline at tiny scale (about 5-11 min on 32
-#                               cores): zkSketch 7 runs at N = 512 (2 batches of 256), zk-Analytics
-#                               executor for all six (noroot, and designed for the CM reference and
-#                               the root-work table), 4 real zk-Analytics proofs (SIX_QUICK_PROVE),
-#                               the rest ESTIMATED ("est")
-#   run_all.sh full [--dry-run] [--from-logs DIR [--zks-prefix P]]
-#                               the paper configuration: N = 16,384 = 8 x 2,048, zkSketch 7 runs,
-#                               zk-Analytics executor + 42 proofs (aggregation epochs 0 and 7 of every
-#                               family, noroot: 12; 28 queries; their shipped CM at epochs 0 and 7 as a
-#                               reference: 2; about 3 h 30 min plus gate waits, an estimate). --dry-run
-#                               prints the plan and runs nothing; the GK rank values and Bloom absent
-#                               keys are then derived natively, or read from DIR's zkSketch logs with
-#                               --from-logs (the real run reads this run's logs)
-#   run_all.sh memmatch [--quick] [--epochs T] [--dry-run] [--from-logs DIR [--zks-prefix P]]
-#                               the memory-matched shape behind the paper's final numbers: each family
-#                               on its own epoch (GK 2,048 records, the others 16,384), which zkSketch
-#                               proves as k leaves + k - 1 merges (GK cap 768, leaves of 512: k = 4;
-#                               CM, HLL, Bloom 1,024: k = 16; SS, KMV 4,096: k = 4) and zk-Analytics as
-#                               one receipt (its matched GK with --m-sub 512), T epochs (default 1).
-#                               Every planned zk-Analytics job is proved (14 at T = 1: about 5 h 30 min,
-#                               an estimate). --quick: the same pipeline at tiny scale (epochs of 256
-#                               records in leaves of 128, SS/KMV one leaf of 256, GK 512 = 4 x 128 with
-#                               cap 384, T = 2; 8 min here), proofs as in quick (SIX_QUICK_PROVE), the
-#                               rest ESTIMATED. The tables then give zkSketch's "1 epoch" as its k leaves
-#                               + k - 1 merges, and its worker, coordinator and combined peak memory
-#   run_all.sh sweep [--min E] [--max E] [--sizes 6,8,10] [--quick] [--dry-run] [--resume]
-#                               batch-size sweep (six/sweep.sh): both systems on ONE batch of m = 2^E records per
-#                               size, E = 6..14 by default, six families, each size in $RESULTS/m<EE>: zkSketch one
-#                               leaf per batch (SIX_T=1, k = 1; GK capacity 2,048 on both sides; Bloom packed while
-#                               7 x m < 2^16, omc at 2^14), zk-Analytics executor + 6 noroot aggregation proofs
-#                               (epoch 0; no CM reference), assemble.py + table.py; then sweep_table.py ->
-#                               sweep.csv / sweep_table.md (per family x m: prove, ms per record, zkA / zkS, verify,
-#                               proof bytes, peak RSS, zkS variant). About 12-16 h for E = 6..14 (estimate from the
-#                               executor's cycle counts at r0vm's 33-44 s per 2^20-cycle segment; the 2^14 size alone
-#                               5-7 h; HLL / GK leaves at 2^13-2^14 take tens of GiB). --quick: m = 64 and 128 only,
-#                               GK capacity 512 (as quick; SIX_GK_CAP overrides), no gate wait, stop at the first
-#                               failure: a ~15-20 min smoke. --dry-run prints the plan and runs nothing; --resume
-#                               skips the finished sizes of RESULTS
-#   run_all.sh queryrate [--q LIST] [--n N] [--quick] [--dry-run]
-#                               the query-rate experiment (the paper's mixed operation stream for all six
-#                               families): one query every Q stream positions, default Q = 1000,10000,100000
-#                               over N = 2^17 AOL positions plus the query-free baseline Q = 0. zkSketch is
-#                               MEASURED: 12 exp_compose forest runs at the memmatch leaf sizes (CM/HLL/Bloom
-#                               1,024; SS/KMV 4,096; GK 512 at capacity 768), a query mid-leaf seals and pads
-#                               the leaf. zk-Analytics is MODELED from measured parts (six/queryrate_model.py):
-#                               its epoch proof at E = Q (proved for Q <= 10,000, else estimated from padded
-#                               cycles) and its query proof cost vs the number n of merged epochs (executor
-#                               at n = 1..64 over 4,096-record epochs, where the KMV summaries are saturated
-#                               as at every Q >= 10,000; proved at n = 1 and 8), total(Q) = T A(Q) + a T +
-#                               b T(T+1)/2 for T = N/Q queries. A GK capacity preflight (the matched GK driver's
-#                               executor over all N records; exit 3 = overflow stops the run) comes first.
-#                               About 14 h (rough estimate). --quick: N = 1024, Q = 100,1000, tiny zk-Analytics
-#                               parts, SIX_FAIL_FAST=1 (about 40 min, rough; `--quick --n 4096` makes every
-#                               leaf a padded one at Q = 100: ~1 h 20 min). --dry-run prints the plan with
-#                               time estimates and runs nothing (six/queryrate.sh)
-#   run_all.sh assemble DIR     re-run assemble.py + table.py on a finished results directory
+# Usage: run_all.sh <command> [options]
+#   check                 check the prerequisites
+#   build                 fetch zk-Analytics @ d4a5a9a into $BASELINE_DIR and build both sides
+#   quick                 smoke test at tiny scale (5-11 min on 32 cores); proves 4 zk-Analytics jobs (SIX_QUICK_PROVE)
+#                         and computes the other jobs' prove times from their padded cycle counts
+#   memmatch [--quick] [--epochs T] [--dry-run [--from-logs DIR [--zks-prefix P]]]
+#                         one epoch per sketch, zkSketch within zk-Analytics' prover memory (Table 2)
+#   sweep [--min E] [--max E] [--sizes 6,8,10] [--quick] [--dry-run] [--resume]
+#                         one batch of m = 2^E records per size on both systems (Figure 5; six/sweep.sh)
+#   queryrate [--q LIST] [--n N] [--quick] [--dry-run]
+#                         one query every Q stream positions; zk-Analytics' totals are computed from its proofs
+#                         and cycle counts (six/queryrate.sh)
+#   full [--dry-run [--from-logs DIR [--zks-prefix P]]]
+#                         8 epochs of 2,048 records per sketch, 42 zk-Analytics proofs
+#   assemble DIR          rebuild the tables of a finished results directory
 #
-# zk-Analytics root variants. Their code builds, inside each epoch's aggregation proof, a Merkle
-# root over the summary's buckets; it is not part of their paper's protocol (an epoch publishes
-# its hash-chain values and ONE commitment to the whole state, which the query proof opens:
-# paper sections 5.2 and 5.3), and nothing in their code reads it. `noroot` = their guests
-# without that root: the DEFAULT and the headline, for all six. Their shipped CM (`designed`:
-# aggr_cm unchanged; its roots cost ~11.1-11.2M cycles per epoch) is proved as a REFERENCE only
-# (SIX_ZKA_CM_REF), to relate to their published numbers. `designed` for the five ports (their
-# samples pattern, 64 buckets) is an option (SIX_ZKA_ROOTS). Query proofs read no root and are
-# proved once.
-#
-# Env:
-#   BASELINE_DIR   zk-Analytics clone + its builds (default ~/ext-baselines; about 13 GB)
-#   RESULTS        output directory (default <repo>/results/six/<mode>-<YYYYmmdd-HHMMSS>, git-ignored);
-#                  must be new or empty
-#   SIX_CORES      zkSketch cores (default: physical cores, at most 32 = the paper configuration)
-#   GATE_WAIT_S    seconds to wait for a quiet box before each timed job (quick 0, full 1800)
-#   GATE_MAX_LOAD, GATE_MAX_BUSY  the quiet thresholds (gate.sh; defaults CPUs/8 (2 below 16 CPUs) and 4)
-#   SIX_ZKA_ROOTS  zk-Analytics aggregation variants executed and proved, a comma list of
-#                  designed | noroot | legacy (default noroot; legacy = the guests of the committed
-#                  2026-10-09 run). full proves 12 aggregation jobs per variant + 28 queries (+ 2 for
-#                  the CM reference): 42 at the defaults, 52 with designed,noroot (the earlier default)
-#   SIX_ZKA_CM_REF 1 (default): also prove their shipped CM aggregation (cm:aggr:<0|7>:designed) as a
-#                  reference, and execute designed for all six (executor only); skipped when
-#                  SIX_ZKA_ROOTS already has designed or legacy (the same CM guest). 0: off (full: 40 jobs)
-#   SIX_ZKA_GK     matched (default) | textbook: the zk-Analytics side's GK. matched = zkSketch's own
-#                  GK rule (the two-sided band-merge apply_batch2, capacity SIX_GK_CAP, s = 51, one step
-#                  per zkSketch leaf, the state carried across epochs) inside their pipeline
-#                  (../gk_matched): the same algorithm on both sides. textbook = textbook
-#                  Greenwald-Khanna rebuilt per epoch (../gk), a different algorithm, kept as a
-#                  labelled reference; SIX_ZKA_ROOTS=legacy needs it (the committed rows are textbook)
-#   SIX_ZKA_GK_IMPL  literal (default) | tuned | fast | fixed_linear: the matched GK guest's implementation
-#                  of the one transition (same state; literal = zkSketch's apply_batch2 code as written, the
-#                  baseline; the others are our rewrites, sensitivity only)
-#   SIX_QUICK_PROVE  quick: the jobs proved for real, as jobs.py --select selectors
-#                  (default cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key: CM and
-#                  KMV noroot at epoch 0, the GK query and the Bloom absent-key query at n = 1)
-#   SIX_ALLOW_STALE=1  let quick/full use binaries older than their sources (refused by default;
-#                  `run_all.sh build` refreshes them)
-#   SIX_GK_ROUNDS  stable (default) | sorted: zkSketch's GK leaf circuit (six_common.sh); honoured by quick/full
-#   SIX_BLOOM_VARIANT  packed (default) | omc: zkSketch's Bloom leaf (six_common.sh); honoured by quick/full
-#   EXP_VERIFY_REPEATS, EXP_FOREST_RETAIN_PREP, EXP_MALLOC_TRIM, EXP_EXIT_BEFORE_AUDIT, EXP_MERGE_CACHE,
-#                  EXP_MERGE_CACHE_ENTRIES  passed through to the zkSketch runs (run_zks.sh)
-# quick, full and memmatch use fixed run shapes: SIX_M, SIX_T, SIX_N, SIX_GK_CAP, SIX_GK_MSUB, SIX_QNS,
-# SIX_M_<FAM>, SIX_LEAF and SIX_LEAF_<FAM> are ignored here (they apply to the individual six/*.sh
-# scripts; memmatch takes --epochs T).
+# Env: BASELINE_DIR (default ~/ext-baselines), RESULTS (default results/six/<mode>-<stamp>), SIX_CORES (default:
+#   physical cores, at most 32), GATE_WAIT_S, SIX_ZKA_ROOTS, SIX_ZKA_CM_REF, SIX_ZKA_GK, SIX_QUICK_PROVE,
+#   SIX_SIZES and SIX_ZKA_HH (../sizes.sh; SIX_ZKA_HH=spacesaving reproduces Tables 2-3 and Figure 5)
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZKS="$(cd "$HERE6/../../../.." && pwd)"
 BASELINE_DIR="$(realpath -m -- "${BASELINE_DIR:-$HOME/ext-baselines}")"
+source "$HERE6/../sizes.sh"   # SIX_SIZES (zka | default): SIX_CM_W, SIX_SS_CAP, SIX_KMV_K, SIX_KMV_SUFFIX
 export BASELINE_DIR
 RZ_HOME=${RISC0_HOME:-$HOME/.risc0}
 export PATH="$HOME/.cargo/bin:$RZ_HOME/bin:$PATH"
@@ -117,8 +32,8 @@ ZKA_REV=d4a5a9a90f7470b4af29045ef248f724708813ad
 KEYS=$ZKS/data/aol.keys
 KEYS_MD5=01dd7d5c8a73
 EB=$BASELINE_DIR/build
-ZKA_BINS=("$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/zka-mg/release/mg" "$EB/zka-gk/release/gk"
-          "$EB/zka-bloom/release/bloom" "$EB/zka-kmv/release/kmv" "$EB/zka-gk-matched/release/gk_matched")
+ZKA_BINS=("$EB/cyc-t1/release/shipped" "$EB/hll/release/hll" "$EB/$SIX_ZKA_HH_BIN" "$EB/zka-gk/release/gk"
+          "$EB/zka-bloom/release/bloom" "$EB/zka-kmv$SIX_KMV_SUFFIX/release/kmv" "$EB/zka-gk-matched/release/gk_matched")
 ZKS_BIN=$ZKS/target/release/examples/exp_compose
 TAGS=(cm hll ss gk bloom bloom_absent kmv)
 QUICK_PROVE_DEFAULT=cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key
@@ -337,7 +252,7 @@ no_root_bins() {  # built drivers whose CSV header lacks the root-variant column
 stale_builds() {
   local z=$ZKS/scripts/baselines/zka i src bin
   local -a pairs=("$z/cyc" "${ZKA_BINS[0]}" "$z/cm_noroot" "${ZKA_BINS[0]}" "$z/hll" "${ZKA_BINS[1]}"
-                  "$z/mg" "${ZKA_BINS[2]}" "$z/gk" "${ZKA_BINS[3]}" "$z/bloom" "${ZKA_BINS[4]}"
+                  "$z/$SIX_ZKA_HH_SRC" "${ZKA_BINS[2]}" "$z/gk" "${ZKA_BINS[3]}" "$z/bloom" "${ZKA_BINS[4]}"
                   "$z/kmv" "${ZKA_BINS[5]}" "$z/gk_matched" "${ZKA_BINS[6]}" "$z/gk_bm2/core" "${ZKA_BINS[6]}")
   local stale=" "
   for ((i = 0; i < ${#pairs[@]}; i += 2)); do
@@ -475,7 +390,7 @@ summary() {  # summary <mode> <rc>
   echo "results:  $RESULTS"
   echo "  manifest.txt                 run configuration and versions"
   echo "  six_sketch_table.md          all tables (markdown)"
-  echo "  six_sketch_comparison.csv    one row per (family, system, root variant, operation); provenance says measured / sampled / derived / ESTIMATED"
+  echo "  six_sketch_comparison.csv    one row per (family, system, root variant, operation); provenance says measured / sampled / computed / FROM CYCLES (padded cycles x k)"
   echo "  six_zksketch_*.csv/.log      zkSketch runs;  six_zka_*.csv/.log  zk-Analytics executor, profile and proofs"
   if (( rc == 0 )); then echo "$mode: OK in $(hms $SECONDS)"; else echo "$mode: FAILED (rc=$rc) after $(hms $SECONDS); see the logs above"; fi
 }
@@ -539,12 +454,13 @@ cmd_quick() {
   write_manifest quick
   echo "quick smoke test -> $RESULTS"
   echo "  zkSketch: 7 runs, N=$SIX_N (t=$SIX_T batches of m=$SIX_M), $SIX_CORES cores; zk-Analytics: executor for all six"
-  echo "  under root variants $EXEC_ROOTS, proofs: ${sel//,/ } (the other planned jobs are ESTIMATED from padded"
-  echo "  cycles); GATE_WAIT_S=$GATE_WAIT_S"
+  echo "  under root variants $EXEC_ROOTS, proofs: ${sel//,/ } (the other planned jobs get prove times"
+  echo "  from their padded cycles); GATE_WAIT_S=$GATE_WAIT_S"
   steps_sampled quick "$sel"
 }
 
-steps_sampled() {  # steps_sampled <mode> <selection>: quick's steps: the selected proofs, the rest ESTIMATED
+steps_sampled() {  # steps_sampled <mode> <selection>: quick's steps: the selected proofs; assemble.py --plan
+                   # computes the other jobs' prove times from their padded cycle counts
   local mode=$1 sel=$2 rc=0 plan
   step "zkSketch: run_zks.sh (7 runs)" "$HERE6/run_zks.sh" || rc=1
   if (( rc == 0 )); then
@@ -556,10 +472,10 @@ steps_sampled() {  # steps_sampled <mode> <selection>: quick's steps: the select
   fi
   if (( rc == 0 )); then
     mapfile -t plan < <(grep ':query:' "$RESULTS/zka_plan.txt")
-    step "zk-Analytics query executor: run_zka.sh qexec (${#plan[@]} jobs, for the estimates)" "$HERE6/run_zka.sh" qexec "${plan[@]}" || rc=1
+    step "zk-Analytics query executor: run_zka.sh qexec (${#plan[@]} jobs, for the cycle-based prove times)" "$HERE6/run_zka.sh" qexec "${plan[@]}" || rc=1
   fi
   if (( rc == 0 )); then
-    step "zk-Analytics MG/GK profile: prof_exec.sh" "$HERE6/prof_exec.sh" || rc=1
+    step "zk-Analytics $SIX_ZKA_HH_NAME/GK profile: prof_exec.sh" "$HERE6/prof_exec.sh" || rc=1
   fi
   if (( rc == 0 )); then
     mapfile -t plan < <(jobs_py --logs "$RESULTS" --prefix six_zksketch --select "$sel" --lines)
@@ -594,7 +510,7 @@ cmd_full() {
       src="read from $from/${zpfx}_{gk,bloom_absent}.log and cross-checked against the native derivation"
       jobs=$(jobs_py --logs "$from" --prefix "$zpfx" --lines) || exit 1
     else
-      src="derived natively from data/aol.keys; the real run reads them from its own zkSketch logs and cross-checks"
+      src="computed from data/aol.keys; the real run reads them from its own zkSketch logs and cross-checks"
       jobs=$(jobs_py --lines) || exit 1
     fi
     local nagg nref=0
@@ -609,7 +525,7 @@ full run plan (dry run; nothing is executed)
   2. zk-Analytics executor:    SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS SIX_ZKA_CM_REF=$SIX_ZKA_CM_REF $HERE6/run_zka.sh exec
                                (aggregation epochs 0..$((SIX_T - 1)) of all six under root variants $EXEC_ROOTS;
                                Bloom/KMV pipelines with queries at n = $SIX_QNS, the query rows once)
-  3. MG/GK guest profile:      $HERE6/prof_exec.sh          (executor only)
+  3. $SIX_ZKA_HH_NAME/GK guest profile:      $HERE6/prof_exec.sh          (executor only)
   4. zk-Analytics, $(wc -l <<< "$jobs") timed proofs: $HERE6/run_zka.sh prove <jobs>
      $((nagg - nref)) aggregation proofs (epochs 0 and $((SIX_T - 1)) x 6 families x root variants $SIX_ZKA_ROOTS)
      + $(grep -c ':query:' <<< "$jobs") query proofs (variant-independent: query guests read no root)$(
@@ -628,7 +544,7 @@ EOF
   write_manifest full
   echo "full run (paper configuration) -> $RESULTS"
   echo "  zkSketch 7 runs + zk-Analytics executor (root variants $EXEC_ROOTS) + the planned proofs (42 at the"
-  echo "  defaults: expect ~3 h 30 min of running, an estimate, plus gate waits; GATE_WAIT_S=$GATE_WAIT_S per timed job)"
+  echo "  defaults: expect about 3 h 30 min of running plus gate waits; GATE_WAIT_S=$GATE_WAIT_S per timed job)"
   steps_proved full
 }
 
@@ -641,7 +557,7 @@ steps_proved() {  # steps_proved <mode>: full's steps: every planned zk-Analytic
   jobs_py --logs "$RESULTS" --prefix six_zksketch --lines > "$RESULTS/zka_plan.txt" \
     || { echo "cannot plan the zk-Analytics jobs (see above)"; summary "$mode" 1; return 1; }
   echo "zk-Analytics plan: $(wc -l < "$RESULTS/zka_plan.txt") jobs ($RESULTS/zka_plan.txt), GK rank values and Bloom absent keys from this run's zkSketch logs"
-  step "zk-Analytics MG/GK profile: prof_exec.sh" "$HERE6/prof_exec.sh" || rc=1
+  step "zk-Analytics $SIX_ZKA_HH_NAME/GK profile: prof_exec.sh" "$HERE6/prof_exec.sh" || rc=1
   mapfile -t plan < "$RESULTS/zka_plan.txt"
   step "zk-Analytics proofs: run_zka.sh prove (${#plan[@]} jobs)" "$HERE6/run_zka.sh" prove "${plan[@]}" || rc=1
   step "assemble + table" assemble_and_table "$RESULTS" || rc=1
@@ -674,13 +590,13 @@ memmatch_plan() {  # memmatch_plan <mode> <quick> <selection> <jobs> <source>: t
   echo "                               (aggregation epochs 0..$((SIX_T - 1)) of all six under root variants $EXEC_ROOTS, each on its family's epoch)"
   if (( quick )); then
     nsel=$(jobs_sel "$jobs" "$sel" | wc -l)
-    echo "  3. zk-Analytics query executor (run_zka.sh qexec, $nq jobs) and MG/GK guest profile (prof_exec.sh)"
-    echo "  4. zk-Analytics, $nsel timed proofs: $(jobs_sel "$jobs" "$sel" | tr '\n' ' ')(SIX_QUICK_PROVE=$sel); the other $(( $(wc -l <<< "$jobs") - nsel )) planned jobs ESTIMATED"
+    echo "  3. zk-Analytics query executor (run_zka.sh qexec, $nq jobs) and $SIX_ZKA_HH_NAME/GK guest profile (prof_exec.sh)"
+    echo "  4. zk-Analytics, $nsel timed proofs: $(jobs_sel "$jobs" "$sel" | tr '\n' ' ')(SIX_QUICK_PROVE=$sel); the other $(( $(wc -l <<< "$jobs") - nsel )) planned jobs get prove times from their padded cycles"
   else
-    echo "  3. MG/GK guest profile:      $HERE6/prof_exec.sh          (executor only)"
+    echo "  3. $SIX_ZKA_HH_NAME/GK guest profile:      $HERE6/prof_exec.sh          (executor only)"
     echo "  4. zk-Analytics, $(wc -l <<< "$jobs") timed proofs: $HERE6/run_zka.sh prove <jobs>"
     echo "     $((nagg - nref)) aggregation proofs (epoch(s) $(aggr_list) x 6 families x root variants $SIX_ZKA_ROOTS) + $nq query proofs$( (( nref )) && echo " + $nref CM reference proof(s) (their shipped CM, last)")"
-    (( SIX_T == 1 )) && echo "     about 5 h 30 min of running at T = 1, an ESTIMATE: ~2,500-3,100 s per 16,384-record aggregation proof (85-104 segments of 2^20 cycles x ~30 s), ~930 s for GK (31 segments), the 7 queries and zkSketch's 7 runs ~40 min; plus quiet-machine waits"
+    (( SIX_T == 1 )) && echo "     expected run time at T = 1 about 5 h 30 min: ~2,500-3,100 s per 16,384-record aggregation proof (85-104 segments of 2^20 cycles x ~30 s), ~930 s for GK (31 segments), the 7 queries and zkSketch's 7 runs ~40 min; plus quiet-machine waits"
   fi
   echo "     GK rank values / Bloom keys (zk-Analytics point n = zkSketch leaf n x k): $src"
   echo "  5. python3 -I $HERE6/assemble.py \$RESULTS $KEYS --zka six_zka --zks six_zksketch$( (( quick )) && echo " --plan \$RESULTS/zka_plan.txt") --extended --out \$RESULTS/six_sketch_comparison.csv"
@@ -721,7 +637,7 @@ cmd_memmatch() {
       src="read from $from/${zpfx}_{gk,bloom,bloom_absent}.log and cross-checked against the native derivation"
       jobs=$(jobs_py --logs "$from" --prefix "$zpfx" --lines) || exit 1
     else
-      src="derived natively from data/aol.keys; the real run reads them from its own zkSketch logs and cross-checks"
+      src="computed from data/aol.keys; the real run reads them from its own zkSketch logs and cross-checks"
       jobs=$(jobs_py --lines) || exit 1
     fi
     memmatch_plan "$mode" "$quick" "$sel" "$jobs" "$src"
@@ -736,11 +652,11 @@ cmd_memmatch() {
   if (( quick )); then
     export SIX_FAIL_FAST=1
     echo "  T=$SIX_T epochs; zk-Analytics executor (root variants $EXEC_ROOTS), proofs: ${sel//,/ } (the other planned"
-    echo "  jobs are ESTIMATED from padded cycles); GATE_WAIT_S=$GATE_WAIT_S"
+    echo "  jobs get prove times from their padded cycles); GATE_WAIT_S=$GATE_WAIT_S"
     steps_sampled "$mode" "$sel"
   else
     echo "  T=$SIX_T epochs; zk-Analytics executor (root variants $EXEC_ROOTS) + every planned proof (expect ~5 h 30 min"
-    echo "  at T = 1, an estimate, plus gate waits; GATE_WAIT_S=$GATE_WAIT_S per timed job)"
+    echo "  at T = 1, plus gate waits; GATE_WAIT_S=$GATE_WAIT_S per timed job)"
     steps_proved "$mode"
   fi
 }

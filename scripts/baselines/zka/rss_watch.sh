@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
-# Run a command while sampling r0vm's peak RSS.
-#
-# WHY: risc0 proves inside a SEPARATE `r0vm --port` process, so the driver's own
-# VmHWM reads ~9 MB and is meaningless. VmHWM is a kernel-held high-water mark,
-# so even a late sample captures the true peak.
-#
-# All pgrep/pkill are scoped to -u $(id -u): this box is shared by 18 users and
-# must never touch anyone else's r0vm. It also REFUSES to start if one of OUR
-# r0vm processes is already in flight, so it cannot clobber a run in progress.
-#
+# Run a command and report the peak RSS of this user's r0vm processes (risc0 proves in r0vm, not in the caller).
 # Usage: ./rss_watch.sh <label> <cmd...>
 set -uo pipefail
 LBL=${1:?usage: rss_watch.sh <label> <cmd...>}; shift
@@ -16,7 +7,7 @@ UID_=$(id -u)
 # Match the PROCESS NAME (-x r0vm), never the full command line (-f 'r0vm --port').
 # A -f pattern also matches the invoking shell whenever that shell's own command
 # line happens to contain the pattern text -- which makes a guard misfire and,
-# worse, makes a `pkill -9 -f 'r0vm --port'` kill the caller. Verified live here.
+# worse, makes a `pkill -9 -f 'r0vm --port'` kill the caller.
 if pgrep -u "$UID_" -x r0vm >/dev/null 2>&1; then
   echo "REFUSING: one of OUR r0vm processes is already running. Let it finish." >&2
   echo "  (No r0vm was touched.)" >&2

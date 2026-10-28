@@ -1,23 +1,4 @@
-//! **§4.3 composition topologies over real recursive proofs.**
-//!
-//! The sketch-agnostic [`merge`](super::merge) atom composes any two
-//! [`Node`]s (a leaf epoch or a merged subtree) into one O(1)-verifiable proof.
-//! This module packages the three §4.3 *schedules* over that atom as first-class
-//! drivers — the real-proof counterparts of the plaintext
-//! [`crate::recursion::framework`] schedules and of the plonky3
-//! `countmin_chain` / `hll_chain` / `countmin_forest_v9` aggregators:
-//!
-//! - [`compose_chain`] — §4.3(a) linear accumulating chain (left-deep fold).
-//! - [`compose_tree`]  — §4.3(b) balanced binary tree (power-of-two history).
-//! - [`StreamingForest`] — §4.3(c) Bentley–Saxe / MMR binary-counter cascade.
-//!
-//! It also adds [`merge_cross_family`] — the §4.2 merge atom across *heterogeneous*
-//! sketch families (e.g. a Count-Min leaf and a HyperLogLog leaf), with **no
-//! shared boundary**, binding both `(initial, final)` pairs under one combined
-//! digest. plonky3 needed a dedicated `cross_family_merge` spike for this; on
-//! plonky2 it is the same `verify_proof` machinery with the boundary `connect`
-//! dropped (each child carries its own `common_data`, so the two circuits may
-//! differ).
+//! Chain, balanced-tree and streaming-forest schedules over `merge`, plus a merge across two families.
 
 use std::sync::Arc;
 

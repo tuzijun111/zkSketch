@@ -1,15 +1,6 @@
-//! Targeted cost runs for the binding fix (see [`crate::sketch::bind`]):
-//! trace rows (`Σ 2^degree` over all tables), prove time and proof size of
-//! every fixed leaf/decoder under `Legacy`, `Semantic` and `Bound`, at one
-//! shape each. Explicit only:
-//!
-//! ```text
-//! BINDING_COST=cm_omc,hll_omc cargo test --release --lib \
-//!     sketch::binding_cost::binding_cost_report -- --ignored --nocapture
-//! ```
-//!
-//! `BINDING_COST` selects rows (default: all); `BINDING_COST_REPS` repeats
-//! each prove (the minimum prove time is reported).
+//! Trace rows, prove time (min of `BINDING_COST_REPS` runs, default 1) and proof size of each
+//! leaf/decoder under every `Binding`; `BINDING_COST` picks the rows (default: all).
+//! Run: BINDING_COST=cm_omc,hll_omc cargo test --release --lib binding_cost_report -- --ignored --nocapture
 
 use crate::recursion::recursive::timing;
 use crate::sketch::bind::Binding;

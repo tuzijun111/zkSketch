@@ -48,7 +48,7 @@ checkout they sit in, so a worktree measures its own sources.
 | `ss_mg/ss_mg_exec.sh` | no | `zka_ss_mg_exec.csv`, `zka_ss_mg_equiv.csv`, `zka_ss_mg_exec.log` | OUR RISC Zero guest running zkSketch's exact SS batch rule (mergeable Misra-Gries), checked against zkSketch's native code (see "zkSketch's SpaceSaving batch rule as a RISC Zero guest") |
 | `gk_bm2/gk_bm2_exec.sh` | no | `zka_gk_bm2_check.csv`, `zka_gk_bm2_exec.csv` (+ `.log`) | zkSketch's own GK band-merge batch transition in a RISC Zero guest, checked tuple by tuple against zkSketch's native `apply_batch2`; executor cycles at the deployed config (see "GK band-merge transition, matched semantics") |
 | `gk_matched/gk_matched_check.sh` | no (`CERTIFY=1`: zkSketch's GK leaf and decoder proofs) | `zka_gk_matched_{check,aggr,certify}.csv` + `zka_gk_matched_check.log` | zkSketch's GK rule inside zk-Analytics' pipeline (the six-sketch GK default): equivalence with zkSketch's native chain, its leaf circuit and its decoder at configs (384, 128) and (768, 512) (see "GK with zkSketch's algorithm in their pipeline") |
-| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~5-11 min, `full` ~3 h 30 min (estimate) plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †; GK = zkSketch's own GK rule in their pipeline, `gk_matched/`) at 8 x 2,048 AOL records: update proving per epoch (zk-Analytics `noroot`, the headline; their shipped CM as a reference), query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
+| `six/run_all.sh` (entry point: `check`, `build`, `quick`, `full`); it drives `six/build.sh`, `six/run_zks.sh`, `six/run_zka.sh`, `six/prof_exec.sh`, `six/jobs.py`, `six/assemble.py`, `six/table.py` | yes: `quick` ~5-11 min, `full` ~3 h 30 min (zk-Analytics proofs at ~30 s per segment; see "Six-sketch comparison (small scale)", Running) plus gate waits (32 cores) | `<repo>/results/six/<mode>-<stamp>/` (git-ignored; the committed `six_*` here are the 2026-10-09 reference run) | zkSketch vs zk-Analytics on six sketches (CM theirs; HLL, SS, GK, Bloom, KMV our ports †; GK = zkSketch's own GK rule in their pipeline, `gk_matched/`) at 8 x 2,048 AOL records: update proving per epoch (zk-Analytics `noroot`, the headline; their shipped CM as a reference), query proving at n = 1, 2, 4, 8, verifier work, sizes, RSS, accuracy (see "Six-sketch comparison (small scale)") |
 
 `compare.sh`, `q_sweep.sh` and `rss_watch.sh` refuse to start while an `r0vm`
 of yours is running, then kill this user's `r0vm` processes around their own
@@ -112,7 +112,7 @@ already calls risc0's accelerated SHA-256.
 `shipped_exec.sh` drives `cyc/src/bin/shipped.rs`. The driver runs zk-Analytics'
 own three epoch summary types, unmodified, on real AOL records, for the query
 classes zkSketch covers. It measures executor cycles and segment counts only.
-**Nothing here was proved.** Every prove-time number below is a model.
+**Nothing here was proved.** Every prove time below is segments x 30.1 s (see below).
 
 | their structure | aggregation guest | query guest, query | our analogue |
 |---|---|---|---|
@@ -173,11 +173,11 @@ classes zkSketch covers. It measures executor cycles and segment counts only.
   occupied heap slots across epochs (cm). `input_bytes` is the risc0-serde guest
   input. `padded_cycles` is the sum of 2^po2 over segments.
 
-### Results (executor; `MODELED` = segments x 30.1 s, NOT measured)
+### Results (executor only; prove time = segments x 30.1 s, not measured)
 
 Aggregation guest on one epoch (16,384 AOL records, 8,433 distinct keys):
 
-| guest | T | key_id | state entries | user cycles | cycles/rec | segments | MODELED prove |
+| guest | T | key_id | state entries | user cycles | cycles/rec | segments | prove (segments x 30.1 s) |
 |---|---|---|---|---|---|---|---|
 | aggr_samples | 100 (T=1 identical) | aol | 8,433 | 131,981,406 | 8,055.5 | 152 | 4,575 s |
 | aggr_histogram | 100 (T=1 identical) | aol | 8,433 | 272,843,799 | 16,653.1 | 318 | 9,572 s |
@@ -191,7 +191,7 @@ anchor (308.3M cycles, 311 segments). A plausible cause, not verified: on skewed
 keys more updates find their key already in the heap, so `cm_heap_update`
 returns early.
 
-Query guest over n populated epochs (segments, with MODELED prove time in parentheses):
+Query guest over n populated epochs (segments, with segments x 30.1 s in parentheses):
 
 | query | n=1 | n=4 | n=16 | n=64 (2^20 records) | cycles fit (R^2) |
 |---|---|---|---|---|---|
@@ -215,11 +215,12 @@ Query guest over n populated epochs (segments, with MODELED prove time in parent
   verified separately (no `env::verify` anywhere in their tree), so the
   aggregation rows above recur once per epoch.
 
-### Modeled prove time and the anchors behind it
+### Prove time from segment counts, and the anchors behind it
 
-MODELED prove time is `segments x 30.1 s/segment`. The CSV carries an envelope
-of `segments x 29.73` to `segments x 30.79`, the per-anchor minimum and maximum
-of the four CPU prove anchors. All four are CM guests, `ProverOpts::succinct()`,
+The prove times above are `segments x 30.1 s/segment` (CSV column
+`MODELED_prove_s`). The CSV also carries an envelope of `segments x 29.73` to
+`segments x 30.79` (`MODELED_prove_s_lo`, `MODELED_prove_s_hi`), the per-anchor
+minimum and maximum of the four CPU prove anchors. All four are CM guests, `ProverOpts::succinct()`,
 r0vm 3.0.6, CPU only, on this 32-core box:
 
 | anchor | prove_s | segments | s/segment | source |
@@ -231,8 +232,8 @@ r0vm 3.0.6, CPU only, on this 32-core box:
 
 Every full segment is a po2=20 trace, so per-segment cost should depend little
 on the instruction mix. That is an argument, not a measurement: **the samples
-and histogram guests have no proved anchor yet**, and their MODELED seconds are
-extrapolated from CM guests only. The GPU prover was not used. Run one small
+and histogram guests have no proved anchor yet**, and their seconds use the
+s/segment of the CM guests only. The GPU prover was not used. Run one small
 proved anchor per non-CM guest in a quiet window. Each command below is sized
 from the executor. `rss_watch.sh` refuses to start if an r0vm of yours is
 running, and it `pkill`s this user's r0vm on exit, so run nothing else under
@@ -277,8 +278,8 @@ path is compiled but has **not** been run.
 - **CM point queries are only meaningful for heavy keys.** The estimate for the
   heaviest key is +3.9% at n=64, so the heavy-key choice matters.
 - **Timing and hardware.** `exec_s` is wall-clock on a shared box and is not a
-  metric. Cycles and segments are deterministic. All MODELED seconds assume
-  CPU-only r0vm on this Threadripper.
+  metric. Cycles and segments are deterministic. All segments x 30.1 s figures
+  assume CPU-only r0vm on this Threadripper.
 
 ## Sketch-family guests (HLL, SpaceSaving, Greenwald-Khanna): zk-Analytics method, our implementation (†)
 
@@ -373,7 +374,7 @@ scripts/baselines/zka/sketch_exec.sh --skip-build --no-exec --prove   # the thre
 | `zka_hll_seed_spread_200.csv` | 800 | `hll/seed_spread.py` with 200 seeds (command in `hll/README.md`) | the same check over the guest seed plus 199 seeds from `numpy.random.default_rng(200)`; not part of the sweep |
 | `zka_hll_anchor.csv` / `.log` | 1 proved | `hll/prove_anchor.sh` | separate anchor CSV; not regenerated without `--prove` |
 | `zka_ss_exec.csv` / `.log` | 70 | `spacesaving/ss_exec.sh` | s = 2^14 and 1,024; aggregation, profiling twins, root variants, epoch 63; topk / estimate / estimate_merged |
-| `zka_ss_anchor.csv` / `.log` | 3 proved | `spacesaving/ss_anchor.sh` | separate anchor CSV with a `prove_condition` column. Two rows come from the superseded first build (per-key root, image `1e73f3f3...`), one of them `contended`; only the `clean` `buckets64` row of the current `aggr_ss` image (`0aff21e3...`) is a valid anchor |
+| `zka_ss_anchor.csv` / `.log` | 3 proved | `spacesaving/ss_anchor.sh` | separate anchor CSV with a `prove_condition` column. Two rows come from the superseded first build (per-key root, image `1e73f3f3...`), one of them `contended`; only the `clean` `buckets64` row of the 64-bucket `aggr_ss` (image `0aff21e3...`) is a valid anchor |
 | `zka_gk_exec.csv` / `.log` | 21 + 1 proved | `gk/gk_exec.sh`, `gk/gk_prove_anchor.sh` | GK keeps its anchor inside the executor CSV (HLL and SS use separate anchor CSVs): the proved row has `arm=proved` and a `contention` column |
 | `zka_{ss,gk}_exec_v1_before_fix.*` | - | first builds | superseded by review fixes; kept for side-by-side comparison only; **do not use** |
 | `zka_sketch_exec.log` | - | `sketch_exec.sh` | one record per sweep: validation, comparison, carry-over and anchor outcomes |
@@ -407,8 +408,8 @@ Common to all three families:
   committed journal, together with the chain boundaries and the n state commits.
   Their `MIN_SUPPORT = 10` suppression applies. There is one guest run (one
   proof) per query, as in their query guests.
-- **Prove-time model.** MODELED = segments x 30.1 s, with an envelope of
-  segments x 29.73 to x 30.79, from the four CM-guest CPU anchors above.
+- **Prove time.** Segments x 30.1 s, with an envelope of segments x 29.73 to
+  x 30.79, from the four CM-guest CPU anchors above; not proved except where stated.
 
 | | HLL † | SpaceSaving † | GK † |
 |---|---|---|---|
@@ -439,11 +440,11 @@ The verbatim copies were re-checked against the clone during integration:
 function in `spacesaving/core/src/lib.rs` and `gk/core/src/lib.rs` finds them
 identical. The clone is clean at `d4a5a9a90f74`.
 
-### Results (executor unless stated; MODELED = segments x 30.1 s, NOT measured)
+### Results (executor unless stated; prove time = segments x 30.1 s, not measured)
 
 **Aggregation guest, one AOL epoch** (epoch 0: 16,384 records, 8,433 distinct keys):
 
-| guest | config | user cycles | cycles/rec | segments | MODELED prove | sketch update share | data dependence (other epochs) |
+| guest | config | user cycles | cycles/rec | segments | prove (segments x 30.1 s) | sketch update share | data dependence (other epochs) |
 |---|---|---|---|---|---|---|---|
 | `hll_aggr` † | b = 14 | 82,646,548 | 5,044 | 85 | 2,558 s | 3.27M (4.0%, 200/rec) | epochs 1, 31, 63: 82.65M, 85 segments each (0.01%) |
 | `aggr_ss` † | s = 2^14 | 113,584,313 | 6,933 | 124 | 3,732 s | 10.3M (9.1%, 629/rec); + canonical sort 13.3%, root 5.1% | epoch 63: 127 segments |
@@ -462,7 +463,7 @@ identical. The clone is clean at `d4a5a9a90f74`.
   64 buckets 124 (headline), 1,024 buckets 128, per-key 176. At s = 1,024 the
   range is 100-105.
 
-**Query guest over n epochs** (segments, with MODELED prove time in parentheses):
+**Query guest over n epochs** (segments, with segments x 30.1 s in parentheses):
 
 | query | n=1 | n=4 | n=16 | n=64 (2^20 records) | user-cycle fit (R^2) |
 |---|---|---|---|---|---|
@@ -486,19 +487,19 @@ with the stored state that the guest re-hashes and merges:
 
 **Proved anchors** (aggregation guest, first 2,048 AOL records, `ProverOpts::succinct()`, CPU r0vm 3.0.6):
 
-| guest | segments | prove_s | s/segment | MODELED | conditions | receipt | verify | r0vm peak RSS |
+| guest | segments | prove_s | s/segment | segments x 30.1 s | conditions | receipt | verify | r0vm peak RSS |
 |---|---|---|---|---|---|---|---|---|
 | `hll_aggr` † | 11 | 332.1 | 30.19 | 331.1 s | 1-min load 11.4 at start; the driver has no contention sampler, and no other family's prover overlapped (by the logs' timestamps) | 224,554 B | 9.8 ms | 9,383 MB |
-| `aggr_ss` † (64-bucket root, current image `0aff21e3...`) | 16 | 473.4 | 29.59 | 481.6 s | `clean`: foreign r0vm in 0 of 470 samples | 224,818 B | 10.2 ms | 9,401 MB |
+| `aggr_ss` † (64-bucket root, image `0aff21e3...`) | 16 | 473.4 | 29.59 | 481.6 s | `clean`: foreign r0vm in 0 of 470 samples | 224,818 B | 10.2 ms | 9,401 MB |
 | `aggr_gk` † (fixed build, ELF `d0f88f7b...`) | 14 | 414.5 | 29.61 | 421.4 s | `contention=none`: 0 foreign r0vm in 1,607 samples; the builder's own nice-19 test build overlapped the first minute | 224,810 B | 11.6 ms | 9,389 MB |
 
 - All three proved journals were asserted equal to the native output.
-- The three non-CM guests land at 29.59-30.19 s/segment, within 2% of MODELED,
+- The three non-CM guests land at 29.59-30.19 s/segment, within 2% of 30.1 s,
   against the CM envelope of 29.73-30.79.
 - `zka_ss_anchor.csv` also holds two rows from the superseded first build
   (v1 image `1e73f3f3...`, per-key root): 672.4 s `clean` and 958.8 s
   `contended`. Neither is the current guest, and the contended one must never be
-  used. Only the `clean` row for the current image (`0aff21e3...`) is a valid
+  used. Only the `clean` row for the 64-bucket image (`0aff21e3...`) is a valid
   anchor.
 
 **Accuracy against exact answers:**
@@ -547,14 +548,14 @@ with the stored state that the guest re-hashes and merges:
     the number of tracked keys.
   - Every number is exact only for these AOL epochs, this batch size and these
     parameters.
-- **MODELED prove times rest on the four CM-guest anchors.** Each family has one
+- **The prove times rest on the four CM-guest anchors.** Each family has one
   proved anchor, for the aggregation guest at 2,048 records only. Those anchors
-  agree with the model within 2%, but every full-epoch and every query prove
-  time is an extrapolation. No query guest was proved here (the six-sketch
-  comparison below proves them at 2,048-record epochs).
-  - The whole-segment model overstates rows whose last segment is partial.
+  agree with 30.1 s per segment within 2%, but every full-epoch and every query
+  prove time is segments x 30.1 s, not a proof. No query guest was proved here
+  (the six-sketch comparison below proves them at 2,048-record epochs).
+  - Counting whole segments overstates rows whose last segment is partial.
     `padded_cycles / 2^20 x 30.1 s` is the lower sensitivity bound, and the gap
-    matters only for small query guests. With the model value first and the
+    matters only for small query guests. With segments x 30.1 s first and the
     bound second:
     - GK: n = 1, 30 s vs 3.8 s (po2 17); n = 4, 30 s vs 15 s; n = 16, 60 s vs
       34-45 s; rank at n = 64, 151 s vs 136 s.
@@ -565,7 +566,7 @@ with the stored state that the guest re-hashes and merges:
   - The anchors ran on a shared box. The SS and GK drivers sample for foreign
     `r0vm` processes; the HLL driver does not.
 - **CPU-only r0vm 3.0.6** on this 64-thread Threadripper. The GPU prover was not
-  used. All MODELED seconds are CPU seconds.
+  used. All segments x 30.1 s figures are CPU seconds.
 - **zkSketch-side numbers must be re-measured after the soundness fixes.** Do
   not pair these rows with zkSketch HLL / SS / GK numbers measured before the
   pending circuit soundness fixes. Re-run zkSketch's side first, and state which
@@ -608,12 +609,11 @@ with the stored state that the guest re-hashes and merges:
   - SS and GK had blocking review findings, which were fixed and re-measured:
     - SS: the root pattern, the point-query path and the anchor hygiene;
     - GK: the lost minimum and a certificate that could exceed eps N.
-  - HLL was accepted with non-blocking nits, still open: the `make_key_id` line
-    cited as `:88` in `hll/host/src/main.rs:7` should be `:76`; `hll_dirty` does
-    not pin the sources. (The 10-seed spread nit is answered by the saved 200-seed
-    file above.)
-  - ELF md5s and image IDs depend on the absolute source path (panic strings);
-    cycle counts do not.
+  - HLL was accepted with non-blocking nits, still open: `hll_dirty` does not pin
+    the sources. (The 10-seed spread nit is answered by the saved 200-seed file
+    above.)
+  - ELF md5s and image IDs depend on the absolute source path and on source line
+    numbers (panic locations), comment lines included; cycle counts do not.
   - `exec_s` is wall-clock on a shared box and is not a metric.
 
 ## Bloom filter and KMV guests: zk-Analytics method, our implementation (†)
@@ -804,8 +804,8 @@ zkSketch's algorithm in their pipeline". The other matched-rule guests (`ss_mg/`
 > used the plain `TwoAdicFriPcs`, not `HidingFriPcs`, so those proofs are **not**
 > zero-knowledge, and the Results tables below are those non-ZK numbers. Zero
 > knowledge costs zkSketch more (at this shape the LogUp masks alone add +16% (CM) /
-> +18% (HLL) end to end over an unmasked hiding build; `src/config.rs`, "Cost of the
-> masks"), and much more for GK at this shape: one GK run of the default (ZK) build
+> +18% (HLL) end to end over an unmasked hiding build; `docs/build.md`, "Zero knowledge
+> (on by default)", *Cost*), and much more for GK at this shape: one GK run of the default (ZK) build
 > on 2026-10-12, on a shared, loaded machine, took 824 s wall, 70 s of leaf proving
 > per batch and 58.8 GiB peak RSS (worker; coordinator 57.9 GiB while deriving the
 > root VK), against 215 s, 14.7 s and 19.4 GiB in `six_zksketch_r2_gk`. That run used
@@ -819,13 +819,13 @@ zkSketch's algorithm in their pipeline". The other matched-rule guests (`ss_mg/`
 > **The `zk` rows are pre-masking.** `zk2_zksketch_*` and `tiny_zksketch_*`
 > (`features=zk-default`, zkSketch `da4ff6e`) and any `six_zksketch_zk_*` set were
 > measured with `HidingFriPcs` on the UNFORKED Plonky3 / Plonky3_RangeAir pins,
-> i.e. before the LogUp masks (`src/config.rs`, "LogUp sums: masked per global
-> interaction"): their proofs reveal unmasked LogUp sums, which a verifier can
+> i.e. before the LogUp masks (`docs/build.md`, "Zero knowledge (on by default)"):
+> their proofs reveal unmasked LogUp sums, which a verifier can
 > test witness guesses against, so they are not zero-knowledge either (e.g.
 > `zk2_zksketch_cm.csv` has a 752,564-byte root; a re-run of that exact CM shape
 > on 2026-10-10 gave 752,728 bytes unmasked and 804,048 masked, and took 26.2 s
 > unmasked vs 30.3 s masked). The masking costs the composed run more than the
-> leaf (`src/config.rs`, "Cost of the masks"); re-measure on the masked build
+> leaf (`docs/build.md`, "Zero knowledge (on by default)", *Cost*); re-measure on the masked build
 > (its CSV rows say `pcs=hiding,logup_mask=on`) before quoting zkSketch
 > zero-knowledge numbers.
 
@@ -946,9 +946,9 @@ it with the journal: `hll_aggr_root`, `bloom_aggr_root`, `kmv_aggr_root` (`guest
 Bloom and KMV run their legacy aggregation function itself and then the root step; GK and
 SS run the legacy steps with the root construction chosen at run time. The variant code
 of HLL / Bloom / KMV / GK lives in each core crate's `src/root.rs`, compiled only with the
-crate feature `root` (enabled by `guests/aggr_root` and the host driver), so the legacy
-guests build exactly as before: every pre-existing guest ELF of the six families is
-byte-identical to the previous build. The cell -> bucket map, per family:
+crate feature `root` (enabled by `guests/aggr_root` and the host driver), so adding the
+variants left every pre-existing guest ELF of the six families byte-identical. The cell ->
+bucket map, per family:
 
 | family | cells | cell -> bucket (64 buckets) | leaf body, canonical order |
 |---|---|---|---|
@@ -1043,7 +1043,7 @@ What the scripts do with them:
 - `six/run_zka.sh exec` executes every aggregation epoch once per variant of
   `SIX_ZKA_ROOTS`, plus `designed` for all six families when the CM reference is on
   (executor only, about a minute at this configuration: it gives the reference's cycle
-  counts, `quick`'s estimate of it, and the root-work table). Bloom and KMV run their
+  counts, from which `quick` computes the reference's prove time, and the root-work table). Bloom and KMV run their
   `--mode exec` pipeline once per variant; the query rows are kept once, after a check
   that they are identical under every variant (all columns but `exec_s`). Then, per family
   and epoch, it checks that all variants give one `state_commit`, with `journal_eq_native`
@@ -1089,7 +1089,7 @@ top-level README, "Experiment 1", and the full guide `docs/six_sketch_comparison
 scripts/baselines/zka/six/run_all.sh check   # prerequisites; exit 1 + the fix if anything blocking is missing
 scripts/baselines/zka/six/run_all.sh build   # fetch zk-Analytics @ d4a5a9a into $BASELINE_DIR; build both sides
 scripts/baselines/zka/six/run_all.sh quick   # smoke test of the whole pipeline (N = 512 = 2 x 256), ~5-11 min
-scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~3 h 30 min (estimate) + gate waits
+scripts/baselines/zka/six/run_all.sh full    # this configuration (N = 16,384 = 8 x 2,048), ~3 h 30 min (proofs at ~30 s per segment) + gate waits
 scripts/baselines/zka/six/run_all.sh full --dry-run   # the plan and the 42 jobs, nothing run
 SIX_ZKA_ROOTS=designed,noroot scripts/baselines/zka/six/run_all.sh full   # the earlier two-variant plan, 52 jobs
 SIX_ZKA_GK=textbook scripts/baselines/zka/six/run_all.sh full   # textbook GK on the zk-Analytics side (the reference)
@@ -1118,20 +1118,20 @@ repository root (git-ignored; `RESULTS=...` to choose; never this directory):
 `manifest.txt` (configuration, versions), `run_all.log`, `six_sketch_table.md` (the
 tables of Results below and more, in a newer layout: zkA (noroot) / zkS side by side, a
 separate reference table for their shipped CM, zkA / zkS in one cell for queries, `est`
-marks), `six_sketch_comparison.csv`, and the raw files of the table below. `quick`
+on zk-Analytics times computed from cycle counts), `six_sketch_comparison.csv`, and the raw files of the table below. `quick`
 executes `noroot` and `designed` (the latter for the CM reference and the root-work
 table) and proves four zk-Analytics jobs for real, all `noroot` or queries
 (`cm:aggr:0:noroot`, `kmv:aggr:0:noroot`, `gk:query:1:<v>`, `bloom:query:1:key:<k>`;
 `SIX_QUICK_PROVE` to change, as `jobs.py --select` selectors, default
 `cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key`). Of its 28 planned
-jobs (12 `noroot` aggregation, 14 queries, 2 CM reference) it ESTIMATES the 24 it does not
-prove, each variant from its own executor cycle counts: padded cycles x the seconds per 2^20 padded
-cycles measured over this run's proofs (the CM reference at 256 records is 14 segments,
-about 7 min if proved; it is estimated). Those cells say `est`;
-`provenance` says ESTIMATED. Across the 40 proofs of the measured run, this model
-(k = 30.06 s per 2^20) gave between 5% below and 9% above the measured time for proofs
+jobs (12 `noroot` aggregation, 14 queries, 2 CM reference) it does not prove 24; for those
+it reports padded cycles x the seconds per 2^20 padded cycles measured over this run's
+proofs, each variant from its own executor cycle counts (the CM reference at 256 records is
+14 segments, about 7 min if proved; it is not proved). Those cells say `cyc`;
+`provenance` says `FROM CYCLES`. Across the 40 proofs of the measured run, padded cycles x
+k = 30.06 s per 2^20 gave between 5% below and 9% above the measured time for proofs
 of >= 2^19 padded cycles (2^20 and up: -5.0% .. +9.3%, 28 proofs; 2^19: -4.3% .. -2.3%, 7 proofs)
-and underestimated proofs of <= 2^18 cycles by 19-37% (fixed overhead; 5 proofs).
+and 19-37% below the measured time for proofs of <= 2^18 cycles (fixed overhead; 5 proofs).
 
 What `build` and `full` run, step by step (the first two commands are `build`), from the repository root (the relative paths below
 assume it; each script also runs on its own; defaults = this configuration; `RESULTS`
@@ -1179,7 +1179,7 @@ legacy` it prints the 40 jobs of the measured run (12 aggregation jobs
 `<fam>:aggr:<0|7>:legacy`, the run wrote them without the suffix, which means the same, and
 the same 28 queries).
 
-Proving time, ESTIMATED from the executor's segment counts at ~30 s per segment of 2^20
+Proving time, computed from the executor's segment counts at ~30 s per segment of 2^20
 cycles (30.07 s per 2^20 padded cycles over the 12 aggregation proofs of the measured run),
 not measured: the 12 `noroot` aggregation proofs are 150 segments (147 x 2^20 padded
 cycles), about 74 min; the 2 CM reference proofs are 48 segments, about 24 min (the same
@@ -1265,7 +1265,7 @@ python3 -I scripts/baselines/zka/six/table.py /tmp/six.csv --raw scripts/baselin
 
 | file | rows | what |
 |---|---|---|
-| `six_sketch_comparison.csv` | 148 | the comparison: one row per (family, system, operation), `provenance` = measured / sampled / derived, `detail` says how (written by `assemble.py` as of `6cac471`; see above) |
+| `six_sketch_comparison.csv` | 148 | the comparison: one row per (family, system, operation), `provenance` = `measured` / `sampled` (mean of the proved epochs) / `derived` (computed from those rows, e.g. 8 x the per-epoch mean), `detail` gives the computation (written by `assemble.py` as of `6cac471`; see above) |
 | `six_zka_{cm,hll,ss,gk,bloom,kmv}_exec.csv` + `six_zka_exec.log` | 8 / 8 / 8 / 8 / 16 / 12 | executor, all 8 aggregation epochs (Bloom, KMV: their `--mode exec` pipeline, query executes included) |
 | `six_zka_{family}_prove.csv` / `.log` | 6 per family (Bloom 10) | proved rows: aggregation epochs 0 and 7, queries at n = 1, 2, 4, 8 (Bloom: inserted and absent key) |
 | `six_zka_jobs.csv` | 40 | one line per proof: gate result, load at start / end, busy cores at start, wall time, r0vm peak RSS (`arg` `-` on the aggregation jobs: the legacy variant) |
@@ -1446,7 +1446,7 @@ zkS = zkSketch. Ratios are zkA / zkS.
   zkSketch was given 32 cores (`EXP_COMPOSE_CORES=32`, the matched-comparison
   setting of `compare.sh`), its query proofs a 32-thread pool on the coordinator.
 - **Sampled epochs (zk-Analytics).** Only aggregation epochs 0 and 7 were proved per
-  family; "per epoch" is their mean and "8 epochs" is 8 x that mean (derived). The
+  family; "per epoch" is their mean and "8 epochs" is 8 x that mean. The
   executor shows how much the other six epochs can differ, in segments per epoch
   (user cycles): CM 24 in every epoch (22.540M-22.547M), HLL 11 (10.395M-10.402M),
   SS 15 (13.995M-14.166M), GK 14-15 (13.144M-13.617M), Bloom 12
@@ -1462,7 +1462,7 @@ zkS = zkSketch. Ratios are zkA / zkS.
   the r0vm process of that one proof (`six/rss_tree.sh`).
 - **What "accept at n" counts.** zk-Analytics: the n aggregation receipts (their tree
   has no `env::verify`, so the verifier checks each; verify time and size = the
-  mean of the two proved epochs, derived) plus the query receipt (measured).
+  mean of the two proved epochs) plus the query receipt (measured).
   zkSketch: the pinned verification of the live Bentley-Saxe peak(s) at version n
   (one peak for n = 1, 2, 4, 8) plus the statement checks against the batch log
   (`query_bind_ms`, measured), plus the query proof's verification (measured). At
@@ -1529,8 +1529,8 @@ harness. One guest run is one zkSketch SS leaf:
 
 So the comparison is between two ways of handling the same batch transition
 (same rule, records and state layout): zkSketch's AIR circuit certifies it,
-and this guest executes it in a zkVM (executor only here; prove time
-MODELED). It is not a comparison of two algorithms, but the two statements are
+and this guest executes it in a zkVM (executor only here; prove time =
+segments x 30.1 s). It is not a comparison of two algorithms, but the two statements are
 not identical either: hash, compute-vs-verify and in-guest key mapping differ
 (see "Statement differences" under Caveats).
 
@@ -1540,16 +1540,16 @@ zk-Analytics' full aggregation pipeline, merged at query time by
 sum-and-truncate. Never mix the two in one table.
 `ss_mg/README.md` has the full detail.
 
-**Nothing here was proved.** Every prove time is MODELED = segments x 30.1 s
-(envelope x 29.73 to x 30.79), the model of the sections above.
+**Nothing here was proved.** Every prove time is segments x 30.1 s
+(envelope x 29.73 to x 30.79), as in the sections above.
 
 ### What is zkSketch's, ours and upstream
 
 | item | source |
 |---|---|
-| batch rule, tie-break, tau, dummy handling, state layout and order | zkSketch: `ss_final_full.rs` `build_ss` (:481), `group_by_key` (:408), `compress_from_gsorted` (:452), `apply_batch_ss_full` (:575); re-implemented, and every run is checked against the native function |
-| key mapping (29-bit mask, low bit forced to 1, `u32::MAX` gives the dummy) | zkSketch `ss_updates_of` (`src/experiments/stream_compose.rs:535`) |
-| epoch slicing, Uniform stream | zkSketch `examples/exp_compose.rs` `batches_from` (:206) and `load_base` (:192, seed 1) |
+| batch rule, tie-break, tau, dummy handling, state layout and order | zkSketch: `ss_final_full.rs` `build_ss`, `group_by_key`, `compress_from_gsorted`, `apply_batch_ss_full`; re-implemented, and every run is checked against the native function |
+| key mapping (29-bit mask, low bit forced to 1, `u32::MAX` gives the dummy) | zkSketch `ss_updates_of` (`src/experiments/stream_compose.rs`) |
+| epoch slicing, Uniform stream | zkSketch `examples/exp_compose.rs` `batches_from` and `load_base` (seed 1) |
 | plain-Rust transition (`ss-mg-core`, radix and std sorts), the two guests, cycle probes, host driver, equivalence checks, runner | ours |
 | unsalted SHA-256 commitments through risc0's accelerated `sha::rust_crypto` | zk-Analytics' style. **No zk-Analytics code is used**: no `Event` batches, no batch chain, no epoch chain, no Merkle root. zkSketch's leaf statement has none of them |
 
@@ -1639,7 +1639,7 @@ Unit tests compare both sorts with `apply_batch_ss_full` on 1,200 random
 24-epoch chains of small shapes (ties at the cut, pads, mask aliases). A
 by-hand mutation check (off-by-one tau, reversed tie order) was caught by them.
 
-### Results (executor; MODELED = segments x 30.1 s, NOT measured)
+### Results (executor only; prove time = segments x 30.1 s, not measured)
 
 Headline guest (`ss_mg`, radix). The phase split covers **user cycles
 only**:
@@ -1648,9 +1648,9 @@ only**:
 - The remaining 2,993 user cycles fall before `main` and after the last probe.
 - "Overhead" (padded - user) is paging plus the per-segment reserve and po2
   padding. It is not in any phase, yet it is 27-34% of the padded cycles that
-  set the segment count, and so the MODELED seconds.
+  set the segment count, and so the computed seconds.
 
-| dataset, epoch | s | S_old active | union keys | tau | S_new active | user cycles | padded cycles (sum 2^po2) | overhead (paging + reserved) | segments | MODELED prove | ingest + commit | transition | transition, % of user | transition, % of padded |
+| dataset, epoch | s | S_old active | union keys | tau | S_new active | user cycles | padded cycles (sum 2^po2) | overhead (paging + reserved) | segments | prove (segments x 30.1 s) | ingest + commit | transition | transition, % of user | transition, % of padded |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | AOL, 0 | 16,384 | 0 | 8,433 | 0 | 8,433 | 5,240,072 | 7,602,176 | 2,362,104 (2,034,292 + 327,812) | 8 | 240.8 s | 2,399,680 | 2,837,399 | 54.1% | 37.3% |
 | AOL, 63 | 16,384 | 8,061 | 15,062 | 0 | 15,062 | 7,048,931 | 10,485,760 | 3,436,829 (2,781,128 + 655,701) | 10 | 301.0 s | 2,399,680 | 4,646,258 | 65.9% | 44.3% |
@@ -1679,14 +1679,14 @@ page those buffers in again. The IPC executor reports paging per session only
 
 Whole stream (the 64-epoch guest chains, sequential, one proof per epoch):
 
-| dataset, s | segments per epoch (mean, range) | segments over 64 epochs | MODELED over 64 epochs |
+| dataset, s | segments per epoch (mean, range) | segments over 64 epochs | segments x 30.1 s over 64 epochs |
 |---|---|---|---|
 | AOL, 16,384 | 10.7 (8-12) | 685 | 20,619 s (5.7 h) |
 | AOL, 1,024 | 5.8 (5-6) | 373 | 11,227 s (3.1 h) |
 | Uniform, 16,384 | 9.3 (8-12) | 596 | 17,940 s (5.0 h) |
 | Uniform, 1,024 | 5.3 (5-6) | 342 | 10,294 s (2.9 h) |
 
-Sensitivity (user cycles / segments / MODELED):
+Sensitivity (user cycles / segments / segments x 30.1 s):
 
 | row | `ss_mg`, radix (headline) | `ss_mg`, std sort | `ss_mg_serde`, radix |
 |---|---|---|---|
@@ -1710,18 +1710,18 @@ Sensitivity (user cycles / segments / MODELED):
 
 ### Caveats
 
-- **No proved anchor for this guest.** Every second above is MODELED from the
-  four CM-guest CPU anchors. The three non-CM anchors (HLL, SS, GK) agreed with
-  the model within 2%, but this guest is not one of them.
-  - The whole-segment model overstates rows whose last segment is partial. The
+- **No proved anchor for this guest.** Every second above is segments x 30.1 s,
+  the rate of the four CM-guest CPU anchors. The three non-CM anchors (HLL, SS,
+  GK) agreed with that rate within 2%, but this guest is not one of them.
+  - Counting whole segments overstates rows whose last segment is partial. The
     lower bound, `padded_cycles / 2^20 x 30.1 s`, gives 218 s for AOL 0 at
-    s = 16,384 (240.8 s modeled) and 158 s for AOL 63 at s = 1,024 (180.6 s).
+    s = 16,384 (240.8 s by segments) and 158 s for AOL 63 at s = 1,024 (180.6 s).
     The other headline rows have only full segments.
 - **CPU-only r0vm 3.0.6 on this box** (AMD Threadripper PRO 9975WX, 32 cores /
   64 threads). The GPU prover was not used.
 - **Cross-hardware.** The paper's zkSketch timing tables were measured on EPYC
   machines. Cycles and segments do not depend on the hardware; seconds do. A
-  ratio of these MODELED seconds to EPYC-measured zkSketch seconds is a
+  ratio of these computed seconds to EPYC-measured zkSketch seconds is a
   cross-hardware ratio and must say so. Better: re-measure zkSketch's SS leaf
   on this box, from a build with the pending soundness fixes, and state which
   build each side uses.
@@ -1775,8 +1775,8 @@ run per epoch:
     S_t = apply_batch2(S_{t-1}, gk_vals_of(batch_t))
     journal = Com_old ‖ Com_batch ‖ Com_new        (unsalted SHA-256, risc0-accelerated)
 
-`apply_batch2` is `src/sketch/gk_bandmerge.rs:1426`; `gk_vals_of` is
-`src/experiments/stream_compose.rs:550`. `gk_bm2/README.md` has the full detail:
+`apply_batch2` is in `src/sketch/gk_bandmerge.rs`; `gk_vals_of` is in
+`src/experiments/stream_compose.rs`. `gk_bm2/README.md` has the full detail:
 the statement, the port, every check and the phase profile. Nothing was proved.
 
 ### Method
@@ -1881,12 +1881,12 @@ Against `gk/`, the zk-Analytics-architecture GK (†):
   measurement only. The first, three-variant version's rows are kept as
   `zka_gk_bm2_{exec,check}_v1_3variants.csv`.
 
-### Results (executor; MODELED = segments x 30.1 s, NOT measured)
+### Results (executor only; prove time = segments x 30.1 s, not measured)
 
 `zka_gk_bm2_exec.csv`, one 16,384-record epoch at the deployed config. Ingest +
 commit and transition are guest probes in **user cycles**:
 
-| row | variant | user cycles | total cycles (Σ 2^po2) | segments | MODELED prove | ingest + commit | transition |
+| row | variant | user cycles | total cycles (Σ 2^po2) | segments | prove (segments x 30.1 s) | ingest + commit | transition |
 |---|---|---|---|---|---|---|---|
 | AOL epoch 0 | literal | 82,065,236 | 135,266,304 | 129 | 3,883 s | 869,752 | 81,195,484 |
 | AOL epoch 0 | literal_reuse | 69,069,283 | 114,294,784 | 109 | 3,281 s | 869,752 | 68,199,531 |
@@ -1905,7 +1905,7 @@ commit and transition are guest probes in **user cycles**:
   commitments costs 0.87M user cycles on every row: 1.1% of `literal`, 3.7% of
   `fixed_linear`, 16.5% of `fast`. Segments also carry paging (total/user is
   1.59x-1.65x), which the executor does not split by phase, so the ingest
-  share of the segments and of the MODELED time is not measured.
+  share of the segments and of the computed time is not measured.
 - **`literal` vs `fast` is 15.6x in user cycles (16x in segments), but most of
   that is the literal port's implementation, not the oblivious schedule.**
   At AOL epoch 0, of the 76.8M user-cycle gap:
@@ -1927,21 +1927,21 @@ commit and transition are guest probes in **user cycles**:
 
 ### Caveats
 
-- **No proved anchor for this guest.** MODELED rests on the four CM-guest CPU
-  anchors (envelope 29.73-30.79 s/segment). The non-CM aggregation anchors
-  above landed within 2% of it, but none is `gk_bm2_step`. The whole-segment
-  model overstates partial last segments: AOL `fixed_linear` is 1,114 s
-  modeled against 1,099 s pro rata.
+- **No proved anchor for this guest.** The 30.1 s per segment comes from the
+  four CM-guest CPU anchors (envelope 29.73-30.79 s/segment). The non-CM
+  aggregation anchors above landed within 2% of it, but none is `gk_bm2_step`.
+  Counting whole segments overstates partial last segments: AOL `fixed_linear`
+  is 1,114 s by segments against 1,099 s pro rata.
 - **Cycle counts belong to one ELF.** Rebuilding with other code in the guest
   moved `literal` (source unchanged) by -0.3% and one segment, and `fast` by
   +1.4%. `fast`'s rows fill exactly 8 x 2^20 total cycles, on the 8/9-segment
-  boundary; quote it as **8-9 segments (241-271 s MODELED)** and use user
+  boundary; quote it as **8-9 segments (241-271 s at 30.1 s per segment)** and use user
   cycles as the primary metric. Details in `gk_bm2/README.md`.
 - **CPU-only r0vm 3.0.6** on this 64-thread Threadripper; the GPU prover was not
   used. `exec_s` is wall-clock and not a metric.
 - **Cross-hardware.** The paper's zkSketch tables were measured on an EPYC
-  machine. Cycles and segments are hardware-independent; MODELED seconds are
-  this box's CPU rate. Any ratio against an EPYC zkSketch time crosses machines
+  machine. Cycles and segments are hardware-independent; the computed seconds
+  use this box's CPU rate. Any ratio against an EPYC zkSketch time crosses machines
   and must say so. No same-box zkSketch GK leaf was measured here, and the
   zkSketch-side caveat above applies.
 - **Which row to quote.** `fixed_linear` is the like-for-like fixed schedule.
@@ -2025,11 +2025,11 @@ rounds 2-3, and the 352 / 336 s real proofs below) and `fast` compact the surviv
 of re-sorting, the observation behind zkSketch's planned stable-compaction circuit, so
 they stay only as labelled sensitivity rows. `literal` at B = 2,048 is 37 segments
 (38.8M padded cycles) at (384, 128) and 31 segments (32.0M) at (768, 512): about 1,133 s
-and 933 s at the 30.6 s per 2^20 padded cycles of the real `tuned` proofs (estimates; a
-real `literal` proof takes 16-19 min). `read` is their
+and 933 s at the 30.6 s per 2^20 padded cycles of the real `tuned` proofs (cycles x that
+rate, not proved here; a real `literal` proof takes 16-19 min). `read` is their
 Event deserialisation plus, from epoch 1 on, the carried state's words (see Caveats).
 
-| zk-Analytics GK | impl | epoch | user cycles | segments (padded, x 2^20) | read (Events + carried state) | batch chain | GK update | everything else | MODELED (padded x 30.07 s) |
+| zk-Analytics GK | impl | epoch | user cycles | segments (padded, x 2^20) | read (Events + carried state) | batch chain | GK update | everything else | padded x 30.07 s |
 |---|---|---|---|---|---|---|---|---|---|
 | matched, (384, 128), 16 steps | **tuned** | 0 | 10,979,416 | **12** (11.5) | 7,605,761 | 2,245,159 | 965,322 | 163,174 | 345.8 s |
 | matched, (384, 128) | tuned | 1 | 11,085,631 | 12 (11.5) | 7,714,745 | 2,245,658 | 952,085 | 173,143 | 345.8 s |
@@ -2047,7 +2047,7 @@ Event deserialisation plus, from epoch 1 on, the carried state's words (see Cave
   zkSketch's rule is cheaper in their pipeline than textbook GK (0.56M-0.97M with `tuned`
   vs about 3M user cycles for the summary at 2,048 records), so the matched baseline is
   FASTER than the textbook one: 11.5 / 11.0 padded segments at configs A / B instead of
-  13.25, a zk-Analytics estimate of about 346 / 331 s instead of 398.5 s at k_s = 30.07 s.
+  13.25, i.e. about 346 / 331 s instead of 398.5 s at k_s = 30.07 s per padded 2^20 cycles.
 - **Real proofs** (M1, `results/20261015-m1/`; their shipped tier `ProverOpts::succinct()`,
   CPU r0vm 3.0.6, epoch 0, noroot, gated on a quiet box, journal == native):
 

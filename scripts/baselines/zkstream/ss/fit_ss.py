@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
-"""Fit the SpaceSaving replay operator's small-scale runs and model deployed sizes.
-Every figure is labelled MEASURED or MODELED.
-
-Input: results/zkstream_ss.csv (run_ss.py). For each (s, k) the latest run that
-compiled is used. Gates first: every chained witness, proof and verify must be ok and
-every forgery rejected, otherwise no cost figure is printed.
-
-  fit_ss.py                    # deployed model: s = 2^14 counters, 2^20-record stream
-  fit_ss.py --s-dep 16384 --stream 1048576 --k-dep 1 16 64 16384
+"""SpaceSaving replay operator: the measured runs (results/zkstream_ss.csv), the exact constraint formula and
+least-squares fits evaluated at the deployed size (default s = 2^14 counters, 2^20-record stream).
+Usage: fit_ss.py [--s-dep 16384 --stream 1048576 --k-dep 1 16 64 16384]
 """
 import argparse, csv, math, statistics, sys
 from collections import defaultdict
@@ -62,7 +56,7 @@ def main():
     ap.add_argument("--csv", default=str(CSV_PATH))
     ap.add_argument("--s-dep", type=int, default=1 << 14, help="deployed SpaceSaving counters")
     ap.add_argument("--stream", type=int, default=1 << 20, help="deployed stream length")
-    ap.add_argument("--k-dep", type=int, nargs="+", default=[1, 16, 64, 1 << 14], help="deployed chunk sizes to model")
+    ap.add_argument("--k-dep", type=int, nargs="+", default=[1, 16, 64, 1 << 14], help="chunk sizes at which to evaluate the fits")
     ap.add_argument("--machine-gb", type=int, default=559, help="RAM of the proving machine")
     ap.add_argument("--cb", type=int, default=21, help="count bits of the layout to fit")
     ap.add_argument("--spe", type=int, default=3, help="slots per committed field element of the layout to fit (v1 = 1)")
@@ -163,7 +157,7 @@ def main():
         print(f"{r['s']:>4} {r['k']:>3} {r['cb']:>3}  an earlier attempt (run {r['run']}) was refused after {float(r['wall_s']):.0f} s, "
               f"peak {float(r['peak_rss_mb']) / 1024:.1f} GB; a later attempt compiled (row above)   (MEASURED)")
 
-    # ---- exact constraint model ---------------------------------------------------
+    # ---- constraint formula: exact rational least squares over every compile ---------
     print(f"\nconstraint model (cb={a.cb}, spe={spe}), cons(s,k) = A*s*k + B*k + C*s + G*ceil(s/spe) + D*ceil(ceil(s/spe)/5)"
           " + E*ceil(k/5) + H*k*floor(s/64) + J*s*floor(k/16) + F\n  (fit over all compiled points; G is folded into C when spe=1;"
           " H, J are the materialisation cuts of the final layout)")
@@ -236,25 +230,25 @@ def main():
             f"s={k[0]}: {per[k]['compile_s']:.0f} s / {per[k]['compile_gb']:.1f} GB" for k in k1))
         sd = a.s_dep
         print(f"  local exponent between s={s1} and s={s2}: time ~ s^{et:.2f}, memory ~ s^{eg:.2f} -> s={sd:,}, k=1: "
-              f"{fmt_s(t2 * (sd / s2) ** et)}, {g2 * (sd / s2) ** eg:.0f} GB   (MODELED; the exponent itself grows with s)")
+              f"{fmt_s(t2 * (sd / s2) ** et)}, {g2 * (sd / s2) ** eg:.0f} GB   (FIT; the exponent itself grows with s)")
     big = max(comp, key=lambda k: per[k]["cons"])
     print(f"largest compiled here: s={big[0]} k={big[1]}: {per[big]['cons']:,} constraints, {per[big]['compile_s']:.0f} s, "
           f"{per[big]['compile_gb']:.1f} GB   (MEASURED)")
 
-    # ---- deployed model ---------------------------------------------------------------
+    # ---- deployed size, from the fits above --------------------------------------------
     s = a.s_dep
     per_rec = A * s + B + E / 5 + H * (s // 64) + J * s / 16
     fixed = Cc * s + G * npk(s) + D * nblk(s) + F
     kmax = int((2 ** BN254_TWO_ADICITY - fixed) // per_rec)
     kmem = int(((a.machine_gb - ra) / rb - fixed) // per_rec) if rb > 0 else kmax
-    print(f"\nDEPLOYED MODEL, s = {s:,} counters, {a.stream:,}-record stream, cb={cb0}   (every number below MODELED)")
+    print(f"\nDEPLOYED SIZE, s = {s:,} counters, {a.stream:,}-record stream, cb={cb0}   (every number below from the fits)")
     print(f"  per chunk: fixed {fixed:,.0f} constraints (opening {Cc:g}/slot + packing + two Poseidon chains) + {per_rec:,.0f} per record "
           f"({A:g} x s + {H:g} x s/64 + {J:g} x s/16 + {B + E / 5:g})   [exact model, k a multiple of 16]")
     print(f"  Groth16/BN254: FFT domain cap 2^{BN254_TWO_ADICITY} = {2 ** BN254_TWO_ADICITY:,} constraints -> k <= {kmax:,} records per chunk")
     print(f"  prove peak RSS ({rb * 1e6:.2f} KB/constraint) within this machine's {a.machine_gb} GB -> k <= {max(kmem, 0):,}")
     print(f"  compile budget here {CAP_S // 60} min / {CAP_GB} GB; previous harness wall {COMPILE_WALL[0]:,} constraints "
           f"({COMPILE_WALL[1]} s, {COMPILE_WALL[2]} GB); CM d=7 w=2^14 k=2 did not compile in 60 min (76 GB and growing)")
-    print("  compile columns: power-law fit / linear fit (both extrapolated from <= "
+    print("  compile columns: power-law fit / linear fit (both fitted on <= "
           f"{max(per[k]['cons'] for k in comp):,} constraints)")
     big_full = max(full, key=lambda k: per[k]["cons"])
     rate_big = per[big_full]["cons"] / statistics.median(per[big_full]["prove"])

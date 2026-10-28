@@ -1,17 +1,5 @@
-//! Backend-agnostic measurement harness for the EVAL_SPEC §1 metrics.
-//!
-//! **Mirror of `plonky2/src/metrics.rs`** (pure-std, no proof-system types), so
-//! the plonky3 (STARK) and plonky2 (SNARK) stacks report the *same* columns:
-//! witness/prove/verify timing split, `prove_total` median+p95, `peak_rss_mb`
-//! (sampled from `/proc/self/status:VmRSS` during the run), and the
-//! deterministic `proof_size_bytes` / `trace_rows` / `num_columns` /
-//! `constraint_count` (= trace_rows·num_columns). [`bench`] can still aggregate
-//! `warmup + trials` runs to median/p95 internally, but the emitted CSV
-//! ([`AggRow::header`]/[`AggRow::fields`]) reports a **single value per metric**
-//! (E1 runs each config once); multi-trial callers see the median.
-//!
-//! [`super::time_it`] and [`super::results_dir`] live in the parent module;
-//! this submodule adds the trial/aggregation/RSS/env machinery on top.
+//! Measurement helpers: timing, peak RSS, proof size and env.json.
+//! Same CSV columns as `plonky2/src/metrics.rs`.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;

@@ -1,39 +1,6 @@
-//! E1 — circuit-cost runner for the **plonky3 (STARK)** backend (EVAL_SPEC E1/§1).
-//!
-//! Benches each certified family leaf over a configurable dataset slice with
-//! `1 warm-up + N trials`, capturing the full §1 metric set — witness/prove/
-//! verify split (from `recursion::recursive::timing`, recorded inside each
-//! `prove_*`), `prove_total` median+p95, proof size, summed trace rows, and
-//! **peak RSS** — and appends one row per `(family, m)` to
-//! `results/e1_circuit.csv`, plus an `env.json`.
-//!
-//! **Fair-comparison note:** `witness_gen` = trace generation, `prove` =
-//! `prove_all_tables`; the per-call circuit *build* is excluded (amortized),
-//! matching plonky2's build-once/prove pattern so the two backends'
-//! `prove_total` are comparable (the COMPARISON.md caveat). plonky3's
-//! multi-table batch-STARK has no single `num_columns`, so we set it to 1 and
-//! report `trace_rows` = Σ padded heights (constraint_count = trace_rows).
-//!
-//! Run (small slice, default):
-//!   cargo run --release --example exp_e1
-//! Configure (env): EXP_DATASET=uniform|gaussian|zipf|aol|netflix,
-//!   EXP_M=4,8,16,32   EXP_TRIALS=5   EXP_WARMUP=1
-//! Whole vs partial dataset: this runner consumes `max(EXP_M)` keys per family
-//! (a *small slice* — fine for testing). To exercise the real datasets, fetch
-//! them first (`python3 scripts/fetch_datasets.py`) and set EXP_DATASET=aol.
-//!
-//! Commitments (revision B2): the DEPLOYED variants (cm `omc`, hll `omc`, ss
-//! `certified`, gk `bandmerge2`) run under the prover's commitment context,
-//! read once (`ProverCommit::from_env`: `ZKSKETCH_COMMIT`, default `hiding`;
-//! the salt seed from `ZKSKETCH_SALT_SEED` or the OS RNG, never printed):
-//! under `hiding` each is the `*_commit` leaf (9 salt inputs, 3 salted
-//! sponges) proved at batch index 1 with `Openings::for_leaf(seed, family,
-//! 1)`. Every baseline variant stays `Plain`. Every CSV row records the mode
-//! it was proved under in its `commit` column (just before `status`): the
-//! run's mode for the deployed variants, `plain` for every baseline (the
-//! plonky2 leg writes the same column, always `plain`, so the two CSVs still
-//! merge); env.json records `commit_deployed`, `commit_baselines` and
-//! `salt_seed` (the seed's source, never the seed).
+//! E1: per-family leaf cost (witness/prove/verify time, proof size, rows, peak RSS); writes results/e1_circuit.csv.
+//! Usage: [EXP_DATASET=uniform|gaussian|zipf|aol|netflix EXP_M=4,8,16,32 EXP_FAMILY=all] cargo run --release --example exp_e1
+//! Other knobs (family shapes and variants, EXP_CORES): docs/experiments.md.
 
 use zksketch::dataset::{aol, netflix, synthetic_stream, take, zipf_stream, Synthetic};
 use zksketch::experiments::metrics::{append_csv, bench, write_env_json, AggRow, BenchCfg, RunOutcome};
@@ -119,7 +86,7 @@ fn outcome(proof_bytes: u64) -> RunOutcome {
         verify: t.verify,
         proof_size_bytes: proof_bytes,
         trace_rows: t.trace_rows,
-        num_columns: 1, // batch-STARK has no single column count; see module note
+        num_columns: 1, // batch-STARK has no single column count; trace_rows is the sum of padded table heights
     }
 }
 

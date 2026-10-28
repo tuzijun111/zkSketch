@@ -1,17 +1,5 @@
-//! CircuitBuilder-based Fibonacci leaf for the recursive merge atom.
-//!
-//! Why a separate leaf representation here (vs Phase 1's uni-stark `FibAir`)?
-//!
-//! The `RecursionInput::UniStark` aggregation path in plonky3-recursion is
-//! exercised upstream only with **empty public inputs** (the `recursive_keccak`
-//! example). Passing 4 PIs — as our uni-stark `FibAir` does — trips a
-//! WitnessConflict at WitnessId(0) inside the recursive verifier. The
-//! well-tested upstream pattern for non-trivial PIs is the
-//! `recursive_fibonacci` style: build the leaf computation directly with
-//! `CircuitBuilder` and prove it via `BatchStarkProver::prove_all_tables`.
-//!
-//! We keep the uni-stark `FibAir` and the Phase 1 §4.1 flat chain intact as
-//! the comparison baseline. This file provides the Phase 1.5 §4.2 path.
+//! Fibonacci leaf built with `CircuitBuilder` for the recursive merge (the uni-stark
+//! `FibAir` leaf hits a WitnessConflict in the recursive verifier with non-empty PIs).
 
 use std::rc::Rc;
 

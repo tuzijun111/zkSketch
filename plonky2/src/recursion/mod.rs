@@ -1,14 +1,4 @@
-//! Recursive proof aggregation — the heart of the framework (paper §4).
-//!
-//! Sketch-agnostic: everything operates on [`Node`]s, which carry a plonky2
-//! proof plus its circuit data and the boundary commits/digest. A leaf and a
-//! merged subtree are both `Node`s and expose the **same** first 8 public inputs
-//! (`initial_commit[0..4]`, `final_commit[0..4]`), so [`merge`] composes them
-//! uniformly into a left-deep or balanced tree.
-//!
-//! - [`merge`]   — §4.2 two-input recursive merge (verify both children in-circuit).
-//! - [`flat_verify`] — §4.1 baseline (verify each node natively); Θ(E) verifier.
-//! - §4.3 chain   — just repeated [`merge`] of the running root with a new leaf.
+//! Recursive aggregation: `Node`, the two-child `merge`, and `flat_verify` (verifies every node natively).
 
 pub mod framework;
 pub mod mmr;

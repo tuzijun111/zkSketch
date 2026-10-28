@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
-# Six-sketch comparison, zk-Analytics side, EXECUTOR ONLY (not timed; cycle counts are
-# deterministic): the per-phase profile of the SS and GK aggregation guests at SIX_M-record
-# (SIX_M_SS / SIX_M_GK when set) epochs (how much of an epoch is their Event read + batch chain), and the SS port's point
-# query (`estimate`) next to the `topk --limit 1` query the comparison proves. Epochs 0 and
-# T-1, queries at n = 1 and T (paper configuration: 2,048 records, epochs 0/7, n = 1/8).
-#   -> <prefix>_prof_ss.csv, <prefix>_prof_gk.csv, <prefix>_prof.log   (prefix: SIX_ZKA_PREFIX, default six_zka)
-# HLL, Bloom and KMV carry the same phase profile in their <prefix>_*_exec.csv rows already, and
-# so does the matched GK (SIX_ZKA_GK=matched, the default: its guest's `prof` column), so the GK
-# profile here runs only for SIX_ZKA_GK=textbook (no <prefix>_prof_gk.csv otherwise).
-# The SS / textbook-GK profiling twins are the LEGACY aggregation guests (the drivers take
-# --profile only without --root); table.py applies their read / chain cycles to the other root
-# variants' executor user cycles (the read and chain code is the same in every variant).
-# Exit status 0 only if every driver call succeeded.
+# Per-phase cycle profile of zk-Analytics' heavy-hitter (MG or SpaceSaving) aggregation and query guests, and of the textbook GK
+# aggregation guest; executor only.
+# Usage: prof_exec.sh   (writes <prefix>_prof_ss.csv, _prof_gk.csv and _prof.log; prefix SIX_ZKA_PREFIX=six_zka)
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE6/six_common.sh"   # BASELINE_DIR, ZKS, RESULTS, SIX_*, PATH
@@ -21,7 +11,7 @@ EB=$BASELINE_DIR/build
 KEYS=$ZKS/data/aol.keys
 OUTD=$RESULTS
 PFX=${SIX_ZKA_PREFIX:-six_zka}
-SSB=$EB/zka-mg/release/mg   # family ss = the Misra-Gries port (../mg)
+SSB=$EB/$SIX_ZKA_HH_BIN   # family ss: SIX_ZKA_HH (../sizes.sh) picks the Misra-Gries or the SpaceSaving port
 GKB=$EB/zka-gk/release/gk
 PROF_GK=0; [[ $SIX_ZKA_GK == textbook ]] && PROF_GK=1
 for b in "$SSB" $( (( PROF_GK )) && echo "$GKB"); do [[ -x $b ]] || six_die "missing $b (run six/build.sh zka)"; done
@@ -38,7 +28,7 @@ run() {  # run <csv> <bin> <args...>
   echo "# rc=$rc" >> "$LOG"
   (( rc == 0 )) || { NFAIL=$((NFAIL + 1)); echo "FAILED prof: $(basename "$bin") $* (rc=$rc)" >&2; }
 }
-echo "# ${PFX}_prof $(date -Is) host=$(hostname) load=[$(cut -d' ' -f1-3 /proc/loadavg)] executor only, not timed; M=$SIX_M T=$SIX_T (MG epoch $(six_fam_m ss), GK epoch $(six_fam_m gk))" > "$LOG"
+echo "# ${PFX}_prof $(date -Is) host=$(hostname) load=[$(cut -d' ' -f1-3 /proc/loadavg)] executor only, not timed; M=$SIX_M T=$SIX_T ($SIX_ZKA_HH_NAME epoch $(six_fam_m ss), GK epoch $(six_fam_m gk))" > "$LOG"
 echo "# zka=$(git -C "$ZKA" rev-parse --short=12 HEAD) zkSketch=$(git -C "$ZKS" rev-parse --short=9 HEAD)" >> "$LOG"
 SSO=$OUTD/${PFX}_prof_ss.csv
 "$SSB" --header > "$SSO"

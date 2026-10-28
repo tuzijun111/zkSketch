@@ -1,13 +1,4 @@
-//! Plaintext SpaceSaving sketch (paper Appendix D/G, Pattern B top-`s`).
-//!
-//! Port of `../src/sketch/ss_final_full.rs` to Goldilocks. Each row is a
-//! `(key, count, active)` triple; over Goldilocks the 64-bit key is a single
-//! field element (no BabyBear key-lo/hi split), so a row commits as **3** field
-//! elements (vs. 4 in the plonky3 original).
-//!
-//! The update is the §G single-pass top-`s` retention: union old∪batch, group
-//! by key (summing counts), count-sort, keep the top `capacity` by count. The
-//! in-circuit counterpart is [`crate::leaf::spacesaving`].
+//! Plaintext batched SpaceSaving: union, group by key, keep the top `capacity` rows by count.
 
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::HashOut;

@@ -1,7 +1,5 @@
 # Prerequisites, build and the zero-knowledge default
 
-(Moved here from the top-level README on 2026-10-18; the README keeps the short version.)
-
 - **plonky3 (root):** stable Rust ≥ 1.88 (edition 2024; `rust-version` in
   `Cargo.toml`). Older toolchains fail inside the Plonky3 dependencies. Install
   Rust with [rustup](https://rustup.rs); distro `rustc` packages are too old. No
@@ -74,24 +72,25 @@
     the `chain_two` example, 16-64 rows): it is below the budget and is not
     claimed to hide anything.
   - *Cost:* small at the leaf, large in the recursion layer, because every
-    merge re-verifies masked proofs in-circuit (measured masked vs unmasked
-    hiding builds; details in `src/config.rs`, "Cost of the masks"). Leaf
-    prove time +9-11%, proof +5-6%. The in-circuit verifier grows ~14%, which
-    pushes the L1 merge's ALU table past 2^17 rows for all four families
-    (also over paper-geometry m = 4096 children), so that table doubles: one
-    CM merge proves in 5.7 s instead of 3.8 s. A small composed run (forest,
-    N = 32, m = 8, 16 cores) takes +40% (CM) / +55% (HLL) wall time and +46%
-    peak RSS; at the six-sketch comparison shape (m = 2,048, t = 8), +16% /
-    +18%. Stored `zk` numbers measured before the masks (`zk2_*`) understate
-    the cost.
+    merge re-verifies masked proofs in-circuit (masked vs unmasked hiding
+    builds of the same tree on a shared 64-thread Threadripper PRO 9975WX:
+    leaves and one CM merge from `exp_e0` `E0_COST`, m = 1024, 2 runs each;
+    merge table heights from `exp_e0` `E0_MERGE=only`; end to end from
+    `exp_compose`, procs, forest). Leaf prove time +9-11%, proof +5-6%. The
+    in-circuit verifier grows ~14%, which pushes the L1 merge's ALU table
+    past 2^17 rows for all four families (also over paper-geometry m = 4096
+    children), so that table doubles: one CM merge proves in 5.7 s instead
+    of 3.8 s. A small composed run (forest, N = 32, m = 8, 16 cores) takes
+    +40% (CM) / +55% (HLL) wall time and +46% peak RSS; at the six-sketch
+    comparison shape (m = 2,048, t = 8), +16% / +18%. Stored `zk` numbers
+    measured before the masks (`zk2_*`) understate the cost.
   - *Still public, or only heuristic:* table heights (operation and batch
     counts); every Expose / NPO public value; with `ZKSKETCH_COMMIT=plain`, the
     unsalted state and batch commitments (statement-level guess-and-check).
     Upstream calls `HidingFriPcs` only statistically zero-knowledge; the
     plain-MMCS (unsalted Merkle leaves) argument and the LogUp masking are our
-    own constructions, argued in `src/config.rs`, not upstream guarantees. All
-    of this is the plonky3 backend; the plonky2 backend (`plonky2/`) is not
-    covered by it.
+    own constructions, not upstream guarantees. All of this is the plonky3
+    backend; the plonky2 backend (`plonky2/`) is not covered by it.
 - **Python (experiment plots):** `python3` + `matplotlib` for
   `scripts/plot_eval.py` (the paper's batch-sweep figure) and
   `scripts/plot_experiments.py`; stdlib only for `fetch_datasets.py` /

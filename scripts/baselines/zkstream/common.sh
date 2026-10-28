@@ -1,14 +1,4 @@
-# Sourced by every script here. Mirrors ../zka/common.sh.
-#
-#   HERE          this directory (harness sources and results, tracked)
-#   ZKS           the zkSketch checkout containing HERE
-#   BASELINE_DIR  external clones and builds; default ~/ext-baselines, the same
-#                 default as ../fetch_baselines.sh
-#   ZSTREAM       zkStream clone @ 33c0d68f (read only; its stdlib idioms are the reference)
-#   ZOK           ZoKrates 0.8.8 binary; ZOK_STDLIB its stdlib
-#   BUILD         every ZoKrates artifact (.out .r1cs keys witnesses proofs), outside the repo
-#   RESULTS       CSV/log destination; default results/ next to this file
-# Paths are made absolute: the drivers cd into per-k build directories.
+# Paths (ZoKrates, zkStream clone, BUILD, RESULTS), CPU pinning and tool/busy checks; sourced by run_ours.sh and sketch_run.sh.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZKS="$(cd "$HERE/../../.." && pwd)"
 BASELINE_DIR="$(realpath -m -- "${BASELINE_DIR:-$HOME/ext-baselines}")"

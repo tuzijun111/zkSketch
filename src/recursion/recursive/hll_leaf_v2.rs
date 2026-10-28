@@ -1,37 +1,5 @@
-//! §5.4-shaped HyperLogLog update leaf (Phase 4d).
-//!
-//! Mirror of `countmin_leaf_v2` for HLL: exposes the §5.4 per-register
-//! aggregate table `A` as an explicit in-circuit witness vector, and
-//! factors the transition into two steps:
-//!
-//!   - **Aggregate**: `A[r] = max(0, {selector[k][r] * lead[k] : k ∈ batch})`,
-//!     i.e., the maximum leading-run statistic contributed by records that
-//!     actually touch register `r`. Records not touching `r` collapse to 0
-//!     (via `selector[k][r] = 0`).
-//!   - **Sparse patch**: `final[r] = max(initial[r], A[r])`, a simple 2-way
-//!     max that applies the aggregate to the prior register state.
-//!
-//! Compared to the §5.1 strawman in `hll_leaf.rs`, the constraints are
-//! reorganised so the per-register transition reads `final = max(initial, A)`
-//! instead of the unified `final = max(initial, {lead[k] : touching})` over
-//! the joined candidate set. That makes the place where a future Appendix F
-//! optimisation (wide-output Poseidon2, LogUp-routed selectors, batched
-//! IPA/KZG multi-opening for the sparse patch) lands explicit.
-//!
-//! What this module **does not** do: reduce the witness count. The m
-//! registers of both states still appear as private inputs because the
-//! commitment is Poseidon2-of-flat-registers (same as v1). The genuine
-//! §5.4 / Appendix F witness reduction needs either a batched IPA/KZG
-//! multi-opening (so the patch verifies only touched registers via a
-//! succinct opening) or a Merkle-tree register commitment with sparse
-//! opens. Both are substantial follow-ups; this module is the structural
-//! scaffold they would build on.
-//!
-//! The produced proof has the same public-inputs layout and
-//! `HllLeafProof` shape as v1, so it plugs into the §4.2 `merge_two_hll`,
-//! §4.3 `HllChainState::extend`, and §4.1 `flat_merge_two_hll` paths
-//! without any changes — the `v2_leaf_merges_with_v1` test exercises that
-//! cross-compatibility.
+//! HyperLogLog leaf v2: `A[r]` = max lead over the records that hit register `r`, then
+//! `final = max(initial, A)`; same public inputs as `hll_leaf`.
 
 use std::rc::Rc;
 

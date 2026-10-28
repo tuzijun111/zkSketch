@@ -1,168 +1,5 @@
-//! **Offline-memory-checking Bloom-filter leaf (`bloom_omc`)** — a measured
-//! generality instance of the Pattern-A Step-5 rebind for an *OR* update,
-//! forked from [`super::hll_omc`] (the max-update leaf), not from the additive
-//! [`super::countmin_omc`].
-//!
-//! ## Sketch
-//!
-//! A **partitioned** Bloom filter: `k` slices of `W = 2^log_w` bits each
-//! (`M = k·W` cells). A record `key` is hashed ONCE with Poseidon2 and digest
-//! limb `j` gives slice `j`'s position `pos_j = digest[j] mod W` (the Count-Min
-//! row construction: `k ≤ 8` positions from one 8-limb digest). Insert sets
-//! the `k` bits `S[j·W + pos_j] := 1`; a membership query ANDs them. Each
-//! state cell is one bit stored as its own field element.
-//!
-//! ## Why the timestamp coordinate is REQUIRED
-//!
-//! The per-cell update is `N = O ∨ A` (old bit OR the batch's OR at that cell).
-//! OR has a fixed point (`1 ∨ x = 1`), so — exactly like HLL's max — a write can
-//! equal its read. A certificate that lists only newly set bits, or a plain
-//! `M_old ⊎ W = M_new ⊎ R` rebind without time, is unsound: the prover claims a
-//! touched `0` bit "was already 1" (`O = N = 1`), leaves it `0` in the committed
-//! final state, and the balance still closes — the insert is suppressed and the
-//! filter reports a **false negative**. The rebind below is the timestamped
-//! offline-memory-checking form (Blum et al. / Spice) specialised to one
-//! read/write pair per touched cell:
-//!
-//! ```text
-//!   WS = {(a, S_{t-1}[a], 0) : a < M}  ⊎  {(a_z, N_z, 1) : touched a_z}
-//!   RS = {(a, S_t[a],  ft_a) : a < M}  ⊎  {(a_z, O_z, 0) : touched a_z}
-//!   WS == RS   (multisets of (addr, bit, ts), one Permute op)
-//! ```
-//!
-//! The only `ts = 0` writes are the init writes, one per address, so a touched
-//! cell's `ts = 0` update read can only consume its own init write, forcing
-//! `O_z = S_{t-1}[a_z]`; the `ts = 1` update write then forces `S_t[a_z] = N_z`,
-//! and every untouched cell is pinned `S_t[u] = S_{t-1}[u]`. `N_z = O_z ∨ A_z` is
-//! computed in-circuit, where `A_z` is the OR of the batch bits routed to
-//! `a_z`, a running OR over the `(address, bit)` pairs sorted by address
-//! (group-by: every touched address has exactly one segment, hence exactly one
-//! read/write pair).
-//!
-//! ## Binding discipline (differs from `hll_omc` ON PURPOSE)
-//!
-//! * **No `decompose_ext_to_base_coeffs` anywhere.** In the pinned fork, with
-//!   the recompose NPO enabled and `coeff_lookups = false` (the configuration
-//!   every leaf in this crate uses), the decompose coefficients are hint
-//!   outputs that the Recompose table does *not* read on the WitnessChecks bus
-//!   (only the packed output is bus-bound, see `RecomposeAir::eval`). They are
-//!   therefore not bound to the value they decompose. [`tests::poc_npo_decompose_coefficients_are_unbound`]
-//!   forges one such coefficient in the trace and the proof still verifies.
-//!   This leaf instead witnesses every base coefficient as a private input,
-//!   pins it to the base field with a range/boolean check, and recomposes it
-//!   through the ALU (`recompose_base_coeffs_to_ext_via_alu`) before
-//!   `connect`ing to the hash input/output — [`tests::control_alu_recompose_binding_rejects_forgery`]
-//!   shows the same forgery is rejected there.
-//! * **Only byte-aligned `add_range_bits`.** For `n % 8 != 0` the fork's
-//!   `add_range_bits` looks up only `byte·2^(8−r)` for the top byte, which in a
-//!   prime field admits `byte = v·2^-(8−r)` for every byte `v`: for `n ≥ 9` the
-//!   proven bound is `x < 2^n + 2^(8⌈n/8⌉−8)` (not `2^n`), for `n < 8` it is no
-//!   range bound at all ([`tests::poc_add_range_bits_unaligned_is_not_a_range_check`]
-//!   gets `add_range_bits(x, 4)` to accept `x = 16^{-1} mod p`).
-//!   [`range_exact`] uses two aligned checks instead
-//!   ([`tests::control_range_exact_rejects_unaligned_forgery`]).
-//! * **Bound Poseidon2 IV.** In the fork's D = 4 Poseidon2 layout a
-//!   `new_start` row does not constrain input limbs that carry no CTL (the
-//!   zero-capacity assertion exists only in the compact D = 1 layout), so
-//!   `add_hash_slice` hashes under a prover-chosen capacity (and, for a
-//!   one-Challenge input, a prover-chosen second rate limb):
-//!   [`tests::poc_poseidon_d4_free_capacity`] exposes a "digest" of `x` that is
-//!   not `MyHash(x)`. For routing this is fatal — with any nonzero capacity a
-//!   record's positions are unrelated to its key, so the insert is silently
-//!   dropped (false negative), and positions can be ground at will. Every hash
-//!   here goes through [`hash_slice_bound`], which feeds the zero constant into
-//!   every first-row limb ([`tests::control_bound_sponge_rejects_capacity_forgery`]).
-//! * **Canonical positions.** `digest[j] = pos + 2^log_w·hi` with `pos` exact in
-//!   `[0, 2^log_w)`, `hi ≤ HI_MAX = (p−1)/2^log_w`, and `hi = HI_MAX ⇒ pos = 0`,
-//!   i.e. the split integer is `≤ p−1`. Without this, a limb `x < 2^27 − 1`
-//!   also splits as `x + p`, which shifts the position to `(x+1) mod W`
-//!   (`p ≡ 1 mod 2^27`) — a misrouting [`tests::noncanonical_position_rejected`]
-//!   mounts end-to-end.
-//! * **Injective key encoding.** The 64-bit key is NOT reduced mod `p` (the
-//!   `Legacy` CM/HLL omc leaves, and the one-hot/memcheck/Merkle CM leaves,
-//!   hash `Val::from_u64(key)`, so keys congruent mod `p` collide and are
-//!   deterministic false positives of each other; the `Semantic`/`Bound`
-//!   CM/HLL omc leaves and the CM decoder now use the same 16-bit limbs,
-//!   [`crate::sketch::bind::key_from_limbs`]). On BabyBear a
-//!   32-bit limb is not injective either (`p < 2^31`), so the key is hashed as
-//!   four range-checked 16-bit limbs, one Challenge `[k0, k1, k2, k3 + 2^16·act]`
-//!   (still ONE Poseidon2 absorb). `act ∈ {0,1}` marks real records; dummy
-//!   (padding) records are forced canonical: `act = 0 ⇒ k0 = k1 = k2 = k3 = 0`,
-//!   and they OR in bit `act = 0`, i.e. never change the state.
-//! * **Exposed boundary.** In this fork `alloc_public_input` values are *not*
-//!   visible to an outside verifier (the Public table is a committed trace).
-//!   The standalone leaf ([`build_bloom_omc_leaf`]) therefore always surfaces
-//!   `(init, final, batch)` commitments via the Expose NPO (24 base values);
-//!   [`read_exposed_commitments`] reads them from a proof. (`hll_omc` exposes
-//!   only `(init, final)`, so its batch is not bound to the proof.)
-//! * **Composable statement.** The 24-value layout is not one the proof forest
-//!   folds. [`build_bloom_omc_leaf_expose`] with [`Expose::Interval`] instead
-//!   exposes the composition layer's interval statement
-//!   `(Com(S_{t-1}), Com(S_t), (t, t, 0, 0), H(TAG_LEAF, t, Com(B_t)))`
-//!   (28 values, [`crate::recursion::recursive::statement`]): `t` is a public
-//!   input pinned to the base field, and `Com(B_t)` is the in-circuit batch
-//!   digest above, so the batch is still bound to the proof, now through `H`.
-//!   `H` is hashed with the bound sponge like every other hash here.
-//!   [`Expose::Boundary`] exposes `(init, final)` only (the pre-B6(b)
-//!   statement, for side-by-side runs); [`Expose::None`] is the standalone
-//!   24-value leaf, op for op.
-//!
-//! ## Open caveat: constants are not bound by the pinned fork
-//!
-//! `ConstAir` stores constant VALUES in the main trace (only `(multiplicity,
-//! index)` are preprocessed, no constraint), so a prover can replace any
-//! constant consistently across its uses — [`tests::poc_const_values_are_prover_chosen`]
-//! verifies a proof of `y = x + 5` that exposes `x = 1, y = 8`. This breaks
-//! every circuit built on the fork, this one included (e.g. the zero IV of
-//! [`hash_slice_bound`], the `assert_zero` target, the cell-address constants).
-//! Everything argued above is therefore **conditional on the fork binding
-//! constant values** (moving the value columns into the preprocessed trace).
-//! A fork-free mitigation also exists because constants are pooled by value:
-//! expose every distinct constant once and derive the per-cell constants by
-//! an ALU chain; it is not implemented here. Separately, the native
-//! `verify_all_tables` reads the preprocessed commitments from the proof
-//! itself, so a real verifier must also pin them (the forgery tests keep the
-//! circuit, hence those commitments, unchanged).
-//!
-//! ## Hiding commitments (revision B2)
-//!
-//! [`build_bloom_omc_leaf_commit`] takes a [`CommitMode`]. `Plain` is the
-//! leaf above byte for byte (no new op, same VK). Under `Hiding` the three
-//! commitments absorb the prefix `[kind, family, 0, 0, ρ_0..ρ_11]` of
-//! [`crate::commitment::hiding`] (tag `TAG_STATE` / `TAG_BATCH`, family
-//! [`CommitFamily::Bloom`] = 5) before the same cells / records, with the
-//! three salts (init, final, batch) the FIRST private inputs; natively
-//! [`commit_bloom_with`] and [`bloom_batch_commit_with`]. The salts are
-//! witnesses (each gets an ALU creator, [`hiding::alloc_salt_targets`]),
-//! hashed with the same bound zero-IV sponge as every other hash here, so
-//! binding holds for every `ρ`. A hiding leaf is proved with
-//! [`BloomOmcLeafCircuit::prove_epoch_commit`] and the prover's openings of
-//! leaf `t`; `prove_epoch_at` refuses to run on it, and the one zero-salt
-//! path, [`BloomOmcLeafCircuit::prove_epoch_public_zero`], accepts only the
-//! public no-op input of the VK-derivation leaf (the empty filter and an
-//! all-dummy batch at `t = 1`).
-//!
-//! ## Two Permute ops share one bus
-//!
-//! The fork's PermuteAir sends bare values on one `PermuteBus` for ALL Permute
-//! ops of a circuit, so what is proven is `sort_in ⊎ omc_in == sort_out ⊎
-//! omc_out`, not two separate equalities. Here that union still splits: sort
-//! elements are base-field values `2a + bit` (coordinate 3 = 0); OMC elements
-//! are `(a, bit, ts, 1)` (coordinate 3 = 1) or the zero dummy of an inactive
-//! update row, and the zero dummies occur at the same `a_active = 0` rows on
-//! both OMC sides. So every value class balances within its own op.
-//!
-//! ## Cost
-//!
-//! One Permute over `M + k·batch` tagged elements, dense commit/unpack of both
-//! states (`Θ(M)`), and per record one Poseidon2 digest, `k` canonical splits
-//! and `k` sorted `(address, bit)` rows: **`Θ(M + k·batch)`**.
-//!
-//! Measured (2026-09-24, shared 64-thread box under load, official release
-//! profile, `tests::bloom_omc_measure`, k = 7, W = 2^14, M = 114,688, half-full
-//! prior): batch 256 → 852,992 trace rows, prove ≈ 1.8 s, proof ≈ 581 KB;
-//! batch 4096 → 3,081,216 rows, ≈ 6.4 s, ≈ 717 KB; batch 16384 → 7,013,376
-//! rows, ≈ 12.9 s, ≈ 734 KB (verify ≈ 15–20 ms throughout).
+//! Bloom-filter leaf: k slices of 2^log_w bits, one field element per bit, updated by
+//! timestamped offline memory checking (the OR update needs the timestamp to be sound).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -842,11 +679,11 @@ pub fn build_bloom_omc_leaf_expose(params: BloomOmcParams, expose: Expose) -> Bl
 }
 
 /// [`build_bloom_omc_leaf_expose`] under the commitment mode `mode`
-/// (revision B2, module doc "Hiding commitments"). `Plain` is the pre-B2
-/// circuit op for op (same VK). `Hiding` allocates the three salts (init,
-/// final, batch) as the first private inputs and absorbs them, behind the
-/// kind/family tag, into `Com(S_{t-1})`, `Com(S_t)` and `Com(B_t)`; prove it
-/// with [`BloomOmcLeafCircuit::prove_epoch_commit`].
+/// (revision B2). `Plain` is the pre-B2 circuit op for op (same VK).
+/// `Hiding` allocates the three salts (init, final, batch) as the first
+/// private inputs and absorbs them, behind the kind/family tag, into
+/// `Com(S_{t-1})`, `Com(S_t)` and `Com(B_t)`; prove it with
+/// [`BloomOmcLeafCircuit::prove_epoch_commit`].
 pub fn build_bloom_omc_leaf_commit(
     params: BloomOmcParams,
     expose: Expose,
@@ -2534,7 +2371,7 @@ mod tests {
 
     /// PoC: `add_range_bits(x, 4)` accepts `x = 16^{-1} mod p` (≈ 0.94·p), i.e.
     /// for `n < 8` it is not a range check at all (for `n ≥ 9` the proven bound
-    /// is `2^n + 2^{8⌈n/8⌉−8}`, argued in the module docs, not PoC'd here).
+    /// is `2^n + 2^{8⌈n/8⌉−8}`, not PoC'd here).
     ///
     /// Gated on [`crate::sketch::bind::probe::fork_binds_range_top_byte`]: on a
     /// fork whose `add_range_bits` also looks the top byte up unshifted, the

@@ -1,12 +1,5 @@
-//! Workload sweep on the HyperLogLog update leaf (Phase 4c analog of
-//! `countmin_sweep`).
-//!
-//! Scans a small grid of `(b, batch)` and reports leaf prove time and proof
-//! size at each grid point. Per the §5.1 strawman pattern: witness scales
-//! roughly with `m + batch * m + batch * m * REGISTER_WIDTH` (the dominant
-//! cost is the per-register bit decomposition for the max constraint).
-//!
-//! Run with: `cargo run --release --example hll_sweep`.
+//! HyperLogLog leaf prove time and proof size over a small (b, batch) grid.
+//! Usage: cargo run --release --example hll_sweep
 
 use std::time::Instant;
 

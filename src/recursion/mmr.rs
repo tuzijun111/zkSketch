@@ -1,21 +1,5 @@
-//! **Standalone Merkle Mountain Range (MMR) over the per-batch input
-//! commitments** `{Com(B_1), …, Com(B_t)}` — the append-only *upload log* (ULog).
-//!
-//! This is the input-commitment log as a **separate artifact**, decoupled from
-//! the proof/state composition: the streaming forest folds `Com(B_t)` into the
-//! unified history root `R(t)` (carrying boundary/order/transition semantics);
-//! this MMR instead binds *just the ordered batch input commitments* into one
-//! published root, so a light client can prove "batch `i`'s committed input is in
-//! the log" in `O(log t)` without verifying any transition proof — the standard
-//! transparency-log pattern (CT / Grin / FlyClient).
-//!
-//! - **Append-only, `O(1)` amortized append** (binary-counter peak cascade).
-//! - **One root** = bag the `popcount(t)` peaks, with the leaf count bound in.
-//! - **`O(log t)` inclusion proofs**, verifiable by anyone holding the root.
-//!
-//! Nodes hash in the project's `MyHash` family (`PaddingFreeSponge<Perm,16,8,8>`),
-//! the same one the commitments use, and leaves are the `Com(B_t)` digests
-//! themselves.
+//! Merkle Mountain Range over the batch input commitments `Com(B_1..B_t)`:
+//! append-only, one root, `O(log t)` inclusion proofs.
 
 use p3_field::PrimeCharacteristicRing;
 use p3_symmetric::CryptographicHasher;

@@ -1,8 +1,4 @@
-# Sourced by the hll/ scripts. Reuses ../common.sh (PATH, BASELINE_DIR, ZKA, RESULTS,
-# link_zka) and adds the HLL build, which goes to $BASELINE_DIR/build/hll.
-#   host binaries: --locked against hll/Cargo.lock (derived from ../cyc/Cargo.lock)
-#   guest ELFs:    RISC0_BUILD_LOCKED=1 makes risc0-build's nested cargo honour
-#                  hll/guests/Cargo.lock (derived from zk-Analytics' own Cargo.lock)
+# Sourced by the hll/ scripts: build, log-header and CSV helpers on top of ../common.sh.
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 HLL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HLL_TARGET="$BASELINE_DIR/build/hll"

@@ -1,22 +1,5 @@
-//! One-shot measurement for the `omc_ungrouped` spike: builds ONE Count-Min
-//! leaf (`omc` = the existing grouped `countmin_omc`, `ungrouped`,
-//! `ungrouped_affine`) at one shape, proves `TRIALS` epochs against a
-//! non-empty prior state, and prints one CSV row. Both variants are measured
-//! identically: build once (timed separately), then `prove_epoch` →
-//! `timing::take()` (witness = trace generation, prove, verify) and the
-//! process peak RSS (VmHWM). Run each shape in its own process.
-//!
-//! Besides the padded `trace_rows = Σ 2^{log_height}` (which is quantized to
-//! powers of two and therefore jumps ~2× when one table crosses a boundary),
-//! the binary captures the prover's own `AIR shape` log (`tracing` info
-//! events emitted by `prove_all_tables`, identical code path for every
-//! variant) and prints the UNPADDED logical rows / lanes / widths per table:
-//! `alu_ops` (ALU rows × lanes = scheduled ALU ops), `unpadded_rows`,
-//! `unpadded_cells` (Σ rows·main_cols) and `alu_pad` (the padded ALU height,
-//! to see which power-of-two cliff a shape sits on).
-//!
-//! Env: VARIANT (omc|ungrouped|ungrouped_affine), D, W, M, TRIALS (default 1).
-//! Example: `VARIANT=ungrouped D=3 W=1024 M=64 cargo run --release --example cm_omc_ungrouped_measure`
+//! One Count-Min leaf (omc|ungrouped|ungrouped_affine) at one shape: times, peak RSS, unpadded rows; one CSV row.
+//! Usage: VARIANT=ungrouped D=3 W=1024 M=64 [TRIALS=1] cargo run --release --example cm_omc_ungrouped_measure
 
 use std::sync::Mutex;
 use std::time::Instant;

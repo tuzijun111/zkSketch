@@ -1,72 +1,5 @@
-//! **Interval statement** of the composition layer (revision B6(b)): what a
-//! composable leaf or merge proof surfaces through its Expose table, the
-//! in-circuit leaf gadget that produces it, and the native (auditor-side)
-//! recomputation of the root statement from the public batch log.
-//!
-//! ## Layouts
-//!
-//! A composable proof exposes one of two layouts (both field-generic; `C` =
-//! commitment length in base elements, `D` = extension degree):
-//!
-//! | layout     | exposed base values                                     | BabyBear | Goldilocks |
-//! |------------|---------------------------------------------------------|----------|------------|
-//! | `Boundary` | `init[C] ‖ final[C]`                                    | 16       | 8          |
-//! | `Interval` | `init[C] ‖ final[C] ‖ idx[D] ‖ H[C]`, `idx = (lo, hi, 0…)` | 28       | 14         |
-//!
-//! `Boundary` is the pre-B6(b) statement (only `(Com(S_{i-1}), Com(S_j))`;
-//! the root then certifies only that SOME batch sequence maps `S_0` to
-//! `S_T`). It stays available, byte for byte, for side-by-side runs.
-//! `Interval` is the paper's interval-proof boundary
-//! `pub_[i,j] = (i, j, Com(S_{i-1}), Com(S_j), H_[i,j])` (zk1.tex Def.
-//! "Interval proof"):
-//!
-//! * **leaf** for batch `t`: `lo = hi = t`, where `t` is a public input of the
-//!   leaf circuit pinned to the base field, and
-//!   `H = Poseidon2(TAG_LEAF, t, Com(B_t))`. `Com(B_t)` is the leaf's
-//!   IN-CIRCUIT batch digest, i.e. the same sponge output the leaf already
-//!   connects to its batch-commitment public input, so it is bound to the
-//!   batch records the transition consumed.
-//! * **merge** of adjacent children `[i, h]` and `[h+1, j]`: enforces
-//!   `left.final == right.init` and `left.hi + 1 == right.lo` in-circuit,
-//!   and exposes `(left.init, right.final, (i, j), H)` with
-//!   `H = Poseidon2(TAG_MERGE, i, h, j, H_L, H_R)` (the paper's
-//!   `H_[i,j] = hash(i, h, j, H_[i,h], H_[h+1,j])`). The adjacency is a field
-//!   equation, so on BabyBear it wraps modulo p (a leaf at `t = p - 1` merges
-//!   with one at `t = 0`); an intermediate `(i, j)` is meaningful only under a
-//!   root the auditor accepted with `lo == 1`, `hi == T < p` and the digest,
-//!   which rule wrapped trees out. On Goldilocks `t < 2^32`, so it cannot wrap.
-//!
-//! **Standalone leaves.** A leaf proof the auditor receives directly (the
-//! per-batch mode, or the lone leaf of a one-batch stream) is not covered by
-//! any root-VK pin, and its exposed statement alone authenticates nothing (a
-//! toy circuit can expose any values). The auditor therefore pins it to the
-//! trusted LEAF VK (derived from a no-op leaf) and STARK-verifies it with a
-//! verifier configured from public parameters before checking the statements
-//! ([`check_leaf_statements_against_log`]; the field-specific
-//! `expose_forest[_gl]::verify_leaves_against_log` does both).
-//!
-//! Hash inputs are extension elements; the in-circuit sponge equals the native
-//! `MyHash` (`PaddingFreeSponge`, zero IV, overwrite mode) over their
-//! concatenated base coordinates, so the natively recomputed digests are:
-//!
-//! ```text
-//! leaf  : MyHash([TAG_LEAF, 0^(D-1), t, 0^(D-1), Com(B_t)[0..C]])
-//! merge : MyHash([TAG_MERGE, i, h, j, H_L[0..C], H_R[0..C]])
-//! ```
-//!
-//! ## Auditor
-//!
-//! [`check_root_statement`] takes the published log (`Com(S_0)`, `Com(S_T)`
-//! and the ordered `Com(B_1..B_T)`) and the composition [`ForestShape`] (the
-//! bracketing the prover used: forest / chain / multi-machine forest), and
-//! checks `lo == 1`, `hi == T`, `init == Com(S_0)`, `final == Com(S_T)`, the
-//! padding coordinates of `idx`, and `H == H_expected`, where `H_expected` is
-//! folded natively over exactly that bracketing. The root-VK pin
-//! ([`super::root_vk::RootVk`]) fixes the bracketing inside the proof; the
-//! digest check fixes which batch sits at which leaf position. By collision
-//! resistance of Poseidon2 and the domain tags, an accepting root was composed
-//! from leaves `t = 1..T` in order, leaf `t` having consumed exactly the batch
-//! whose commitment the log lists at position `t`.
+//! Interval statement `(init, final, lo, hi, H)` of the composition layer: layouts, the
+//! in-circuit leaf gadget, and the auditor's check of a root against the batch log.
 
 use p3_circuit::ops::Poseidon2Config;
 use p3_circuit::{CircuitBuilder, ExprId};
@@ -108,7 +41,9 @@ impl Expose {
     }
 }
 
-/// The statement layout of an exposed-values vector (see the module table).
+/// The statement layout of an exposed-values vector: `Boundary` is
+/// `init[C] ‖ final[C]`, `Interval` is `init[C] ‖ final[C] ‖ idx[D] ‖ H[C]` with
+/// `idx = (lo, hi, 0, ...)` (`C` = commitment length, `D` = extension degree).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layout {
     Boundary,
@@ -393,6 +328,10 @@ impl<BF> BatchLog<BF> {
 /// Check a root statement against the log and the composition shape:
 /// Interval layout, `lo == 1`, `hi == T`, zero `idx` padding,
 /// `init == Com(S_0)`, `final == Com(S_T)`, `H == H_expected(shape, log)`.
+///
+/// On BabyBear the in-circuit index adjacency is a field equation and can wrap
+/// modulo `p`; `lo == 1`, `hi == T < p` and the digest check rule wrapped trees
+/// out. Goldilocks indices are `< 2^32` and cannot wrap.
 pub fn check_root_statement<BF: PrimeField64>(
     stmt: &Statement<BF>,
     log: &BatchLog<BF>,
@@ -527,7 +466,7 @@ pub fn check_leaf_statements_against_log<BF: PrimeField64>(
 /// exposed state commitment must equal.
 ///
 /// Each part's digest is recomputed with the honest indices, so a part whose
-/// exposed `(lo, hi)` wrapped modulo `p` (see the module docs) fails the
+/// exposed `(lo, hi)` wrapped modulo `p` (see [`check_root_statement`]) fails the
 /// digest check exactly as a wrapped root would. This checks VALUES only: it
 /// authenticates nothing unless every part was first verified against the
 /// trusted VK of its bracketing (`expose_forest::PrefixAuditor` does both).

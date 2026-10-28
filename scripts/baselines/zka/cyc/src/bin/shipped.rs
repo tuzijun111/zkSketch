@@ -1,73 +1,5 @@
-// SHIPPED-STRUCTURE ARM (revision Step 3, arm A): zk-Analytics' OWN three epoch
-// summary types, run on REAL AOL records, for the query classes zkSketch covers.
-//
-//   family     | aggregation guest            | query guest (query)                     | our analogue
-//   -----------+------------------------------+-----------------------------------------+-------------
-//   samples    | aggr_samples  (AGGR_SAMPLES) | querier-guest-samples (SumTopk{limit})  | SS heavy hitters
-//   histogram  | aggr_histogram               | querier-guest-histogram (P90)           | GK quantiles
-//   cm         | aggr_cm                      | querier-guest-cm (Estimate{key}, Topk)  | CM point query
-//
-// Nothing about their structures is reimplemented. Every epoch state comes out of
-// THEIR aggregation entry points (aggregator/core/src/lib.rs process_*_aggr_with_state),
-// every chain link is the one their aggregation journal would publish, and the
-// guests are their unmodified ELFs (aggregator/methods, querier/methods @ d4a5a9a).
-//
-// Records: data/aol.keys (flat little-endian u32, 2^20 keys). Epoch e holds keys
-// [e*m, (e+1)*m) -- the same slicing as zkSketch's exp_compose batches_from() with
-// m = 16,384, so epoch 0 is exactly the records of our matched CM epoch.
-//   key_id = Event::make_key_id(0, key as u64)   (their canonical 15-byte key id,
-//            zkvm-common/src/lib.rs:76; same encoding as acc_zka.rs)
-//   value  = 1 for samples and cm (frequency counting: samples sums become exact
-//            per-key counts, the CM table a frequency table, as in cmp.rs/acc_zka.rs)
-//          = key & 0x1F_FFFF for histogram (the 21-bit coordinate zkSketch's GK
-//            leaf summarises, src/experiments/stream_compose.rs gk_vals_of)
-//   ts     = global record index
-// Batches: one source (id 0), stream order, chunks of --batch records (default 8,
-// their --commit-batch-size default), SHA-256 batch hash chain continued across
-// epochs exactly as their aggregator host does (prev_source_chain_tips carried,
-// source_batch_seq continues). Epoch chain: epoch e's prev_chain_hash is epoch
-// e-1's final_chain_hash (one aggregator).
-//
-// Modes:
-//   --mode aggr  : execute the family's AGGREGATION guest on epoch --epoch-index
-//                  (default 0; earlier epochs are processed natively only to obtain
-//                  the carried chain tips).
-//   --mode query : aggregate epochs 0..n natively (their code), then execute the
-//                  family's QUERY guest over all n populated epoch states.
-// EXECUTOR ONLY unless --prove is passed (opt-in; not used by the shipped arm).
-//
-// Every run checks the guest journal against their native function on the same
-// input (aggregation: full output equality; query: output equality after
-// suppress_if_low_support, exactly what the guest commits), and reports the exact
-// plaintext answer next to theirs.
-//
-// Usage:
-//   shipped --header
-//   shipped --mode aggr  --family samples|histogram|cm [--epoch-index 0]
-//   shipped --mode query --family samples   --epochs N [--limit 10]              (SumTopk)
-//   shipped --mode query --family histogram --epochs N                           (P90)
-//   shipped --mode query --family cm        --epochs N --query estimate|topk [--limit 10]
-//   common: [--keys PATH] [--epoch-size 16384] [--batch 8] [--prove]
-//           [--key-id aol|const]   (const: histogram only, see key_id_mode())
-//   cm aggr only: [--root legacy|designed|noroot|twin]   (default legacy)
-//
-// --root (six-sketch comparison, ../README.md "Six-sketch comparison"): which Merkle
-// root(s) the CM aggregation journal carries. Their aggr_cm builds, besides the flat
-// SHA-256 state_commit every query guest reads, row_roots (one SHA-256 leaf per counter)
-// + cm_root + heap_root, which nothing reads.
-//   legacy, designed  their aggr_cm, unchanged (the same guest: the committed 2026-10-09
-//                     reference rows are `legacy`; `designed` = zk-Analytics as designed)
-//   noroot            aggr_cm_noroot (../cm_noroot): their process_cm_aggr_with_state
-//                     with only the Merkle block replaced by zeros. journal_eq_native
-//                     checks the journal against THEIR native output with the three root
-//                     fields zeroed (and against the noroot copy run natively).
-//   twin              VALIDATION ONLY, never proved: aggr_cm_twin, an unedited copy of their
-//                     code compiled in ../cm_noroot; same journal as aggr_cm, and outside
-//                     the Merkle work the same cost (../cm_noroot/core/src/lib.rs, "twin").
-// Query guests read no root, so --root is refused with --mode query.
-// CM aggregation rows also carry variants_agree (their aggregation and the noroot copy, run
-// natively on the same input, agree on everything but the three root fields, which are zero
-// in the copy) and state_commit (hex); `-` elsewhere.
+// zk-Analytics' own samples, histogram and CM guests on AOL epochs; executor only unless --prove.
+// Usage: shipped --mode aggr|query --family samples|histogram|cm [--epochs N] [--query estimate|topk] [--root R]
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -381,7 +313,8 @@ fn join<T: std::fmt::Display>(v: &[T]) -> String {
 
 const HEADER: &str = "system,arm,mode,guest,family,query,topk_slots,histogram_slots,epochs,epoch_index,epoch_records,records,batch,value_enc,limit,distinct_keys,per_key_entries,input_bytes,user_cycles,padded_cycles,segments,max_po2,exec_s,journal_bytes,state_commits,journal_eq_native,result,exact,prove_s,verify_ms,receipt_bytes,s_per_segment,key_id,root_variant,root_construction,variants_agree,state_commit";
 
-/// CM aggregation root variant (--root); see the header comment.
+/// CM aggregation root variant (--root, cm aggr only). legacy, designed: their aggr_cm;
+/// noroot: aggr_cm_noroot (../cm_noroot), root fields zero; twin: aggr_cm_twin, validation only.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CmRoot {
     Legacy,

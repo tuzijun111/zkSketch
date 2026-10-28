@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
-"""Fit the GK replay operator's small-scale runs and model deployed sizes.
-Every figure is labelled MEASURED or MODELED.
-
-Reads $RESULTS/zkstream_gk.csv (all runs of run_gk.py). Steps:
-  1. soundness gate: every chained witness, verify, tamper, overflow and validation row ok
-  2. per measured point (eps, k, s'): constraints, compile, setup, witness+prove, verify, bytes, RSS
-  3. constraint model: least squares over every compile (grid + compile-only sweeps) on the
-     circuit's structural terms; residuals printed; the model is used only where it fits
-  4. time/memory fits against constraints (prove, setup, witness, compile, pk bytes)
-  5. MODELED deployed sizes (eps = 1/51, s' = 2^11, m = 2^14 records per chunk) and the
-     feasibility verdict against the measured compile wall
+"""GK replay operator: the measured runs ($RESULTS/zkstream_gk.csv) and least-squares fits evaluated at s' = 2^11, m = 2^14.
+Usage: python3 scripts/baselines/zkstream/gk/fit_gk.py
 """
 import csv, math, os, statistics, sys
 from collections import defaultdict
@@ -145,7 +136,7 @@ def main():
     print("  verify is the CLI (process start included); proof bytes are the JSON encoding; "
           "witness+prove is the prover's per-chunk cost")
 
-    # ---- 3. constraint model ------------------------------------------------------------
+    # ---- 3. constraints: least squares on the circuit's structural terms ----------------
     comp = {}
     for r in rows:
         if r["step"] == "compile_op" and r["constraints"]:
@@ -195,7 +186,7 @@ def main():
     ca, cb = loglog(ccs, [comp[k]["s"] for k in keys])
     ma, mb = loglog(ccs, [comp[k]["mb"] for k in keys])
     rate = [measured[k]["cons"] / measured[k]["prove"] for k in mk]
-    # the Groth16 rate falls with size (MSM/FFT, memory), so extrapolate from the large points
+    # the Groth16 rate falls with size (MSM/FFT, memory), so larger circuits use a power law fitted to the points >= 100K
     lg = [k for k in mk if measured[k]["cons"] >= 100_000]
     if len(lg) >= 2:
         qa, qb = loglog([measured[k]["cons"] for k in lg], [measured[k]["prove"] for k in lg])
@@ -205,12 +196,12 @@ def main():
     else:
         prove_t = lambda c: pa + pb * c
         wit_t = lambda c: wa + wb * c
-    print("\nfits against constraints c                                                  (MODELED)")
+    print("\nfits against constraints c                                                  (FIT)")
     print(f"  prove   = {pa:.3f} s + {pb * 1e6:.3f} us * c   (Groth16 ark; rate {min(rate):,.0f}..{max(rate):,.0f} c/s MEASURED)")
     print(f"  witness = {wa:.3f} s + {wb * 1e6:.3f} us * c")
     if len(lg) >= 2:
         print(f"  large points (c >= 100K, n={len(lg)}): prove = {qa:.3e} * c^{qb:.3f} s, witness = "
-              f"{ra:.3e} * c^{rb:.3f} s  <- used for every extrapolation below")
+              f"{ra:.3e} * c^{rb:.3f} s  <- used below for sizes past the largest measured circuit")
         for k in sorted(lg, key=lambda kk: measured[kk]["cons"]):
             v = measured[k]
             print(f"    c={v['cons']:>9,}: prove {v['prove']:6.2f} s (linear fit {pa + pb * v['cons']:6.2f}, "
@@ -234,18 +225,18 @@ def main():
         print(f"  refused compile (MEASURED outcome): 1/eps={r['eps_den']} k={r['k']} s'={r['cap']} "
               f"nb={r['nb']}: {r['note']}")
 
-    # per-record marginal costs from the model at a given geometry
+    # per-record marginal constraints at a given geometry: fitted formula at k = 2^12 minus k = 2^11, over 2^11
     def per_record(E_like, S, NB, L=None, P=None):
         c1, _ = model(E_like, S, 1 << 12, NB, L, P)
         c0, _ = model(E_like, S, 1 << 11, NB, L, P)
         return (c1 - c0) / (1 << 11)
 
-    # ---- 5. deployed sizes (MODELED) ------------------------------------------------------
+    # ---- 5. deployed sizes, from the fits above -------------------------------------------
     S_dep, m_dep, E_dep = 1 << 11, 1 << 14, 51
     P_dep = E_dep // 2                                   # COMPRESS every floor(1/(2 eps)) = 25
     NB_dep = 21                                          # n < 2^21 covers the 2^20 stream
     L_dep = (2 * (1 << 21) // E_dep).bit_length()        # p = floor(2n/51) < 2^17
-    print(f"\nDEPLOYED (MODELED): eps = 1/{E_dep} (COMPRESS every {P_dep}), s' = {S_dep}, m = {m_dep} records "
+    print(f"\nDEPLOYED (FIT): eps = 1/{E_dep} (COMPRESS every {P_dep}), s' = {S_dep}, m = {m_dep} records "
           f"per chunk, n < 2^{NB_dep} (g, Delta, p: {L_dep} bits)")
     print("  1/51 is not a power of two: the circuit would add a floor-division hint for p (two range")
     print("  checks per pass, negligible); the model keeps every other term at these widths.")
@@ -278,7 +269,7 @@ def main():
           f"chunk at the best measured rate ({best:,.0f} c/s), {cons_dep / r_lg / 3600:,.1f} h at the rate of the "
           f"largest point ({r_lg:,.0f} c/s); {chunks} chunks for 2^20 records -> >= "
           f"{chunks * cons_dep / best / 3600:,.0f} h (compile/RSS power laws give ~{t_comp / 3600:,.0f} h / "
-          f"~{gb_comp:,.0f} GB -- 3 orders of magnitude of extrapolation, indicative only)")
+          f"~{gb_comp:,.0f} GB -- 3 orders of magnitude beyond the measured range, indicative only)")
     # one COMPRESS pass alone, and the cheapest chunk shape (no pass) at the deployed capacity
     g1 = geo(64, S_dep, NB_dep, 1)
     g1.update(L=L_dep, WB=22 + 2 * L_dep, Q=L_dep.bit_length(), cond=0)
@@ -318,8 +309,8 @@ def main():
           f"(O(s') INSERT + O(s' log^2 s') COMPRESS every {P_dep} records), so shrinking the chunk only "
           f"trades the compile wall for ~{whole / 1e9:,.0f} G constraints (~{t_whole_lo / 3600:,.0f} h of "
           f"witness+prove) for 2^20 records.")
-    # per-record cost at the measured sizes vs the model, for context
-    print("\nper-record constraints (marginal, MODELED from the fitted terms, at each point's own NB):")
+    # per-record constraints of the fitted formula at each measured geometry
+    print("\nper-record constraints (marginal, from the fitted terms, at each point's own NB):")
     for (E, S, nb) in sorted({(k[0], k[2], k[3]) for k in measured}):
         print(f"  1/eps={E:<3} s'={S:<4} nb={nb:<2} {per_record(E, S, nb):>9,.0f}")
     print(f"  1/eps=51  s'=2048 nb={NB_dep} {pr:>9,.0f}   <- deployed")

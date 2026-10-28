@@ -1,11 +1,4 @@
-//! Proof-system configuration.
-//!
-//! The plonky3 original (`../src/config.rs`) uses BabyBear + Poseidon2 +
-//! two-adic FRI. Here we use plonky2's recursion-friendly defaults: the
-//! **Goldilocks** field with the **Poseidon** config. Goldilocks is 64-bit, so
-//! sketch counters / register values fit in a single field element — there is no
-//! need for the BabyBear "pack 4 cells into one degree-4 extension element"
-//! alignment trick the original required.
+//! Proof-system configuration: Goldilocks field, Poseidon hash, shared circuit config.
 
 use plonky2::field::goldilocks_field::GoldilocksField;
 use plonky2::plonk::circuit_builder::CircuitBuilder;

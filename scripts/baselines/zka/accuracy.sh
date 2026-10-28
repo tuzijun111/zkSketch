@@ -1,26 +1,6 @@
 #!/usr/bin/env bash
-# ============================================================================
-# Plaintext (NO PROVER) experiments for the zkSketch vs zk-Analytics comparison.
-#
-#   M5  accuracy parity  -> results/accuracy_parity.csv (+ _summary.txt)
-#   M4  their native_baseline (author-supplied plain-vs-ZK) -> results/native_baseline.txt
-#
-# Runs nothing that proves. No r0vm, no guest execution. Safe on the shared box.
-#
-# Usage:
-#   ./accuracy.sh [all|accuracy|native] [SCALE]
-#
-# SCALE (accuracy): number of records per stream. Default 16384 (== their
-#   epoch size and our m=2^14 matched batch). SCALE also scales the native
-#   baseline epoch size.
-#
-# Env overrides:
-#   SEEDS=24            number of independent key-set seeds
-#   KEYS_LIST="256 1024 4096"   distinct-key counts to sweep
-#   DISTS="uniform zipf"        key distributions
-#   D=3 W=1024          our CM geometry (theirs is hard-coded 3x1024)
-#   TOPKS="1 8 100"     CM_TOPK_SLOTS builds for the native baseline
-# ============================================================================
+# Count-Min accuracy of both systems at 3 x 1024, and zk-Analytics' native_baseline (no proving).
+# Usage: ./accuracy.sh [all|accuracy|native] [SCALE]   (env: SEEDS, KEYS_LIST, DISTS, D, W, TOPKS)
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"   # HERE BASELINE_DIR ZKA RESULTS build_cyc cyc_target
@@ -38,9 +18,7 @@ TOPKS="${TOPKS:-1 8 100}"
 ACC_ZKA=$(cyc_target 100)/release/acc_zka   # built at the shipped default T=100, as before
 ACC_OURS=$EXT/build/ourcm/release/acc_ours
 
-# ---- cleanup: these harnesses spawn no prover, but honour the house rule and
-# reap anything WE started. We never kill r0vm processes we did not spawn --
-# the box is shared and the lead serialises timing runs.
+# ---- cleanup: kill only the children this script started; never an r0vm it did not spawn (shared machine).
 CHILDREN=()
 cleanup() {
   for p in "${CHILDREN[@]:-}"; do [[ -n "$p" ]] && kill "$p" 2>/dev/null || true; done
@@ -153,7 +131,7 @@ print("  The classical Count-Min eps/delta guarantee is over the RANDOM CHOICE O
 print("  HASH FUNCTIONS, and requires the hashes to be independent of the input.")
 print("  Neither system has that. zk-Analytics fixes CM_SEEDS as three public")
 print("  compile-time constants (aggregator/core/src/lib.rs:40); zkSketch fixes a")
-print("  public Poseidon2 instance (sketch/countmin_final.rs:147). When the curator")
+print("  public Poseidon2 instance (hash_cell_prf, sketch/countmin_final.rs). When the curator")
 print("  is also the prover, it knows the addressing before choosing what to")
 print("  ingest, so a chosen-key adversary can drive the estimate far past eps*N")
 print("  in EITHER system and the proof still verifies -- a proof of correct")
@@ -242,9 +220,8 @@ PY2
     echo
   } >> "$txt"
 
-  # --- plain-vs-ZK ratios. The ZK anchors are NOT measured here (no prover is
-  # allowed to run from this script); they are the lead's already-measured
-  # numbers, quoted as constants and labelled as such.
+  # --- plain-vs-ZK ratios. No prover runs here: the ZK anchors are those of compare.sh's runs
+  # (results/zka_matched.csv, zks_matched_t1.csv), quoted as constants.
   python3 - "$txt" >> "$txt" <<'PY3'
 import re, sys
 txt = open(sys.argv[1]).read()
@@ -261,7 +238,7 @@ def agg_ms(topk):
 their1, their100 = agg_ms(1), agg_ms(100)
 ours = grab(r"zksketch_native_single_thread_ms=([\d.]+)")
 N = 16384
-# --- MEASURED ZK anchors (from the lead's runs, quoted, not re-run here) ---
+# --- ZK anchors from compare.sh's runs (zka_matched.csv, zks_matched_t1.csv), quoted, not re-run here ---
 ZKA_PROVE_S   = 3202.012   # Z-1, n=16384, CM_TOPK_SLOTS=1, RISC Zero succinct
 ZKA_RSS_MB    = 9453.5     # r0vm VmHWM
 OURS_PROVE_S  = 23.7458    # zkSketch cm_omc d=3 w=1024 t=1, m=2^14

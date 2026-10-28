@@ -1,45 +1,5 @@
-//! Privacy-preserving §5.2 Count-Min update leaf (Phase 9c).
-//!
-//! Unlike v1/v2/v3 — which expose per-record `(key, value, pos)` tuples as
-//! public inputs and leak the batch contents — this leaf implements the
-//! paper's actual §5.2 PI shape: **`(initial_commit, final_commit,
-//! batch_commit)`**, with everything per-record moved to private
-//! witnesses. Keys are never disclosed.
-//!
-//! ### Phase 9c scope (this file)
-//!
-//! - Private `(key, value)` witnesses, bound to a public `batch_commit`
-//!   via an in-circuit Poseidon2 hash of the encoded batch.
-//! - In-circuit derivation of counter positions `pos_{k,i} = h_i(key_k)`
-//!   under the v9 field-friendly hash family (see
-//!   `src/sketch/countmin_v9.rs`). The native side computes `(k · a_i +
-//!   b_i)` in BabyBear and reduces mod `w`; the in-circuit gadget
-//!   reproduces this with a multiply-add gate, a bit-decomposition of
-//!   the result, and a weighted sum of the bottom `log₂(w)` bits.
-//! - All of v3's counter-grouping machinery (PermuteAir, adjacent-equality
-//!   tags, running-sum aggregation, sparse-patch → cell delta) reused
-//!   verbatim — operating on the in-circuit-derived positions now.
-//!
-//! ### Phase 9 scope (not yet in this file)
-//!
-//! - **9e (key-grouping)**: Without it, every record pays the in-circuit
-//!   hash cost. With it, only `|distinct_keys|` records pay. That's where
-//!   the duplicate-density curve will actually slope down. This is a
-//!   follow-up.
-//! - **9d (merge function)**: a v9-specific `merge_two_countmin_v9_private`
-//!   that handles the new PI shape. Without it, v9 leaves cannot be
-//!   chained.
-//!
-//! ### Constraints on `(d, w)`
-//!
-//! - `d ≤ 16` (v9 hash-family table size).
-//! - **`w` must be a power of 2** in `{2, 4, 8, 16}` — Phase 9c's range
-//!   check is a bottom-`log₂(w)`-bits extraction. Non-power-of-2 `w`
-//!   would need an additional "r < w" check that we defer.
-//! - `d * w` must be a multiple of 4 (Challenge extension degree — same
-//!   constraint as v1/v2/v3 state-commitment).
-//! - `m` (batch size) is free; private records pack as 4 Vals each into
-//!   the batch hash input, so `4 * m` is automatically aligned.
+//! Count-Min leaf v9: records are private, bound to a public batch commitment, and
+//! key-/counter-sorted in-circuit. Public inputs: `(initial, final, batch_commit)`.
 
 use std::rc::Rc;
 
@@ -172,8 +132,8 @@ pub fn prove_countmin_leaf_v9(
 
 /// Runtime-parameterised privacy-preserving v9 leaf prover.
 ///
-/// `params.w` must be a power of 2 in `{2, 4, 8, 16}` (see the module
-/// docstring); the panic message is explicit if it isn't.
+/// `params.w` must be a power of 2 in `{2, 4, 8, 16}`; the panic message is
+/// explicit if it isn't.
 pub fn prove_countmin_leaf_v9_with_params(
     params: CountMinLeafParams,
     initial_state: CountMinState,

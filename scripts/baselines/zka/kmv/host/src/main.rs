@@ -1,75 +1,5 @@
-// KMV / bottom-k baseline in zk-Analytics' architecture (ours †): host driver.
-//
-// Patterned on ../../hll/host/src/main.rs (itself on ../../cyc/src/bin/shipped.rs); the
-// prove-time RSS / contention sampler follows ../../gk/host/src/main.rs. The epochs,
-// the source batch hash chain and the epoch chain are built exactly as there:
-//   records  data/aol.keys (flat little-endian u32). Epoch e = keys [e*m, (e+1)*m),
-//            m = --epoch-size (default 2,048: the planned zkSketch-vs-zk-Analytics
-//            configuration, 8 epochs/batches of 2,048 records).
-//   key_id   Event::make_key_id(0, key)  (zkvm-common/src/lib.rs:76, as shipped.rs)
-//   value    1 (ignored by KMV);  ts = global record index
-//   batches  one source (id 0), stream order, --batch records per batch (default 8, their
-//            --commit-batch-size default); SHA-256 batch chain continued across epochs
-//            (prev_source_chain_tips carried, source_batch_seq continues); epoch e's
-//            prev_chain_hash = epoch e-1's final_chain_hash.
-//
-// Modes (every guest run is EXECUTED; with --prove it is also PROVED):
-//   --mode aggr  [--epoch-index i]     the kmv_aggr guest on epoch i (earlier epochs are
-//                                      aggregated natively only to carry the chain tips)
-//   --mode query --epochs n            aggregate epochs 0..n natively, then the kmv_query
-//                                      guest over the n epoch states
-//   --mode exec  --epochs N [--query-at 1,2,4,8]
-//                                      the whole per-epoch pipeline: kmv_aggr on every
-//                                      epoch 0..N-1 in order, each epoch's chain hash and
-//                                      source tips taken from the PREVIOUS GUEST JOURNAL
-//                                      (as their aggregator host carries them), and after
-//                                      epoch n-1 the kmv_query guest over epochs 0..n for
-//                                      every n in --query-at (default N)
-//   --prove      ProverOpts::succinct() (their shipped tier), CPU r0vm; the proved
-//                journal is asserted equal to the native output; records prove_s,
-//                verify_ms (best of 5), receipt bytes, the r0vm peak RSS and foreign-r0vm
-//                contention during the prove
-//   --words      after every kmv_query run, also run the kmv_query_words guest on the same
-//                input (sensitivity: values sent as Vec<u64> in serde's default encoding,
-//                the form of their CmEpochState::heap_vals; same journal). Proved too
-//                under --prove.
-//   --gate TEXT  how the runner gated the prove (e.g. load1_start=..;max_load=..;waited_s=..),
-//                appended to the contention column of proved rows (gate=none if absent)
-//   --root legacy|designed|noroot   which Merkle root the aggregation journal carries
-//                (six-sketch comparison, ../../README.md "Six-sketch comparison";
-//                ../core/src/lib.rs "root variants"); --mode aggr and exec:
-//                  legacy    (default) the kmv_aggr guest, no root at all: the guest of
-//                            the committed 2026-10-09 reference rows
-//                  designed  kmv_aggr_root, 64-bucket samples-pattern root (zk-Analytics as designed)
-//                  noroot    kmv_aggr_root, root field zero (apples-to-apples with zkSketch)
-//                Query guests read no root, so query rows do not depend on it (refused with
-//                --mode query); aggregation rows also check variants_agree (the legacy,
-//                designed and noroot aggregations run natively agree on the state, state
-//                commitment, epoch link, n_events and source tips) and print state_commit.
-//   --arm-tag T  proved rows get arm proved_T (and proved_contended_T when contended)
-//                instead of proved / proved_contended: the runner passes `override` when
-//                its load gate was raised above the default, and anything else a caller
-//                wants to keep apart (e.g. `validation`). Only arm == proved, with no tag,
-//                is a timing-grade row.
-//
-// Checks on every row (the driver exits 1 when one fails; the row is still printed):
-//   journal_eq_native  the guest journal equals the same core function run natively
-//   ref_check          an independent host reference (own FNV-1a + splitmix64 code; every
-//                      distinct hash of the covered keys, sorted, first k) equals the
-//                      guest's epoch state (aggr) / merged set (query), and the f64
-//                      estimator (k-1) / (v_k / 2^64) agrees with the integer answer
-//                      within 1
-//   accuracy           exact = distinct keys of the covered records; rel_err against it;
-//                      std_err = 1/sqrt(k-2) (KMV's relative standard error);
-//                      accuracy_ok = (answer == exact) on the exact branch (fewer than k
-//                      distinct hashes), |rel_err| <= 5 std_err on the estimator branch
-//
-// Usage:
-//   kmv --header
-//   kmv --mode aggr  [--epoch-index 0] [--root legacy|designed|noroot] [common] [--prove]
-//   kmv --mode query --epochs N [--words] [common] [--prove]
-//   kmv --mode exec  --epochs N [--query-at 1,2,4,8] [--words] [--root ...] [common] [--prove]
-//   common: [--epoch-size 2048] [--batch 8] [--keys PATH] [--gate TEXT] [--arm-tag T]
+// Host driver for the KMV port: executes the guests (and proves them with --prove), one CSV row per guest run.
+// Usage: kmv --header | kmv --mode aggr|query|exec [--epochs N] [--query-at 1,2,4,8] [--prove] ...
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,8 +19,9 @@ use zka_kmv_methods::{
 };
 use zkvm_common::Event;
 
-/// MODELED prove time: segments x s/segment. Central value and envelope are the four
-/// CPU CM prove anchors in ../README.md ("Modeled prove time and the anchors behind it").
+/// MODELED_prove_s = segments x S_PER_SEG (computed, not measured), from the four CPU-proved CM guest runs
+/// in scripts/baselines/zka/README.md: S_PER_SEG is aggr_cm T=100, n=512 (661.3 s / 22 segments = 30.06 s)
+/// rounded; _lo/_hi use 29.73 and 30.79 s, the lowest and highest s/segment of the four.
 const S_PER_SEG: f64 = 30.1;
 const S_PER_SEG_LO: f64 = 29.73;
 const S_PER_SEG_HI: f64 = 30.79;

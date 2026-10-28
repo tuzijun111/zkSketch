@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""Small-scale driver: a ZoKrates Count-Min operator following zkStream's
-stateful-operator design. This is OUR circuit in zkStream's toolchain
-(ZoKrates 0.8.8, Groth16 over BN254) -- never report it as "zkStream".
-
-For each chunk size k: generate the operator and its witness helper, compile both,
-set up the operator once, then prove a chain of C chunks over AOL keys. Each chunk
-opens the previous chunk's table commitment, so the chain is checked end to end.
-With --tamper, forged inputs at the smallest k must be rejected by compute-witness.
-
-One CSV row per measured step -> $RESULTS/zkstream_small.csv (appended).
-
-  run_zkstream.py --k 16 64 256 --chunks 4 --tamper
+"""Count-Min replay operator following zkStream's design (our ZoKrates 0.8.8 / Groth16 circuit, not zkStream):
+proves C chained chunks over AOL keys per chunk size k; one row per step in $RESULTS/zkstream_small.csv.
+Usage: run_zkstream.py --k 16 64 256 --chunks 4 --tamper
 """
 import argparse, csv, json, math, os, re, secrets, subprocess, sys, time
 from datetime import datetime

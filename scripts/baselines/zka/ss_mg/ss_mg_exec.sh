@@ -1,53 +1,7 @@
 #!/usr/bin/env bash
-# zkSketch's SpaceSaving batch rule (mergeable Misra-Gries) as a RISC Zero guest
-# (ss_mg; see README.md and ../README.md). EXECUTOR ONLY: proves nothing.
-#
-#   0. unit tests (native only): ss-mg-core vs zkSketch apply_batch_ss_full on
-#      small random shapes (ties at the cut, pads, mask aliases), both sorts
-#   1. equivalence: guest-chained epochs 0..N-1 (each run reads the previous
-#      GUEST output) on AOL and Uniform at every s in CAPS; N = CHAIN_EPOCHS
-#      (default 64 = the whole 2^20-record stream) with the headline radix sort
-#      and STD_CHAIN_EPOCHS (default 8) with the std sort. Every run is checked
-#      row by row and field by field against zkSketch's native
-#      apply_batch_ss_full, its commitments against SHA-256 of zkSketch's
-#      native objects, Com_old(e) against Com_new(e-1), and its cycle marks
-#      against the executor's user cycles (probes_ok)        -> zka_ss_mg_equiv.csv
-#   2. cost: AOL epoch 0, AOL epoch LATE_EPOCH (S_LATE computed natively from
-#      epochs 0..LATE-1, ss-mg-core checked on every one of them), Uniform
-#      epoch 0, at every s in CAPS, for three configurations (each run checked
-#      as in 1)                                              -> zka_ss_mg_exec.csv
-#        ss_mg       radix   headline (input via env::read_slice)
-#        ss_mg       std     sort sensitivity (pdqsort + select_nth)
-#        ss_mg_serde radix   read-path sensitivity (risc0 serde env::read, as the zka guests)
-#
-# Every row carries MODELED prove time = segments x 30.1 s (envelope
-# 29.73..30.79), the CM-guest CPU anchors of ../README.md. NOT measured.
-#
-# Columns: the driver's (ss_mg --header), plus two this script appends from
-# r0vm's own session summary (RISC0_INFO=1, one per guest run, in run order):
-# r0vm_paging_cycles and r0vm_reserved_cycles. Every row is checked against it:
-# r0vm's user cycles == user_cycles, its total == padded_cycles, and
-# user + paging + reserved == total; a mismatch fails the step.
-#
-# Both CSVs are REGENERATED: rows go to <csv>.tmp, which replaces the CSV only
-# if every step passed (the previous CSV is kept as <csv>.prev, gitignored).
-# The raw log ../results/zka_ss_mg_exec.log is only ever appended to (one
-# header per run, failed runs included): the unit-test results, every cost
-# row, one summary line per chain (the chain rows themselves are in
-# zka_ss_mg_equiv.csv) and the driver's messages, r0vm's summaries excepted.
-#
-# Usage: ./ss_mg_exec.sh
-# Env:   SKIP_BUILD=1          use the existing binaries
-#        SKIP_TESTS=1          skip step 0
-#        CAPS="16384 1024"     capacities
-#        CHAIN_EPOCHS=64       guest-chained epochs, radix sort (>= 4)
-#        STD_CHAIN_EPOCHS=8    guest-chained epochs, std sort (>= 4)
-#        LATE_EPOCH=63         late AOL epoch of the cost rows ("" skips it)
-#        KEYS=...              AOL keys (default <checkout>/data/aol.keys)
-#        RESULTS=...           output directory (default ../results)
-#
-# Kills nothing: each executor run spawns its own r0vm child, which exits with
-# the run. RISC0_DEV_MODE is refused (here and by the driver).
+# ss_mg executor runs: unit tests, guest-chained equivalence runs, cost rows -> ../results/zka_ss_mg_{equiv,exec}.csv.
+# Usage: ./ss_mg_exec.sh   Env: SKIP_BUILD=1 SKIP_TESTS=1 CAPS="16384 1024" CHAIN_EPOCHS=64 LATE_EPOCH=63
+#        STD_CHAIN_EPOCHS=8 KEYS=data/aol.keys RESULTS=../results   (both CSVs are rewritten; the old one is kept as <csv>.prev)
 set -uo pipefail
 SSMG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SSMG_DIR/../common.sh"
@@ -114,7 +68,7 @@ fi
 hdr="$("$SSMG_BIN" --header),r0vm_paging_cycles,r0vm_reserved_cycles"
 for f in "$EXEC_CSV" "$EQUIV_CSV"; do echo "$hdr" > "$f.tmp"; done
 
-# dataset, guest, sort, capacity, epoch, union_distinct, tau, new_active, user_cycles, segments, transition_cycles, MODELED
+# dataset, guest, sort, capacity, epoch, union_distinct, tau, new_active, user_cycles, segments, transition_cycles, MODELED_prove_s
 SUMMARY_COLS=3-6,8,13-15,18,20,28,42
 
 # Driver runs pass RISC0_INFO=1 to their r0vm children, which then log their

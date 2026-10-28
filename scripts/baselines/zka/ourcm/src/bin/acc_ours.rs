@@ -1,15 +1,5 @@
-//! Accuracy harness, OUR side (zkSketch Count-Min, cm_omc addressing).
-//!
-//! Reads a key stream (one decimal u64 key per line) on stdin, folds it into a
-//! d x w Count-Min sketch using EXACTLY the addressing the `cm_omc` /
-//! `countmin_final` circuit uses -- `zksketch::sketch::countmin_final::
-//! hash_cell_prf` (Poseidon2 sponge over BabyBear, digest element `row` mod w)
-//! -- and prints, for every distinct key, `key,exact,estimate`.
-//!
-//! Value per record is 1 (frequency counting), so the CM error is directly
-//! comparable to the classical eps*||f||_1 bound with ||f||_1 = n_records.
-//!
-//! Usage: acc_ours --d 3 --w 1024 < stream.txt
+//! CM accuracy, zkSketch side: a d x w table with the cm_omc cell addressing (hash_cell_prf).
+//! Usage: acc_ours --d 3 --w 1024 [--selfcheck 1] < stream.txt   (prints key,exact,estimate)
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Write};
@@ -113,7 +103,7 @@ fn main() {
             // and our ZK time by the line above compares two different
             // denominators, so the two "ZK/plain" ratios are not comparable.
             // This arm adds our leaf's own binding work -- commit_batch over all
-            // records (the in-circuit batch digest, countmin_omc.rs:281/349) and
+            // records (the in-circuit batch digest of the countmin_omc leaf) and
             // commit_countmin over the d*w state (the boundary commitment) --
             // so the denominator covers the same class of work as theirs.
             let recs: Vec<CountMinUpdate> =

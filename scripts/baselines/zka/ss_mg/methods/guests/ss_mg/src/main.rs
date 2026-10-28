@@ -1,17 +1,8 @@
 #![no_main]
 #![no_std]
 
-// zkSketch's SpaceSaving batch transition (mergeable Misra-Gries) as a RISC
-// Zero guest; see ../../../../core/src/lib.rs. One run = one zkSketch SS leaf:
-// journal = Com_old || Com_batch || Com_new (96 bytes).
-//
-// HEADLINE guest: reads its input as raw words with env::read_slice (RISC
-// Zero's documented fast path for bulk data). ss_mg_serde is the same guest
-// reading the same data through risc0 serde (env::read), as the zka guests do.
-//
-// Cycle probes: env::cycle_count() (host-reported, unconstrained) after the
-// input read and after each ss-mg-core phase. They are part of the measured
-// guest (there is no probe-free twin); each costs a handful of cycles.
+// RISC Zero guest for ss-mg-core (../../../../core): one zkSketch SS leaf per run, input via
+// env::read_slice, with env::cycle_count() marks (host-reported) after each phase.
 
 extern crate alloc;
 

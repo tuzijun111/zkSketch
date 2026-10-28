@@ -1,21 +1,5 @@
-//! v1 (§5.1 strawman) vs v2 (§5.4-shaped) HyperLogLog leaf comparison.
-//!
-//! Both leaves produce the same `HllLeafProof` shape and chain through the
-//! same `merge_two_hll`. The difference is internal: v1 enforces
-//! `final[r] = max(initial[r], {lead[k] : touching})` in one unified
-//! candidate-set constraint; v2 factors it into two stages — first compute
-//! the per-register aggregate `A[r] = max(0, {selector[k][r] * lead[k]})`
-//! as an explicit witness vector, then patch `final[r] = max(initial[r], A[r])`.
-//!
-//! No witness *reduction* yet — that's blocked by the Poseidon2-of-flat-
-//! registers commit. A future variant with batched IPA/KZG multi-opening or
-//! Merkle-tree commits + sparse opens (Appendix F) would actually drop the
-//! per-register loop; v2's `A` slot is the seam that variant plugs into.
-//! Today this demo confirms the structural refactor preserves correctness
-//! and proof shape, and reports the modest extra cost of the explicit `A`
-//! vector + extra bit-decomp range checks.
-//!
-//! Run with: `cargo run --release --example hll_v1_vs_v2`.
+//! HyperLogLog leaf v1 (one max constraint) vs v2 (explicit per-register aggregate): prove time and proof size.
+//! Usage: cargo run --release --example hll_v1_vs_v2
 
 use std::time::Instant;
 

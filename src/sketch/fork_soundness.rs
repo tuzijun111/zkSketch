@@ -1,34 +1,6 @@
-//! Regression tests for three soundness gaps in the pinned Plonky3-recursion fork
-//! (`July620/Plonky3_RangeAir` @ `19dcb37`). Each test builds a toy circuit, runs it
-//! honestly, then FORGES the trace (rewriting every value that depends on the forged one so
-//! that only the gap is exercised), proves against the HONEST circuit's prover data, and
-//! verifies with `verify_all_tables`.
-//!
-//! These started as proof-of-concept tests that asserted the forgery was ACCEPTED (the
-//! `poc_*` tests of the Bloom-filter leaf). Here they assert it is REJECTED, so they only
-//! pass against a fork carrying the fixes:
-//!
-//! 1. **Constants bound.** `ConstAir` kept constant VALUES in the main trace with only
-//!    `(multiplicity, index)` preprocessed and no constraint, so a prover could replace a
-//!    constant consistently across its uses. Fixed by committing the value in the
-//!    preprocessed row `[mult, idx, value[0..D)]` and constraining `main == preprocessed`.
-//! 2. **Poseidon2 zero IV.** In the D > 1 (non-compact) layout, input limbs without a CTL on
-//!    a `new_start` row (the capacity, and rate limbs a partial first chunk leaves unfilled)
-//!    were unconstrained, so the IV was prover-chosen. Fixed by asserting them zero.
-//! 3. **Unaligned `add_range_bits`.** For `n % 8 != 0` the top byte was looked up only as
-//!    `byte·2^(8−r)`, which in a prime field admits `byte = v·2^-(8−r)`: no bound at all for
-//!    `n < 8`, and `x < 2^n + 2^(8⌈n/8⌉−8)` for `n ≥ 9`. Fixed by also looking up the
-//!    unshifted top byte.
-//!
-//! A forged proof counts as rejected when the prover returns an error, the prover panics
-//! (e.g. while building a lookup table from an out-of-range value), or verification fails;
-//! [`Verdict::Rejected`] records which. The controls re-run the repo-side mitigations
-//! (`range_exact`, `hash_slice_bound`) that predate the fork fixes.
-//!
-//! [`known_gap_unpinned_verifier_accepts_a_forged_vk`] documents what the fork fixes do NOT
-//! cover: `verify_all_tables` reads the preprocessed commitment (VK) from the proof, so a
-//! prover that also swaps in the forged circuit's own prover data is accepted unless the
-//! caller pins the VK.
+//! Regression tests for three fork fixes (bound constants, zero Poseidon2 IV, aligned
+//! `add_range_bits`): forged traces must be rejected. One test shows the open gap: a verifier
+//! that does not pin the VK accepts a proof under a forged VK.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 

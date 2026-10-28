@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
-"""Native reference for the HyperLogLog operator (hll_op.zok.tpl).
-
-Everything the circuit computes, recomputed in plain Python so the driver can check
-each chunk independently of ZoKrates:
-
-  * BN254 Poseidon, bit-exact with ZoKrates 0.8.8 stdlib hashes/poseidon/poseidon.zok
-    (constants are parsed from that stdlib file, not copied here);
-  * the record -> (register index, rank) map of the operator;
-  * the packed register state, its salted commitment and the batch digest;
-  * the textbook HyperLogLog estimate (Flajolet et al. 2007, small-range correction).
-
-Run directly for a self-test of the Poseidon port against known vectors.
+"""Native reference for hll_op.zok.tpl: Poseidon (bit-exact with the ZoKrates 0.8.8 stdlib), register map, packed
+state, commitments and the HLL estimate. Run directly for a self-test of the Poseidon port.
 """
 import os
 import re
@@ -119,7 +109,7 @@ def geometry(s, lanes=None):
 
 
 def constraints(k, s, P=None, ck=8):
-    """Exact R1CS size of hll_op.zok (ZoKrates 0.8.8, bn128), derived from the compiles.
+    """Exact R1CS size of hll_op.zok (ZoKrates 0.8.8, bn128); fit.py compares it with every compile.
     426 + 1: Poseidon-1 salt heads, the three equality checks and one == 1; 678 per
     5-word commitment block pair (2 x 354, minus 3 per zero-padded lane saved in each
     first round, folded into 6*S); 339 per digest block (+3 per record, same padding

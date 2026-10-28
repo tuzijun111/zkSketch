@@ -64,12 +64,10 @@ fn main() {
     let info = default_executor().execute(env, AGGR_CM_ELF).unwrap();
     let el = t.elapsed();
     let cycles = info.cycles();
-    // SEGMENT COUNT is what makes the prove-time model determinate. risc0 proves
-    // segment-by-segment then lifts/joins, so prove_s is far better predicted by
-    // `k * segments` than by a cycle-linear fit -- and the two models disagree by
-    // up to 36% at small n. The executor yields segments for free and
-    // deterministically, so every prove-time extrapolation can be anchored on a
-    // measured s/segment instead of an assumed kHz. (qsweep.rs:325 does the same.)
+    // risc0 proves segment by segment and then lifts/joins, so prove_s scales with
+    // the segment count rather than linearly with cycles (at small n, a fit on segments
+    // and a fit on cycles differ by up to 36%). The executor gives segments without
+    // proving; qsweep prints them too.
     let segments = info.segments.len();
     println!("n={} keys={} cbs={} total_cycles={} cycles_per_record={:.1} segments={} cycles_per_segment={:.0} exec_s={:.2}",
         n, keys, cbs, cycles, cycles as f64 / n as f64,

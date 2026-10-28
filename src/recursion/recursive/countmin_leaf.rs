@@ -1,43 +1,5 @@
-//! CircuitBuilder-based Count-Min update leaf for the §4.2 recursive merge.
-//!
-//! The circuit verifies one epoch of the Count-Min sketch (paper §5.4
-//! Pattern A linear), staged here as the §5.1 *strawman*: per-cell additive
-//! deltas, with the in-circuit Poseidon2 hash binding the per-epoch state
-//! commitments. Parameters `(d, w, batch)` are runtime-supplied so the
-//! sweep demo can scan a workload grid without recompilation.
-//!
-//! The flattened cell count `d * w` must be a multiple of the Challenge
-//! extension degree (4), so the off-circuit `commit_countmin` and the
-//! in-circuit `add_hash_slice` produce identical 8-element base-field
-//! digests. See the alignment comment in `src/commitment/countmin.rs`.
-//!
-//! ### Public inputs (Challenge field elements)
-//!
-//! In allocation order:
-//! 1. `initial_commit[0..2]` — `[Val; 8]` digest packed into 2 Challenge PIs.
-//! 2. `final_commit[0..2]`   — same shape for the post-update state.
-//! 3. For each record `k`: `(key_k, value_k, pos_k[0..d])`, each as one PI
-//!    embedded into Challenge. `pos_k[r]` is the public hash position
-//!    `hash_cell(r, key_k, w)`; the off-circuit caller computes it and the
-//!    leaf verifier (or downstream merge verifier) checks the pos PIs
-//!    against a native recomputation.
-//!
-//! ### Private inputs
-//!
-//! - Packed initial cells (`d*w/4` Challenge entries) decomposed in-circuit
-//!   into individual base-embedded cell values for the per-cell transitions.
-//! - Packed final cells (same shape).
-//! - Per record `(k, r)`: `selectors[k][r][0..w]` — `w` base-embedded
-//!   indicators forming a one-hot vector pointing at column `pos_k[r]`.
-//!
-//! ### Constraints
-//!
-//! 1. `hash(initial_packed) == initial_commit` (in-circuit Poseidon2).
-//! 2. `hash(final_packed)   == final_commit`.
-//! 3. For each `(k, r)`: `sum(selectors[k][r]) == 1` and
-//!    `sum_j(selectors[k][r][j] * j) == pos_k[r]`.
-//! 4. State transition for every cell `(i, j)`:
-//!        `final[i*w + j] = initial[i*w + j] + sum_k(selectors[k][i][j] * value_k)`.
+//! Count-Min update leaf: per-record `(key, value, pos[0..d])` are public inputs and
+//! cells are updated through one-hot column selectors; `d * w` must be a multiple of 4.
 
 use std::rc::Rc;
 

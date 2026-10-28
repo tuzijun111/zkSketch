@@ -1,53 +1,5 @@
-//! **In-circuit binding helpers** for the sound (`Binding::Bound`) builds of
-//! the Count-Min / HyperLogLog leaves and decoders.
-//!
-//! Three properties of the pinned fork (July620/Plonky3_RangeAir @ 19dcb37)
-//! make the pre-fix (`Binding::Legacy`) builds unsound:
-//!
-//! 1. **Unbound decompose coefficients.** With the recompose NPO enabled and
-//!    `coeff_lookups = false` (every leaf here), `decompose_ext_to_base_coeffs(x)`
-//!    returns hint coefficients that the Recompose table never reads on the
-//!    WitnessChecks bus: `RecomposeAir::eval` receives only the packed output
-//!    `[x_idx, v_0..v_3]`, and `v_i` is not tied to the coefficient witnesses.
-//!    A prover may put any value, even a non-base extension element, in them.
-//!    [`decompose_bound`] re-binds them. It pins each coefficient to the base
-//!    field (range check, bits, or [`canonical_split_gadget`]) and asserts
-//!    `x == Σ c_i·e_i` through ALU rows (`recompose_base_coeffs_to_ext_via_alu`
-//!    + `connect`), which ARE constrained. Witness generation is unchanged
-//!    because the coefficients still come from the fork's decomposition hint.
-//!    The now-redundant Recompose NPO row stays; it only re-checks `x`.
-//! 2. **Free sponge IV (D = 4 Poseidon2).** The non-compact D = 4 layout puts
-//!    no constraint on first-row input limbs that carry no CTL (the zero
-//!    capacity assertion exists only in the compact D = 1 layout). So
-//!    `add_hash_slice` hashes under a prover-chosen capacity, and for a
-//!    one-Challenge input also a prover-chosen second rate limb. A
-//!    single-block digest, such as a record's routing hash, can then be
-//!    ground at will. [`hash_slice_bound`] feeds the zero constant into every
-//!    first-row limb.
-//! 3. **Non-canonical positions.** `decompose_to_bits(x, Val::bits())` also
-//!    admits the bits of `x + p` (BabyBear: whenever `x < 2^31 − p`). Because
-//!    `p ≡ 1 (mod 2^27)`, that shifts a `mod 2^k` position to `(x+1) mod 2^k`.
-//!    [`canonical_split_gadget`] (positions) and [`assert_canonical_bits`]
-//!    (full-width bit decompositions) reject it. (The merged soundness fork
-//!    canonicalises full-width `decompose_to_bits` itself;
-//!    `probe::fork_canonical_bits` reports which fork is linked.)
-//!
-//! The candidate fork switch `set_recompose_coeff_ctl_for_decompose_links(true)`,
-//! with the `recompose/coeff` table, does NOT fix (1) for these circuits.
-//! That table becomes a WitnessChecks *creator* of every hint coefficient
-//! (multiplicity `ext_reads`, `batch_stark_prover/recompose.rs:345`). The
-//! ALU also creates a hint output on its first ALU use, because the Hint op
-//! does not mark it defined (`circuit.rs` creator rules). Neither creator
-//! ever reads the coefficient. If the ALU reads it once, `ext_reads = 0`, so
-//! nothing checks it and a forged coefficient is still accepted. If it is
-//! read two or more times, it is created twice and even honest proofs fail.
-//! See `tests::coeff_ctl_candidate_is_not_a_fix`.
-//!
-//! **Open caveat.** The fork does not bind constant VALUES: ConstAir keeps
-//! them in the main trace and only `(index, multiplicity)` is preprocessed.
-//! The basis constants `e_i` of the ALU recomposition, the zero IV, and every
-//! range/split constant are all constants. Soundness of the bound builds is
-//! therefore conditional on that separate fix.
+//! `Binding` modes (Legacy, Semantic, Bound) and the in-circuit helpers of the bound
+//! builds: bound decompositions, zero-IV hashing, canonical splits and exact key limbs.
 
 use p3_circuit::ops::{Poseidon2Config, Poseidon2PermCall};
 use p3_circuit::{CircuitBuilder, ExprId};

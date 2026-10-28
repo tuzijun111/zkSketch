@@ -1,9 +1,5 @@
-//! End-to-end case study runner (paper §Evaluation `sec:rq5-casestudy`).
-//!
-//! `cargo run --release --example exp_casestudy`
-//! Uses the fetched AOL/Netflix datasets when present (run
-//! `python3 scripts/fetch_datasets.py` first), else synthetic streams.
-//! Knobs: `EXP_CASE_EPOCHS`, `V3_SWEEP_THREADS`. Writes `results/casestudy*.csv`.
+//! End-to-end case study on the Gaussian and Uniform streams, plus AOL/Netflix when fetched; writes results/casestudy*.csv.
+//! Usage: [EXP_CASE_EPOCHS=4 V3_SWEEP_THREADS=n] cargo run --release --example exp_casestudy
 
 use zksketch::experiments::{casestudy, resolve_threads, with_pool};
 

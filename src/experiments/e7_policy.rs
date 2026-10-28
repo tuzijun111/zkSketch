@@ -1,20 +1,6 @@
-//! **E7 — maintenance policy × query rate** (EVAL_SPEC §2 E7). The
-//! lazy/eager/smoothed trade-off on the streaming forest: when do you fold the
-//! `popcount(t)` surviving peaks into a single verified root?
-//!
-//! - **lazy** — never fold between queries. Inserts are cheap (just the MMR
-//!   carry cascade); a query must fold all `popcount(t)−1` peaks ⇒ high query
-//!   latency.
-//! - **eager** — fold to a single root after every insert. Inserts pay the fold
-//!   (high insert tail); queries hit a fresh root ⇒ ~`verify_base` only.
-//! - **smoothed(c)** — drain `c` peak-merges per insert; bounds both the insert
-//!   tail and the residual query fold. Sits between lazy and eager.
-//!
-//! Like E5, this is **leaf-shape-agnostic**: it's a structural simulation driven
-//! by the measured per-merge cost `τ` (the option-(i) composition cost — a
-//! Poseidon2 boundary digest, **not** a recursive-SNARK fold) and the measured
-//! `verify_base` (one root re-check). The merge *counts* are the structural
-//! signal; the absolute ms are this lightweight cost (flagged, as in RQ4/E5).
+//! E7: lazy / eager / smoothed fold policies on the streaming forest vs query rate.
+//! Latency = merge count × τ (+ one root verify per query); τ is the measured `merge_atom`
+//! digest time, or one real recursive STARK merge with `EXP_E7_REAL=1`.
 
 use std::hint::black_box;
 use std::time::Instant;

@@ -1,47 +1,6 @@
 #!/usr/bin/env bash
-# Partitioned Bloom filter in zk-Analytics' architecture (our port †, see README.md).
-#
-# Runs the bloom driver once and appends its rows to OUT. The default is the
-# executor-only pipeline at the planned comparison configuration:
-#   --mode exec: bloom_aggr on epochs 0..EPOCHS-1 (EPOCHS=8 epochs of EPOCH_SIZE=2048
-#   AOL records, batches of 8), each epoch's chain carried from the previous guest
-#   journal; bloom_query after epoch n for every n in QUERY_AT ("1 2 4 8"), once per
-#   probe in PROBES ("first,absent": the last queried epoch's first key, and a key
-#   absent from the whole dataset); with WORDS=1 (the executor default) each query is
-#   also run as bloom_query_words (sensitivity: filters in serde's default Vec<u32>
-#   encoding; same journal).
-# MODE=aggr (EPOCH_INDEX) and MODE=query (EPOCHS) run one guest instead.
-#
-# PROVE=1 also PROVES every guest run of the invocation (ProverOpts::succinct(), CPU
-# r0vm). The planned measurement is `PROVE=1 ./run_exec.sh` as is: under PROVE=1 the
-# defaults are PROBES=first and WORDS=0 (8 aggregation + 4 query proofs). The driver
-# records prove_s, verify_ms (best of 5), receipt bytes, the r0vm peak RSS and
-# contention. Before proving, the runner
-#   - takes $BASELINE_DIR/build/zka-prove.lock (shared with ../kmv/run_exec.sh; refuses
-#     when another bloom/kmv PROVE=1 run holds it), and
-#   - waits up to WAIT_S until the 1-minute load is <= MAX_LOAD and no r0vm of any user
-#     runs (../sketch_exec.sh's rule); it refuses (exit 3) if the box stays busy.
-# The gate is recorded in each proved row's contention column (gate=load1_start=..;
-# max_load=..;waited_s=..). MAX_LOAD above its default 24 tags proved rows
-# arm=proved_override (ARM_TAG=<tag> sets any tag, e.g. validation); a row whose
-# prove saw foreign load is arm=proved_contended. Only arm == proved is timing-grade;
-# the runner prints a re-run command for every contended row. Default OUT is then
-# zka_bloom_prove.csv.
-#
-# Rows are appended to OUT and the raw log as each guest run finishes, so an
-# interrupted PROVE=1 run keeps its finished rows.
-#
-# Every row: journal == native, independent reference filter, no false negatives,
-# measured FPR on ABSENT keys absent from the dataset vs its expectation; the driver
-# exits 1 when any check fails (its rows are still appended).
-#
-# Env: SKIP_BUILD=1  MODE=exec  EPOCHS=8  EPOCH_SIZE=2048  QUERY_AT="1 2 4 8"
-#      PROBES=first,absent (PROVE=1: first)  WORDS=1 (PROVE=1: 0)  EPOCH_INDEX=0  BATCH=8
-#      ABSENT=10000  PROVE=0  MAX_LOAD=24  WAIT_S=1800  ARM_TAG=
-#      OUT=$RESULTS/zka_bloom_exec.csv (PROVE=1: zka_bloom_prove.csv); raw log next to it
-#
-# Touches no process it did not start (the executor and prover spawn and reap their
-# own r0vm); never uses ../rss_watch.sh, which pkills every r0vm of this account.
+# Bloom port of zk-Analytics: run the bloom driver (executor; PROVE=1 also proves) and append its rows to OUT.
+# Usage: [PROVE=1] [MODE=exec|aggr|query] [EPOCHS=8] [EPOCH_SIZE=2048] [QUERY_AT="1 2 4 8"] ./run_exec.sh
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/bloom_common.sh"
 refuse_dev_mode

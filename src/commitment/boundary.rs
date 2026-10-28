@@ -1,8 +1,4 @@
-//! Boundary helpers — Phase 1's stand-in for `Com(S_t)`.
-//!
-//! For the toy `FibAir`, the boundary is just the pair `(a, b)`. We expose a
-//! `Boundary` type alias here so downstream modules can keep names aligned
-//! with the paper without depending directly on the prover module.
+//! Boundary `(a, b)` of the toy `FibAir` leaf, standing in for `Com(S_t)`.
 
 use crate::config::Val;
 use crate::prover::Boundary as LeafBoundary;

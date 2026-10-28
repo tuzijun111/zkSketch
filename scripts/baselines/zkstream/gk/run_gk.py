@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""Small-scale driver: a Greenwald-Khanna replay operator in zkStream's toolchain (ZoKrates
-0.8.8, Groth16 over BN254) following zkStream's stateful-operator design (Sec 4.4). This is
-OUR circuit -- never report it as "zkStream". Patterned on ../run_zkstream.py (Count-Min).
-
-For each (eps = 1/E, chunk size k, capacity s'): run the native textbook GK over the chain's
-records first (capacity check, insert-position hints, the expected summary after every chunk),
-generate and compile the operator and its witness helper, set up once, then prove a chain of C
-chunks over AOL keys. Each chunk opens the previous chunk's commitment (com_in == prev com_out),
-and the operator's com_out must equal the commitment of the NATIVE summary, so every chunk
-checks the circuit's tuple list against the reference. With --tamper, forged inputs must be
-rejected by compute-witness and a forged public output by verify.
-
-One CSV row per measured step -> $RESULTS/zkstream_gk.csv (appended); console -> a raw log.
-
-  run_gk.py --E 8 16 --k 4 16 64 --cap 16 32 64 --chunks 4 --tamper --prune
+"""Greenwald-Khanna replay operator following zkStream's design (our ZoKrates 0.8.8 / Groth16 circuit, not zkStream):
+proves C chained chunks over AOL keys, each checked against gk_ref.py; one row per step in $RESULTS/zkstream_gk.csv.
+Usage: run_gk.py --E 8 16 --k 4 16 64 --cap 16 32 64 --chunks 4 --tamper --prune
 """
 import argparse, csv, json, os, random, re, secrets, shutil, subprocess, sys, time
 from datetime import datetime
@@ -150,7 +138,7 @@ def main():
     ap.add_argument("--tamper", action="store_true", help="forgery checks at every point")
     ap.add_argument("--overflow-demo", action="store_true",
                     help="for points whose capacity is too small, compile anyway and show the overflow assert rejects")
-    ap.add_argument("--compile-only", action="store_true", help="compile the operator only (constraint model)")
+    ap.add_argument("--compile-only", action="store_true", help="compile the operator only (constraint counts for fit_gk.py)")
     ap.add_argument("--max-wait", type=int, default=900, help="seconds to wait for other provers before a prove")
     ap.add_argument("--prune", action="store_true", help="delete witnesses after each chunk verifies, and pk at the end")
     ap.add_argument("--reuse-compiled", action="store_true",

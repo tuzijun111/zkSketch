@@ -1,10 +1,8 @@
 #![no_main]
 #![no_std]
 
-// VALIDATION ONLY. Their aggr_cm guest (aggregator/methods/guest_cm/src/main.rs @ d4a5a9a)
-// with process_cm_aggr taken from ../../core's `twin` module, an unedited copy of their
-// code compiled in this crate. Same journal as aggr_cm; outside the Merkle work it costs
-// what aggr_cm costs (../../core/src/lib.rs, "twin"). Never a reported number.
+// Their aggr_cm guest with process_cm_aggr from ../../core's `twin` module, an unedited
+// copy of their code. Only used to check the noroot copy; not a reported number.
 
 extern crate alloc;
 

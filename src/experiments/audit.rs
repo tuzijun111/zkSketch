@@ -1,27 +1,5 @@
-//! **The AUDITOR side of the composition harness** (B6(b) statement checks,
-//! B2 hiding commitments).
-//!
-//! Every function here consumes only what a verifier holds: the PUBLISHED
-//! batch log ([`BatchLog`]: `Com(S_0)`, `Com(S_T)`, every `Com(B_t)`), the
-//! received proofs, a trusted VK, and public parameters ([`PublicParams`]:
-//! the family, its shape and batch size, and the commitment MODE, which is
-//! public because it changes every VK). Nothing here takes, derives or reads
-//! the prover's salt seed or a per-version randomizer: the log is produced
-//! PROVER-side (`dist_compose::publish_batch_log` and its Goldilocks twin),
-//! and the auditor compares commitment values without ever opening one. A
-//! source-level test (`tests::auditor_source_names_no_prover_secret`) keeps
-//! the prover-side seed types and randomizer derivations out of this file.
-//! That includes the query side (Property 3): [`QueryAudit`] (decode and
-//! prefix VKs from public parameters, prefix certificates tiled against the
-//! log) and [`ContextStore`] (the certificates the procs workers shipped).
-//!
-//! The one commitment the auditor recomputes is the genesis anchor
-//! `Com(S_0)`: `S_0` is the public empty sketch and its randomizer is the
-//! public zero, so [`genesis_commit_bb`] / [`genesis_commit_gl`] rebuild it
-//! from public parameters and [`check_log_genesis_bb`] /
-//! [`check_log_genesis_gl`] hold the published log to it (before the timed
-//! verify, like the VK derivation: a one-time, per-deployment check).
-//! `Com(S_T)` and every `Com(B_t)` are taken from the published log.
+//! Auditor side of the composition harness: verifies proofs against the published batch log,
+//! a trusted VK and public parameters, and recomputes only the genesis `Com(S_0)`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, RandomState};

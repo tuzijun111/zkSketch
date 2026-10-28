@@ -1,32 +1,5 @@
 #![no_std]
-//! Partitioned Bloom filter epoch summary for the zk-Analytics pipeline (baseline port, ours †).
-//!
-//! zk-Analytics (SIGCOMM'26, commit d4a5a9a) ships three epoch summary types (samples,
-//! histogram, cm) and no membership filter. This crate adds one in THEIR architecture
-//! and with THEIR plumbing, exactly as ../../hll/core does for HyperLogLog:
-//!
-//! * aggregation (`process_bloom_aggr_with_state`) is `process_cm_aggr_with_state`
-//!   (aggregator/core/src/lib.rs:1215-1301) with the CM table + heap replaced by a
-//!   partitioned Bloom filter: verify the source SHA-256 batch hash chain
-//!   (`verify_and_compute_chain`, verbatim), flatten the batches, build the epoch's
-//!   filter from scratch one record at a time, hash the state with an unsalted, tagged
-//!   SHA-256, and link it into the epoch chain with their `EpochChainLink::new`.
-//! * query (`run_bloom_query`) is `run_cm_query` (querier/core/src/lib.rs:249-371) with
-//!   the CM sum + min-lookup replaced by the Bloom union (bitwise OR of the n epoch
-//!   filters) + membership test: verify the epoch chain links
-//!   (`verify_epoch_chain_integrity`, verbatim), recompute every epoch's state
-//!   commitment, merge, answer, and publish the chain boundaries + state commits + the
-//!   queried key and its answer, with their low-support suppression.
-//!
-//! The filter is the textbook partitioned Bloom filter (Bloom 1970; the partitioned
-//! form of Chang, Feng and Li, INFOCOM 2004 / Almeida et al. 2007): k slices of W bits,
-//! one position per slice, insert sets the k bits, a lookup ANDs them. Plain Rust
-//! executed as a RISC Zero guest, exactly as their three summaries are: no oblivious
-//! padding, no memory checking, no sorting certificate, no algebraic hash.
-//!
-//! The functions that are private upstream are include!d verbatim from
-//! `upstream_verbatim.rs` (generated and checked by ../gen_upstream.sh; byte-identical
-//! to ../../hll/core/src/upstream_verbatim.rs).
+//! Partitioned Bloom filter epoch summary in zk-Analytics' architecture (our port).
 
 extern crate alloc;
 

@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# constraint_probe.sh <csv> <P|default> <s> <k>...     (CK from the environment, default 8)
-# Compile-only probe of hll_op.zok: exact constraint counts, compile wall and peak RSS.
-# Used to (a) justify the register packing (P sweep) and (b) derive the exact
-# constraint formula in fit.py. Artifacts go to $BUILD/probe_*, outside the repo.
+# Compile-only probe of hll_op.zok: constraint count, compile time and peak RSS per k (artifacts under $BUILD).
+# Usage: constraint_probe.sh <csv> <P|default> <s> <k>...   (CK from the environment, default 8)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASELINE_DIR="${BASELINE_DIR:-$HOME/ext-baselines}"

@@ -1,18 +1,4 @@
-//! **Standalone Merkle Mountain Range (MMR) over the per-batch input
-//! commitments** `{Com(B_1), …, Com(B_t)}` — the append-only *upload log*.
-//!
-//! Port of `../src/recursion/mmr.rs` to plonky2/Goldilocks. The input-commitment
-//! log as a **separate artifact**, decoupled from proof/state composition: binds
-//! *just the ordered batch input commitments* into one published root, so a light
-//! client can prove "batch `i`'s committed input is in the log" in `O(log t)`
-//! without verifying any transition proof (CT / Grin / FlyClient pattern).
-//!
-//! - **Append-only, `O(1)` amortized append** (binary-counter peak cascade).
-//! - **One root** = bag the `popcount(t)` peaks, with the leaf count bound in.
-//! - **`O(log t)` inclusion proofs**, verifiable by anyone holding the root.
-//!
-//! Nodes hash with `PoseidonHash` (the same family the commitments use); leaves
-//! are the `Com(B_t)` digests (`HashOut<F>`) themselves.
+//! Merkle Mountain Range over the per-batch input commitments Com(B_1..B_t), with O(log t) inclusion proofs.
 
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::HashOut;

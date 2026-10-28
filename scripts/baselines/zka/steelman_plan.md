@@ -77,7 +77,7 @@ VERIFIED: query cost is Θ(n · d · w) in the number of epochs in range.
 
 ---
 
-## 2. Cost model (fitted from our own measurements — used throughout below)
+## 2. Cycle cost (a line through our own measurements — used throughout below)
 
 Fit `cycles(n) = F + c·n` at `TOPK=100, keys=1024` from `results/a2_anchor.csv` (n=512) and
 `results/a1_cycles.csv` (n=16384):
@@ -96,7 +96,7 @@ Fixed-cost decomposition (SHA-256 compressions per epoch):
 > Their guest imports `risc0_zkvm::sha::rust_crypto` (the accelerated implementation) under
 > `cfg(target_os = "zkvm")` and in `merkle.rs`, and patching `sha2` to risc0's fork leaves the cycle
 > count unchanged (`sha_accel_control.sh`, `results/sha_accel_control.csv`). 1,695 cycles per
-> compression is a fitted constant, not a SHA cost; estimates below that price hashing with it are unverified.
+> compression is a fitted constant, not a SHA cost; the numbers below that price hashing at that rate are unverified.
 
 That number is the load-bearing one. It confirms — independently — that **the guests use software
 SHA-256, not the risc0 precompile**: there is no `[patch.crates-io]` anywhere in the tree
@@ -104,18 +104,18 @@ SHA-256, not the risc0 precompile**: there is no `[patch.crates-io]` anywhere in
 `querier/core/Cargo.toml:11` pull plain `sha2 0.10`. 1,695 cyc/block is the right order for
 software SHA-256 under rv32im; the precompile would be ~1-2 orders cheaper.
 
-**Non-circular cross-check.** Re-deriving `F` from the compression count at each `TOPK` and
+**Non-circular cross-check.** Recomputing `F` from the compression count at each `TOPK` and
 subtracting from the measured `cycles_per_record` gives the marginal per-record cost, and the
 implied per-heap-slot linear-scan cost (`cm_heap_update`, `:1103-1141`) agrees to 6%:
 
-| TOPK | heap leaves | derived F | marginal c (cyc/rec) | implied cyc per heap slot |
+| TOPK | heap leaves | F from compressions | marginal c (cyc/rec) | implied cyc per heap slot |
 |---|---|---|---|---|
 | 1 | 1 | 10,744,605 | 5,490 | — |
 | 8 | 8 | 10,771,725 | 6,334 | 120.6 |
 | 100 | 128 | 11,237,850 | 18,132 | 127.7 |
 
-The model reproduces the measured `n=16384, TOPK=1` total to within 0.001%
-(100,696,064 predicted vs 100,695,728 measured, `results/zka_matched.csv`).
+With the TOPK=1 values, `F + c·n` gives 100,696,064 cycles at `n=16384`, within 0.001% of the
+measured 100,695,728 (`results/zka_matched.csv`).
 
 ---
 
@@ -335,7 +335,7 @@ four-proof matrix is ~35 min of serialized prover time.
 2. `cm_state_commit ≡ cm_epoch_state_commit` (test A11-i).
 3. Executor-only cycle delta (< 30 s, allowed): `carry` vs `nocarry` at `n=1024`. **Predicted
    +330 K cycles + read cost ⇒ +2.0 ± 0.5%.** A delta materially above ~4% means `env::read` of the
-   12 KB state is far more expensive than modelled, and §3.3 needs revising.
+   12 KB state costs far more than §3.3 assumes, and §3.3 needs revising.
 
 **Stage 1 — prover, 4 proofs, ~35 min serialized (lead-scheduled):**
 

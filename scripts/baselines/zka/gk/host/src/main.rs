@@ -1,66 +1,6 @@
-// zk-Analytics-architecture GREENWALD-KHANNA arm: our GK guests (aggr_gk, querier_gk)
-// run in zk-Analytics' own epoch pipeline on REAL AOL records. zk-Analytics ships no
-// quantile summary with a rank guarantee (its histogram is per-key log2 bins, P90
-// only); this measures what their general-purpose method costs for one.
-//
-// Patterned on ../../cyc/src/bin/shipped.rs (records, batching, chain carrying,
-// executor measurement, journal == native check, MODELED column).
-//
-// Records: data/aol.keys (flat little-endian u32). Epoch e holds keys [e*m, (e+1)*m),
-// m = --epoch-size (16,384 default: epoch 0 is our matched epoch).
-//   key_id = Event::make_key_id(0, key)   (zkvm-common/src/lib.rs:76, as shipped.rs)
-//   value  = key & 0x1F_FFFF              (as shipped.rs's histogram arm and zkSketch's
-//                                          gk_vals_of; values in [0, 2^21))
-//   ts     = global record index
-// Batches: source 0, stream order, --batch records each (default 8, their
-// --commit-batch-size default); SHA-256 batch chain, source_batch_seq and
-// prev_source_chain_tips carried across epochs as their aggregator host does. Epoch
-// e's prev_chain_hash is epoch e-1's final_chain_hash.
-//
-// Modes:
-//   --mode aggr  [--epoch-index i]        execute aggr_gk on epoch i (earlier epochs
-//                                         are aggregated natively only for the chain tips)
-//        [--root legacy|designed|noroot|pertuple]
-//                                         which Merkle root the journal carries (six-sketch
-//                                         comparison, ../../README.md "Six-sketch comparison";
-//                                         ../core/src/lib.rs "Root variants"):
-//                                           legacy    (default) aggr_gk, per-tuple root: the
-//                                                     guest of the committed 2026-10-09 rows
-//                                           designed  aggr_gk_root, 64-bucket samples-pattern root
-//                                           noroot    aggr_gk_root, root field zero
-//                                           pertuple  aggr_gk_root, the legacy per-tuple root
-//                                                     (sensitivity)
-//                                         Query guests read no root (--root is refused with
-//                                         --mode query). Aggregation rows also check
-//                                         variants_agree (every variant run natively gives the
-//                                         same state, state commitment, epoch link, n_events
-//                                         and source tips) and print state_commit.
-//        [--profile]                      execute the PROFILING guest instead (phase split;
-//                                         legacy only)
-//        [--prove]                        also prove it (ProverOpts::succinct(), their tier)
-//   --mode query --epochs n --query rank|p50|p90|p99 [--rank-value v]
-//                                         aggregate epochs 0..n natively, execute querier_gk
-//        [--prove]                        also prove it (ProverOpts::succinct(); added for the
-//                                         six-sketch comparison, ../README.md)
-//   --header
-//   common: [--keys PATH] [--epoch-size 16384] [--batch 8]
-//
-// Every run checks the guest journal against the native function on the same input
-// and compares the answer with the exact answer over the covered values. Every row
-// also carries NATIVE accuracy checks of the same summaries (not guest work):
-//   min_kept      t_0.v / t_(s-1).v equal the epoch minimum / maximum (every epoch covered)
-//   q_named       aggr rows: per-epoch quantile at phi in {0, 1/1000, 1/100, 1/2, 99/100, 1},
-//                 as err/cert pairs
-//   q_sweep_1001  quantile at phi = q/1000, q = 0..1000, over the row's epoch (aggr) or
-//                 union (query): worst actual error, worst certified error, worst cert/eps N
-//   q_ok          every named and swept phi: exact answer inside the certified interval
-//                 and actual error <= certified error <= eps N
-//   cert_over_eps_n  this row's certified error / eps N
-// Proved rows also record `contention`: foreign r0vm processes (not descendants of
-// this driver) seen by the 250 ms sampler during the prove, their CPU seconds in that
-// window, and the max 1-minute load. arm = proved_contended when those foreign r0vm
-// processes burned >= CONTENDED_CPU_S (10) CPU seconds in the window.
-// The driver exits 1 (row still printed) when a journal or accuracy check fails.
+// Host driver for the GK guests (aggr_gk, aggr_gk_root, aggr_gk_prof, querier_gk) on AOL epochs; one CSV row per run.
+// Usage: gk --mode aggr [--epoch-index I] [--root R] [--profile|--prove]
+//        gk --mode query --epochs N --query rank|p50|p90|p99 [--prove]   (all flags: VALUE_FLAGS, BOOL_FLAGS)
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -78,8 +18,9 @@ use risc0_zkvm::{default_executor, default_prover, ExecutorEnv, ProverOpts, Sess
 use zkvm_common::Event;
 
 const VALUE_MASK: u32 = 0x001F_FFFF;
-/// MODELED prove time: segments x 30.1 s, envelope 29.73 .. 30.79 s/segment (the four
-/// CPU CM anchors in ../README.md "Modeled prove time and the anchors behind it").
+/// MODELED_prove_s = segments x S_PER_SEG (computed, not measured), from the four CPU-proved CM guest runs
+/// in scripts/baselines/zka/README.md: S_PER_SEG is aggr_cm T=100, n=512 (661.3 s / 22 segments = 30.06 s)
+/// rounded; _lo/_hi use 29.73 and 30.79 s, the lowest and highest s/segment of the four.
 const S_PER_SEG: f64 = 30.1;
 const S_PER_SEG_LO: f64 = 29.73;
 const S_PER_SEG_HI: f64 = 30.79;
@@ -451,7 +392,7 @@ struct Acc {
 }
 
 /// Native quantile checks of a summary set (one epoch for aggr rows, the union for
-/// query rows); see the header comment.
+/// query rows); the columns are described in scripts/baselines/zka/gk/README.md.
 struct QChecks {
     min_kept: bool,
     named: String,

@@ -1,42 +1,4 @@
-//! SpaceSaving **top-`c` query** decode circuit (E3).
-//!
-//! Implements the paper's *SpaceSaving Top-`c` Query Circuit* (zk1.tex
-//! §SpaceSaving Query Circuit). A top-`c` query returns the first `c` active
-//! rows of the committed summary under the declared count/key order; \sys
-//! answers queries against the closed (committed) state `S_t`.
-//!
-//! The committed state is an [`SsState`] whose rows are kept in
-//! `(active asc, count asc)` order (dummies first, then actives by **ascending**
-//! count), so the top heavy hitters (highest counts) are the *last* active
-//! rows. The circuit re-hashes the state (binds it to the published commitment),
-//! then enforces the paper's checks and releases the top-`c` mass.
-//!
-//! ## Verification target (paper)
-//!
-//! Public input is the query size `c`. With `#active = #{active rows}` and
-//! `k = min(c, #active)`, the released result table `res` is the first `k`
-//! rows of `S_t` under the declared (top-count-first) order, with canonical
-//! dummy rows beyond position `k`. For the identity release policy the circuit
-//! binds the published answer to `res` (here: the released top-`c` mass
-//! `Σ res[z].count`, a deterministic function of the fully-pinned `res`).
-//!
-//! ## Checks
-//!
-//! 1. **State opening** — re-hash the `capacity` rows, bind to `Com(S_t)`.
-//! 2. **Active-prefix structure** — active flags are monotone (here a
-//!    contiguous *suffix*: dummies first, actives last).
-//! 3. **Distinct-key** — adjacent active rows carry distinct keys (the grouped
-//!    summary has no duplicate retained keys); witnessed inverse.
-//! 4. **Sortedness** — counts non-decreasing along the stored order
-//!    (range-checked adjacent diff); equivalently the top heavy hitters are
-//!    the trailing rows.
-//! 5. **Top-`c` selection** — a monotone 0/1 selector `sel` marks exactly
-//!    `k = min(c, #active)` rows as released: a *suffix* of the row array
-//!    (the highest-count actives), each selected row active, and
-//!    `Σ sel = min(c, #active)`.
-//! 6. **Release binding** — identity / threshold over the released mass
-//!    `Σ sel·count` (shared [`bind_release`], same semantics as the other
-//!    decode leaves).
+//! SpaceSaving top-c query decode circuit over a committed state.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

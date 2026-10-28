@@ -1,12 +1,5 @@
-//! Side-by-side comparison of the §4.1 flat chain and the §4.2 recursive
-//! merge on **HyperLogLog** — Phase 4c analog of `countmin_chain_two`.
-//!
-//! Same shape as the Count-Min comparison demo: two adjacent HLL update
-//! epochs (`b = 3`, `m = 8`, batch = 2 records) proven once each, then run
-//! through both chain strategies. Prints prove times, merge/bundle times,
-//! verify times, and proof sizes for both paths.
-//!
-//! Run with: `cargo run --release --example hll_chain_two`.
+//! Flat chain vs recursive merge over two HyperLogLog leaves.
+//! Usage: cargo run --release --example hll_chain_two
 
 use std::time::Instant;
 

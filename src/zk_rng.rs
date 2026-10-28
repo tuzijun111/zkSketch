@@ -1,21 +1,4 @@
-//! [`ZkRng`] — the mask RNG of the hiding PCS (the default `zk` feature), which
-//! also draws the ZK LogUp masks (see `crate::config`).
-//!
-//! `HidingFriPcs` draws every trace-randomization row, random codeword and
-//! quotient-chunk mask from the RNG it is constructed with, so hiding holds
-//! only if that stream is cryptographically unpredictable AND never reused:
-//! two proofs masked with the same stream leak linear combinations of their
-//! witnesses. Hence:
-//!
-//! * a CSPRNG (`StdRng`, ChaCha12) seeded straight from the OS ([`SysRng`]),
-//!   never from a fixed or derived seed (upstream's `SmallRng::seed_from_u64`
-//!   is a test fixture, not a CSPRNG);
-//! * [`Clone`] **reseeds from the OS** instead of copying the state:
-//!   `HidingFriPcs::clone` clones its RNG (`p3-fri` `hiding_pcs.rs`), so a
-//!   state-copying clone would hand the copy the original's future masks.
-//!
-//! The PCS already needs `Send + Sync` (it keeps the RNG behind a mutex);
-//! `Debug` never prints the state.
+//! `ZkRng`: OS-seeded CSPRNG for the hiding PCS and the LogUp masks; `Clone` reseeds from the OS.
 
 use core::convert::Infallible;
 

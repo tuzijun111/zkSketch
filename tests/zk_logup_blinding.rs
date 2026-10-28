@@ -1,51 +1,5 @@
-//! Zero-knowledge LogUp sums (`src/config.rs`, "LogUp sums: masked per global
-//! interaction").
-//!
-//! A batch proof reveals one LogUp cumulative sum per global interaction
-//! (`BatchProof::global_lookup_data`). Unmasked, each is a deterministic
-//! function of the witness and of the lookup challenges, and anyone can
-//! replay the transcript up to those challenges from public data (instance
-//! bindings, main commitment, public values, preprocessed commitment). A
-//! verifier who guesses the witness can then recompute a sum and compare it
-//! with the revealed one. The `zk` build masks every revealed sum with a
-//! fresh extension-field mask, zero-sum per bus, committed before the
-//! challenges.
-//!
-//! The leaf is a real Count-Min `omc` leaf (d = 4, w = 8, batch 4) under
-//! [`Expose::None`], [`Binding::Semantic`] and plain commitments: it exposes no
-//! statement, so its public-input table (`Com(S_{t-1})`, `Com(S_t)`,
-//! `Com(B_t)`) is witness, and those commitments depend on the batch.
-//!
-//! - `revealed_sums_are_fresh_per_proof_and_zero_sum_per_bus`: two proofs of
-//!   the same leaf and witness.
-//! - `guess_and_check_replay_of_revealed_sums`: one batch key is the secret,
-//!   4096 candidate keys are tried against the public-input table's revealed
-//!   sum, and the constant table's sum (a function of public data only) is
-//!   recomputed as a check that the replay itself is exact.
-//!
-//! Under `zk` (the default) both tests assert the masked behavior. Under
-//! `--no-default-features` the same code runs as the unmasked control: the
-//! sums repeat across proofs, the constant table's sum is recomputed
-//! exactly, and the replay finds exactly the true key.
-//!
-//! The `zk` negative result ("no candidate matches") is only meaningful if
-//! the replay reproduces the `zk` transcript exactly (instance bindings with
-//! the doubled hiding domain, hiding-PCS commitments, mask-widened main
-//! traces); a replay that drifted after a transcript change would also find
-//! nothing. The `--no-default-features` control cannot show that, since it
-//! replays a different (non-hiding) transcript. The third test does, in the
-//! `zk` build itself: `zero_masks_make_the_zk_replay_exact` proves the same
-//! leaf under `zk` with every mask replaced by zero through the forks'
-//! test-only mask hook and requires the replay to reproduce the constant
-//! table's sum and to single out the secret key. It needs the hook, so it
-//! runs only with
-//!
-//! ```text
-//! cargo test --release --features test-hooks,p3-circuit-prover/test-hooks --test zk_logup_blinding
-//! ```
-//!
-//! (an out-of-tree check that zeroed every mask inside the core fork made
-//! both `zk` assertions above fail, as expected).
+//! LogUp sums revealed by `zk` proofs are masked: fresh per proof, zero-sum per bus, no guess-and-check replay.
+//! zero_masks_make_the_zk_replay_exact needs --features test-hooks,p3-circuit-prover/test-hooks.
 
 use std::collections::BTreeMap;
 

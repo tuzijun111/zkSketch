@@ -1,6 +1,4 @@
-//! Root variants of the aggregation journal (six-sketch comparison). Compiled only with
-//! the `root` feature (see the end of lib.rs); everything else of the crate is reused from
-//! the parent module unchanged.
+//! Root variants of the aggregation journal (six-sketch comparison); compiled only with the `root` feature.
 
 // The parent's imports come with the glob, its Sha256 and Digest trait included.
 use super::*;

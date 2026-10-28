@@ -1,21 +1,7 @@
 #!/usr/bin/env bash
-# Equivalence evidence for the matched GK port (executor only unless CERTIFY=1; nothing of
-# zk-Analytics is proved here):
-#   1. native unit tests (cargo test -p gk-matched-host): the core against zkSketch's own
-#      apply_batch2 chain, carried-state binding, overflow = hard error, the rank estimator
-#   2. --mode check for each configuration: every epoch < EPOCHS and implementation, the
-#      guest's emitted state == zkSketch's chain tuple by tuple, journal == native, the query
-#      guest's rank bounds == zkSketch's rank_interval on the hot value
-#   3. --mode aggr (noroot, literal: the driver's default implementation) at every epoch < EPOCHS:
-#      the measurement-shaped row
-#   4. CERTIFY=1: --mode certify, zkSketch's own GK leaf circuit (as exp_compose builds it) proves
-#      every m_sub-record leaf, and each epoch's last leaf must expose Com(S) of the guest's
-#      state; zkSketch's GK decoder proof must give the query guest's answer. Heavy: real STARK
-#      proofs (~6 s per cap-384 / 128-record leaf, ~1.5 min per 2,048-record epoch).
-# Env: CONFIGS (default "A:384:128 B:768:512" = name:capacity:m_sub), EPOCHS (2), EPOCH_SIZE
-#   (2048), KEYS, OUT_DIR (default $RESULTS), SKIP_BUILD=1, CERTIFY=1.
-# Writes $OUT_DIR/zka_gk_matched_{check,aggr,certify}.csv (header once; rewritten per run) and
-# appends the raw record to $OUT_DIR/zka_gk_matched_check.log. Exit 1 on any failure.
+# Equivalence checks for the matched GK port: unit tests, check and aggr rows; CERTIFY=1 adds zkSketch's proofs.
+# Usage: [CONFIGS='A:384:128 B:768:512'] [EPOCHS=2] [EPOCH_SIZE=2048] [KEYS=...] [OUT_DIR=$RESULTS] [SKIP_BUILD=1]
+#        [CERTIFY=1] gk_matched_check.sh   (CONFIGS: name:capacity:m_sub; -> $OUT_DIR/zka_gk_matched_{check,aggr,certify}.csv, zka_gk_matched_check.log)
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common_gk_matched.sh"
 case "${RISC0_DEV_MODE:-}" in ""|0|false|no|off) ;; *) echo "RISC0_DEV_MODE is set; refusing" >&2; exit 2 ;; esac

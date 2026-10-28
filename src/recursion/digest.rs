@@ -1,21 +1,5 @@
-//! Ordered-batch digest helpers.
-//!
-//! Canonical chain digest of the composition layer. The leaf digest binds
-//! the epoch index, a range descriptor, the **batch commitment**, and the
-//! two full boundary state commitments:
-//!
-//! `H[j,j] = H('LEAF', j, D_j, Com(B_j), Com(S_{j-1}), Com(S_j))`
-//!
-//! and internal nodes bind the split point:
-//!
-//! `H[i,j] = H('MRGE', i, m, j, H[i,m], H[m+1,j])`.
-//!
-//! Both are computed natively (outside the composition circuit) and
-//! recomputed by the verifier from the public log, so a root digest that
-//! matches the log binds the ordered batch commitments and boundary states
-//! of the whole prefix — not just the state sequence. Commitments are
-//! absorbed at full width (no truncation) through the variable-length
-//! Poseidon2 sponge `MyHash`.
+//! Chain digests: leaf `H[j,j] = H('LEAF', j, D_j, Com(B_j), Com(S_{j-1}), Com(S_j))`,
+//! merge `H[i,j] = H('MRGE', i, m, j, H[i,m], H[m+1,j])`.
 
 use p3_field::PrimeCharacteristicRing;
 use p3_symmetric::{CryptographicHasher, Permutation};

@@ -1,44 +1,5 @@
-//! **Count-Min `c_merkle` leaf — CERTIFIED distinct-key update + MERKLE
-//! sparse-rebind state commitment** (plonky3 / STARK).
-//!
-//! This is the head-to-head partner of [`super::countmin_merkle`]. Both commit
-//! the state with the same per-row **Merkle root** and rebind it with the same
-//! `Θ(t_max·d·log w)` sparse update chain — so the COMMITMENT is identical.
-//! What differs is the **update method**:
-//!
-//! - [`super::countmin_merkle`] (the `merkle` variant) is **replay-style**: it
-//!   hashes and routes **every one of the `batch` records** individually
-//!   (`add_hash_slice` per record), so the in-circuit PRF cost is `Θ(batch·d)`.
-//! - This leaf (the `c_merkle` variant) is **certified-style**: it proves the
-//!   batch opens from `Com(B_t)`, then routes each `(record, row)` tuple to the
-//!   per-row Merkle ops; collisions are re-aggregated at the **cell** level by
-//!   the routing, so the per-row final roots equal the additive Count-Min state.
-//!
-//! Following the updated paper design (zk1.tex §"Pattern A", Steps 1–5), the
-//! data-dependent **key-grouping** step is dropped: the PRF runs once per
-//! record (`Θ(batch·d)`), and there is no `distinct_bound` compaction. The
-//! batch-binding stage is lifted from [`super::countmin_final`]; the rebind
-//! (op routing, `climb_merkle_path`, per-row root chain) is reused from
-//! [`super::countmin_merkle`].
-//!
-//! ## Where the two pipelines meet (the seam)
-//!
-//! The PRF yields, per record `k` and row `i`, the cell position
-//! `pos_i[k] = Poseidon2(key_k)[i] mod w` and the record value `value_k`.
-//! These `(row, position, value)` tuples are **routed** to the per-row Merkle
-//! ops exactly as the `merkle` leaf routes its records: a one-hot selector
-//! sends each `(i, k)` to the op at `pos_i[k]`, the op increment is
-//! `Σ_k sel·value_k`, and the op is rebound through the Merkle update chain.
-//! Routing re-aggregates collisions at the **cell** level, so the per-row roots
-//! are correct regardless of duplicate keys.
-//!
-//! ## Soundness posture
-//!
-//! Identical to [`super::countmin_final`] for the update relation (same
-//! per-record → group-by-counter shape) and to [`super::countmin_merkle`] for
-//! the rebind (same path gadget). Scope: **plonky3 only** for v1; a
-//! Goldilocks/plonky2 port is deferred. The existing `merkle` and `certified`
-//! leaves are left untouched as side-by-side baselines.
+//! Count-Min `c_merkle` leaf (`merkle` in the experiments): `countmin_final`'s batch binding
+//! and per-record hashing, with `countmin_merkle`'s per-row Merkle rebind of touched cells.
 
 use std::rc::Rc;
 

@@ -1,19 +1,6 @@
 #!/usr/bin/env bash
-# M=1 forest run with a BUSY SIBLING NODE: while the measured machine proves
-# on NUMA node 0, a dummy prover replica (output discarded) occupies node 1,
-# so the baseline machine experiences the same package environment (shared
-# socket power/fabric budget) as every machine in the M>=2 runs.
-#
-# Per family: start the dummy (same family, 2x the stream so it outlives the
-# measurement), wait for its build to pass, run the real M=1 measurement,
-# then kill the dummy. The dummy's CSV goes to /tmp and is discarded.
-#
-# Usage:
-#   scripts/run_m1_busy_sibling.sh <out.csv> [families]
-#   scripts/run_m1_busy_sibling.sh frame_out_1machine_plonky3_busysib.csv cm,hll,ss,gk
-#
-# The measurement environment matches the paper's deployed shapes; override
-# via the usual EXP_* variables if needed.
+# M = 1 forest run on NUMA node 0 while a dummy prover keeps node 1 busy, as in the M >= 2 runs.
+# Usage: scripts/run_m1_busy_sibling.sh <out.csv> [families, default cm,hll,ss,gk]
 set -u
 OUT="${1:?usage: run_m1_busy_sibling.sh <out.csv> [families]}"
 FAMILIES="${2:-cm,hll,ss,gk}"

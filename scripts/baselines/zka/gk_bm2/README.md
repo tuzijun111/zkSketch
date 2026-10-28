@@ -8,8 +8,8 @@ zkSketch's batch transition** in a RISC Zero guest instead:
 
     S_t = apply_batch2(S_{t-1}, gk_vals_of(batch_t))
 
-with `apply_batch2` from `src/sketch/gk_bandmerge.rs:1426` and `gk_vals_of` from
-`src/experiments/stream_compose.rs:550`, at the deployed configuration
+with `apply_batch2` from `src/sketch/gk_bandmerge.rs` and `gk_vals_of` from
+`src/experiments/stream_compose.rs`, at the deployed configuration
 `GkbParams { capacity: 2048, batch: 16384, s: 51 }`. It measures executor cycles
 only; nothing is proved. `../gk` is unchanged and stays the
 zk-Analytics-architecture baseline.
@@ -267,11 +267,11 @@ The state is carried natively from epoch to epoch. Any mismatch prints
     epochs start from a full odd table.
   - The `fast` and `fixed_linear` ports' refusal of a non-canonical state.
 
-## Results (executor; MODELED = segments x 30.1 s, NOT measured)
+## Results (executor only; prove time = segments x 30.1 s, not measured)
 
 Deployed configuration, one epoch (16,384 records), `zka_gk_bm2_exec.csv`:
 
-| row | variant | user cycles | total cycles (Σ 2^po2) | segments | MODELED prove (envelope) | rounds evaluated |
+| row | variant | user cycles | total cycles (Σ 2^po2) | segments | prove, segments x 30.1 s (envelope) | rounds evaluated |
 |---|---|---|---|---|---|---|
 | AOL epoch 0 | literal | 82,065,236 | 135,266,304 | 129 | 3,883 s (3,835-3,972) | 15 |
 | AOL epoch 0 | literal_reuse | 69,069,283 | 114,294,784 | 109 | 3,281 s | 15 |
@@ -313,10 +313,10 @@ only):
   encoding has a fixed size. That is 1.1% of `literal`'s user cycles, 3.7% of
   `fixed_linear`'s and 16.5% of `fast`'s.
   - The probes count user cycles only (`env::cycle_count`). Segments, and so
-    the MODELED time, also carry paging and reserved cycles: total/user is
+    the computed prove time, also carry paging and reserved cycles: total/user is
     1.65x for the literal variants, 1.64x for `fixed_linear` and 1.59x for
     `fast`. The executor does not split those by phase, so the ingest share
-    of the segments or of the MODELED time is not measured.
+    of the segments or of that time is not measured.
 - **`literal` vs `fast` is 15.6x in user cycles and 16x in segments** (82.1M vs
   5.3M, 129 vs 8; 5,009 vs 322 user cycles per record). Both compute the same
   2048-slot state, which holds 46-56 actives. This is NOT the price of the
@@ -361,12 +361,12 @@ only):
 
 ## Caveats
 
-- **No proved anchor.** Every prove time here is `segments x 30.1 s`. The model
+- **No proved anchor.** Every prove time here is `segments x 30.1 s`. The 30.1 s
   comes from the four CM-guest CPU anchors in `../README.md` (envelope 29.73-30.79
   s/segment). The HLL, SS and GK aggregation anchors there landed within 2% of
-  it, but none is this guest. The whole-segment model overstates rows whose last
+  it, but none is this guest. Counting whole segments overstates rows whose last
   segment is partial: AOL `fixed_linear` is 37 segments, the last at po2 19, so
-  1,114 s modeled against 1,099 s pro rata. Every other row here is whole po2-20
+  1,114 s by segments against 1,099 s pro rata. Every other row here is whole po2-20
   segments.
 - **Cycle counts belong to one ELF.** Code generation elsewhere in the guest
   moves them, even when a variant's own source does not change.
@@ -385,7 +385,7 @@ only):
   - `fast`'s three measurement rows fill exactly 8 x 2^20 total cycles
     (8,388,608), so they sit on the 8/9-segment boundary, and the deployed
     check rows show 8-9 segments. Quote `fast` as **8-9 segments (241-271 s
-    MODELED)**, with user cycles as the primary metric and segment ratios as
+    at 30.1 s per segment)**, with user cycles as the primary metric and segment ratios as
     approximate.
 - **CPU-only r0vm 3.0.6** on this 64-thread Threadripper box; the GPU prover was
   not used. `exec_s` is wall-clock on a shared box and is not a metric. For a
@@ -395,9 +395,9 @@ only):
   to a scratch directory and was not kept. Both log headers recorded
   `dirty_excl_results=[2]`.
 - **Cross-hardware.** The paper's zkSketch timing tables come from an EPYC
-  machine. Cycles and segments do not depend on hardware, but the MODELED
-  seconds are this box's CPU prover rate. A ratio between a zkSketch EPYC
-  prove time and a MODELED second here crosses machines and must say so. A
+  machine. Cycles and segments do not depend on hardware, but the computed
+  seconds use this box's CPU prover rate. A ratio between a zkSketch EPYC
+  prove time and one of these seconds crosses machines and must say so. A
   same-box zkSketch GK leaf at this configuration was not measured here, and
   zkSketch-side numbers should come from the current build (see
   `../README.md`).

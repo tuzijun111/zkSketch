@@ -1,43 +1,6 @@
-//! Poseidon2-backed commitment for a Count-Min update batch (Phase 9 — the
-//! §5.2 privacy-preserving design).
-//!
-//! ### Why this exists
-//!
-//! v1, v2, and the original v3 leaf all expose per-record `(key, value, pos)`
-//! tuples as public inputs — convenient for merge-compatibility but
-//! **violating the paper's privacy guarantee** (§3.4: the verifier should
-//! learn no more than what the declared aggregate reveals; raw keys
-//! definitely leak). The paper's §5.2 PI surface is just
-//! `(C_B, C_old, C_new, M)`: the batch is committed via `C_B` and never
-//! disclosed. This module provides that commitment.
-//!
-//! ### Layout
-//!
-//! Each `CountMinUpdate` `(key: u64, value: u32)` is encoded as **4 base
-//! field elements**:
-//!
-//! ```text
-//! [key_lo: u32, key_hi: u32, value: u32, 0]
-//! ```
-//!
-//! - Splitting `key` into two 32-bit chunks lets us embed it in `Val =
-//!   BabyBear` (which is ~31 bits) without depending on field reduction
-//!   for u64 → Val conversion. For our prototype workloads with small keys,
-//!   `key_hi` is always zero.
-//! - The trailing zero is alignment padding: 4 Vals per record means the
-//!   total flattened input is always a multiple of `CELL_ALIGNMENT = 4`, so
-//!   the in-circuit `add_hash_slice` (which packs 4 Vals into one Challenge
-//!   element) and the native `MyHash::hash_iter` produce identical digests.
-//!   Same trick as `commit_countmin` uses for state cells.
-//!
-//! ### Soundness
-//!
-//! `CountMinBatchCommit` binds the prover to a specific batch. In the
-//! private-batch v3 leaf (Phase 9c), per-record `(key, value)` move from
-//! public inputs to private witnesses; an in-circuit Poseidon2 hash gate
-//! reproduces this commitment over the private witnesses and connects to
-//! the `batch_commit` PI. A malicious prover cannot insert, drop, or
-//! reorder records without breaking the commitment binding.
+//! Poseidon2 commitment `C_B` to a Count-Min update batch. Records are hashed as
+//! `[key_lo, key_hi, value, 0]` (`commit_batch`) or, for the `omc` leaf under Semantic/Bound,
+//! as `[k0, k1, k2, k3, value, 0, 0, 0]` with exact 16-bit key limbs (`commit_batch_limbs`).
 
 use p3_field::PrimeCharacteristicRing;
 use p3_symmetric::CryptographicHasher;

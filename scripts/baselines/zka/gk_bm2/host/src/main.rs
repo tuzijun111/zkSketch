@@ -1,50 +1,5 @@
-// zkSketch's two-sided GK band-merge BATCH TRANSITION executed in a RISC Zero guest
-// (gk_bm2_step), for an executor-cycle cost comparison against zkSketch's GK leaf.
-// Matched semantics: the guest computes exactly zkSketch's
-// apply_batch2(S_{t-1}, gk_vals_of(batch_t)) (src/sketch/gk_bandmerge.rs:1426,
-// src/experiments/stream_compose.rs:550) and journals (Com_old, Com_batch, Com_new),
-// unsalted SHA-256. Unlike scripts/baselines/zka/gk (textbook GK in zk-Analytics'
-// pipeline), nothing here is zk-Analytics code or architecture; it is the zkVM
-// ("general-purpose method") cost of zkSketch's own leaf statement.
-//
-// Records, exactly as zkSketch's exp_compose harness batches them:
-//   aol      data/aol.keys (zksketch::dataset::aol(), or --keys PATH), flat LE u32
-//   uniform  zksketch::dataset::synthetic_stream(Uniform, N, seed 1), what
-//            exp_compose's load_base("uniform") generates (prefix-consistent in N)
-//   batching plain: batch e = base[(e*m + j) % len], j < m (exp_compose batches_from)
-//            --query-every Q: zksketch's build_query_schedule_batches(base, K*m, m, Q,
-//            GkBandmerge2), the mixed-workload batcher (early-sealed batches padded
-//            with PAD_KEY), to exercise the sentinel path
-//   values   gk_vals_of (drop PAD_KEY slots, mask to 21 bits), inside the guest
-//   params   GkbParams { capacity, batch: m, s } (deployed: 2048, 16384, 51)
-//
-// Modes:
-//   --mode exec  --dataset aol|uniform --epoch-index e [--variant V] [--emit-state]
-//        Chain zkSketch's native apply_batch2 over epochs 0..e (every step also checked
-//        against the four ports natively), then EXECUTE the guest on epoch e. One CSV
-//        row per variant. Without --emit-state the guest writes only its cycle probes to
-//        stdout; the journal is checked against the native commitments.
-//   --mode check --dataset aol|uniform --epochs K [--variant V] [--query-every Q]
-//        Chain over epochs 0..K-1 (all batches of the schedule with --query-every),
-//        executing the guest at EVERY epoch with the new state emitted, and compare
-//        it with zkSketch's native apply_batch2 output tuple by tuple (and n, params),
-//        plus the journal against the native commitments. One row per (epoch, variant).
-//   --header
-//   common: [--capacity 2048] [--s 51] [--epoch-size 16384] [--keys PATH]
-//   V: comma-separated literal,literal_reuse,fixed_linear,fast, or all (default).
-//      See ../core: literal = zkSketch's code statement for statement; literal_reuse =
-//      the same with per-round tables reused (no fresh pages per round under risc0's
-//      bump allocator); fixed_linear = zkSketch's fixed schedule (full table, every
-//      round, every pair) with a linear-time union and an in-place linear re-sort;
-//      fast = the same output with a data-dependent schedule.
-//
-// Every row also carries the guest's merge census (direction-1 / direction-2 fusions,
-// summed over the rounds), checked against the native ports' census. Any mismatch
-// (guest state, journal, census, or a native port vs zkSketch) prints a MISMATCH line
-// on stderr and exits 1 right after that row; the shell runner keeps such rows out of
-// the CSV. Nothing is proved: --prove does not exist here. MODELED prove time =
-// segments x 30.1 s/segment (envelope 29.73 .. 30.79), the CPU CM-guest anchors of
-// scripts/baselines/zka/README.md; it is a model, not a measurement.
+// Host driver for the gk_bm2 guest (zkSketch's GK batch transition), checked against zkSketch's native code.
+// Usage: gk_bm2 --mode exec|check --dataset aol|uniform [--epoch-index E | --epochs K] [--variant V]
 
 use std::time::Instant;
 
@@ -55,6 +10,9 @@ use zksketch::dataset::{synthetic_stream, Synthetic};
 use zksketch::experiments::stream_compose::{build_query_schedule_batches, gk_vals_of, StreamFamily, PAD_KEY};
 use zksketch::sketch::gk_bandmerge::{try_apply_batch2, Gk2State, Gk2Tuple, GkbParams};
 
+/// MODELED_prove_s = segments x S_PER_SEG (computed, not measured), from the four CPU-proved CM guest runs
+/// in scripts/baselines/zka/README.md: S_PER_SEG is aggr_cm T=100, n=512 (661.3 s / 22 segments = 30.06 s)
+/// rounded; _lo/_hi use 29.73 and 30.79 s, the lowest and highest s/segment of the four.
 const S_PER_SEG: f64 = 30.1;
 const S_PER_SEG_LO: f64 = 29.73;
 const S_PER_SEG_HI: f64 = 30.79;
@@ -141,7 +99,7 @@ fn load_base(dataset: &str, need: usize) -> Vec<u32> {
     }
 }
 
-/// examples/exp_compose.rs:206-210 (`batches_from`, private there), verbatim.
+/// `batches_from` in examples/exp_compose.rs (private there), verbatim.
 fn batches_from(base: &[u32], m: usize, t: usize) -> Vec<Vec<u32>> {
     (0..t).map(|i| (0..m).map(|j| base[(i * m + j) % base.len()]).collect()).collect()
 }

@@ -1,26 +1,5 @@
-//! **zkSketch Framework §4: Verifiable Streaming Sketch Maintenance.**
-//!
-//! Port of `../src/recursion/framework.rs` to plonky2/Goldilocks. The proof-
-//! orchestration layer that sits *above* the per-family update circuits of §5
-//! (`crate::leaf::*`). It is **sketch-agnostic**: it composes per-epoch
-//! transition proofs into a single auditable root, independent of whether the
-//! leaves are Count-Min, GK, HLL, or SpaceSaving.
-//!
-//! - **§4.1 Per-epoch transition proof chain.** Each closed epoch yields a leaf
-//!   with public boundary `(D_i, Com(S_{i-1}), C_{B_i}, Com(S_i), M)`. Adjacent
-//!   leaves chain through `Com(S_i)`. [`verify_epoch_chain`] is the Θ(E) verifier.
-//! - **§4.2 Interval proofs + the merge atom.** An [`IntervalProof`] carries the
-//!   public boundary; [`merge_atom`] composes two adjacent intervals, checking the
-//!   shared boundary and combining the ordered-epoch digests via the existing
-//!   [`combine_digest`].
-//! - **§4.3 Composition topologies.** [`compose_chain`] (linear), [`compose_tree`]
-//!   (balanced binary), and [`StreamingForest`] (Bentley–Saxe / MMR cascade).
-//! - **Root `R(t)`.** [`root_commitment`] packages a root's boundary into the
-//!   `O(1)`-size digest the verifier checks.
-//!
-//! Unlike the plonky3 original, the per-family leaves here are real plonky2
-//! proofs that self-verify natively; this module adds the **composition
-//! soundness** §4 is about (contiguity, boundary agreement, order-binding).
+//! Boundary-level composition: epoch-chain check, interval merge, chain/tree/forest schedules, root digest.
+//! No proofs here; recursion::topology runs the same schedules over real proofs.
 
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::HashOut;

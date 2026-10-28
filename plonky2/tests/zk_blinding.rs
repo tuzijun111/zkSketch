@@ -1,15 +1,5 @@
-//! Zero-knowledge regression tests for the plonky2 backend.
-//!
-//! At the pinned plonky2 rev, `CircuitBuilder::blind()` joins each pair of
-//! Z-blinding rows with `generate_copy` (a witness copy) instead of `connect` (a
-//! copy constraint). Sigma is then the identity on those rows, so the permutation
-//! polynomial Z and its partial products are not blinded: anyone holding the
-//! circuit and a proof can recover a low-entropy private input by recomputing Z
-//! from guessed witnesses and comparing it with the opened Z(zeta)
-//! (guess-and-check). `zk_blinds_permutation_argument` fails on that rev and
-//! passes with the fix, so it guards the plonky2 dependency. None of the tests
-//! that force `zero_knowledge` on are gated on the `zk` feature, so the
-//! `--no-default-features` run checks the plonky2 build as well.
+//! Zero-knowledge regression tests. zk_blinds_permutation_argument fails unless plonky2's blind()
+//! joins the Z-blinding rows with connect rather than generate_copy.
 
 use anyhow::Result;
 use plonky2::field::extension::Extendable;

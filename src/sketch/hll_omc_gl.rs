@@ -1,32 +1,4 @@
-//! **Goldilocks (D=2) offline-memory-checking HyperLogLog leaf** — the
-//! selectable Goldilocks counterpart of [`super::hll_omc`], mirroring how
-//! [`super::ss_final_full_gl`] / [`super::gk_bandmerge_gl`] shadow their
-//! BabyBear originals. The BabyBear module stays byte-for-byte untouched;
-//! this file only adds the `hll_gl` option.
-//!
-//! Same check as the BabyBear leaf (see [`super::hll_omc`]'s header for the
-//! WS ⊎ = RS offline-memory-checking argument and the max-update `ts`
-//! soundness note). The port-relevant differences:
-//!
-//! - **Config**: `crate::config_gl` (Goldilocks, D=2 extension, width-8
-//!   Poseidon2, digest 4) via `GOLDILOCKS_D2_W8`; registration/builders use
-//!   the `::<2>` / `_d2` forms.
-//! - **Register packing**: 2 registers per `Challenge` (D=2) instead of 4.
-//! - **Routing**: the key digest is 4 Goldilocks coefficients (2 Challenges)
-//!   instead of 8 BabyBear ones; `idx`/`ρ` come from 64-bit decompositions of
-//!   `digest[0]`/`digest[1]` and the remaining 2 coefficients are consumed
-//!   (BabyBear: 8 × 31-bit — same ~256 decomposed bits per record).
-//! - **Multiset encoding**: BabyBear packs `(addr, val, ts, 1)` into one
-//!   D=4 challenge. D=2 has only two coords, and splitting an element across
-//!   two cells would be UNSOUND: the permutation argument is a multiset
-//!   equality over *cells*, so a malicious σ could re-pair value-cells with
-//!   ts-cells across elements and resurrect the max-suppression attack the
-//!   `ts` coordinate exists to kill. Instead each element stays ONE cell:
-//!   `[addr, 4·val + 2·ts + 1]` — injective because `val < 2^RANK_BITS` is
-//!   range-checked for every multiset participant (`ts` is boolean, the `+1`
-//!   tag keeps real cells disjoint from the zero dummies of inactive rows).
-//!   The two extra 8-bit range checks per register this needs (`o_cells`,
-//!   `n_cells`) are honest-complete — registers hold ranks `ρ ≤ 65 < 2^8`.
+//! Goldilocks (D = 2) port of the HLL `omc` leaf (`hll_gl`).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -798,12 +770,12 @@ pub fn build_hll_omc_leaf_commit(
 
     // ── Recommit (offline memory checking): WS ⊎ = RS with a time coordinate ─
     // enc(a, v, ts) = recompose([a, 4v + 2ts + 1]) — ONE D=2 cell per element
-    // so the permutation argument cannot re-pair coordinates across elements
-    // (see the module header). The +1 tag keeps real elements disjoint from the
-    // zero dummies inactive update rows produce; the `ts` bit forces the read
-    // at a touched cell to see the ts=0 init value, binding op_old to the
-    // committed old register (the max fix). Injective because every `v` is
-    // range-checked `< 2^RANK_BITS` and `ts` is boolean.
+    // so the permutation argument cannot re-pair coordinates across elements.
+    // The +1 tag keeps real elements disjoint from the zero dummies inactive
+    // update rows produce; the `ts` bit forces the read at a touched cell to
+    // see the ts=0 init value, binding op_old to the committed old register
+    // (the max fix). Injective because every `v` is range-checked
+    // `< 2^RANK_BITS` and `ts` is boolean.
     let enc = |b: &mut CircuitBuilder<Challenge>, a: ExprId, v: ExprId, ts: ExprId| -> ExprId {
         let tag = b.mul_add(ts, two, one); // 2·ts + 1
         let packed_v = b.mul_add(v, four, tag); // 4·v + 2·ts + 1
@@ -1186,7 +1158,7 @@ impl HllOmcLeafCircuit {
 
         // Dense old/new register multisets + touched read/write rows, in the
         // offline-memory-checking read/write-set form with a time coordinate `ts`
-        // (see the BabyBear module's soundness note).
+        // (as in `hll_omc`: without `ts` a prover could suppress an update).
         let o_cells_native: Vec<u32> = init_regs.clone();
         let n_cells_native: Vec<u32> = committed_final_regs.clone();
         // ft_a = 1 iff register a is touched (its final value was written at ts=1).

@@ -1,17 +1,5 @@
-//! §4.1 flat proof chain for Count-Min update epochs.
-//!
-//! Companion to `recursion::flat` (which is the Fibonacci toy AIR) and the
-//! §4.2 recursive merge in `recursion::recursive::countmin_merge`. The flat
-//! `ChainProof` simply bundles two `CountMinLeafProof`s; `verify_chain`
-//! re-verifies each leaf natively via `BatchStarkProver::verify_all_tables`
-//! and checks the shared-boundary equality from the carried commits. The
-//! ordered-update digest is computed once with the same `leaf_digest` /
-//! `combine_digest` recipe the recursive merge uses, so both paths certify
-//! the same `H_{[i,j]}` interval object.
-//!
-//! Verifier cost scales as `Θ(E)` in the number of leaves; contrast the
-//! `O(1)` of the recursive merge. The `examples/countmin_chain_two.rs`
-//! demo measures both on the same two leaves.
+//! Flat proof chain for Count-Min epochs: keeps both leaf proofs and re-verifies
+//! each one, so verifier cost grows with the number of leaves.
 
 use core::fmt;
 

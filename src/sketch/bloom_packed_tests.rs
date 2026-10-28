@@ -1,26 +1,3 @@
-//! Tests of the packed-byte Bloom leaf ([`super`]): filter equality with
-//! `bloom_omc` (native and random-batch differential fuzz at the deployed
-//! and test shapes; proved leaves and queries against `bloom_omc`'s at the
-//! test shape and at the deployed filter shape), the `k·m < 2^16` timestamp
-//! bound, honest round trips in every layout and commitment mode, the hiding
-//! guards, the cleanliness of every test switch ([`PackedChecks`]), and
-//! forgeries with positive controls.
-//!
-//! **Forgeries.** Each attack builds a forged epoch witness by replaying the
-//! batch with one (record, slice) pair or one routing split overridden; the
-//! rest of the replay is honest and consistent with the forgery, so the
-//! honest witness RUNNER accepts the forged private inputs (it evaluates
-//! connects, not range lookups or BoolChecks) and the forgery reaches the
-//! prover. With the targeted check removed ([`PackedChecks`], a different
-//! circuit) the forgery must prove, self-verify and commit to a WRONG final
-//! state (positive control). Against the deployed circuit it must be rejected
-//! by the prover or the verifier ([`PackedProveError::Prove`] /
-//! [`PackedProveError::Verify`]), never by the runner
-//! ([`PackedProveError::Run`] fails the test). Memory-checking forgeries
-//! (stale read, tampered final word) cannot be matched by any permutation, so
-//! their Permute op is forged to emit the claimed reads directly
-//! ([`forge_permute_outputs`]): only the PermuteBus can object.
-
 use super::*;
 use crate::commitment::hiding::SaltSeed;
 use crate::recursion::recursive::expose_forest::{read_exposed_statement, vk_pin_values};

@@ -1,35 +1,4 @@
-//! Certified (§"Pattern A") Count-Min update leaf for plonky2 — the
-//! **hash-every-record** design matching the updated paper (zk1.tex Steps 1–5).
-//!
-//! The data-dependent key-grouping step was removed from the paper design: the
-//! circuit no longer pre-aggregates same-key records before hashing. Instead it
-//! hashes **every** record to its `d` counters (`n_ctr = batch·d`), groups BY
-//! COUNTER, and accumulates each counter segment by a checked running sum, so
-//! duplicate keys and independent collisions alike are reconciled in one pass.
-//! The circuit's shape is fixed by the public batch capacity `m`, never by the
-//! realised number of distinct keys. The additive relation is unchanged
-//! (Count-Min is additive), so the final committed state is identical whether
-//! same-key records are pre-grouped or hashed one-by-one.
-//!
-//! ## Pipeline (paper Steps 1–5; circuit stages A, F–J)
-//! 1. (Stage A) Bind initial/final cells and the raw batch to Poseidon
-//!    commitments (PIs).
-//! 2. (Stage F) Derive the `d` counters each record updates:
-//!    `h_i(k) = Poseidon(k)[i] mod w`, run once PER RECORD, value = record value.
-//!    This builds the `n_ctr = batch·d` counter-update table directly.
-//! 3. (Stage G) Sort the `batch·d` counter updates (permutation + sortedness).
-//! 4. (Stage H) Counter-level adjacent-equality + running sum.
-//! 5. (Stages I/J) Sparse-patch one-hot cell selector + state transition
-//!    `final[idx] = initial[idx] + Σ sel·acc`.
-//!
-//! ## The one structural difference from plonky3
-//! plonky3 proves each sort with a dedicated `PermuteAir` table. plonky2 has no
-//! such table, so each permutation here is an **in-circuit grand-product
-//! argument** ([`assert_perm_cols`]): fold each tuple with a Fiat-Shamir
-//! challenge `α`, then assert `Π(x_i + β) == Π(y_i + β)`, with `α, β` derived
-//! from a Poseidon hash of both lists and drawn from the degree-2 extension of
-//! Goldilocks (soundness error `≤ n/p² ≈ 2⁻¹⁰⁸` at `n = 2²⁰`). Sortedness is
-//! enforced by range-checking adjacent differences (`split_le`).
+//! Count-Min update leaf: hash every record in-circuit, sort and group by counter, one-hot sparse patch.
 
 use std::sync::Arc;
 

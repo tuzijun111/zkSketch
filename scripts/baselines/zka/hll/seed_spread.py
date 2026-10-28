@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
-"""Accuracy side-check for the HLL baseline (native, numpy; no zkVM).
+"""HLL accuracy check in numpy: reproduce the guest's estimates in zka_hll_exec.csv, then repeat with 9 other seeds.
 
-1. Independent re-implementation of the guest's HLL (FNV-1a over the 15-byte
-   make_key_id(0, key), seeded splitmix64 finaliser, index = low 14 bits,
-   rank = 1 + leading zeros of the other 50 bits, textbook estimator with linear
-   counting). For the seed the guest uses (their CM row-0 seed 0x6d0f27bd) it must
-   reproduce the committed estimate of every query row in zka_hll_exec.csv exactly;
-   the script exits non-zero otherwise.
-2. The same estimate under 9 other seeds, to show how much of the observed error is
-   the draw of one hash function (HLL standard error 1.04/sqrt(2^14) = 0.81%).
-
-Usage: seed_spread.py [--keys data/aol.keys] [--exec-csv results/zka_hll_exec.csv]
-                      [--out results/zka_hll_seed_spread.csv]
+Usage: python3 seed_spread.py [--keys PATH] [--exec-csv PATH] [--out PATH]
 """
 import argparse, csv, math, os, sys
 import numpy as np

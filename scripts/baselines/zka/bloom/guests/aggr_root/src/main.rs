@@ -1,12 +1,7 @@
 #![no_main]
 #![no_std]
 
-// Bloom aggregation guest of the six-sketch ROOT VARIANTS (designed = 64-bucket samples-pattern
-// root, noroot = none; ../../core/src/lib.rs "root variants"). It is bloom_aggr with the
-// variant read before the input and committed with the journal, and one more phase mark
-// (the root step): marks start, read, chain, flatten, update, commit, root, journal go to
-// STDOUT (not the journal), 8 cycle_count calls and one 64-byte write. bloom_aggr (no root)
-// stays the guest of the committed 2026-10-09 reference rows (`legacy`).
+// bloom_aggr with the six-sketch root variant (designed = 64-bucket root, noroot = none) in the journal.
 
 extern crate alloc;
 

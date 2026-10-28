@@ -1,45 +1,4 @@
-//! Bloom-filter **membership query** circuit (plonky3/STARK), the query side
-//! of [`crate::sketch::bloom_omc`].
-//!
-//! Proves `answer = AND_j S[j·W + pos_j(key)]` against a committed partitioned
-//! Bloom filter `S` (`M = k·W` bit cells, `Com(S) = commit_bloom(S)` — the same
-//! digest the update leaf surfaces as its final commitment, so a query chains
-//! onto a leaf's output).
-//!
-//! Stages:
-//! 1. Every cell is boolean (pins it to the base field); the cells are packed
-//!    4-per-Challenge through the ALU and hashed with the bound sponge →
-//!    `Com(S)` (the `Θ(M)` re-hash).
-//! 2. The key is routed exactly as the update leaf routes an active record
-//!    ([`record_route_gadget`] with `act = 1`): four range-checked 16-bit limbs,
-//!    one bound Poseidon2 digest, canonical `(pos, hi)` splits.
-//! 3. Per slice a one-hot selector `s_{j,i}` (boolean, `Σ_i s = 1`,
-//!    `Σ_i i·s = pos_j`) opens `o_j = Σ_i s_{j,i}·S[j·W + i]` (`Θ(M)` total, the
-//!    [`super::countmin`] selector pattern).
-//! 4. `answer = ∏_j o_j`.
-//!
-//! The verifier-visible statement is the Expose op `(Com(S), record(key),
-//! answer)`: `record(key) = [k0, k1, k2, k3 + 2^16]` is injective in the key,
-//! so the verifier checks it equals [`record_vals`]`(Some(key))`. The 16
-//! values are the standard decode statement layout, so
-//! [`crate::decode::read_exposed_statement`] reads them as `(Com(S), query,
-//! answer)` with `query = record(key)` and `answer = (a, 0, 0, 0)`, and
-//! [`crate::decode::verify_decode_proof`] pins a proof to
-//! [`bloom_decode_vk`] (derived from public parameters).
-//!
-//! Hiding commitments (revision B2): [`prove_bloom_query_commit`] opens a
-//! state committed under a [`CommitMode`]. `Plain` is the circuit above op
-//! for op; `Hiding` opens `Com(S; ρ) = commit_bloom_with(S, Hiding, ρ)` (the
-//! salt is the first 3 private inputs, absorbed behind the `TAG_STATE` /
-//! Bloom tag), so the exposed commitment is the salted one a hiding leaf
-//! published. The verifier pins such proofs to [`bloom_decode_vk_commit`]
-//! with the same mode (derived over the empty filter with the public zero
-//! salt; the salt is a witness).
-//!
-//! Soundness caveat: as for the update leaf, this is conditional on the pinned
-//! fork binding constant values (see the "constants are not bound" section of
-//! [`crate::sketch::bloom_omc`]); the one-hot index constants `i` and the
-//! `assert`-targets are constants.
+//! Bloom-filter membership decode circuit: `answer = AND_j S[j·W + pos_j(key)]` against `Com(S)`.
 
 use std::rc::Rc;
 

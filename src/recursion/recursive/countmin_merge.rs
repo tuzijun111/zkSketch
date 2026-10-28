@@ -1,9 +1,4 @@
-//! Two-leaf recursive merge for Count-Min update epochs (paper §4.2 Lite).
-//!
-//! Aggregates two `CountMinLeafProof`s into one batch-STARK that certifies
-//! both per-epoch updates. The §4.2 shared-boundary check is performed
-//! natively against the exposed commits — full in-circuit hiding of the
-//! intermediate commit is the same follow-up the Fibonacci variant defers.
+//! Two-leaf recursive merge for Count-Min leaves; the shared boundary is checked natively.
 
 use core::fmt;
 

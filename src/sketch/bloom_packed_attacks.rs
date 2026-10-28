@@ -1,52 +1,5 @@
-//! **G-sound, attack round 1: trace-level forgeries against the DEPLOYED
-//! packed Bloom layout** (the leaf with the `Interval` statement and `Hiding`
-//! commitments, family 7; the query under `Hiding`).
-//!
-//! A malicious prover may hand `prove_all_tables` ANY traces. Every forgery
-//! here is turned into traces by a forger that the honest runner cannot
-//! veto:
-//!
-//! * the private inputs are written by the forger (the leaf's input layout is
-//!   rebuilt here, [`Wit::private_inputs`]); the commitments it claims are
-//!   computed by a field-exact mirror of the circuit ([`Wit`]), so a forgery
-//!   that satisfies every `connect` reaches the prover unchanged;
-//! * a forgery that must break a `connect` goes through the split-wire
-//!   pre-pass ([`split_conflicting_wires`]): the offending ALU / NPO output is
-//!   re-pointed to a scratch slot of a CLONE of the circuit, while the prover
-//!   data (built from the deployed circuit) still names the original witness
-//!   id, so only the WitnessChecks LogUp bus can object;
-//! * memory-checking forgeries that no permutation can match go through
-//!   [`forge_permute_outputs`] (only the PermuteBus can object);
-//! * constant forgeries patch one `Op::Const` value of the runner's clone
-//!   (only the ConstAir binding can object);
-//! * the query is forged through the decoder's test-only
-//!   [`with_query_forger`] hook, which replaces the runner with the same
-//!   tools; the decoder still proves with the prover data of the circuit it
-//!   built.
-//!
-//! **Positive controls.** Each forgery against a circuit without the
-//! targeted check ([`PackedChecks`], test-only; or, for a constant, the
-//! circuit whose constant IS the forged value) must prove, verify, carry that
-//! circuit's VK (not the deployed one), use NO split wire, and certify a WRONG
-//! state (a final commitment that opens to a byte state other than the
-//! native insert) or a WRONG answer. Against the deployed circuit the same
-//! forgery must be rejected by the prover or the verifier; a refusal of the
-//! runner or of the split pre-pass fails the test. The pipeline is
-//! transparent on honest witnesses (`pipeline_is_transparent_on_honest_witnesses`).
-//!
-//! Forgeries whose check is a `connect` (the relation itself, no switch:
-//! selector index, selected value, digest recomposition, `HI_MAX − hi = dd`,
-//! the canonicity edge, the dummy rule) are attempted with split wires, and
-//! their control is the forgery that the same goal admits once a SWITCHABLE
-//! check is removed (stated per attack). Unbalanced memory-checking
-//! forgeries (pure stale read, tampered final word) have no switch (the
-//! permutation is the relation); their control is the balanced variant that
-//! the timestamp or final-timestamp check stops.
-//!
-//! Run: `cargo test --release --lib -- bloom_packed::attacks::` (the
-//! test-shape suite takes about 25 s; the two
-//! `attacks_at_the_deployed_filter_shape_*` tests repeat every attack at
-//! `k = 7, W = 2^14`, about 2 min and 1.5 GB together).
+//! Trace-level forgeries against the deployed packed Bloom leaf and query, with positive controls.
+//! Run: cargo test --release --lib -- bloom_packed::attacks::
 
 use super::*;
 

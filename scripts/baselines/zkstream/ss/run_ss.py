@@ -1,20 +1,7 @@
 #!/usr/bin/env python3
-"""Small-scale driver: a ZoKrates SpaceSaving operator following zkStream's
-stateful-operator design ("replay": commit-in, batch digest, textbook per-record
-update, commit-out). OUR circuit in zkStream's toolchain (ZoKrates 0.8.8, Groth16
-over BN254) -- never report it as "zkStream".
-
-For each (s, k): generate the operator and its witness helper, compile both under a
-time and memory cap, set up the operator once, then prove a chain of C chunks over the
-first AOL keys. A native SpaceSaving reference computes the next state and the slot
-hints; the helper computes the Poseidon commitments; the circuit's own output must
-equal the helper's commitment to the reference state (cross-check), and each chunk's
-public com_in must equal the previous proof's public com_out. Forged inputs must be
-rejected by compute-witness; a proof with a changed public output must fail verify.
-
-One CSV row per measured step -> $RESULTS/zkstream_ss.csv (appended).
-
-  run_ss.py --s 8 16 32 64 128 --k 4 16 64 --chunks 4 --prune
+"""SpaceSaving replay operator following zkStream's design (our ZoKrates 0.8.8 / Groth16 circuit, not zkStream):
+proves C chained chunks over AOL keys, each checked against a native reference; one row per step in $RESULTS/zkstream_ss.csv.
+Usage: run_ss.py --s 8 16 32 64 128 --k 4 16 64 --chunks 4 --prune
 """
 import argparse, csv, json, os, re, secrets, subprocess, sys, time
 from datetime import datetime

@@ -1,10 +1,4 @@
-//! Feasibility spike: can the REAL recursive forest (`prove_countmin_forest_v9`,
-//! whose merges verify their two children in-circuit) recursively verify the
-//! stream runner's OMC (`omc`) leaves — not just the native v9 leaves?
-//!
-//! If this passes, the stream runner can keep its leaf proofs, wrap them as
-//! `CountMinLeafProofV9`, and fold them with the real recursive merge so
-//! `merge_ms` reflects actual in-circuit child verification.
+//! Recursive v9 forest and chain merges over the stream runner's Count-Min leaves (omc, c_merkle, one_hot).
 
 use zksketch::commitment::CountMinBatchCommit;
 use zksketch::recursion::recursive::countmin_chain_v9::prove_countmin_chain_v9;

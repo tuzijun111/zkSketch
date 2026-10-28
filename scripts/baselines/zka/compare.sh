@@ -1,13 +1,6 @@
 #!/bin/bash
-# Definitive four-metric comparison: zkSketch vs zk-Analytics.
-#
-# MATCHED UNIT: one epoch / one batch = 16,384 records, Count-Min d=3 rows x w=1024 cols.
-#   - zk-Analytics fixes CM_ROWS=3, CM_COLS=1024 in code and uses 16,384-log epochs.
-#   - zkSketch runs the same geometry with EXP_D=3 EXP_W=1024, m=2^14.
-# Metrics on both sides: prover time, verifier time, proof size, peak RSS.
-#
-# risc0 spawns `r0vm` as a SEPARATE process that survives killing its parent --
-# always clean it up, or the next measurement runs against a 32-core squatter.
+# Count-Min 3 x 1024 on 16,384-record epochs, zkSketch vs zk-Analytics: prove and verify time, proof size, peak RSS.
+# Usage: ./compare.sh   (ZKSKETCH_COMMIT=plain|hiding)
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"   # PATH RESULTS ZKS ZKA BASELINE_DIR build_cyc cyc_target
 set -u
 R=$RESULTS; mkdir -p $R

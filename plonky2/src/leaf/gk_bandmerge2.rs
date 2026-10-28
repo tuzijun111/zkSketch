@@ -1,23 +1,4 @@
-//! In-circuit **two-sided Greenwald–Khanna band-merge leaf (`bandmerge2`)**
-//! (plonky2 / SNARK). Port of `../src/sketch/gk_bandmerge.rs::prove_gkb2_inner`
-//! (the Gribelyuk two-sided §5.2 certificate the streaming forest deploys).
-//!
-//! One epoch's certificate: union `S_old ‖ fresh` → value-sort by `(e,t)` →
-//! two-sided neighbor-init → `L_f = ⌈log₂(cap+m)⌉` parity-0 fuse+resort rounds →
-//! compact to `capacity`. The prover supplies every intermediate table
-//! ([`build_bm2`]); the circuit binds the state/batch commitments and checks the
-//! whole pipeline is consistent, so the proof's shape is fixed by `(cap, m, s)`.
-//!
-//! ## plonky2 vs plonky3
-//! - plonky3 packs a tuple into 2 BabyBear-ext challenges (8 coeffs); plonky2
-//!   works on raw Goldilocks fields — `TUPLE_CELLS = 6` cells `(e,g,g°,Δ,Δ°,t)`
-//!   per tuple, `active` derived as `[e ≠ E_MAX]`.
-//! - plonky3's `add_permute(sigma)` (sorts) → [`assert_perm_cols`] (sigma-free
-//!   multiset equality) + explicit `(e,t)`-sortedness range checks.
-//! - plonky3's `add_range_bits(bits)` / `force_le` → [`split_le`] / [`force_le`].
-//! Carries the plonky3 audit fixes: `(e,t)` tiebreaks (pin equal-`e` order),
-//! `is_fresh` gate + `N_t = N_prev + #active_batch` conservation, and the
-//! poisoned-dummy guard `(1−active)·g = 0` in the mass stage.
+//! Two-sided Greenwald–Khanna band-merge leaf (`bandmerge2`), port of ../src/sketch/gk_bandmerge.rs.
 
 use std::sync::Arc;
 

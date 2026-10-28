@@ -1,9 +1,5 @@
-//! Accumulating chain root (paper §4.3 — the simplest recursive schedule).
-//!
-//! Phase 1 only supports the two-leaf case (`init`). Extending the root by one
-//! more leaf (`extend`) corresponds to one merge atom per arrival; the §4.3
-//! description applies but we leave the implementation for Phase 1.5 once the
-//! in-circuit merge is available.
+//! Accumulating chain root over toy `LeafProof`s. Only the two-leaf case
+//! (`init`) is implemented.
 
 use crate::prover::LeafProof;
 use crate::recursion::flat::{ChainProof, MergeError, merge_two};

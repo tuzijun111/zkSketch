@@ -1,12 +1,5 @@
-//! Multi-leaf §4.3 recursive chain sweep on HyperLogLog (Phase 4c analog of
-//! `countmin_chain_n`).
-//!
-//! Builds chains of length `E ∈ {2, 4, 8}` and prints prove time per merge,
-//! total prove time, verify time, and proof size at each `E`. Shows the
-//! paper's `O(1)` verifier claim holds for HLL just as it does for Count-Min:
-//! `chain verify` and `recursive proof size` stay roughly flat across `E`.
-//!
-//! Run with: `cargo run --release --example hll_chain_n`.
+//! HyperLogLog recursive chain over E = 2, 4, 8 leaves: prove and verify time, proof size.
+//! Usage: cargo run --release --example hll_chain_n
 
 use std::time::Instant;
 

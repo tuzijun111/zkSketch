@@ -1,0 +1,59 @@
+# batches.sh: zkSketch, every batch size in Table 2's memory-matched setting (Figure 5)
+started=2026-10-28T15:42:57+08:00 host=SPRL6201019991 cpus_allowed=0-31 cores=32 gate_wait_s=900
+zksketch=a328976a13610fd13c4d25702f31d6e93f8d8218 exp_compose_md5=e4a2a04653ef sizes=zka (cm 3x1024, ss/kmv 1024, gk cap 768 s 51, hll b14, bloom 7x2^14 packed)
+plan=cm:64:64 cm:128:128 cm:256:256 cm:512:512 cm:1024:1024 cm:2048:1024 cm:4096:1024 cm:8192:1024 cm:16384:1024 hll:64:64 hll:128:128 hll:256:256 hll:512:512 hll:1024:1024 hll:2048:1024 hll:4096:1024 hll:8192:1024 hll:16384:1024 ss:64:64 ss:128:128 ss:256:256 ss:512:512 ss:1024:1024 ss:2048:2048 ss:4096:4096 ss:8192:4096 ss:16384:4096 gk:64:64 gk:128:128 gk:256:256 gk:512:512 gk:1024:512 gk:2048:512 gk:4096:512 gk:8192:512 gk:16384:512 bloom:64:64 bloom:128:128 bloom:256:256 bloom:512:512 bloom:1024:1024 bloom:2048:1024 bloom:4096:1024 bloom:8192:1024 bloom:16384:1024 kmv:64:64 kmv:128:128 kmv:256:256 kmv:512:512 kmv:1024:1024 kmv:2048:2048 kmv:4096:4096 kmv:8192:4096 kmv:16384:4096
+step rc=0 seconds=36 cm m=64 leaves=1 leaf=64
+step rc=0 seconds=7 cm m=128 leaves=1 leaf=128
+step rc=0 seconds=7 cm m=256 leaves=1 leaf=256
+step rc=0 seconds=10 cm m=512 leaves=1 leaf=512
+step rc=0 seconds=45 cm m=1024 leaves=1 leaf=1024
+step rc=0 seconds=68 cm m=2048 leaves=2 leaf=1024
+step rc=0 seconds=94 cm m=4096 leaves=4 leaf=1024
+step rc=0 seconds=167 cm m=8192 leaves=8 leaf=1024
+step rc=0 seconds=257 cm m=16384 leaves=16 leaf=1024
+step rc=0 seconds=120 hll m=64 leaves=1 leaf=64
+step rc=0 seconds=59 hll m=128 leaves=1 leaf=128
+step rc=0 seconds=90 hll m=256 leaves=1 leaf=256
+step rc=0 seconds=64 hll m=512 leaves=1 leaf=512
+step rc=0 seconds=63 hll m=1024 leaves=1 leaf=1024
+step rc=0 seconds=92 hll m=2048 leaves=2 leaf=1024
+step rc=0 seconds=195 hll m=4096 leaves=4 leaf=1024
+step rc=0 seconds=275 hll m=8192 leaves=8 leaf=1024
+step rc=0 seconds=450 hll m=16384 leaves=16 leaf=1024
+step rc=0 seconds=100 ss m=64 leaves=1 leaf=64
+step rc=0 seconds=41 ss m=128 leaves=1 leaf=128
+step rc=0 seconds=40 ss m=256 leaves=1 leaf=256
+step rc=0 seconds=41 ss m=512 leaves=1 leaf=512
+step rc=0 seconds=14 ss m=1024 leaves=1 leaf=1024
+step rc=0 seconds=47 ss m=2048 leaves=1 leaf=2048
+step rc=0 seconds=57 ss m=4096 leaves=1 leaf=4096
+step rc=0 seconds=77 ss m=8192 leaves=2 leaf=4096
+step rc=0 seconds=140 ss m=16384 leaves=4 leaf=4096
+step rc=0 seconds=79 gk m=64 leaves=1 leaf=64
+step rc=0 seconds=48 gk m=128 leaves=1 leaf=128
+step rc=0 seconds=17 gk m=256 leaves=1 leaf=256
+step rc=0 seconds=49 gk m=512 leaves=1 leaf=512
+step rc=0 seconds=70 gk m=1024 leaves=2 leaf=512
+step rc=0 seconds=128 gk m=2048 leaves=4 leaf=512
+step rc=0 seconds=182 gk m=4096 leaves=8 leaf=512
+step rc=0 seconds=280 gk m=8192 leaves=16 leaf=512
+step rc=0 seconds=501 gk m=16384 leaves=32 leaf=512
+step rc=0 seconds=68 bloom m=64 leaves=1 leaf=64
+step rc=0 seconds=41 bloom m=128 leaves=1 leaf=128
+step rc=0 seconds=12 bloom m=256 leaves=1 leaf=256
+step rc=0 seconds=42 bloom m=512 leaves=1 leaf=512
+step rc=0 seconds=48 bloom m=1024 leaves=1 leaf=1024
+step rc=0 seconds=65 bloom m=2048 leaves=2 leaf=1024
+step rc=0 seconds=61 bloom m=4096 leaves=4 leaf=1024
+step rc=0 seconds=173 bloom m=8192 leaves=8 leaf=1024
+step rc=0 seconds=254 bloom m=16384 leaves=16 leaf=1024
+step rc=0 seconds=96 kmv m=64 leaves=1 leaf=64
+step rc=0 seconds=8 kmv m=128 leaves=1 leaf=128
+step rc=0 seconds=37 kmv m=256 leaves=1 leaf=256
+step rc=0 seconds=8 kmv m=512 leaves=1 leaf=512
+step rc=0 seconds=10 kmv m=1024 leaves=1 leaf=1024
+step rc=0 seconds=41 kmv m=2048 leaves=1 leaf=2048
+step rc=0 seconds=17 kmv m=4096 leaves=1 leaf=4096
+step rc=0 seconds=71 kmv m=8192 leaves=2 leaf=4096
+step rc=0 seconds=128 kmv m=16384 leaves=4 leaf=4096
+finished=2026-10-28T17:09:27+08:00 failures=0 seconds=5190

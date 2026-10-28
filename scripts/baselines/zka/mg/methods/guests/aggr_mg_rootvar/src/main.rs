@@ -1,11 +1,7 @@
 #![no_main]
 #![no_std]
 
-// ROOT-VARIANT twin of aggr_mg: the same mg-core aggregation, with the Merkle-root
-// construction chosen at run time (an MgRoot read before the input). Journal =
-// (root, the aggr_mg journal). The six-sketch designed (Buckets64) and noroot (None)
-// rows and the buckets1024/perkey sensitivity rows (../../../README.md); aggr_mg
-// (MgRoot::HEADLINE compiled in) is the guest of the `legacy` rows.
+// aggr_mg with the Merkle-root construction (MgRoot) read at run time; journal = (root, aggr_mg journal).
 
 extern crate alloc;
 

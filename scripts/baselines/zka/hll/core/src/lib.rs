@@ -1,28 +1,5 @@
 #![no_std]
-//! HyperLogLog epoch summary for the zk-Analytics pipeline (baseline port, ours).
-//!
-//! zk-Analytics (SIGCOMM'26, commit d4a5a9a) ships three epoch summary types (samples,
-//! histogram, cm) and no distinct-count sketch. This crate adds a fourth one in THEIR
-//! architecture and with THEIR plumbing, and nothing else:
-//!
-//! * aggregation (`process_hll_aggr_with_state`) is `process_cm_aggr_with_state`
-//!   (aggregator/core/src/lib.rs:1215-1301) with the CM table + heap replaced by 2^14
-//!   HyperLogLog registers: verify the source SHA-256 batch hash chain
-//!   (`verify_and_compute_chain`, verbatim), flatten the batches, build the epoch's
-//!   summary from scratch, hash the state with an unsalted, tagged SHA-256, and link it
-//!   into the epoch chain with their `EpochChainLink::new`.
-//! * query (`run_hll_query`) is `run_cm_query` (querier/core/src/lib.rs:249-371) with
-//!   the CM merge + lookup replaced by an elementwise-max register merge and the
-//!   HyperLogLog estimator: verify the epoch chain links (`verify_epoch_chain_integrity`,
-//!   verbatim), recompute every epoch's state commitment, merge, answer, and publish
-//!   the chain boundaries + state commits + result, with their low-support suppression.
-//!
-//! The sketch is the textbook plaintext algorithm (Flajolet, Fusy, Gandouet, Meunier
-//! 2007). No oblivious padding, memory checking, sorting certificate or algebraic hash:
-//! plain Rust executed as a RISC Zero guest, exactly as their three summaries are.
-//!
-//! The functions that are private upstream are include!d verbatim from
-//! `upstream_verbatim.rs` (generated and checked by ../gen_upstream.sh).
+//! HyperLogLog epoch summary in zk-Analytics' architecture (our port).
 
 extern crate alloc;
 

@@ -1,61 +1,5 @@
-//! **Offline-memory-checking count-min leaf** — the §"Pattern A" Step-5
-//! alternative that rebinds the sparse patch *without a Merkle path per
-//! touched cell* (zk1.tex, "offline memory checking").
-//!
-//! ## What this is
-//!
-//! `one_hot` ([`super::countmin_final`]) and `merkle`
-//! ([`super::countmin_c_merkle`]) both share the front half of the
-//! pipeline — per-record PRF hash → counter-sort permutation →
-//! group-by-counter running sum — and differ only in how they *rebind*
-//! the state in Step 5:
-//!
-//! - `one_hot` materialises the **dense** `d·w` array, scatters each
-//!   counter total through a one-hot selector matrix
-//!   (`n_ctr × d·w` private witnesses), and re-hashes all `d·w` cells.
-//!   Cost grows with `w`; large widths blow the selector budget / the
-//!   BabyBear `2^27` FRI-domain ceiling.
-//! - `merkle` opens each touched cell with a two-sided Merkle path
-//!   (`Θ(t_max·d·log w)`), flat in `w` but paying a `log w` Poseidon
-//!   path per cell.
-//!
-//! `memcheck` does neither. It treats the sketch as memory and commits
-//! the state as the **sparse multiset of touched `(address, total)`
-//! cells**: the group-by running sum already produces exactly one
-//! `(address, total)` pair per touched counter at each segment end, so
-//! the rebind is just a Poseidon hash over those `n_ctr`-padded entries.
-//! Untouched cells never appear — they "cancel" by *not being named*,
-//! which is the offline-memory-checking idea in its cheapest form. There
-//! is **no dense `d·w` work and no Merkle path**: the cost is
-//! `Θ(batch·d · log(d·w))` — the `log(d·w)` from a sortedness
-//! range-check that keeps the sparse commitment canonical (one entry per
-//! address) — and is **independent of `w`** in the dominant term. This is
-//! the variant that proves a `7 × 16384` sketch update where `one_hot`
-//! panics.
-//!
-//! ## Why it starts from the empty state (the honest caveat)
-//!
-//! Cancelling untouched cells without opening them is sound here because
-//! the initial state is **empty**: every touched cell's old value is `0`,
-//! so the new value *is* the running-sum total and no membership proof
-//! against a prior commitment is needed. Chaining `memcheck` onto a
-//! *non-trivial* `Com(S_{t-1})` would require proving the old value of
-//! each touched cell was the last-written one — i.e. either materialising
-//! the prior state (back to `Θ(d·w)`) or a per-cell membership proof
-//! (back to Merkle). The genuinely sub-linear cross-batch version is the
-//! Spice-style running write-set product (init once at genesis, carry the
-//! accumulator); this prototype demonstrates the single-epoch core that
-//! the cross-batch construction is built from. See the module
-//! `prove_countmin_memcheck` docs.
-//!
-//! ## Obliviousness
-//!
-//! The committed entry list is a fixed length `n_ctr = batch·d` (the
-//! public batch capacity), padded with all-zero entries; the number of
-//! *real* touched cells is hidden inside the Poseidon digest. The circuit
-//! shape depends only on `(d, w, batch)`, never on the realised number of
-//! distinct counters — Property-4 obliviousness, same as the other
-//! variants.
+//! Count-Min `memcheck` leaf: commits only the touched (address, total) cells, no Merkle path.
+//! Sound only from the empty initial state, since untouched cells are never opened.
 
 use std::rc::Rc;
 
@@ -165,9 +109,9 @@ impl CmMemcheckParams {
 }
 
 /// A self-verified `memcheck` leaf proof. The commitment is the sparse
-/// patch digest (see module docs), **not** the dense `commit_countmin`
-/// digest — so it is not directly comparable to `one_hot`/`merkle`
-/// commitments. Querying goes through the materialised `patch`.
+/// patch digest (a Poseidon2 hash of the padded touched-cell list), **not**
+/// the dense `commit_countmin` digest — so it is not directly comparable to
+/// `one_hot`/`merkle` commitments. Querying goes through the materialised `patch`.
 pub struct CountMinMemcheckProof {
     pub output: RecursionOutput<ConfigWithFriParams>,
     /// Sparse-patch commitment to the final state.
@@ -261,8 +205,8 @@ fn pack_batch_to_challenge(batch: &[CountMinUpdate]) -> Vec<Challenge> {
 /// # Why empty-init
 ///
 /// Soundness of "untouched cells cancel by omission" relies on the old
-/// value of every touched cell being a public constant (`0`). See the
-/// module docs for the cross-batch extension.
+/// value of every touched cell being a public constant (`0`). For a
+/// non-empty prior state use the `omc` leaf ([`super::countmin_omc`]).
 ///
 /// # Panics
 /// - `params.validate()` failures.

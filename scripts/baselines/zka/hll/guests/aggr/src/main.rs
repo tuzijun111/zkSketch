@@ -1,10 +1,7 @@
 #![no_main]
 #![no_std]
 
-// HLL aggregation guest: their aggr_cm guest (aggregator/methods/guest_cm/src/main.rs)
-// with process_cm_aggr replaced by process_hll_aggr. The only addition is a cycle
-// counter read at each phase boundary, written to STDOUT (not the journal) so the host
-// can split the cost; it is 7 cycle_count calls and one 56-byte write.
+// HLL aggregation guest: their aggr_cm guest with process_hll_aggr; phase cycle counts go to stdout.
 
 extern crate alloc;
 

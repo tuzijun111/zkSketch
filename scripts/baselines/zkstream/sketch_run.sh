@@ -1,71 +1,16 @@
 #!/usr/bin/env bash
-# sketch_run.sh -- one entry point for the sketch-family replay operators (HyperLogLog,
-# SpaceSaving, Greenwald-Khanna) that follow zkStream's design. They are OUR ZoKrates
-# circuits, never "zkStream" (see README.md, "Sketch-family replay operators"). The
-# script re-runs the exact measurement sequences behind the family CSVs, the matched
-# zkSketch leaves, and the fits.
-#
-#   hll   hll/run_hll.py + hll/probes/constraint_probe.sh -> zkstream_hll.csv,
-#         zkstream_hll_{constraint,packing}_probe.csv, zkstream_hll_<run>.log
-#         sub-stages: probes grid deployed wall edge   (refresh: opt-in, see below)
-#   ss    ss/run_ss.py -> zkstream_ss.csv, zkstream_ss_<sub>_<ts>.log
-#         sub-stages: grid scaling large deployed
-#   gk    gk/run_gk.py -> zkstream_gk.csv, zkstream_gk_<ts>.log
-#         sub-stages: grid sweep validate probes
-#   ours  zkSketch's own leaves (hll_omc, ss_final_full, gk_bandmerge2; default binding)
-#         at the ZoKrates points' state size and records per batch -> zks_sketch_small.csv
-#   fit   hll/fit.py, ss/fit_ss.py (-> zkstream_ss_fit.log), gk/fit_gk.py
-#   compare  prints the matched ZoKrates-vs-zkSketch tables from the CSVs (no proving)
+# Run the HLL, SpaceSaving and GK replay operators (our ZoKrates circuits following zkStream's design), the matched
+# zkSketch leaves and the fits. A family's CSVs in results/ are replaced only after a full run passes its gate.
 #
 # Usage: sketch_run.sh [options] [stage|family:sub ...]
-#   default stages: hll ss gk ours fit compare  (several hours; the two 45-min refusals
-#   alone take 1.5 h). Examples:
-#     sketch_run.sh --dry-run                 # print the plan and every command
-#     sketch_run.sh ours compare              # matched zkSketch leaves only (minutes)
-#     sketch_run.sh --skip-refusals hll ss gk fit
-#     sketch_run.sh ss:grid                   # partial run: stays in the staging dir
-# Options:
-#   --dry-run        print the plan and the commands; run and write nothing
-#   --skip-refusals  skip the two compiles that are known to hit the 45 min budget
-#                    (hll s=2^14 k=1024; ss s=2^14 k=1) and carry their previous rows
-#                    over verbatim into the regenerated CSV
+#   stages: hll ss gk ours fit compare (default: all; several hours)
+#   sub-stages: hll:probes|grid|deployed|wall|edge (+ opt-in refresh)  ss:grid|scaling|large|deployed  gk:grid|sweep|validate|probes
+#   --dry-run        print the plan and every command; run and write nothing
+#   --skip-refusals  skip the two compiles known to hit the 45 min budget; keep their previous rows
 #   --allow-busy     skip the load guard (the drivers still wait for other provers)
-#   --deployed       'ours' also proves zkSketch's deployed shapes (s=2^14 / s'=2^11,
-#                    m=2^14), one rep each, under the same 45 min / 150 GB cap
-# Env:
-#   MAX_LOAD=8 WAIT_S=1800   load guard: before a family's first command and before the
-#                            first 'ours' point, wait until the 1-minute load average is
-#                            <= MAX_LOAD and no zokrates/exp_compose/r0vm of this user runs;
-#                            before every later command or point, wait only for those
-#                            processes (our own finished runs still lift load1). Refuse the
-#                            stage (exit 3) after WAIT_S seconds
-#   RESULTS  BASELINE_DIR  PIN_CPUS   as in common.sh
-#   OURS_REV=HEAD                 git revision of zkSketch measured by 'ours' (git archive)
-#   OURS_DIR=$BASELINE_DIR/build/zks_sketch_ours   exported source + its CARGO_TARGET_DIR
-#   OURS_REPS=3                   repetitions per point (the CSV keeps every rep)
-#   OURS_GK_ROUNDS=sorted         round certification of zkSketch's GK leaf (exp_compose
-#                                 EXP_GK_ROUNDS): sorted = the pre-M3 leaf, the one every stored
-#                                 gk row of zks_sketch_small.csv measured (variant gk_bandmerge2);
-#                                 stable = the M3 stable-compaction leaf (variant
-#                                 gk_bandmerge2_stable). The variant column is taken from
-#                                 exp_compose's own row, so the label names the circuit that ran
-#
-# Regeneration is staged. Every run writes into $RESULTS/sketch_run.<ts>.<pid>.tmp/
-# (gitignored). A family's canonical files are replaced only when ALL its sub-stages
-# ran, every driver exited 0 and the family gate passed: no row with ok=0 other than a
-# compile refused by the budget, and the expected number of proven points. The
-# previous canonical files are kept under <staging>/<family>/prev/. A partial run
-# (e.g. ss:grid) or a failed gate leaves the canonical files untouched.
-#
-# Budgets: every ZoKrates compile runs under `timeout 45m systemd-run --user --scope
-# -p MemoryMax=150G` inside the drivers; every zkSketch run here under the same cap.
-# This script refuses to raise either cap. Stages run one after the other, never two
-# provers at once. It signals no process.
-#
-# hll:refresh (opt-in, not in the default plan) recompiles the wire-refresh probe
-# (CK=1 and CK=8, s=2^14, k=4 16 64) into zkstream_hll_refresh_probe_regen.csv. The
-# committed zkstream_hll_refresh_probe.csv was assembled by hand (its header says how);
-# its CK=none rows come from the superseded v1 template and cannot be regenerated.
+#   --deployed       'ours' also proves zkSketch's deployed shapes (s=2^14 / s'=2^11, m=2^14)
+# Env: MAX_LOAD=8 WAIT_S=1800 (load guard), OURS_REV=HEAD, OURS_REPS=3, OURS_GK_ROUNDS=sorted|stable,
+#      OURS_DIR=$BASELINE_DIR/build/zks_sketch_ours ('ours' source export and build), RESULTS, BASELINE_DIR, PIN_CPUS (see common.sh)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/common.sh"   # ZKS BASELINE_DIR ZOK ZOK_STDLIB RESULTS PIN_CPUS require_tools

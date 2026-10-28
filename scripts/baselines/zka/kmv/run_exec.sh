@@ -1,44 +1,6 @@
 #!/usr/bin/env bash
-# KMV / bottom-k in zk-Analytics' architecture (our port †, see README.md).
-#
-# Runs the kmv driver once and appends its rows to OUT. The default is the
-# executor-only pipeline at the planned comparison configuration:
-#   --mode exec: kmv_aggr on epochs 0..EPOCHS-1 (EPOCHS=8 epochs of EPOCH_SIZE=2048 AOL
-#   records, batches of 8), each epoch's chain carried from the previous guest journal;
-#   kmv_query (distinct-count estimate) after epoch n for every n in QUERY_AT ("1 2 4 8");
-#   with WORDS=1 (the executor default) each query is also run as kmv_query_words
-#   (sensitivity: values in serde's default Vec<u64> encoding; same journal).
-# MODE=aggr (EPOCH_INDEX) and MODE=query (EPOCHS) run one guest instead.
-#
-# PROVE=1 also PROVES every guest run of the invocation (ProverOpts::succinct(), CPU
-# r0vm). The planned measurement is `PROVE=1 ./run_exec.sh` as is: under PROVE=1 the
-# default is WORDS=0 (8 aggregation + 4 query proofs). The driver records prove_s,
-# verify_ms (best of 5), receipt bytes, the r0vm peak RSS and contention. Before
-# proving, the runner
-#   - takes $BASELINE_DIR/build/zka-prove.lock (shared with ../bloom/run_exec.sh;
-#     refuses when another bloom/kmv PROVE=1 run holds it), and
-#   - waits up to WAIT_S until the 1-minute load is <= MAX_LOAD and no r0vm of any user
-#     runs (../sketch_exec.sh's rule); it refuses (exit 3) if the box stays busy.
-# The gate is recorded in each proved row's contention column (gate=load1_start=..;
-# max_load=..;waited_s=..). MAX_LOAD above its default 24 tags proved rows
-# arm=proved_override (ARM_TAG=<tag> sets any tag, e.g. validation); a row whose
-# prove saw foreign load is arm=proved_contended. Only arm == proved is timing-grade;
-# the runner prints a re-run command for every contended row. Default OUT is then
-# zka_kmv_prove.csv.
-#
-# Rows are appended to OUT and the raw log as each guest run finishes, so an
-# interrupted PROVE=1 run keeps its finished rows.
-#
-# Every row: journal == native, independent reference bottom-k and f64 estimator,
-# estimate vs the exact distinct count; the driver exits 1 when any check fails (its
-# rows are still appended).
-#
-# Env: SKIP_BUILD=1  MODE=exec  EPOCHS=8  EPOCH_SIZE=2048  QUERY_AT="1 2 4 8"
-#      WORDS=1 (PROVE=1: 0)  EPOCH_INDEX=0  BATCH=8  PROVE=0  MAX_LOAD=24  WAIT_S=1800
-#      ARM_TAG=  OUT=$RESULTS/zka_kmv_exec.csv (PROVE=1: zka_kmv_prove.csv); raw log next to it
-#
-# Touches no process it did not start (the executor and prover spawn and reap their
-# own r0vm); never uses ../rss_watch.sh, which pkills every r0vm of this account.
+# KMV port of zk-Analytics: run the kmv driver (executor; PROVE=1 also proves) and append its rows to OUT.
+# Usage: [PROVE=1] [MODE=exec|aggr|query] [EPOCHS=8] [EPOCH_SIZE=2048] [QUERY_AT="1 2 4 8"] ./run_exec.sh
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/kmv_common.sh"
 refuse_dev_mode

@@ -1,11 +1,5 @@
-//! Workload sweep on the Count-Min update leaf (Phase 3c).
-//!
-//! Scans a small grid of `(d, w, batch)` and reports leaf prove time and
-//! proof size at each grid point. Recursive aggregation isn't measured
-//! here — the per-leaf cost is what the workload-axis experiments
-//! quantify (the merge cost is leaf-shape-agnostic).
-//!
-//! Run with: `cargo run --release --example countmin_sweep`.
+//! Count-Min leaf prove time and proof size over a small (d, w, batch) grid.
+//! Usage: cargo run --release --example countmin_sweep
 
 use std::time::Instant;
 

@@ -1,21 +1,5 @@
-//! Count-Min **point-frequency** decode circuit (E3, plonky3/STARK).
-//!
-//! Proves `answer = release( min_i  S[i][ h_i(key) ] )` against a committed
-//! Count-Min state `S`, where `h_i(key) = Poseidon2(key)[i] mod w` is derived
-//! **in-circuit** (so the prover can't pick favourable cells). This mirrors the
-//! plonky2 `decode::countmin` relation on the STARK backend, reusing the
-//! `countmin_final` prove harness (Poseidon2 + Recompose, no Permute).
-//!
-//! Stages:
-//! 1. Re-hash the `d·w` cells → bind to the committed digest (the `Θ(s)` cost).
-//! 2. Derive the `d` query positions from `Poseidon2(key)`; select each row's
-//!    cell via a one-hot selector bound to that position. Under
-//!    `Binding::Semantic`/`Bound` the key is hashed as four exact 16-bit limbs
-//!    (as the `omc` leaf routes it), under `Legacy` as one field element
-//!    (the key mod `p`).
-//! 3. Min gadget: `mn ≤ every selected cell` (range-checked diffs) and
-//!    `∏(cell − mn) = 0` (so `mn` is one of them).
-//! 4. Apply the release policy and bind the released value to the public answer.
+//! Count-Min point-query decode: `answer = release(min_i S[i][h_i(key)])` against `Com(S)`.
+//! The positions `h_i(key)` are computed in-circuit from `Poseidon2(key)`.
 
 use std::rc::Rc;
 
@@ -762,8 +746,8 @@ mod tests {
     /// answer; the Plain decoder is the pre-B2 circuit (VK recorded at
     /// main@7089f70) and the Hiding VK does not depend on the salt. A query at
     /// version `t` opened with `ρ^S_t` exposes exactly the final commitment of
-    /// the hiding leaf `t` (the lemma in `crate::commitment::hiding`); a wrong
-    /// salt still proves, but exposes a commitment that is not the log's.
+    /// the hiding leaf `t`; a wrong salt still proves, but exposes a
+    /// commitment that is not the log's.
     #[test]
     fn hiding_decode_exposes_hiding_commit() {
         use crate::commitment::hiding::{CommitFamily, Openings, SaltSeed, rho_state_bb};

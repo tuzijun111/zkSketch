@@ -1,10 +1,7 @@
 #![no_main]
 #![no_std]
 
-// HLL query guest: their querier-guest-cm (querier/methods/guest_cm/src/main.rs) with
-// run_cm_query replaced by run_hll_query, keeping their low-support suppression. The
-// only addition is a cycle counter read at each phase boundary, written to STDOUT (not
-// the journal); it is 8 cycle_count calls and one 64-byte write.
+// HLL query guest: their querier-guest-cm with run_hll_query; phase cycle counts go to stdout.
 
 extern crate alloc;
 

@@ -1,27 +1,4 @@
-//! In-circuit Greenwald–Khanna update leaf for plonky2 (Pattern B fusion).
-//!
-//! Port of `../src/sketch/gk_final_full.rs` (§5.4) to plonky2's gate model.
-//! Pipeline:
-//!
-//! 1. Bind old state, batch, and new state to Poseidon commitments (PIs).
-//! 2. **Union + value-sort**: `combined = old ‖ batch` is permuted
-//!    (grand-product) to `(active asc, value asc)` order; sortedness range-checked.
-//! 3. **`L = ⌈log₂(total)⌉` parity-0 fusion rounds.** Each round, for every
-//!    adjacent pair `(2i, 2i+1)`, a witnessed `decision` bit may fuse them when
-//!    **both active with equal value** (summing counts/errors into `2i+1`,
-//!    dummying `2i`); the fused table is then permuted+sorted back to
-//!    `(active asc, value asc)` for the next round.
-//! 4. **Split**: the last `capacity` rows (largest values, fully fused) become
-//!    the new state; the first `batch` are the discarded excess.
-//! 5. **Mass conservation**: `Σ new.count + Σ excess.count == Σ old.count +
-//!    Σ batch.active`.
-//!
-//! As in the plonky3 original, the fusion eligibility implication is
-//! one-directional (`decision ⇒ eligible`); an honest prover fuses every
-//! eligible pair, so the certified result equals the native full-fusion update,
-//! while under-fusion degrades gracefully (mass-conserved, sorted). The exact
-//! value-equality fusion policy (vs. band-merge of different values) is the same
-//! documented simplification as plonky3's `gk_final_full`.
+//! Greenwald–Khanna update leaf that fuses equal-value tuples only (port of ../src/sketch/gk_final_full.rs).
 
 use std::sync::Arc;
 

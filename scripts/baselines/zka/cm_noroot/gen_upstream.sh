@@ -1,26 +1,6 @@
 #!/usr/bin/env bash
-# Regenerates (default) or checks (--check) the two include!d files of core/:
-#
-#   core/src/upstream_noroot.rs  zk-Analytics' CM aggregation, process_cm_aggr_with_state
-#                                (aggregator/core/src/lib.rs:1215-1301 @ d4a5a9a), with ONE
-#                                block replaced: lines 1262-1274, which build row_roots (one
-#                                SHA-256 leaf per counter, 3 x 1024, folded per row by their
-#                                MerkleTree), cm_root (a MerkleTree over the row roots) and
-#                                heap_root (a MerkleTree over the top-k heap slots). In the
-#                                copy those three journal fields are zero. Chain verification,
-#                                flattening, table update, top-k heap update, state commitment,
-#                                epoch link and the journal type are their code, byte for byte.
-#   core/src/upstream_twin.rs    the same functions with NOTHING replaced (lines 1215-1301
-#                                whole, plus the Merkle helpers). VALIDATION ONLY: built into the
-#                                aggr_cm_twin guest, which checks that copying the code into this
-#                                crate leaves its cost unchanged outside the Merkle work (see
-#                                core/src/lib.rs, "twin"). It is never a reported number.
-#
-# Every block is cut by line range from the clone at d4a5a9a; nothing is edited except the
-# one marked NOROOT block. The functions that are private upstream (and the per-record pub
-# ones: key_to_u64, cm_bucket_index, batch_chain_hash) are copied rather than called across
-# the crate boundary, so they stay in the same crate as their callers, as they are upstream
-# (a cross-crate call is not inlined and would charge the baseline extra cycles per record).
+# Writes core/src/upstream_{noroot,twin}.rs from the zk-Analytics clone at d4a5a9a (--check: diff only).
+# Usage: ./gen_upstream.sh [--check]
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"   # ZKA
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

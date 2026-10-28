@@ -1,41 +1,5 @@
-//! **Count-Min sparse-rebind leaf with Merkle-root state commitments**
-//! (plonky3 / STARK) — the §5.2 RQ2-c "sparse-opening commit" repair.
-//!
-//! The canonical flat-commit update leaf ([`super::countmin_final`]) and the
-//! strawman leaf ([`crate::recursion::recursive::countmin_leaf`]) both commit
-//! the state with a **flat** Poseidon2 sponge over all `d·w` cells, so every
-//! rebind re-hashes the whole sketch and costs `Θ(d·w)`. Here each of the `d`
-//! rows is committed by a **Merkle root** over its `w` cells, and the rebind
-//! opens only the touched cells via a per-row **Merkle update chain**: thread
-//! the row's root `r_0 = Com(row_{t-1}) → … → r_T = Com(row_t)` through
-//! `t_max` single-leaf ops, each verifying the **old** value against `r_{c-1}`
-//! and the **new** value against `r_c` along the **same** sibling path.
-//! Untouched cells never appear (they carry through the shared siblings), so a
-//! rebind is `Θ(T·log w)` per row — `Θ(distinct·d·log w)` overall, **independent
-//! of `w`**. The flat-commit leaves remain the baseline for comparison.
-//!
-//! ## d rows, d independent trees
-//! A Count-Min sketch has `d` rows of `w` counters with independent row hashes
-//! `h_i(key) = Poseidon2(key)[i] mod w`. Each row is its own perfect binary
-//! Merkle tree of `w` leaves (`w` is a power of two), with its own root pair of
-//! public inputs. A record touches one cell per row (`d` cells total); the
-//! per-row op lists and update chains are otherwise identical to a single row.
-//! `Com(S)` is therefore the `d`-tuple of row roots (each `[Val; 8]`).
-//!
-//! ## Soundness sketch
-//! - **Batch opened (S1):** `Com(B_t)` (a Poseidon2 sponge over the
-//!   `(key, value)` records) binds the witnessed records.
-//! - **Routing (S2):** each record's per-row cell `pos_i = Poseidon2(key)[i] mod
-//!   w` is derived in-circuit; a one-hot selector maps each `(record, row)` to
-//!   an *active* patch op whose position equals that `pos_i`.
-//! - **Aggregate (S3):** `new_c = old_c + Σ_{records→c} value`.
-//! - **Rebind (S5):** the in-circuit Merkle path gadget ties `old_c`/`new_c`
-//!   to `r_{c-1}`/`r_c` along one shared path, per row; untouched cells are
-//!   unchanged because only the touched leaf moves.
-//!
-//! ## The in-circuit Merkle gadget
-//! Built from `add_hash_slice` (= the canonical `MyHash` sponge, so the native
-//! [`merkle_root`] matches bit-for-bit). See [`climb_merkle_path`].
+//! Count-Min leaf with one Merkle tree per row: records are hashed and routed in-circuit, and
+//! only the touched cells are rebound along their Merkle paths.
 
 use std::rc::Rc;
 

@@ -1,14 +1,4 @@
-//! Two-leaf recursive merge for HyperLogLog update epochs (paper §4.2 Lite).
-//!
-//! Aggregates two `HllLeafProof`s into one batch-STARK that certifies both
-//! per-epoch updates. The §4.2 shared-boundary check is performed natively
-//! against the exposed commits — full in-circuit hiding of the intermediate
-//! commit is the same follow-up the Count-Min variant defers.
-//!
-//! Structurally identical to `countmin_merge` — the recursion / chain /
-//! flat layers above the leaf are sketch-agnostic. Only the commit type
-//! (`HyperLogLogCommit` instead of `CountMinCommit`) and the leaf-proof type
-//! differ.
+//! Two-leaf recursive merge for HyperLogLog leaves; same structure as `countmin_merge`.
 
 use core::fmt;
 

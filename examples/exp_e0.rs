@@ -1,79 +1,5 @@
-//! **E-0** (revision plan): per-table trace heights of every deployed circuit
-//! against the hiding row ceiling. Does each family's largest table fit
-//! under 2^24 rows (hiding PCS) and 2^25 (non-hiding) at each batch size m?
-//!
-//! Heights are static functions of the circuit, so nothing is proved: each
-//! builder stops right after `get_airs_and_degrees_with_prep`
-//! ([`zksketch::experiments::table_probe`]), before the preprocessed commit.
-//! Leaf heights are the same under both PCS (a hiding PCS commits
-//! `2^(log_h + 1)` rows of each table). Merge heights are NOT: a merge circuit
-//! verifies its children's proofs, and under `--features zk` those are hiding
-//! proofs (random-codeword openings, the randomization-polynomial round, a
-//! doubled FRI domain), so the hiding merge circuit is larger. Every row
-//! carries the `pcs` of the build that recorded it, and `logup_mask` (`on`
-//! when the core fork masks the revealed LogUp sums: the masked in-circuit
-//! verifier makes every merge circuit larger again); the hiding merges come
-//! only from a `zk` (default) run. The circuits are the ones the
-//! composition harness deploys (`stream_compose`): CM omc, HLL omc, SS
-//! certified (`ss_final_full`), GK bandmerge2, plus the Bloom omc leaf, under
-//! `composition_expose()` (Interval unless `ZKSKETCH_STATEMENT` says otherwise),
-//! `default_binding()` (Semantic unless `ZKSKETCH_BINDING` says otherwise) and
-//! `commit_mode_from_env()` (revision B2: `ZKSKETCH_COMMIT=plain|hiding`,
-//! unset = Hiding except Plain under `ZKSKETCH_BINDING=legacy`). All five
-//! leaves are built with their `*_commit` builders in that mode (a Hiding
-//! leaf carries the salt private inputs, 9 for the four BabyBear sketches and
-//! 3 for Bloom, and the salted commitment sponges), the Bloom leaf under the
-//! same statement layout as the others, as the composition harness builds it.
-//! Every CSV row records the mode its circuit was built in (`commit_mode`).
-//!
-//! ```bash
-//! cargo run --release --example exp_e0                  # 5 families x m in {2^12, 2^13, 2^14}
-//! ZKSKETCH_COMMIT=plain cargo run --release --example exp_e0   # the pre-B2 (Plain) leaves
-//! ZKSKETCH_BINDING=bound E0_FAMILY=cm,hll cargo run --release --example exp_e0
-//! E0_MERGE=1 E0_FAMILY=hll E0_M=4096 cargo run --release --example exp_e0
-//! E0_COST=1 cargo run --release --example exp_e0 [--features zk]
-//! ```
-//!
-//! Knobs:
-//! * `E0_FAMILY` (`cm,hll,ss,gk,bloom`, plus `bloom_packed`: the M2
-//!   packed-byte Bloom leaf, `zksketch::sketch::bloom_packed`, whose merges
-//!   `E0_MERGE` also probes), `E0_M` (`4096,8192,16384`).
-//! * Geometry (paper defaults): `EXP_D`=7, `EXP_W`=16384 (CM), `EXP_HLL_B`=14,
-//!   `EXP_SS_CAP`=16384, `EXP_GK_CAP`=2048, `EXP_GK_S`=73, `EXP_BLOOM_K`=7,
-//!   `EXP_BLOOM_LOGW`=14.
-//! * `E0_QUOTIENT=1`: also record each table's log quotient-chunk count
-//!   (non-ZK and ZK).
-//! * `E0_PROVE=1`: also build and prove one no-op epoch per cell and check the
-//!   proof's per-table `degree_bits == log_h + is_zk` and op types (a Hiding
-//!   leaf proves the VK-derivation no-op through `prove_epoch_public_zero`
-//!   at batch index 1, the one zero-salt path). It proves
-//!   at the probed geometry, so keep m small (GK at m=2^14 needs ~85 GB
-//!   non-hiding, ~250 GB hiding).
-//! * `E0_MERGE=1`: also probe the merge circuits (cm/hll/ss/gk): prove the
-//!   family's no-op leaf at the cell's geometry, then derive the root VK of an
-//!   `E0_MERGE_T`-leaf forest (default 8: merge levels L1..L3), recording each
-//!   level's real merge circuit. Merge rows report the child's m, and
-//!   `variant=hiding_merge` names `expose_forest`'s state-hiding merge
-//!   circuit, not the PCS (see `pcs`). `E0_MERGE=only` writes the merge rows
-//!   alone (no leaf rows). Run it under `--features zk` for the hiding merges;
-//!   the zk leaf it proves first peaks at ~107 GB for CM at m=2^14 and
-//!   ~122 GB for GK at m=2^13 (GK at m=2^14: ~250 GB), so probe GK's hiding
-//!   merges over m <= 8192 children.
-//! * `E0_COST=1`: instead of the probe, measure prove time, peak RSS and proof
-//!   bytes of one leaf per family and one merge at a SMALL geometry (CM d=4
-//!   w=1024, HLL b=10, SS cap=1024, GK cap=256, Bloom k=7 log_w=10, all at
-//!   m=`E0_COST_M`=1024; merge over two CM leaves). Run once per PCS build.
-//!   Under Hiding the two merged CM leaves are opened honestly
-//!   (`Openings::for_leaf` from `ZKSKETCH_SALT_SEED` or an OS-random seed,
-//!   never printed), so leaf 1's final `Com(S_0; ρ_1)` is leaf 2's init.
-//!
-//! Output (`results/`): `e0_tables.csv` (one row per table), `e0_summary.csv`
-//! (one row per circuit), `e0_cost.csv` (`E0_COST`). `m_cross_hiding` is the
-//! m at which a straight-line fit of the table's unpadded rows over the
-//! probed m values reaches the table's hiding ceiling (min over tables in the
-//! summary). That ceiling is 2^24 unless a recorded `lq_zk` exceeds
-//! `LOG_BLOWUP` (`TableShape::log_ceiling`); `fits_*` use the same ceilings,
-//! and a circuit fits only if every table does.
+//! E0: per-table trace heights of the deployed circuits vs the 2^24 (hiding) and 2^25 (non-hiding) row limits.
+//! Usage: [E0_FAMILY=cm,hll,ss,gk,bloom E0_M=4096,8192,16384] [E0_MERGE=1 | E0_COST=1] cargo run --release --example exp_e0
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -636,6 +562,10 @@ fn probe(ctx: &Ctx, fams: &[String], ms: &[usize], g: &Geometry) {
     let expose = ctx.statement;
     let binding = ctx.binding;
     let mode = ctx.mode;
+    // E0_PROVE=1 also proves one no-op epoch per cell at the probed m and checks it (check_proof). Keep m small:
+    // GK at m=2^14 needs ~250 GB in the default zk build, ~85 GB with --no-default-features.
+    // E0_MERGE=1 proves that leaf too (zk: ~107 GB for CM at m=2^14, ~122 GB for GK at m=2^13) and records the
+    // merge circuits of an E0_MERGE_T-leaf forest; E0_MERGE=only writes the merge rows alone.
     let prove = env_on("E0_PROVE");
     let merge_only = std::env::var("E0_MERGE").is_ok_and(|v| v == "only");
     let merge = merge_only || env_on("E0_MERGE");
@@ -770,7 +700,7 @@ fn outcome(proof: &Proof, witness: Duration, prove: Duration, verify: Duration) 
 }
 
 /// Indicative cost of the hiding PCS: one no-op leaf epoch per family and
-/// one merge, at a small geometry (see the module docs). One warm-up prove,
+/// one merge, at a small geometry (`Geometry::small`). One warm-up prove,
 /// then one measured prove on the same prebuilt leaf.
 fn cost(ctx: &Ctx, fams: &[String]) {
     let g = Geometry::small();

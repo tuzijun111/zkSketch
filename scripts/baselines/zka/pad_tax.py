@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
-"""Exact replication of zkSketch's split+pad rule.
-
-Source: src/experiments/stream_compose.rs:503-565
-(`build_query_schedule_batches`). Only EXP_COMPOSE_QUERY_EVERY_OPS uses it;
-EXP_COMPOSE_QUERY_EVERY (batch-aligned) never pads
-(examples/exp_compose.rs:651-659 -> pad_records=0, split_leaves=0).
-"""
+"""Pad records and split leaves of zkSketch's query schedule (build_query_schedule_batches),
+by replaying its loop and in closed form. Usage: python3 pad_tax.py"""
 import sys
 
 def sim(N, m, Q):
@@ -57,7 +52,7 @@ if __name__ == "__main__":
 
 def qctx(t, qevery):
     """query_ctx_verifies per composition mode, from
-    stream_compose.rs:583-598 (aggregate_queries).  Purely STRUCTURAL —
+    `aggregate_queries` in src/experiments/stream_compose.rs.  Purely STRUCTURAL —
     no proving needed to predict it.
       per_batch -> t'      chain -> 1      forest -> popcount(t')"""
     qs = [i for i in range(1, t+1) if i % qevery == 0]

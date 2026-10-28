@@ -1,24 +1,5 @@
-//! E6 — streaming-forest cores × batch runner (EVAL_SPEC E6). Sweeps core count
-//! `k` and batch size `m`, proving `t` independent Count-Min transition leaves in
-//! parallel on a `k`-thread pool and folding them into a streaming forest. The
-//! headline is `speedup_vs_1core` (the `t/k` term of the work–depth bound) and
-//! the sustained insert rate `v` (`t / completion`, inserts/sec).
-//!
-//! Run:    cargo run --release --example exp_e6
-//! Config: EXP_E6_CORES=1,2,4,8   EXP_E6_BATCHES=32,64   EXP_E6_INSERTS=8
-//!         EXP_E6_TRIALS=2        EXP_E6_WARMUP=1
-//!         EXP_E6_CM_VARIANT=one_hot   (leaf prover: one_hot|omc|merkle; default one_hot)
-//!
-//! The leaf variants share the per-record hash + counter front half and differ
-//! only in the §5 rebind: `omc` = the sound OMC leaf (`countmin_omc`),
-//! `merkle` = the sparse Merkle-commit rebind (`countmin_c_merkle`), `one_hot` =
-//! the §5.2 flat-commit leaf (`countmin_final`). A `variant` column is the first
-//! CSV field; the k=1 speedup baseline is per (variant, m).
-//!
-//! This is real STARK proving (the only part core count moves — the §4
-//! composition merges are single-threaded Poseidon2), so it is heavier than E5.
-//! Cores are clamped to the machine's available threads. `k=1` is always
-//! measured (the speedup baseline).
+//! E6: Count-Min leaf proving over k cores and batch size m, with Poseidon2 digest merges; writes results/e6_forest.csv.
+//! Usage: [EXP_E6_CORES=1,2,4,8 EXP_E6_BATCHES=32,64 EXP_E6_CM_VARIANT=one_hot|omc|merkle] cargo run --release --example exp_e6
 
 use zksketch::experiments::e6_forest::{measure, CmLeaf};
 use zksketch::experiments::metrics::{append_csv, write_env_json, BenchCfg};

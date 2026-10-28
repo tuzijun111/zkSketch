@@ -1,56 +1,5 @@
-//! **Canonical** count-min update circuit — the final §5.2 design.
-//!
-//! This file is the single self-contained reference for what the count-
-//! min update circuit does today. It bundles:
-//!
-//! - **Full circuit** with every §5.2 stage from raw batch to state
-//!   transition, in one place (no jumping across modules).
-//! - **Privacy preservation** — keys/values are private witnesses; the
-//!   only public binding for the batch is a Poseidon2 commitment.
-//! - **Per-record hashing (no key-grouping)** — the updated paper design
-//!   (zk1.tex §"Pattern A", Steps 1–5) drops the data-dependent key-
-//!   grouping step. Every record is hashed to its `d` counters
-//!   (`n_ctr = batch · d` rows), the rows are grouped BY COUNTER, a
-//!   running sum totals each counter's contribution, and a sparse patch
-//!   rebinds the state. Duplicate keys are summed alongside every other
-//!   collision in the counter grouping, so the circuit shape is fixed by
-//!   the public batch capacity `m`, not by the realised distinct-key count.
-//! - **Chain-merge compatibility** with the §4.2 recursive aggregation
-//!   (`merge_two_countmin_v9`) so two leaves at the same params combine
-//!   into one O(1)-verify proof.
-//!
-//! Background on design choices (e.g. why the v9 field-friendly hash
-//! family, why power-of-2 `w`) lives in
-//! [`docs/countmin.md`](../../../docs/countmin.md). This file is the
-//! implementation; the doc is the narrative.
-//!
-//! ### Pipeline (one paragraph)
-//!
-//! The prover supplies the raw batch as private witnesses and the
-//! counter-sorted view of the per-record updates as a permutation hint;
-//! the per-record hash positions follow from the PRF hash
-//! `h_i(k) = Poseidon2(k)[i] mod w` run once PER RECORD. A single
-//! PermuteAir instance (counter-sort) plus PoneglyphDB §4.3-style
-//! adjacent-equality + running-sum gates enforce the group-by-counter
-//! relation. The final state is reached via a sparse-patch state-
-//! transition equation `final[idx] = initial[idx] + Σ sel_a[r][idx] ·
-//! acc[r]`. Cells are Poseidon2-committed at both ends, exposing only
-//! `(initial_commit, final_commit, batch_commit)` as PIs.
-//!
-//! ### Tests in this file
-//!
-//! One `#[test] #[ignore]` proving-time test plus round-trip / tamper
-//! coverage:
-//!
-//! - [`tests::proving_time_merge_two_leaves`] — proves two leaves and
-//!   times the §4.2 sequential merge step separately from the leaf
-//!   prove times.
-//! - [`tests::generate_proof_round_trip`] and
-//!   [`tests::tamper_rejected`] — the soundness round-trip + tamper
-//!   checks for this circuit.
-//!
-//! Run on demand: `V3_SWEEP_THREADS=8 cargo test --release --lib
-//! countmin_final -- --ignored --nocapture`.
+//! Count-Min `one_hot` leaf: per-record PRF hashing, group by counter, and a one-hot sparse
+//! patch over the flat Poseidon2 commitment of all d·w cells.
 
 use std::rc::Rc;
 

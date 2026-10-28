@@ -1,51 +1,5 @@
-//! **Naive in-circuit "replay" leaf for SpaceSaving** — the per-record
-//! oblivious replay of the plaintext SpaceSaving algorithm
-//! ([`crate::sketch::spacesaving`]). This is the **baseline strawman** that
-//! the optimized certified leaf ([`crate::sketch::ss_final_full`]) is shown
-//! to beat, and it is the SpaceSaving analog of Count-Min's existing replay
-//! strawman ([`crate::recursion::recursive::countmin_leaf`]).
-//!
-//! Where `ss_final_full` certifies the §G top-`s` retention with a single
-//! group-sort-split pass (cost `Θ(m + s)` permute rows), the naive leaf
-//! literally re-executes the plaintext `SpaceSaving::update` once **per
-//! record**, threading the full `s`-row state `S_0 → S_1 → … → S_m`. For
-//! each record it witnesses one-hot `match` / `fill` / `evict` selectors,
-//! one-hot-SELECTS the evicted counter's count, and range-checks its
-//! minimality against every counter with `Θ(s)` `decompose_to_bits` gadgets —
-//! a `Θ(m·s)` cost (the honest lower bound for oblivious per-record replay; an
-//! earlier version paid `Θ(m·s²)` by range-checking every (evict-position,
-//! counter) pair). This is the fair `verification-over-computation` cost-to-beat
-//! for `ss_final_full`'s `Θ(m + s)` batch certificate.
-//!
-//! ### Commitment interchangeability
-//!
-//! The naive leaf binds the **same** initial / final / batch commitments,
-//! with the **same** Poseidon2 packing as `ss_final_full` (4 base coeffs per
-//! row: `(key_lo, key_hi, count, active)`), so the two leaves' proofs are
-//! directly comparable: a `SsFullStateCommit` / `SsFullBatchCommit` from one
-//! is byte-identical to the other for the same inputs. We reuse
-//! `SsFullParams` / `SsFullState` / `SsFullRow` / `SsFullUpdate` and the
-//! `SsFullProof` / `SsFullLeafProof` proof types verbatim from
-//! `ss_final_full`.
-//!
-//! ### State / active convention
-//!
-//! A SpaceSaving row is *free* iff its `count == 0`. We model a free slot as
-//! `SsFullRow::dummy()` (`key = 0, count = 0, active = 0`) and a filled slot
-//! as `active = 1, count > 0`, so `active == (count != 0)` holds for every
-//! state row. The circuit **enforces** this coupling (via a witnessed
-//! inverse of `count`) on every threaded state row, which is what makes the
-//! `active` flag a trustworthy "this slot is occupied" indicator for the
-//! match / fill / evict branch logic.
-//!
-//! ### Scope / assumptions (same as `ss_final_full`)
-//!
-//! - Per-record `value` and accumulated `count` fit in `COUNT_DIFF_BITS − 1`
-//!   bits (`< 2^21`), so the eviction-minimality unsigned diffs
-//!   `count_l − count_j` fit in `COUNT_DIFF_BITS` bits and a "negative" diff
-//!   wraps past the field modulus, soundly rejecting.
-//! - `key` fits in two BabyBear limbs; real keys must be non-zero (`0` is the
-//!   free/dummy sentinel). The test workloads honor both.
+//! SpaceSaving replay baseline: re-executes the per-record update in-circuit, Θ(m·s), with
+//! the same commitments as `ss_final_full`.
 
 use std::rc::Rc;
 

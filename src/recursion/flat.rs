@@ -1,16 +1,5 @@
-//! Two-leaf merge — paper §4.2 (interval merge atom) in its §4.1 flat form.
-//!
-//! Phase 1: `ChainProof` carries both leaf proofs by reference, the outer
-//! boundary, and the combined `H_{[i,j]}` digest. `verify_chain` re-checks
-//! every leaf and asserts boundary equality at every internal split.
-//!
-//! Phase 1.5 (planned): replace the bundled leaf proofs with a single
-//! `p3_recursion::RecursionOutput` produced via
-//! `p3_recursion::build_and_prove_aggregation_layer(&left_input, &right_input, ...)`.
-//! The two `RecursionInput::UniStark` inputs would be constructed from the
-//! current `LeafProof`s, and the in-circuit constraints would add equality
-//! between the right-input's exposed `initial` and the left-input's exposed
-//! `final_` — that is the §4.2 shared-boundary check.
+//! Flat two-leaf merge for the Fibonacci toy leaf: `ChainProof` keeps both leaf
+//! proofs and `verify_chain` re-verifies them and checks the shared boundary.
 
 use core::fmt;
 

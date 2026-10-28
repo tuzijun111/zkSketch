@@ -1,32 +1,4 @@
-//! Greenwald–Khanna **approximate-rank / quantile** decode circuit (E3).
-//!
-//! Implements the paper's GK rank-query relation (zk1.tex `app:gk-decode`,
-//! §Pattern-B): the prover supplies a **one-hot bracketing selector** for the
-//! pair `e_i ≤ q < e_{i+1}` over the value-sorted committed tuples, and the
-//! circuit certifies the **approximate-rank estimator**
-//!
-//! ```text
-//!   P_i      = Σ_{z ≤ i} count_z              (prefix mass; paper g₁+g₂+1)
-//!   r_min    = P_i − max_error_i              (paper P_i − Δ₂,ᵢ − g₂,ᵢ)
-//!   r_max    = P_i + max_error_{i+1}          (paper P_i + Δ₁,ᵢ₊₁ + g₁,ᵢ₊₁)
-//!   res      = ⌊(r_min + r_max) / 2⌋          (rational midpoint, kept integer
-//!                                              via a witnessed remainder)
-//! ```
-//!
-//! against a committed GK state (tuples `(value, count, max_error, active)`,
-//! value-ascending with dummies first). With the folded 4-field tuple, `count`
-//! plays the rank-mass `g` and `max_error` plays the deviation `Δ`.
-//!
-//! The `±∞` sentinels bracketing every `q` are realised implicitly: the
-//! selector ranges over `cap + 1` boundary positions `k ∈ {0,…,cap}` (`k` =
-//! number of tuples with `value ≤ q`), so `k = 0` brackets below the table
-//! (left sentinel −∞, `max_error_i = 0`) and `k = cap` brackets above it (right
-//! sentinel +∞, `max_error_{i+1} = 0`).
-//!
-//! Checks: state opening (re-hash + bind), per-tuple `≤`-flag soundness, one-hot
-//! bracketing-selector correctness, the prefix-sum relation, the `r_min`/`r_max`
-//! bound computations, the rational-midpoint `res` with a witnessed boolean
-//! remainder, and the identity / release-policy binding from `res` to `ans`.
+//! Greenwald–Khanna rank-query decode circuit over a committed GK state.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

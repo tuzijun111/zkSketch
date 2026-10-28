@@ -1,13 +1,5 @@
-//! Multi-leaf §4.3 recursive chain sweep on Count-Min.
-//!
-//! Builds chains of length `E ∈ {2, 4, 8}` and prints prove time per
-//! merge, total prove time, verify time, and proof size at each `E`.
-//! Compared to the `examples/countmin_chain_two.rs` demo, this is where
-//! the paper's central `O(1)` verifier claim should become visible: as
-//! `E` grows, the recursive chain's verify cost stays roughly flat while
-//! a hypothetical flat baseline would scale linearly.
-//!
-//! Run with: `cargo run --release --example countmin_chain_n`.
+//! Count-Min recursive chain over E = 2, 4, 8 leaves: prove and verify time, proof size.
+//! Usage: cargo run --release --example countmin_chain_n
 
 use std::time::Instant;
 
@@ -78,10 +70,8 @@ fn run_chain_at(e: usize) {
     let verify_time = t.elapsed();
 
     let chain_proof_size = serialized_size(&chain.root.recursive_proof.0);
-    // Hypothetical §4.1 baseline: re-verify each leaf independently.
-    // We can estimate the verify cost as E × (per-leaf verify), but the
-    // most honest measure is "E leaves' proofs bundled", whose size is the
-    // sum of leaf proof bytes.
+    // Flat-chain baseline size: the E leaf proofs bundled, i.e. the sum of
+    // the leaf proof bytes.
     let flat_proof_size_estimate = total_leaf_proof_bytes;
 
     println!("E = {e}:");

@@ -1,21 +1,4 @@
-//! Plaintext **two-sided** Greenwald–Khanna band-merge sketch (paper §5.2, the
-//! Gribelyuk mirror construction) for plonky2 / Goldilocks.
-//!
-//! Port of `../src/sketch/gk_bandmerge.rs` `apply_batch2` / `build_bm2` (the
-//! `bandmerge2` variant the streaming forest deploys), NOT the one-sided fusion
-//! GK in [`super::greenwald_khanna`]. A representative tuple is
-//! `(e, g, g°, Δ, Δ°, t)` — the mirror doubles the one-sided `(g, Δ)` into a
-//! **left** pair `(g, Δ)` (mass/uncertainty of covered elements `≺ e`) and a
-//! **right** pair `(g°, Δ°)` (covered elements `≻ e`), so `Σ_active (g+g°+1) = N`.
-//!
-//! The batched update (`apply_batch2`): union `S_old ‖ fresh`, value-sort by
-//! `(e, t)`, two-sided neighbor-init the fresh tuples' `Δ, Δ°`, run
-//! `L_f = ⌈log₂(cap+m)⌉` parity-0 fuse+resort rounds (each round tests every
-//! adjacent pair for the two-sided merge threshold `g+…+Δ ≤ θ = ⌊N_t/s⌋` and
-//! folds the newer tuple into the older, direction chosen by `t`), then compact
-//! to `capacity`. [`build_bm2`] additionally captures every intermediate table
-//! (union permutation, per-round decisions/fused/resorted) that the in-circuit
-//! certificate ([`crate::leaf::gk_bandmerge2`]) binds.
+//! Plaintext two-sided Greenwald–Khanna band-merge sketch and the witness tables for leaf::gk_bandmerge2.
 
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::HashOut;

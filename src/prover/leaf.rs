@@ -1,17 +1,5 @@
-//! Leaf STARK prove/verify for the toy `FibAir`.
-//!
-//! Mirrors the paper's per-update transition proof π_i: each `LeafProof`
-//! certifies that the underlying epoch update advanced the boundary from
-//! `initial` to `final_`. The two public values exposed are exactly those
-//! boundaries.
-//!
-//! Zero knowledge: this is a plain uni-stark proof, not a circuit-prover
-//! batch, so the recursion fork's hiding-budget guard does not apply. Under
-//! the default `zk` feature it still uses the hiding PCS, but its traces
-//! (`2^log_steps` rows; 16-64 in the tests and the `chain_two` example) are
-//! below the `2(q + 2D) = 124`-row hiding budget (`crate::config`, "Hiding
-//! budget"), so these proofs are NOT claimed to hide the trace. The toy leaf
-//! is a Phase-1 scaffold; no sketch, merge, root or decoder proof uses it.
+//! Prove/verify for the toy `FibAir` leaf (plain uni-stark; tests and the `chain_two` example).
+//! Its 16-64-row traces are below the ZK hiding budget: these proofs are not claimed to hide them.
 
 use core::borrow::Borrow;
 use core::fmt;

@@ -1,18 +1,4 @@
-// Independent host-side references for the Misra-Gries port. None of this code
-// is shared with mg-core, so agreement is a real check, not a tautology.
-//
-//   NaiveMg       Misra-Gries with a BTreeMap and a plain decrement-all loop
-//                 (mg-core uses parallel arrays, a hash index and in-place
-//                 compaction). The states must be identical for every capacity.
-//   naive_merge   BTreeMap sum of equal keys, then the mergeable Misra-Gries
-//                 reduction (subtract the (capacity+1)-th largest sum, keep the
-//                 positive counters) -- the specification of mg_core::mg_merge.
-//   naive_point   per-epoch binary search (the guest scans linearly) -- the
-//                 specification of the MgQuery::Estimate answer.
-//   decrement_sum the slack of a per-epoch point answer: sum over the epochs of
-//                 (N_e - C_e) / (capacity + 1), C_e the epoch's counter sum.
-//   merged_slack  the slack of a merged answer: (N - C) / (capacity + 1).
-//   exact_*       plain frequency counting for accuracy.
+// Host-side reference implementations for checking the Misra-Gries port; no code is shared with mg-core.
 
 use std::collections::{BTreeMap, HashMap};
 

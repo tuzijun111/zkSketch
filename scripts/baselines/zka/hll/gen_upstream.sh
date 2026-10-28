@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# Regenerates (default) or checks (--check) core/src/upstream_verbatim.rs: the
-# zk-Analytics functions this port needs that are PRIVATE in their crates, so they
-# cannot be imported through a path dependency. Each block is cut byte-for-byte from
-# the clone at d4a5a9a by line range; nothing is edited. lib.rs include!s the file,
-# so the private `fn` items keep their upstream visibility inside zka_hll_core.
-#
-# Public upstream items (Event, make_key_id, BatchInput, CmAggrInput, EpochChainLink,
-# batch_chain_hash, key_to_u64, CM_SEEDS, MIN_SUPPORT) are imported by path instead.
+# Regenerate core/src/upstream_verbatim.rs (zk-Analytics' private functions, cut verbatim from d4a5a9a) or --check it.
+# Usage: ./gen_upstream.sh [--check]
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"   # ZKA
 HLL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -1,7 +1,5 @@
-//! Side-by-side demo: §4.1 flat chain vs §4.2 recursive merge vs §4.3 chain,
-//! on real Count-Min update epochs. Mirrors `../examples/countmin_chain_two.rs`.
-//!
-//! Run with:  `cargo run --release --example countmin_chain`
+//! Count-Min demo: three epoch leaves, flat verification vs. recursive merge vs. chain.
+//! Usage: cd plonky2 && cargo run --release --example countmin_chain
 
 use std::time::Instant;
 

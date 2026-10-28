@@ -1,55 +1,6 @@
 #!/usr/bin/env python3
-"""Print the README's markdown tables from six_sketch_comparison.csv.
-
-Usage: python3 -I table.py <six_sketch_comparison.csv> [--zka PFX] [--raw DIR]
-
-The epochs T, records per epoch M, the proved epochs and the query points n are read from
-the CSV, so any run shape works. The last table also reads the zk-Analytics executor /
-profile CSVs <PFX>_<fam>_exec.csv and <PFX>_prof_{ss,gk}.csv (--zka, default six_zka) from
---raw DIR (default: the CSV's directory).
-
-Committed 2026-10-09 set (it has zkSketch rows of run r2): zkA = zk-Analytics side, zkS =
-zkSketch default build of that day (run r2; the `zk` feature was then off), zkS-zk = zkSketch
-built with `--features zk` (HidingFriPcs) BEFORE the LogUp-mask forks: its revealed LogUp sums
-are unmasked, so it is not zero-knowledge either, and the masked build costs more
-(src/config.rs, "Cost of the masks").
-A new run (`run_all.sh`): zkS = that run's zkSketch build (the line above the tables says
-which; the default build is zero-knowledge: pcs=hiding, logup_mask=on). Cells marked `est`
-are ESTIMATED zk-Analytics prove times (not proved in that run; see the CSV's provenance).
-KB / MB = 10^3 / 10^6 bytes; GB (memory) = 2^30 bytes.
-
-Root variants of the zk-Analytics aggregation proofs (the CSV's `variant` column; a CSV
-without it is the legacy variant): with one variant the tables show `zkA`; with several
-(e.g. SIX_ZKA_ROOTS=designed,noroot) every update-side and accept table shows one zkA column
-per variant (`zkA designed`, `zkA noroot`) next to zkSketch, with a ratio against each. A
-default `run_all.sh` run has one column variant, noroot (the headline), plus their shipped
-CM (variant designed, CM only) as a REFERENCE: it gets its own table right after the first
-one and is not a column anywhere else. Query proofs do not depend on the variant. The first
-table, "Update proofs side by side", puts proving time, verification time, proof size and
-peak memory of the update proofs together; the last one lists each executed variant's root
-construction and executor cycles.
-The committed 2026-10-09 set is the `legacy` variant (CM their shipped roots, SS samples
-pattern with 64 buckets, GK per-tuple root, HLL / Bloom / KMV none). For it the tables of
-the previous version are printed unchanged; added are the variant note at the top, the
-"Update proofs side by side" table and the root-variant table at the end, and the GK label.
-
-GK: the zk-Analytics GK rows of a run with SIX_ZKA_GK=matched (the default since 2026-10-15)
-run zkSketch's own GK batch rule in their pipeline (assemble.py names their system '... zkSketch
-GK rule'): the GK row is labelled "same rule both sides" and a line under the run line gives
-the configuration; when assemble.py found the zkSketch GK run at another capacity, s or leaf
-size (CONFIG MISMATCH in the note) it is labelled "CONFIG MISMATCH: same rule, NOT the same
-function" instead. Otherwise (the committed set, SIX_ZKA_GK=textbook) the zk-Analytics GK is
-textbook Greenwald-Khanna, a different algorithm: the row is labelled "zkA: textbook GK".
-
-A CSV with assemble.py's --extended columns (a `run_all.sh memmatch` run) also gets, after the
-first table(s), "zkSketch run shape and memory": per family the epoch, zkSketch's leaves per
-epoch, its variant and shape, its "1 epoch" time and how it was obtained, and the worker,
-coordinator and combined peaks against the 8 GiB budget; the first table gets the coordinator
-and combined peaks of both sides next to the prover's. When some family proves an epoch as
-k > 1 zkSketch leaves (the memory-matched forest), zkS "1 epoch" is those k leaves + k - 1
-merges, the query at n is zkSketch's query after leaf n x k, and the texts say so; families
-may then have epochs of their own (the run line lists them).
-"""
+"""Markdown tables of a six_sketch_comparison.csv written by assemble.py (run with python3 -I).
+Usage: table.py <six_sketch_comparison.csv> [--zka PFX] [--raw DIR]"""
 import argparse
 import csv
 import os
@@ -210,10 +161,11 @@ def v(r, col):
     return None if r is None or r[col] in ('', None) else float(r[col])
 
 
-def E(r):  # ' est' when the row's value is (partly) an estimate
-    return ' est' if r is not None and 'ESTIMATED' in r['provenance'] else ''
+def E(r):  # ' cyc' when the row's prove time is (partly) computed from padded cycles, not proved
+    return ' cyc' if r is not None and any(t in r['provenance'] for t in CYC_TAGS) else ''
 
 
+CYC_TAGS = ('FROM CYCLES', 'ESTIMATED')   # assemble.py's tag; the archived runs carry the second
 SAMPLED_Q = 'not proved: SAMPLED'   # assemble.py: an accept row whose query receipt n was not proved
 
 
@@ -264,7 +216,7 @@ def line(cells):
 if not LEGACY:
     feats = sorted({m.group(1) for r in rows if (r['system'], r['run']) == ZKS
                     for m in [re.search(r'features=(\S+)', r['detail'])] if m})
-    est = sorted({m.group(1) for r in rows for m in [re.search(r'ESTIMATED \((.*?)\)$', r['provenance'])] if m})
+    est = sorted({m.group(1) for r in rows for m in [re.search(r'(?:FROM CYCLES|ESTIMATED) \((.*?)\)$', r['provenance'])] if m})
     if PERFAM:
         shp = '; '.join(f'{fam.upper() if fam != "bloom" else "Bloom"} {MF[fam]:,} = {KF[fam]} x {LF[fam]:,}'
                         for fam in FAMS if fam in MF)
@@ -276,8 +228,8 @@ if not LEGACY:
         print(f'_Run: {M * T:,} AOL records = {T} epochs x {M:,}; zk-Analytics proved epochs {and_join(AE)} and '
               f'queries at n = {", ".join(map(str, QNS))}; zkSketch features: {", ".join(feats) or "?"}._\n')
     if est:
-        print(f'_`est` = ESTIMATED zk-Analytics prove time, NOT proved in this run: {est[0]}. Verify time and bytes '
-              f'of an estimated receipt are the mean of the measured ones; ratios built on an estimate are marked '
+        print(f'_`cyc` = zk-Analytics prove time computed from padded cycles, NOT proved in this run: {est[0]}. Verify '
+              f'time and bytes of such a receipt are the mean of the measured ones; ratios that use one are marked '
               f'too._\n')
     if GK_ROWS:
         print(f'_GK, zk-Analytics side: {GK_NOTE or ("textbook Greenwald-Khanna, not zkSketch" + chr(39) + "s algorithm")}._\n')
@@ -393,7 +345,7 @@ ROOTV_BEST = any(v(get(fam, 'zks', OP_STREAM), 'verify_ms') is not None for fam 
 HEAD_TXT = ('' if LEGACY or 'noroot' not in ZV else ' (headline: zkA noroot)' if MULTI else
             ' (headline: zkA = zk-Analytics without the per-bucket Merkle root, noroot)')
 if FOREST:
-    za_t = '' if T == 1 else f', "{T} epochs" = {T} x that (derived)'
+    za_t = '' if T == 1 else f', "{T} epochs" = {T} x that (computed)'
     zs_t = ('; the forest is that one epoch and ends in ONE root proof: "verify" is that root' if T == 1 else
             f', "{T} epochs" = the whole forest incl. all its merges (measured), which ends in ONE root proof: "verify" '
             f'is that root, in both rows')
@@ -412,7 +364,7 @@ if FOREST:
 else:
     print(f'**Update proofs side by side{HEAD_TXT}: proving time, verification time, proof size, peak memory** (one epoch = '
           f'one batch of {M:,} records. zkA: one aggregation receipt per epoch, all kept and verified; "1 epoch" = the '
-          f'mean of proved epochs {and_join(AE)} (sampled), "{T} epochs" = {T} x that (derived); verify = best of 5 '
+          f'mean of proved epochs {and_join(AE)} (sampled), "{T} epochs" = {T} x that (computed); verify = best of 5 '
           f'calls per receipt; peak RSS = the r0vm process (max over the proved epochs). zkS: "1 epoch" = the leaf '
           f'proof alone (leafgen_seq_ms / {T}, EXCLUDING composition; its proof = the leaf-1 proof), "{T} epochs" = the '
           f'whole forest incl. its {T - 1} merge{"" if T == 2 else "s"} (measured), which ends in ONE root proof: '
@@ -504,12 +456,12 @@ if FOREST:
     print(f'\n**Update side.** One epoch = the family\'s epoch (run line). Ratios are zkA / zkS. zkA prove per epoch is '
           f'the mean of proved epochs {and_join(AE)} (sampled)'
           + ('; zkS "1 epoch" is the measured forest, its k leaves + k - 1 merges (first table).\n' if T == 1 else
-             f'; zkA {T} epochs = {T} x that mean (derived). zkS "{T} batches" is measured and includes all the '
+             f'; zkA {T} epochs = {T} x that mean (computed). zkS "{T} batches" is measured and includes all the '
              f'forest\'s merges; "1 epoch" is the epoch\'s k leaves + k - 1 merges (first table) and EXCLUDES the '
              f'merges across epochs.\n'))
 else:
     print(f'\n**Update side.** One epoch = one batch of {M:,} records. Ratios are zkA / zkS. zkA prove per epoch is the '
-          f'mean of proved epochs {and_join(AE)} (sampled); zkA {T} epochs = {T} x that mean (derived). zkS "{T} batches" is '
+          f'mean of proved epochs {and_join(AE)} (sampled); zkA {T} epochs = {T} x that mean (computed). zkS "{T} batches" is '
           f'measured and includes the {T - 1} forest merge{"" if T == 2 else "s"}; "leaf alone" is leafgen_seq_ms / {T} and '
           f'EXCLUDES composition.\n')
 ZONE = 'zkS 1 epoch' if FOREST else 'zkS leaf alone'   # zkS update_per_epoch
@@ -605,7 +557,7 @@ for who, title in WHO:
         extra = ('best of 5 calls per proof on both sides; deserialisation excluded on both sides'
                  if col == 'verify_ms' else 'KB = 10^3 bytes')
         print(f'\n**{what}, zkA vs {title}** ({unit}; {extra}; cells {" / ".join(zl(var) for var in ZV)} / zkS; zkA = '
-              f'n aggregation receipts + 1 query receipt, derived; {FPEAKS}, sum of '
+              f'n aggregation receipts + 1 query receipt, computed; {FPEAKS}, sum of '
               f'measured parts; **bold** = the smaller side'
               + ('; ~ = zkA did not prove the query at that n: its query receipt is the mean of the proved ones'
                  if any(SAMPLED_Q in r['provenance'] for r in rows) else '') + ')\n')
@@ -690,10 +642,10 @@ if HAS_R1:
         line([NAME[fam], f'{fs(s1)} / {fs(s2)}', f'{fs(l1)} / {fs(l2)}', f'{fs(q1)} / {fs(q2)}'])
 
 print(f'\n**zk-Analytics aggregation guest, epoch 0 ({EPOCH_TXT}): their ingest vs the rest** (user cycles; '
-      'MODELED column = proved per-epoch time x the non-ingest share of user cycles, ignoring paging and segment '
-      'rounding; it is NOT a measurement)\n')
+      'last columns = proved per-epoch time x the non-ingest share of user cycles, ignoring paging and segment '
+      'rounding; computed, not measured)\n')
 table(['sketch', 'user cycles', 'Event read', 'batch-chain check', 'read + chain share', 'source',
-       'MODELED non-ingest prove / epoch (s)', f'vs {ZONE}', 'vs zkS amortized'])
+       'non-ingest prove / epoch (s), computed', f'vs {ZONE}', 'vs zkS amortized'])
 for fam in FAMS:
     for var in ZV:
         name = NAME[fam] + (f' ({var})' if MULTI else '')

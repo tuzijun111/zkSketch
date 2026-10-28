@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# gen.sh <N> <D> <W> <outdir>
-# Instantiates cm_op.zok.tpl (proven) and cm_helper.zok.tpl (witness only) for N
-# records per chunk, D rows and W columns, by textual constant replacement -- the
-# way zkStream sizes its circuits (nexmark/zokrates-nexmark/src/zokrates.rs:85-87).
+# Instantiate cm_op.zok.tpl (proven) and cm_helper.zok.tpl (witness only) for N records, D rows and W columns.
+# Usage: gen.sh <N> <D> <W> <outdir>
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ $# -eq 4 ]] || { echo "usage: gen.sh <N> <D> <W> <outdir>" >&2; exit 2; }

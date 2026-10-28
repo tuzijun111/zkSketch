@@ -1,103 +1,5 @@
-//! **Complete SpaceSaving update circuit** (paper Appendix D/G, Pattern B
-//! top-`s` retention) — the optimized counterpart to the
-//! [`crate::sketch::ss_final`] baseline, mirroring how
-//! [`crate::sketch::gk_final_full`] completes [`crate::sketch::gk_final`].
-//!
-//! Where `ss_final` only certified the Poseidon2 commits + active-flag
-//! monotonicity + mass conservation (Steps 2–4 deferred), this module
-//! enforces the full §G pipeline in-circuit:
-//!
-//! 1. **Bind** old state + batch to their commitments (Poseidon2).
-//! 2. **Union** `(S_old.active ‖ B.active)` — realized as the input to
-//!    the key-sort PermuteAir (the multiset check ties the sorted view to
-//!    the combined old+batch rows; no separate union table needed).
-//! 3. **Group by key, sum counts** — key-sort via PermuteAir, then
-//!    PoneglyphDB §4.3 adjacency-equality tags + a running sum produce the
-//!    grouped candidate table `G` (one summed row per distinct key; the
-//!    rest become dummies). This is the Count-Min running-sum gadget.
-//! 4. **Top-`s` retention** — a second PermuteAir re-sorts `G` by
-//!    `(active asc, count asc)`; range-checked count-sortedness +
-//!    active-monotonicity force the canonical order, and the compaction
-//!    binds `S_new = G_sorted[batch..]` (the **top `capacity` by count**)
-//!    and `residual = G_sorted[..batch]`. Because the table is sorted
-//!    count-ascending, every residual row's count is `≤` the smallest
-//!    kept count — exactly the paper's threshold-residual condition
-//!    `R[q] ⪯ τ` (no omitted candidate beats the worst retained one).
-//! 5. **Recommit** `S_new` to `C_new` (whole-state replacement).
-//! 6. **Metadata** via `params.validate()`.
-//!
-//! Plus **mass conservation**: `Σ(S_new.count) + Σ(residual.count) =
-//! Σ(S_old.count·active) + Σ(B.value·active)` — SpaceSaving's grouping
-//! preserves total weight.
-//!
-//! ### Convention (mirrors `gk_final_full`)
-//!
-//! Rows are kept in `(active asc, count asc)` order: dummies (count 0)
-//! first, then actives by ascending count. So the **top `capacity`** rows
-//! (highest counts = heavy hitters) are the *last* `capacity`, and the
-//! count diff `count[r+1] − count[r]` is non-negative across **every**
-//! adjacent pair (the dummy→active boundary too, since dummies have
-//! count 0), which lets the sortedness check be a plain
-//! `decompose_to_bits(count[r+1] − count[r], COUNT_DIFF_BITS)` with no
-//! gating — sidestepping the `mul(decompose, decompose)` bus issue.
-//!
-//! ### Why §G's single-pass retention (no GK-style log rounds)
-//!
-//! Top-`s` retention is a single threshold cut, not iterative fusion:
-//! group once, sort once, split once. So unlike `gk_final_full` there is
-//! no `L`-round schedule — SpaceSaving is the cheapest Pattern B family,
-//! exactly as the paper notes ("SpaceSaving avoids the … round count").
-//!
-//! ### Permute domains (shared PermuteBus)
-//!
-//! The pinned fork concatenates every `add_permute` of a circuit into ONE
-//! PermuteAir whose `PermuteBus` message is the four value coordinates only
-//! (no op id), so it proves only that the union of all permute inputs equals
-//! the union of all outputs. With both permutes on the same untagged
-//! `[key_lo, key_hi, count, active]` encoding a prover could trade rows
-//! between them and re-fragment a key (PoC:
-//! `tests::shared_permute_bus_forgery_rejected`, accepted before the fix).
-//! The count-sort domain (`grouped`, `g_sorted`, `residual`) therefore carries
-//! `GROUPED_OP_TAG` in the `key_hi` slot (keys are single-limb, and
-//! `key_sorted.key_hi = 0` is enforced), which restores per-op multiset
-//! equality by a counting argument. NOTE: like every constraint on decomposed
-//! fields, this relies on decompositions being bound to their packed values,
-//! which the fork's `recompose/coeff` lowering does by default (see
-//! `crate::recompose_binding` and `BIND_DECOMPOSITIONS`).
-//!
-//! ### Assumptions / scope
-//!
-//! - Per-record `count`/`value` fit in `COUNT_DIFF_BITS − 1` bits
-//!   (`< 2^21`); `key` fits in one BabyBear limb (`key_hi = 0`, so
-//!   `key < 2^31`) so the group-by adjacency test on `key_field` has no
-//!   field-wrap collisions. The test workloads honor both.
-//! - Real keys must be non-zero (key `0` is the dummy sentinel). The
-//!   all-dummy rows form one key-0 segment whose summed count is 0; that
-//!   count-0 "segment-end" row sorts to the bottom and never enters the
-//!   top-`capacity`, so it's harmless.
-//! - The `(count, key)` total order's **key tie-breaker** is not strictly
-//!   verified (we verify the primary count order + the multiset +
-//!   exact-kept-count); ties on count are resolved by the prover's stable
-//!   sort. This is the same flavor of honest-prover latitude that
-//!   `gk_final_full` documents for its fusion policy.
-//! - Flat Poseidon2-over-all-rows commitment (same as `gk_final_full`);
-//!   the §G "whole-state recommit" is `∝ capacity`, which is inherent for
-//!   a bounded summary (sparse openings wouldn't help).
-//!
-//! ### Hiding commitments (revision B2)
-//!
-//! [`build_ss_full_leaf_commit`] with [`CommitMode::Hiding`] salts all three
-//! commitments, `Com(x; ρ) = MyHash([kind, SpaceSaving, 0, 0, ρ…] ‖ rows)`
-//! ([`commit_ss_state_with`] / [`commit_ss_batch_with`], see
-//! [`crate::commitment::hiding`]): +2 Poseidon2 and +3 ALU rows per
-//! commitment. Prove it with [`SsFullLeafCircuit::prove_epoch_commit`]; the
-//! no-op VK-derivation leaf uses [`SsFullLeafCircuit::prove_epoch_public_zero`].
-//! Every pre-B2 entry point builds the `Plain` circuit, byte for byte.
-//! The leaf takes no [`Binding`]: both modes hash with the plain
-//! `add_hash_slice` sponge (`commit_hash(.., Binding::Semantic)`), never the
-//! zero-IV `bind::hash_slice_bound` that `Binding::Bound` selects in
-//! [`crate::commitment::hiding`], so the first row's IV rests on the fork's
-//! own Poseidon2 IV binding, as it does for the `Plain` leaf.
+//! Heavy-hitter leaf with mergeable Misra–Gries compression: group old state and batch by
+//! key, sort by count, keep the top `capacity` counters and subtract τ.
 
 use std::rc::Rc;
 
@@ -765,7 +667,7 @@ fn bind_decomposition(
 // ─── Prover ──────────────────────────────────────────────────────────────
 
 /// Prove one SpaceSaving epoch with the full §G top-`s` pipeline enforced
-/// in-circuit (see the module docstring).
+/// in-circuit.
 pub fn prove_ss_full(
     params: SsFullParams,
     initial_state: SsFullState,

@@ -1,9 +1,4 @@
-//! Integration test for the §4.2 recursive HyperLogLog chain (Phase 4c).
-//!
-//! Mirrors `tests/two_leaf_countmin.rs` but the leaves are real HyperLogLog
-//! update epochs (paper §5.3 Pattern A max, Appendix F). Two adjacent
-//! epochs are aggregated by `merge_two_hll` into one batch-STARK, then
-//! re-verified end-to-end via `verify_chain_hll`.
+//! Two HyperLogLog leaves merged into one recursive proof (merge_two_hll) and verified.
 
 use zksketch::recursion::recursive::hll_leaf::{B, prove_hll_leaf};
 use zksketch::recursion::recursive::hll_merge::{

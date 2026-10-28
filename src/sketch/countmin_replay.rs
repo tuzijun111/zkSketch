@@ -1,36 +1,5 @@
-//! **Count-Min `replay` leaf — per-record REPLAY update + FLAT commit**
-//! (plonky3 / STARK).
-//!
-//! The faithful flat-commit counterpart of [`super::countmin_merkle`]: it uses
-//! the **same per-record replay update** (hash *every* record's key in-circuit,
-//! route it to its cell), but commits the state with a **flat** Poseidon2 sponge
-//! over all `d·w` cells instead of a Merkle root. It is the proper baseline for
-//! the head-to-head against [`super::countmin_final`] (`certified`): both keep
-//! keys **private** and derive the hash positions **in-circuit**, so they
-//! isolate exactly the *update method* (per-record replay vs distinct-key
-//! certified) at a fixed flat commitment.
-//!
-//! ### Why a new leaf (not the §5.1 strawman)
-//!
-//! The older [`crate::recursion::recursive::countmin_leaf`] takes the per-record
-//! hash positions as **public inputs** (computed off-circuit) and never hashes
-//! keys in-circuit — so it neither hides the keys nor proves the routing, and is
-//! not comparable to the private circuits. That leaf is kept for the
-//! cross-family merge; this module is the honest replay update.
-//!
-//! ### The 2×2 grid this completes
-//!
-//! |               | flat commit                     | Merkle commit |
-//! |---------------|---------------------------------|---------------|
-//! | replay update | **this leaf** (`replay`)         | `merkle`      |
-//! | certified upd | `certified` (`countmin_final`)  | `c_merkle`    |
-//!
-//! ### Cost
-//!
-//! Per-record PRF hash (`batch` Poseidon2 calls) + a one-hot over all `w` cells
-//! per `(record, row)` (`Θ(d·w·batch)` selectors) + the flat `Θ(d·w)` commit.
-//! Unlike `certified` there is **no** distinct-key compaction, so every record
-//! pays the hash — that is the point of the comparison.
+//! Count-Min `replay` leaf (baseline): per-record in-circuit hashing and one-hot routing
+//! over a flat Poseidon2 commitment of all d·w cells.
 
 use std::rc::Rc;
 

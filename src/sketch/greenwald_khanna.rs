@@ -1,26 +1,4 @@
-//! Plaintext Greenwald-Khanna (GK) quantile sketch (paper §5.3 Pattern B
-//! with merge-tree semantics).
-//!
-//! Phase 6a: plaintext only; in-circuit leaf and recursive merge are
-//! deferred (proper Pattern B in-circuit shape is the §G four-gate
-//! pipeline + per-tuple merge-tree certificate, multi-day follow-up).
-//!
-//! ### Scope (read carefully)
-//!
-//! This is a *simplified* GK summary: a bounded-capacity sorted list of
-//! `(value, count, max_error)` tuples. The full GK guarantees ε-approximate
-//! rank queries via careful merging of adjacent entries with bounded error
-//! propagation. The prototype implements:
-//!   - Insertion at the correct sorted position with `(value, 1, 0)`.
-//!   - When the summary exceeds `capacity`, merge the two adjacent entries
-//!     with the smallest combined `count + max_error` (a cheap stand-in
-//!     for GK's band-based merge rule).
-//!
-//! What this gets right: a Pattern B mergeable summary with eviction-style
-//! compression, sorted by value, bounded-capacity. What's deferred: the
-//! ε-bound on rank-query accuracy (the full GK guarantee). For the
-//! framework's purpose — exercising the recursion / chain / merge layers
-//! with a Pattern B sketch — this is enough.
+//! Simplified plaintext GK summary: a bounded sorted list that merges the cheapest adjacent pair.
 
 use crate::sketch::{DeltaCert, Sketch};
 

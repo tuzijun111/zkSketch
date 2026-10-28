@@ -1,23 +1,5 @@
-//! E8 — cross-stack head-to-head, **plonky2 (SNARK)** side (EVAL_SPEC E8). The
-//! plonky2 counterpart of `examples/exp_e8.rs`: the same certified Count-Min leaf
-//! shape (d=4, w=8) and a recursive merge of two chainable leaves, on Goldilocks
-//! + Poseidon + native recursion. `scripts/run_experiments.sh e8` merges this
-//! into `results/e8_crossstack.csv` (the `backend` column distinguishes it from
-//! the plonky3 rows).
-//!
-//! Two ops here:
-//! - `leaf` — build + prove one CM leaf (§1 split via `prove_timed`).
-//! - `recursive_merge` — `recursion::merge` of two chainable CM Nodes (a **real**
-//!   recursive SNARK that verifies both children in-circuit).
-//!
-//! Cross-family (cm+hll) merge is **omitted on plonky2**: the recursive `merge`
-//! requires both Nodes to thread on the same state commitment, but CM (d·w cells)
-//! and HLL (2^b registers) commit different state shapes with no unified
-//! commitment — a documented gap (the plonky3 side composes them via the §4
-//! framework digest instead).
-//!
-//! Run: cargo run --release --example e8_crossstack
-//! Env: EXP_E8_M=64  EXP_E8_DB=32  EXP_E8_TRIALS=2
+//! E8 on plonky2: CM leaf (d=4, w=8) + recursive merge; no cm+hll merge (no common state commitment).
+//! Usage: cd plonky2 && EXP_E8_M=64 EXP_E8_DB=32 EXP_E8_TRIALS=2 cargo run --release --example e8_crossstack
 
 use std::time::Duration;
 

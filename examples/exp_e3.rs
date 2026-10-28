@@ -1,17 +1,5 @@
-//! E3 — decode/query cost runner for the **plonky3 (STARK)** backend
-//! (EVAL_SPEC E3). The plonky2 leg (`plonky2/examples/e3_decode.rs`) covers all
-//! four families; this is the STARK-backend counterpart (was the missing
-//! "plonky3 decode AIR" gap). For each family it benches the decode proof against
-//! a committed state, **sweeping the state size `s`** — the decode cost's only
-//! structural dependence (it re-hashes the whole committed state) — plus a
-//! release-policy variant.
-//!
-//! Output: `results/e3_decode.csv` (same schema as the plonky2 leg, merged):
-//!   `backend, family, query_type, s, release_policy, constraint_count,
-//!    prove_total_ms_median, verify_ms_median, proof_size_bytes, peak_rss_mb_median`
-//!
-//! Run: `cargo run --release --example exp_e3`
-//! Env: EXP_DATASET (uniform), EXP_TRIALS (3).
+//! E3: decode (query) proof cost vs state size per family; writes results/e3_decode.csv.
+//! Usage: [EXP_DATASET=uniform EXP_TRIALS=3] cargo run --release --example exp_e3
 
 use zksketch::dataset::{aol, netflix, synthetic_stream, take, zipf_stream, Synthetic};
 use zksketch::decode::countmin::{prove_cm_decode, CmDecodeParams};

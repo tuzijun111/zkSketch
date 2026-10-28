@@ -7,8 +7,8 @@ retention), on the same records, batches and state representation. The
 comparison is therefore between two ways of handling the same batch
 transition, not between two algorithms:
 - zkSketch's AIR circuit certifies it;
-- this guest executes it in a zkVM. Only the executor ran here; prove time is
-  MODELED.
+- this guest executes it in a zkVM. Only the executor ran here; prove times are
+  segments x 30.1 s, not measured.
 
 The two statements still differ in hash (SHA-256 vs Poseidon2), in
 compute-vs-verify and in who maps the raw keys (see `../README.md`, Caveats).
@@ -29,9 +29,9 @@ risc0's accelerated `sha::rust_crypto`, as their aggregator does).
 |---|---|---|
 | read | S_old (`capacity` rows) and the epoch's `m` raw u32 dataset keys | - |
 | Com_old | SHA-256(tag, s, m, S_old rows) | zka style; layout = zkSketch `flat_state_vals` |
-| map | each raw key k becomes a record: `u32::MAX` (PAD_KEY) gives the dummy (0, 0, 0, 0); otherwise ((k & 0x1FFF_FFFF) \| 1, 0, 1, 1) | zkSketch `ss_updates_of`, `src/experiments/stream_compose.rs:535` |
+| map | each raw key k becomes a record: `u32::MAX` (PAD_KEY) gives the dummy (0, 0, 0, 0); otherwise ((k & 0x1FFF_FFFF) \| 1, 0, 1, 1) | zkSketch `ss_updates_of`, `src/experiments/stream_compose.rs` |
 | Com_batch | SHA-256(tag, m, mapped records) | layout = zkSketch `flat_batch_vals` |
-| transition | S_new = `apply_batch_ss_full(S_old, batch).0` | zkSketch `src/sketch/ss_final_full.rs:575` (`build_ss`:481, `group_by_key`:408, `compress_from_gsorted`:452) |
+| transition | S_new = `apply_batch_ss_full(S_old, batch).0` | zkSketch `apply_batch_ss_full` in `src/sketch/ss_final_full.rs` (with `build_ss`, `group_by_key`, `compress_from_gsorted`) |
 | Com_new | SHA-256(tag, s, m, S_new rows) | as Com_old |
 | journal | Com_old \|\| Com_batch \|\| Com_new (96 raw bytes, `env::commit_slice`) | - |
 
@@ -50,9 +50,9 @@ words: dummies (0, 0, 0, 0) first, then active rows by (count asc, key asc). The
 guest reproduces this row sequence exactly, ties included.
 
 Per epoch, the host feeds the guest the previous state and the next `m` keys,
-starting from `SsFullState::empty`. This is the loop of
-`stream_compose.rs:758-761` and `:961-972`, over the batches of
-`examples/exp_compose.rs` `batches_from`.
+starting from `SsFullState::empty`. This is the `StreamFamily::SsCertified` loop
+of `prove_queries_only` and `prove_leaves` in `src/experiments/stream_compose.rs`,
+over the batches of `examples/exp_compose.rs` `batches_from`.
 
 ## Implementation (ours)
 
@@ -162,8 +162,11 @@ each applied alone in a scratch build and then reverted:
 | key-descending ties on the radix path (reverse the grouped table before the stable count sort) | the radix random-shape test |
 | key-descending ties on the std path (key packed as `0x1FFF_FFFF - key`) | the std random-shape test |
 
-The restored source is byte-identical to the backup taken before mutating, and
-it rebuilds to the same guest ELF md5s that produced the CSVs.
+The restored source was byte-identical to the backup taken before mutating, and
+rebuilt to the guest ELF md5s that produced the CSVs. Comment edits made after
+those runs moved source lines, which the ELFs record in panic locations, so a
+rebuild of the current source gives different md5s and image IDs than the CSVs,
+with the same cycle counts.
 
 ## Layout
 

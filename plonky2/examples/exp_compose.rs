@@ -1,29 +1,6 @@
-//! **Streaming proof-composition — plonky2 (SNARK) backend.**
-//!
-//! The plonky2 sibling of `../../examples/exp_compose.rs`. Proves `t = ⌈N/m⌉`
-//! batch leaves per family and composes them under per_batch / chain / forest
-//! via the process-level distributed engine (`experiments::dist_compose`): one
-//! pinned OS process per machine, socket IPC, measured cross-machine comm. Same
-//! CSV schema as the plonky3 runner so the two backends compare directly.
-//! Optionally binds the four family roots pairwise cross-family.
-//!
-//! Env (subset of the plonky3 contract):
-//!   EXP_COMPOSE_N        total records (int or 2^k)          (default 16)
-//!   EXP_COMPOSE_BATCHES  batch size m                        (default 4)
-//!   EXP_COMPOSE_FAMILY   cm,hll,ss,gk comma-list             (default all four)
-//!   EXP_DATASET          uniform|gaussian|zipf|aol|netflix   (default uniform)
-//!   EXP_D / EXP_W        Count-Min depth / width             (default 2 / 4)
-//!   EXP_HLL_B            HyperLogLog register bits           (default 4)
-//!   EXP_SS_CAP           SpaceSaving capacity                (default 4)
-//!   EXP_GK_CAP           Greenwald–Khanna capacity           (default 4)
-//!   EXP_COMPOSE_MODE     per_batch|chain|forest comma-list   (default all three)
-//!   EXP_COMPOSE_MACHINES machines (forest/per_batch)         (default 1)
-//!   EXP_COMPOSE_CORES    cores per machine                   (default 4)
-//!   EXP_COMPOSE_CROSS_FAMILY  1 = also bind the 4 roots cross-family (default 0)
-//!   EXP_NET_MBPS / EXP_NET_RTT_MS  network model             (default 200 / 0.2)
-//!   EXP_OUT / $1         output CSV name                     (default stream_compose_p2)
-//!
-//! Run:  cd plonky2 && cargo run --release --example exp_compose
+//! plonky2 side of scripts/run_compose.sh (EXP_COMPOSE_BACKEND=plonky2): per_batch / chain / forest.
+//! EXP_* as in docs/experiments.md, but one value each (only EXP_COMPOSE_FAMILY and _MODE take comma-lists).
+//! Usage: cd plonky2 && EXP_COMPOSE_N=16 EXP_COMPOSE_BATCHES=4 (batch size m) cargo run --release --example exp_compose [out_name]
 
 use zksketch_snark::dataset::{aol, netflix, synthetic_stream, zipf_stream, Synthetic};
 use zksketch_snark::experiments::dist_compose::{
@@ -92,6 +69,7 @@ fn main() -> anyhow::Result<()> {
     let machines = env_usize("EXP_COMPOSE_MACHINES", 1).max(1);
     let mbps = env_f64("EXP_NET_MBPS", 200.0);
     let rtt = env_f64("EXP_NET_RTT_MS", 0.2);
+    // EXP_COMPOSE_CROSS_FAMILY=1 also merges the four family roots pairwise (cm+hll, ss+gk); one extra CSV row.
     let cross_family = env_usize("EXP_COMPOSE_CROSS_FAMILY", 0) != 0;
     let shape = FamShape {
         d: env_usize("EXP_D", 2),
@@ -267,7 +245,8 @@ fn main() -> anyhow::Result<()> {
             cf.verify_ms / 1000.0,
             cf.proof_bytes as f64 / 1024.0,
         );
-        // Emit a synthetic row so the artifact is captured in the CSV.
+        // One CSV row for the cross-family run: leafgen_ms and leafgen_seq_ms = family_roots_ms (the four
+        // family forests), merge_ms = cross_merge_ms, merges_cross = pairs; columns that do not apply are 0.
         let row: Vec<String> = vec![
             "plonky2".into(),
             dataset.clone(),

@@ -1,9 +1,4 @@
-//! Leaf AIRs and the `LeafAir` trait that lets the prover/recursion code stay
-//! generic over the underlying computation.
-//!
-//! Phase 1 only ships `FibAir` (a Fibonacci-style toy that stands in for a
-//! per-epoch sketch update). Phase 2 will add `CountMinUpdateAir` and friends
-//! behind the same trait.
+//! Leaf AIRs and the `LeafAir` trait that the prover and recursion code are generic over.
 
 pub mod fib;
 

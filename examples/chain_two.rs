@@ -1,7 +1,5 @@
-//! Demo: side-by-side comparison of the §4.1 flat chain (Phase 1) and the
-//! §4.2 recursive merge (Phase 1.5).
-//!
-//! Run with: `cargo run --release --example chain_two`.
+//! Flat chain vs recursive merge over two toy Fibonacci leaves.
+//! Usage: cargo run --release --example chain_two
 
 use std::time::Instant;
 

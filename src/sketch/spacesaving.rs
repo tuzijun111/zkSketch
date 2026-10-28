@@ -1,26 +1,4 @@
-//! Plaintext SpaceSaving sketch (paper §5.3 Pattern B, Appendix G).
-//!
-//! Phase 5a: plaintext only; in-circuit leaf and recursive merge are 5b and
-//! 5c. SpaceSaving is the canonical example of a *Pattern B*
-//! (mergeable-summary with eviction) sketch — fundamentally different from
-//! Count-Min / HyperLogLog (Pattern A delta-certifiable). The §G four-gate
-//! pipeline (SS-Union → Sort+SegGroup → TopS → ReplaceState) is the proper
-//! in-circuit shape; Phase 5b lands a simplified strawman as scaffolding
-//! and 5c-future / v2 will fill in the four gates.
-//!
-//! ### Update rule (Misra-Gries / SpaceSaving)
-//!
-//! Maintain a fixed-capacity `capacity_s` summary of `(key, count)` pairs.
-//! On insert `(key, value)`:
-//!   1. If `key` matches an existing row, increment that row's count by `value`.
-//!   2. Else if any row is "free" (count = 0), populate it with `(key, value)`.
-//!   3. Else (full, no match), find the row with minimum count `m_min`,
-//!      evict it, and write `(key, m_min + value)`. The discarded count
-//!      effectively becomes the new row's `err` bound.
-//!
-//! The classical SpaceSaving variant also tracks a per-row `err` field; the
-//! prototype omits it (commit is just `(key, count)` pairs) since the
-//! strawman leaf doesn't validate eviction.
+//! Plaintext SpaceSaving sketch: when full, a new key replaces the minimum-count row.
 
 use crate::sketch::{DeltaCert, Sketch};
 

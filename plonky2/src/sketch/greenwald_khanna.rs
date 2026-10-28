@@ -1,14 +1,4 @@
-//! Plaintext Greenwald–Khanna quantile sketch (paper §5.4, Pattern B fusion).
-//!
-//! Port of `../src/sketch/gk_final_full.rs` to Goldilocks. A tuple is
-//! `(value, count, max_error, active)`; over Goldilocks each is one field
-//! element, so a tuple commits as **4** field elements.
-//!
-//! The batched update is the §5.4 pipeline: union old∪batch, sort by
-//! `(active asc, value asc)`, run `L = ⌈log₂(total)⌉` parity-0 fusion+resort
-//! rounds (each merges adjacent **equal-value** active pairs, summing counts),
-//! then split off the top `capacity` by value. The in-circuit counterpart is
-//! [`crate::leaf::greenwald_khanna`].
+//! Plaintext batched Greenwald–Khanna with equal-value fusion; native side of leaf::greenwald_khanna.
 
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::HashOut;

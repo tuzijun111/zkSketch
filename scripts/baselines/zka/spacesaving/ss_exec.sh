@@ -1,30 +1,6 @@
 #!/usr/bin/env bash
-# SpaceSaving on zk-Analytics' pipeline (our port; see README.md). EXECUTOR ONLY.
-#
-#   aggregation guest on ONE epoch (the first 16,384 AOL records), s in {2^14, 1024}:
-#       aggr_ss (headline root: their samples-style 64-bucket root) + its _prof twin;
-#       aggr_ss_rootvar sensitivity rows: buckets1024, perkey (v1), none, and
-#       buckets64 again (must match aggr_ss to within the extra 4-byte read);
-#       aggr_ss on epoch 63 (a late-epoch guest-vs-native spot check: the query
-#       rows' epoch states 1..63 come from native aggregation)
-#   query guest over n populated epochs, s in {2^14, 1024}:
-#       topk (limit 10, keys in the journal) and its _prof twin;
-#       estimate (their SumExactKey per-epoch scan; the heaviest key of the prefix,
-#       and rank 100 as a mid-frequency key) and a _prof twin of the rank-1 run;
-#       estimate_merged (v1 point query: full merge, then lookup; sensitivity only)
-#
-# Every row carries MODELED prove time = segments x 30.1 s (envelope 29.73..30.79),
-# the CM-guest CPU anchors of ../README.md. NOT measured. Proved rows never go
-# here; they go to ../results/zka_ss_anchor.csv (ss_anchor.sh).
-#
-# Usage: ./ss_exec.sh [n1 n2 ...]          (default epochs: 1 4 16 64)
-# Env:   SKIP_BUILD=1   use the existing binaries
-#        CAPS="16384 1024"  capacities
-#        LATE_EPOCH=63  epoch index of the late-epoch spot check ("" skips it)
-#        OUT=...        default ../results/zka_ss_exec.csv (appended; header checked)
-#
-# Runs no prover. Kills nothing: each executor run spawns its own r0vm child,
-# which exits with the run.
+# Executor runs of the SpaceSaving port (aggregation and query guests) -> ../results/zka_ss_exec.csv.
+# Usage: ./ss_exec.sh [epochs ...]   (default 1 4 16 64)   Env: SKIP_BUILD=1 CAPS="16384 1024" LATE_EPOCH=63 OUT=...
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common_ss.sh"
 

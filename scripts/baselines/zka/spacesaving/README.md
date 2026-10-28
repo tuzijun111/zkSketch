@@ -71,11 +71,13 @@ cd scripts/baselines/zka/spacesaving && CARGO_TARGET_DIR=~/ext-baselines/build/z
   cargo honour the guest lockfile.
 - Path dependencies reach the read-only clone through `../.zka`, the untracked
   symlink that `../common.sh` maintains.
-- A fresh target directory rebuilt all five guest ELFs byte for byte; the md5s
-  are in the header of `../results/zka_ss_exec.log`, and every CSV row carries
-  its guest's `image_id`. The rebuild is byte-identical only from the same
-  absolute source path: panic-location strings embed the path. A build from
-  another path gives different md5s and image IDs but identical cycle counts.
+- The md5s of the five measured guest ELFs are in the header of
+  `../results/zka_ss_exec.log`, and every CSV row carries its guest's
+  `image_id`. Panic locations embed the source path and line numbers, so a build
+  from another path, or of source whose lines have moved, gives different md5s
+  and image IDs but identical cycle counts. Comment edits made after the
+  measured runs moved lines in `core/`, which all five guests link, so a rebuild
+  of the current source no longer matches the md5s and image IDs in those files.
 - Driver flags: `ss --mode aggr|query --capacity S [--epochs N] [--query topk|estimate|estimate_merged] [--limit 10] [--point-rank R] [--root legacy|designed|noroot|buckets1024|perkey] [--epoch-size 16384] [--batch 8] [--profile|--prove]`,
   `--root` (the six-sketch root variants (`../README.md`, "Six-sketch comparison", "Root variants")): `legacy` (the default) runs `aggr_ss`, the
   measured guest of this README; every other value runs `aggr_ss_rootvar` with that
@@ -193,10 +195,11 @@ cd scripts/baselines/zka/spacesaving && CARGO_TARGET_DIR=~/ext-baselines/build/z
     bucket root vs an independent grouping, and the point-query scan vs a
     binary search.
 
-## Results (executor; `MODELED` = segments x 30.1 s, NOT measured)
+## Results (executor only; prove time = segments x 30.1 s, not measured)
 
-`MODELED` prove time uses the CM-guest CPU anchors of `../README.md`. The CSV
-carries the envelope segments x 29.73 to segments x 30.79. Cycles and segments
+The 30.1 s per segment is the rate of the CM-guest CPU anchors of `../README.md`
+(CSV column `MODELED_prove_s`). The CSV carries the envelope segments x 29.73 to
+segments x 30.79 (`MODELED_prove_s_lo`, `MODELED_prove_s_hi`). Cycles and segments
 are deterministic. `padded_cycles` = Σ 2^po2 over segments. Total cycles
 including paging are not exposed by `SessionInfo`, so they are not reported.
 
@@ -204,7 +207,7 @@ including paging are not exposed by `SessionInfo`, so they are not reported.
 
 Headline guest `aggr_ss` (their samples-style 64-bucket root):
 
-| s | state entries | user cycles | cycles/rec | padded cycles | segments | MODELED prove |
+| s | state entries | user cycles | cycles/rec | padded cycles | segments | prove (segments x 30.1 s) |
 |---|---|---|---|---|---|---|
 | 16,384 | 8,433 (exact, no eviction) | 113,584,313 | 6,932.6 | 129,499,136 | **124** | **3,732 s** |
 | 1,024 | 1,024 (full; min counter 13) | 97,874,942 | 5,973.8 | 105,906,176 | **101** | **3,040 s** |
@@ -219,7 +222,7 @@ No query reads any of these roots.
 
 - The first version rooted every entry as its own Merkle leaf, the pattern of
   their per-key histogram family. That made the s = 2^14 epoch 176 segments
-  (5,298 s MODELED), 42% above the samples pattern. Their samples family holds
+  (5,298 s at 30.1 s per segment), 42% above the samples pattern. Their samples family holds
   the same kind of state (key → count), so its root is the one that applies.
 - The `buckets64` row of `aggr_ss_rootvar` costs 55 cycles more than `aggr_ss`
   (the extra `SsRoot` read), so the sensitivity rows compare like for like.
@@ -264,7 +267,7 @@ cycles.
 
 ### Query guest over n populated epochs
 
-Each cell gives user cycles, segments and MODELED prove time.
+Each cell gives user cycles, segments and segments x 30.1 s.
 
 Top-10 (`topk`: verification preamble, full merge, top 10 with keys):
 
@@ -351,16 +354,16 @@ One sighting makes the row `contended`. `prove_other_r0vm_samples` (sightings /
 samples) and `prove_load1_mean` / `_max` carry the evidence. **Use only `clean`
 rows.**
 
-| guest (root) | condition | segments | prove_s | s/segment | verify | receipt | r0vm peak RSS | MODELED (30.1 s/seg) |
+| guest (root) | condition | segments | prove_s | s/segment | verify | receipt | r0vm peak RSS | segments x 30.1 s |
 |---|---|---|---|---|---|---|---|---|
 | **current `aggr_ss` (buckets64)** | **clean** (other r0vm 0/470 samples; load mean 48, max 61) | 16 | **473.4 s** | **29.59** | 10.2 ms | 224,818 B | 9,401 MB | 481.6 s |
 | v1 `aggr_ss` (perkey) | clean (0/132 samples at 5 s; load mean 49, max 60) | 23 | 672.4 s | 29.23 | 11.5 ms | 224,818 B | 9,411 MB | 692.3 s |
 | v1 `aggr_ss` (perkey) | **contended** (another job's prover ran 13 of 16 min; load averaged 101) | 23 | 958.8 s | 41.69 | 9.8 ms | 224,818 B | 9,400 MB | 692.3 s |
 
-- The current guest's anchor is 1.7% below its MODELED time; at 29.59 s/segment
+- The current guest's anchor is 1.7% below segments x 30.1 s; at 29.59 s/segment
   it sits 0.5% under the low end of the CM-anchor envelope (29.73–30.79). The
-  v1 guest's clean anchor gave 29.23 s/segment. Both support applying the
-  segment model to these non-CM guests.
+  v1 guest's clean anchor gave 29.23 s/segment. Both support using the CM
+  guests' seconds per segment for these non-CM guests.
 - The load on both clean runs is this prover itself (about 50 threads) plus
   another user's small job; no other r0vm ran.
 - The two v1 rows were measured before the review fixes, on the v1 ELF (image
@@ -370,7 +373,8 @@ rows.**
   must not be used.
 - It is one anchor per guest version on a shared box; the per-segment cost is
   not characterised beyond that. The query guest has no proved anchor; its
-  MODELED times rest on the four CM anchors plus these aggregation anchors.
+  times are segments x 30.1 s, resting on the four CM anchors plus these
+  aggregation anchors.
 
 ## What is reused from upstream (clone `d4a5a9a`, read-only)
 
@@ -434,7 +438,7 @@ is the same.
   - Another stream, or another epoch of AOL, gives different counts. Cycle
     counts and segments are exact for these inputs only.
 - **Nothing here was proved except the aggregation anchors.** Every other prove time is
-  MODELED from the four CM-guest CPU anchors of `../README.md` (29.73–30.79
+  segments x 30.1 s, from the four CM-guest CPU anchors of `../README.md` (29.73–30.79
   s/segment, r0vm 3.0.6, `ProverOpts::succinct()`). The GPU prover was not used.
 - **Merge semantics (top-k).** Summing only where a key is present, then
   truncating to s, is the specified merge. It is not Agarwal et al.'s MG /

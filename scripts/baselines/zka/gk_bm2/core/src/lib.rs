@@ -1,64 +1,7 @@
 #![no_std]
 
-//! zkSketch's two-sided Greenwald-Khanna band-merge BATCH TRANSITION, ported to
-//! plain Rust for a RISC Zero guest (matched-semantics baseline, `gk_bm2`).
-//!
-//! The textbook-GK guest in `../../gk` (INSERT / COMPRESS per record, k-way
-//! COMBINE at query time) is NOT what zkSketch's circuit certifies. This crate
-//! ports what it does certify, `apply_batch2` of `src/sketch/gk_bandmerge.rs`
-//! in the zkSketch checkout this harness sits in, so a zkVM guest computes
-//! the SAME function `S_{t-1}, batch_t -> S_t` that one zkSketch GK leaf proves:
-//!
-//!   1. map the batch's raw u32 keys to values (`gk_vals_of`: drop `PAD_KEY`
-//!      slots, mask to 21 bits);
-//!   2. union = old tuples ++ one fresh singleton `(v,0,0,0,0,t)` per value,
-//!      padded with `E_MAX` dummies to `capacity + m` rows, sorted by `(e, t)`;
-//!   3. two-sided neighbour initialisation of the fresh rows' `Delta`, `Delta°`;
-//!   4. `L_f = ceil(log2(capacity + m))` parity-0 fuse rounds under the threshold
-//!      `theta = floor(N_t / s)`, re-sorting by `(e, t)` after each round;
-//!   5. keep the first `capacity` rows; `n = N_t`.
-//!
-//! Four implementations of that one function are provided:
-//!
-//! - [`apply_batch2`] is the LITERAL port, statement for statement: the same
-//!   fixed `capacity + m` table, every `L_f` round over every row (dummies
-//!   included), the same stable `sort_by_key` on `(e, t)` through an index
-//!   permutation, fresh tables allocated every round. Only the circuit-witness
-//!   captures are left out: zkSketch keeps every round's `fused`, a clone of
-//!   `resorted`, `sigma` and the direction / condition vectors, plus `union_raw`,
-//!   `union_init`, the challenge-level `expand_sigma` and the `excess` slice; the
-//!   port computes the same tables but retains none of them, and none feeds the
-//!   output. `apply_batch2`'s `debug_assert!` on the excess
-//!   is compiled out of release builds, which is what zkSketch's harness runs, so
-//!   a capacity overflow truncates silently here exactly as there.
-//! - [`apply_batch2_reuse`] is the same code with the per-round tables allocated
-//!   once. risc0's default guest allocator never frees, so the literal port pays
-//!   for every fresh page it touches; this variant separates that cost from the
-//!   schedule's.
-//! - [`apply_batch2_fixed`] keeps zkSketch's FIXED schedule (the full
-//!   `capacity + m` table, every `L_f` round, every pair visited, every row
-//!   rewritten every round) but drops the implementation costs the literal port
-//!   carries on top of it: the union is built in linear time (the radix sort and
-//!   merge of the fast variant, then padded with dummies), and each round fuses
-//!   and compacts the survivors in place, in one table allocated once, instead of
-//!   writing a fresh `fused` table and stable-sorting it by `(e, t)`. On a
-//!   canonical old state the compaction IS that re-sort (see the function doc),
-//!   and the variant refuses any other old state, as the fast one does.
-//! - [`apply_batch2_fast`] computes the same output with a data-dependent
-//!   schedule a zkVM may use (the circuit must be oblivious, a zkVM need not):
-//!   radix-sort only the fresh values and merge them into the already-sorted old
-//!   actives, fuse over the active prefix only, compact in place of the re-sort,
-//!   and stop after the first round that changes nothing (every later round is
-//!   then the identity). It refuses (panics on) an old state that is not in the
-//!   canonical form `apply_batch2` produces, the one domain where the shortcuts
-//!   could diverge; a chain of states starting at [`State::empty`] never leaves it.
-//!
-//! The host checks all four against zkSketch's own `apply_batch2`, tuple by
-//! tuple (`../host`, `--mode check`, and its unit tests).
-//!
-//! Commitments are unsalted SHA-256 (risc0's accelerated SHA-256 in the guest),
-//! in the style of `../../gk/core`: a domain tag, then the little-endian bytes of
-//! the state's word encoding ([`state_to_words`]) or of the raw key batch.
+//! zkSketch's GK band-merge batch transition (`apply_batch2`, src/sketch/gk_bandmerge.rs) in plain Rust
+//! for a RISC Zero guest, with four implementations: literal, literal_reuse, fixed_linear and fast.
 
 extern crate alloc;
 
@@ -76,16 +19,16 @@ compile_error!("the commitments hash u32 words as their in-memory bytes, which m
 // Constants and types, field for field as in zkSketch.
 // ===========================================================================
 
-/// `gk_bandmerge.rs:66-67`. Value field width; the top value is reserved for
+/// `E_BITS` / `E_MAX` in `gk_bandmerge.rs`. Value field width; the top value is reserved for
 /// dummies so they sort to the back.
 pub const E_BITS: u32 = 22;
 pub const E_MAX: u32 = (1 << E_BITS) - 1;
-/// `stream_compose.rs:510`. Pad sentinel of split (early-sealed) batches.
+/// `PAD_KEY` in src/experiments/stream_compose.rs. Pad sentinel of split (early-sealed) batches.
 pub const PAD_KEY: u32 = u32::MAX;
-/// `stream_compose.rs:550-555` (`gk_vals_of`): GK values are keys masked to 21 bits.
+/// `gk_vals_of` in src/experiments/stream_compose.rs: GK values are keys masked to 21 bits.
 pub const VALUE_MASK: u32 = 0x001F_FFFF;
 
-/// `gk_bandmerge.rs:1278-1308` (`Gk2Tuple`): `(e, g, g°, Delta, Delta°, t, active)`
+/// `Gk2Tuple` in `gk_bandmerge.rs`: `(e, g, g°, Delta, Delta°, t, active)`
 /// with the same widths. A dummy is `(E_MAX, 0, 0, 0, 0, 0, 0)`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub struct Tuple {
@@ -108,7 +51,7 @@ impl Tuple {
     }
 }
 
-/// `gk_bandmerge.rs:94-101` (`GkbParams`).
+/// `GkbParams` in `gk_bandmerge.rs`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Params {
     /// Public summary capacity `s'`.
@@ -119,7 +62,7 @@ pub struct Params {
     pub s: u64,
 }
 
-/// `gk_bandmerge.rs:1311-1327` (`Gk2State`): value-sorted actives padded to
+/// `Gk2State` in `gk_bandmerge.rs`: value-sorted actives padded to
 /// `capacity` with dummies, and the cumulative record count `n`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct State {
@@ -142,7 +85,7 @@ impl State {
     }
 }
 
-/// `gk_bandmerge.rs:142-149`: `L_f = ceil(log2 total)`.
+/// `num_rounds` in `gk_bandmerge.rs`: `L_f = ceil(log2 total)`.
 pub fn num_rounds(total: usize) -> usize {
     if total <= 1 {
         0
@@ -151,8 +94,8 @@ pub fn num_rounds(total: usize) -> usize {
     }
 }
 
-/// `stream_compose.rs:550-555` (`gk_vals_of`): strip `PAD_KEY` slots, mask the
-/// rest to 21 bits (`< E_MAX`).
+/// `gk_vals_of` in src/experiments/stream_compose.rs: strip `PAD_KEY` slots, mask
+/// the rest to 21 bits (`< E_MAX`).
 pub fn vals_of(batch: &[u32]) -> Vec<u32> {
     batch.iter().filter(|&&k| k != PAD_KEY).map(|&k| k & VALUE_MASK).collect()
 }
@@ -171,10 +114,10 @@ pub enum Mark {
 }
 
 // ===========================================================================
-// LITERAL port of apply_batch2 (gk_bandmerge.rs:1426-1646).
+// LITERAL port of apply_batch2 (gk_bandmerge.rs).
 // ===========================================================================
 
-/// `apply_batch2` (`gk_bandmerge.rs:1426`), literal port. Same signature and output.
+/// `apply_batch2` (`gk_bandmerge.rs`), literal port. Same signature and output.
 pub fn apply_batch2(s_old: &State, batch_vals: &[u32]) -> State {
     apply_batch2_marked(s_old, batch_vals, &mut |_| {})
 }
@@ -202,7 +145,7 @@ pub fn apply_batch2_reuse_marked(s_old: &State, batch_vals: &[u32], mark: &mut i
 }
 
 fn literal(s_old: &State, batch_vals: &[u32], mark: &mut impl FnMut(Mark), reuse: bool) -> State {
-    // ---- build_bm2 (gk_bandmerge.rs:1538-1573)
+    // ---- build_bm2 (gk_bandmerge.rs)
     let cap = s_old.params.capacity;
     let m = s_old.params.batch;
     let total = cap + m;
@@ -234,7 +177,7 @@ fn literal(s_old: &State, batch_vals: &[u32], mark: &mut impl FnMut(Mark), reuse
     let union_raw: Vec<Tuple> = idx.iter().map(|&i| combined[i]).collect();
     mark(Mark::UnionBuilt);
 
-    // ---- finish_bm2 (gk_bandmerge.rs:1576-1646)
+    // ---- finish_bm2 (gk_bandmerge.rs)
     let total = union_raw.len();
 
     // two-sided neighbor-init: Δ₁ from the right (right-to-left), Δ₂ from the
@@ -289,7 +232,7 @@ fn literal(s_old: &State, batch_vals: &[u32], mark: &mut impl FnMut(Mark), reuse
     State { tuples: final_tuples, params: s_old.params, n: n_t }
 }
 
-/// `fuse_round_fixed2` (`gk_bandmerge.rs:1445-1505`), literal port without the
+/// `fuse_round_fixed2` (`gk_bandmerge.rs`), literal port without the
 /// witness vectors (`dirs`, `c1s`, `c2s`). Pairs `(2i, 2i+1)`; direction `1`
 /// folds the left (younger) tuple into the right one, `2` the right (younger)
 /// into the left one, `0` keeps both. For an odd `total` the last row is never
@@ -454,9 +397,11 @@ fn sorted_active_union(s_old: &State, batch_vals: &[u32], extra: usize) -> Vec<T
     u
 }
 
-/// [`apply_batch2`]'s output, computed with a data-dependent schedule (see the
-/// crate doc). Panics if `s_old` is not canonical ([`canonical_violation`]) or a
-/// batch value is `>= E_MAX` (impossible after [`vals_of`]).
+/// [`apply_batch2`]'s output, computed with a data-dependent schedule: radix-sort the
+/// fresh values and merge them into the sorted old actives, fuse over the active prefix
+/// only, and stop after the first round that changes nothing. Panics if `s_old` is not
+/// canonical ([`canonical_violation`]) or a batch value is `>= E_MAX` (impossible after
+/// [`vals_of`]).
 pub fn apply_batch2_fast(s_old: &State, batch_vals: &[u32]) -> State {
     apply_batch2_fast_marked(s_old, batch_vals, &mut |_| {})
 }

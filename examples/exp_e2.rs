@@ -1,24 +1,5 @@
-//! E2 — integrity runner for the **plonky3 (STARK)** backend (EVAL_SPEC E2).
-//!
-//! Two correctness properties per family:
-//! - **Soundness / tamper:** replace a uniform-random 5% of a batch's rows with
-//!   random data; over `EXP_TAMPER_TRIALS` (default 50) trials record the
-//!   fraction *rejected*. We measure rejection at the **binding layer**: a 5%
-//!   tamper changes the batch commitment and/or `Com(S_t)`, so any proof bound
-//!   to the honest history root is rejected. (Constraint-level rejection — the
-//!   prover *cannot* produce an accepted proof of a false transition — is
-//!   covered by the `*_soundness_rejects_*` / `*_rho_binding_*` unit tests;
-//!   run `cargo test --release --lib soundness rejects`.)
-//! - **Fidelity:** the ZK-verified decoded answer equals the plaintext sketch
-//!   answer (the proof binds `Com(S_t)` to the natively-recomputed state), and
-//!   we report the sketch's error vs. the exact ground truth.
-//!
-//! Output: `results/e2_integrity.csv`
-//!   `backend, family, query_type, tamper_trials, tamper_reject_rate,
-//!    zk_answer, plaintext_answer, ground_truth, zk_eq_plaintext`
-//!
-//! Run: `cargo run --release --example exp_e2`
-//! Env: EXP_DATASET (default uniform), EXP_M (default 16), EXP_TAMPER_TRIALS (50).
+//! E2: tamper rejection (state or batch commitment changes after replacing 5% of a batch) and answer fidelity.
+//! Usage: [EXP_DATASET=uniform EXP_M=16 EXP_TAMPER_TRIALS=50] cargo run --release --example exp_e2
 
 use std::collections::HashSet;
 

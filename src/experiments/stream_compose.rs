@@ -1,104 +1,6 @@
-//! **Multi-family streaming proof composition** (paper §Streaming Proof
-//! Composition, generalised beyond Count-Min).
-//!
-//! Benchmarks the three composition modes — **per-batch proof chain**, the
-//! **recursive linear chain**, and the **streaming forest** — over a stream of
-//! `t = ⌈N/m⌉` transition leaves, for six sketch families each pinned to one
-//! leaf variant:
-//!
-//! | family | variant           | leaf prover (exposed)          |
-//! |--------|-------------------|--------------------------------|
-//! | cm     | omc               | `prove_countmin_omc_exposed`   |
-//! | hll    | omc               | `prove_hll_omc_exposed`        |
-//! | ss     | certified         | `prove_ss_full_exposed`        |
-//! | gk     | bandmerge2        | `prove_gkb2_exposed`           |
-//! | bloom  | omc               | `build_bloom_omc_leaf_expose`  |
-//! | bloom  | packed (B1, M2)   | `build_bloom_packed_leaf_commit` |
-//! | kmv    | kmv (bottom-`k`)  | `build_kmv_leaf_commit`        |
-//!
-//! (The first four are the measured families; the Bloom filter, a generality
-//! instance of the timestamped OR rebind, and the KMV / bottom-`k`
-//! distinct-count sketch, a verified sorted reduction, run through the same
-//! harness.)
-//!
-//! All six leaves surface their `(Com(S_{i-1}), Com(S_i))` boundary via the
-//! Expose NPO, so the **family-agnostic** folds
-//! ([`prove_forest_over`](crate::recursion::recursive::expose_forest::prove_forest_over)
-//! Bentley–Saxe tree, [`prove_chain_over`](crate::recursion::recursive::expose_forest::prove_chain_over)
-//! left-leaning linear) compose any of
-//! them and bind `left.final == right.initial` in-circuit. The per-batch mode
-//! folds nothing — it stores the `t` leaf proofs to a folder and the verifier
-//! holds all of them.
-//!
-//! **Statement (B6(b)).** By default the leaves are built with the Interval
-//! statement (`statement::composition_expose()`): leaf `t` also exposes
-//! `(t, t)` and `H = Poseidon2(TAG_LEAF, t, Com(B_t))`, the merges enforce index
-//! adjacency and fold the digests, and the auditor checks the root against
-//! the public batch log (`Com(S_0)`, `Com(S_T)` and every `Com(B_t)`, which
-//! the PROVER publishes: `dist_compose::publish_batch_log`) under the fold's
-//! bracketing. Where the auditor holds LEAF proofs directly (per_batch,
-//! and the lone leaf of a one-batch stream) it pins each one to the leaf VK
-//! derived from public parameters, STARK-verifies it, and checks its statement
-//! against its log entry and the boundary chain; the reported verify time is
-//! that audit. `ZKSKETCH_STATEMENT=boundary` (or `ZKSKETCH_BINDING=legacy`)
-//! selects the pre-B6(b) Boundary layout for side-by-side runs, with a loud
-//! warning that the batch log is then NOT checked.
-//!
-//! **Hiding commitments (B2).** Every measurement takes the run's
-//! [`ProverCommit`] (read once by the runner: `ZKSKETCH_COMMIT`, default
-//! `hiding`, plus the salt seed). Under `Hiding` each leaf `t` (every batch,
-//! query-sealed and padded ones included) is built with the family's
-//! `*_commit` builder and proved with `prove_epoch_commit(t, .., openings of
-//! leaf t)`; a query at version `t'` opens `Com(S_{t'}; ρ^S_{t'})` with the
-//! same randomizer leaf `t'` closed its state with, so its exposed commitment
-//! is leaf `t'`'s final. The published log is built prover-side, and the
-//! auditor ([`super::audit`]) sees only the log, the proofs and public
-//! parameters. `ZKSKETCH_COMMIT=plain` is the pre-B2 path byte for byte.
-//!
-//! ## Mixed updates + queries (`query_at`)
-//!
-//! With a non-empty `query_at` schedule (1-based batch indices), a **query
-//! leaf** (the family's `src/decode/*` circuit: cm point count, hll
-//! cardinality, ss top-1 mass, gk rank, bloom membership, kmv distinct
-//! count) is proved after each listed batch
-//! against the state at that point. Queries at ARBITRARY stream positions
-//! (the paper's operation-stream model: a query OCCUPIES a position, so `n`
-//! points carry `n − ⌊n/Q⌋` update records) are supported by building the
-//! batch list with [`build_query_schedule_batches`]:
-//! a query landing mid-batch seals the batch early and pads its tail with the
-//! family's provable no-op records ([`PAD_KEY`]), so `Com(S_u)` becomes a real
-//! batch-boundary commitment at the exact query position. The query circuit
-//! re-hashes the state and exposes `(Com(S_{t'}), q, answer)`. The auditor
-//! ([`QueryAudit`]) pins every query proof to the decode circuit's VK derived
-//! from public parameters, then binds its `Com(S_{t'})` to the certified
-//! history (Property 3) with the interval proofs live at `t'`: all `t'` leaves
-//! (per_batch), the current fold `Π_[1,t']` (chain), or the `popcount(t')`
-//! Bentley–Saxe peaks (forest; under the procs engine with `M` machines, the
-//! earlier slices' roots plus the query slice's peaks). Each is pinned to the
-//! VK of its bracketing and STARK-verified, their statements must tile
-//! `[1, t']` against the batch log, and the last one's final commitment must
-//! equal the query's — interior boundaries are hidden by the final root, so
-//! mid-stream queries verify against the composition state at query time, not
-//! the end-of-stream root. Query costs are reported separately (`query_*`
-//! fields): `query_ctx_verifies` counts the certificate's proofs and
-//! `query_bind_ms` the measured binding cost.
-//!
-//! ## Cores and machines
-//!
-//! Every mode honours a **cores** budget: the whole measurement runs inside a
-//! `cores`-thread rayon pool, so each leaf/merge proof uses exactly that many
-//! cores (the per-machine budget). The `per_batch` and `forest` modes
-//! additionally honour a **machines** count `M`: leaves are independent, so `M`
-//! machines prove them in parallel. Recursion proofs are `!Send`
-//! (`Rc<CircuitProverData>`) and cannot be combined across threads, so we do NOT
-//! fake a parallel fold; instead the parallel leaf-gen wall-clock is the
-//! **work-partition makespan** — the `t` leaves are split into `M` contiguous
-//! segments and `leafgen = max` over segments of the segment's real per-leaf
-//! prove times (measured at the machine's core budget). The recursive fold then
-//! runs sequentially on one machine (the `O(log t)` depth tail the paper's
-//! `O(t/M + log t)` predicts), yielding one real `O(1)` root whose size and
-//! verify time are reported. `chain` is inherently sequential (each fold needs
-//! its predecessor), so it ignores `machines`.
+//! In-process (`EXP_COMPOSE_EXEC=sim`) composition benchmark: per-batch, chain and forest modes.
+//! With `M` machines, per-batch and forest leafgen = max over `M` contiguous leaf segments of
+//! their summed prove times; chain leafgen is the plain sum.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -1753,9 +1655,9 @@ fn prove_leaves(
 }
 
 /// `M`-machine work-partition makespan of `per_leaf` prove times: split the
-/// leaves into `M` contiguous segments and take the max segment sum. Models `M`
-/// machines each proving a disjoint contiguous range at the machine's core
-/// budget. `machines <= 1` ⇒ the sequential sum.
+/// leaves into `M` contiguous segments and take the max segment sum. The
+/// per-leaf times are measured one after another in this process, each leaf
+/// on the `cores`-thread pool. `machines <= 1` ⇒ the sequential sum.
 fn makespan(per_leaf: &[f64], machines: usize) -> f64 {
     let t = per_leaf.len();
     if machines <= 1 || t == 0 {

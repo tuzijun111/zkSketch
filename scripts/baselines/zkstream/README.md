@@ -60,9 +60,9 @@ the same 32 hardware threads.
 
 Both sides pay a fixed cost per batch: the operator pays two commitment chains
 and a digest per chunk, and a zkSketch leaf pays a per-batch table term. `fit.py`
-therefore fits intercept and slope separately, labels every extrapolation
-MODELED, and checks zkSketch's fit against its measured 2^14 leaf before quoting
-anything.
+therefore fits intercept and slope separately, tags every number it reads off a
+fit `(MODELED)` and every run `(MEASURED)` in its output, and checks zkSketch's
+fit against its measured 2^14 leaf before quoting anything.
 
 At d=3, w=1024 the Groth16 intercept is the larger of the two (about 1.1 s
 against 0.1 s), so zkSketch is cheaper per batch at every size measured and
@@ -324,7 +324,7 @@ Its batch-merge semantics compact differently, so these rows are not matched.
   - ZoKrates compiles in 1298 s, sets up in 10.7 s and writes a 517 MB proving key;
   - zkSketch's whole process, including two circuit builds and two proves, takes 3.5 s.
 
-### Fits (MEASURED points, fitted; MODELED beyond them)
+### Fits (least squares through the measured points; values beyond them come from the fits)
 
 ZoKrates side, from the family fit scripts (`fit`):
 
@@ -337,7 +337,7 @@ ZoKrates side, from the family fit scripts (`fit`):
   residual 0 over 18 compiles.
   - Prove = 9.26 us x constraints, a rate of 62K-134K constraints/s.
   - At s = 2^14 that is 511,307 constraints per record: about 3.8-4.9 s of proving
-    per record (MODELED).
+    per record at the measured and fitted prove rates (not proved).
 - **GK.** Constraints are fitted within 11 constraints over 40 compiles.
   - Per record: 557-3,439 constraints at s' = 16..64.
   - At NB = 21 (the reviewed figures): 7,809 at s' = 512, 15,913 at s' = 1024 and
@@ -352,14 +352,14 @@ fixed state:
 | Family, state | m measured | a | b (per record) | ZoKrates per record at the same state |
 |---|---|---|---|---|
 | HLL, s = 2^14 | 4 .. 16,384 (7 sizes) | 0.50 s | 0.83 ms | 26.3 ms (fit), 32x |
-| SpaceSaving, s = 2^14 | 2, 16,384 | 7.21 s | 0.44 ms | about 3.8-4.9 s (MODELED), about 10^4 x |
-| GK, s' = 2^11 | 32 (1/eps = 64), 16,384 (1/eps = 51) | 7.9 s | 3.3 ms | about 1.9 s (MODELED: 48 s per 25-record chunk), about 580x |
+| SpaceSaving, s = 2^14 | 2, 16,384 | 7.21 s | 0.44 ms | about 3.8-4.9 s (511,307 constraints at the measured and fitted prove rates), about 10^4 x |
+| GK, s' = 2^11 | 32 (1/eps = 64), 16,384 (1/eps = 51) | 7.9 s | 3.3 ms | about 1.9 s (48 s per 25-record chunk: the s' = 2048 probe's measured 50 s scaled to 1.28 M constraints), about 580x |
 
 At small m the zkSketch cost is flat. It barely changes from m = 4 to m = 256 at
 HLL s = 2^14, so small-shape slopes on this side mostly measure padding steps. The
 per-record figures above use the deployed m = 2^14 point.
 
-### Deployed-size costs and feasibility (MODELED unless marked)
+### Deployed-size costs and feasibility (computed from the fits unless marked MEASURED)
 
 The deployed shapes are:
 
@@ -375,13 +375,13 @@ one run each, load1 15-18 from the harness's own preceding runs, no other prover
 | | HLL | SpaceSaving | GK |
 |---|---|---|---|
 | ZoKrates circuit for one m = 2^14 batch | 35,983,852 constraints | 8.38e9 constraints (31x over the 2^28 radix-2 FFT domain) | 651 M constraints |
-| ZoKrates compile at the deployed state | exceeds the 45 min / 150 GB budget. **MEASURED**: k = 1024 refused at 2701 s, and a larger chunk only adds code. Modeled 258 h / 393 GB | exceeds the budget. **MEASURED**: even k = 1 refused twice at 45 min, still running at 55.6 GB | 487x the largest compile that finished (1.34 M, 24 min, 45.8 GB). Not attempted; the constraint model predicts the held-out s' = 2048 compile to within 0.005% |
-| ZoKrates, largest feasible chunking | k <= 785 (modeled compile wall). **Derived from measured per-chunk cost**: k = 512, 2,048 proofs x 14.45 s = **8.2 h** (floor 7.65 h) | none compiles at s = 2^14. If it did: prover RAM caps k at 289, giving 3,629 proofs and **46-60 days** | a chunk must contain a COMPRESS pass (k >= 25, 1.28 M constraints, inside the envelope): 41,943 proofs x about 48 s = **about 561 h** |
+| ZoKrates compile at the deployed state | exceeds the 45 min / 150 GB budget. **MEASURED**: k = 1024 refused at 2701 s, and a larger chunk only adds code. The compile fits give 258 h / 393 GB | exceeds the budget. **MEASURED**: even k = 1 refused twice at 45 min, still running at 55.6 GB | 487x the largest compile that finished (1.34 M, 24 min, 45.8 GB). Not attempted; the constraint-count fit matches the held-out s' = 2048 compile to within 0.005% |
+| ZoKrates, largest feasible chunking | k <= 785 (from the compile-time fit). **From the measured per-chunk cost**: k = 512, 2,048 proofs x 14.45 s = **8.2 h** (floor 7.65 h) | none compiles at s = 2^14. If it did: prover RAM caps k at 289, giving 3,629 proofs and **46-60 days** | a chunk must contain a COMPRESS pass (k >= 25, 1.28 M constraints, inside the envelope): 41,943 proofs x about 48 s = **about 561 h** |
 | zkSketch leaf, m = 2^14 (**MEASURED**) | 14.1 s w+p, 21 ms verify, 693 KiB, 17.3 GB RSS | 14.5 s, 21 ms, 689 KiB, 17.9 GB | 62.2 s, 20 ms, 807 KiB, 82.3 GB |
-| zkSketch, 64 leaves for 2^20 records (derived: 64 x measured leaf, no fold) | **15.1 min** | **15.4 min** | **66 min** |
+| zkSketch, 64 leaves for 2^20 records (64 x the measured leaf, no fold) | **15.1 min** | **15.4 min** | **66 min** |
 | ZoKrates / zkSketch, whole stream | about 33x (30x at the ZoKrates floor) | about 4,300-5,600x | about 510x |
-| Verifier, whole stream | ZoKrates: 2,048 proofs, 2 MB JSON, about 14 s CLI. zkSketch: 64 leaves, 45 MB, about 1.4 s | ZoKrates: 3,629 proofs (modeled). zkSketch: 64 leaves, 45 MB, about 1.4 s | ZoKrates: 41,943 proofs, 42 MB JSON. zkSketch: 64 leaves, 53 MB, about 1.3 s |
-| Feasible in ZoKrates at the deployed batch? | **no**, compile over budget; only chunked (k <= 785) | **no**: not even k = 1 compiled within the budget (two attempts), and the modeled prover time is months | **no**, 487x the compile wall |
+| Verifier, whole stream | ZoKrates: 2,048 proofs, 2 MB JSON, about 14 s CLI. zkSketch: 64 leaves, 45 MB, about 1.4 s | ZoKrates: 3,629 proofs (computed, not run). zkSketch: 64 leaves, 45 MB, about 1.4 s | ZoKrates: 41,943 proofs, 42 MB JSON. zkSketch: 64 leaves, 53 MB, about 1.3 s |
+| Feasible in ZoKrates at the deployed batch? | **no**, compile over budget; only chunked (k <= 785) | **no**: not even k = 1 compiled within the budget (two attempts), and the computed prover time is months | **no**, 487x the compile wall |
 
 Notes on the table:
 
@@ -431,7 +431,9 @@ Notes on the table:
   - ZoKrates: the Groth16 prove rate rises and then falls with circuit size, and
     compile time is superlinear, a property of ZoKrates itself.
   - zkSketch: cost moves in power-of-two steps.
-  - Every deployed ZoKrates figure extrapolates from at most 1.34 M constraints.
+  - Every deployed ZoKrates figure is computed from circuits of at most 1.34 M
+    constraints: by the fits, or by scaling a measured chunk (HLL: the k = 512
+    chunk x 2,048; GK: the s' = 2048 probe scaled to the 25-record chunk).
 - **Binding favours the baseline.** Records are bound by a batch digest, not by
   zkStream's per-message EdDSA signatures, which would cost more per record.
 - **Anchoring the chain.** The verifier must check that chunk 0's `com_in` equals the

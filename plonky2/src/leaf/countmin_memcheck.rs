@@ -1,29 +1,5 @@
-//! In-circuit **offline-memory-checking Count-Min leaf (`memcheck`)** (plonky2 /
-//! SNARK). Port of `../src/sketch/countmin_memcheck.rs`.
-//!
-//! Rebinds the sparse patch **without a Merkle path per touched cell and without
-//! the dense `d·w` array**. It shares the front half with [`super::countmin_final`]
-//! / [`super::countmin_omc`] — per-record PRF hash → counter-sort → group-by
-//! running sum — and differs only in Step 5: it commits the state as the **sparse
-//! multiset of touched `(address, total)` cells** (a Poseidon hash over the
-//! `n_ctr`-padded segment-end entries). Untouched cells "cancel" by *not being
-//! named*. Cost is `Θ(batch·d · log(d·w))` — independent of `w` in the dominant
-//! term — so it proves a wide `7×16384` update where `one_hot` blows the selector
-//! budget.
-//!
-//! ## Empty-init caveat (faithful to the original)
-//! Cancelling untouched cells without opening them is sound only because the
-//! initial state is **empty**: every touched cell's old value is `0`, so the new
-//! value *is* the running-sum total. Chaining onto a non-trivial prior is what
-//! [`super::countmin_omc`] (dense multiset) or `merkle` handle instead — so this
-//! leaf returns a standalone proof, not a chain `Node`.
-//!
-//! ## plonky2 vs plonky3
-//! plonky3 routes the counter-sort through a `PermuteAir` with an explicit
-//! `sigma`; plonky2's grand-product ([`assert_perm_cols`]) is sigma-free. The
-//! sparse-patch entry is `[active, active·addr, active·total]` per row (the
-//! BabyBear 4-cell `recompose` packing collapses to 3 plain field elements over
-//! Goldilocks); native and in-circuit hash the identical flat stream.
+//! Count-Min `memcheck` leaf: commits the touched (addr, total) cells as a sparse multiset.
+//! Only sound from an empty initial state, so it returns a standalone proof, not a chain Node.
 
 use std::sync::Arc;
 

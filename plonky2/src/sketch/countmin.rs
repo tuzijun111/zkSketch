@@ -1,8 +1,4 @@
-//! Plaintext Count-Min sketch (paper §5.1/§5.4, Pattern A linear).
-//!
-//! Port of `../src/sketch/countmin.rs`. Over Goldilocks each counter is
-//! a single field element, so the commitment is just Poseidon over the row-major
-//! flattened counters — no BabyBear cell-packing/alignment dance.
+//! Plaintext Count-Min sketch; the commitment is Poseidon over the row-major counters.
 
 use plonky2::field::types::Field;
 use plonky2::hash::hash_types::HashOut;

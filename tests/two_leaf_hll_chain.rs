@@ -1,7 +1,4 @@
-//! Integration test for the §4.3 recursive chain over HyperLogLog epochs (Phase 4c).
-//!
-//! Mirrors `tests/two_leaf_countmin_chain.rs`. Exercises `HllChainState::extend`
-//! to grow the chain past two leaves and confirms `verify_chain_hll` accepts.
+//! HyperLogLog recursive chain extended past two leaves (HllChainState::extend).
 
 use zksketch::recursion::recursive::hll_chain::HllChainState;
 use zksketch::recursion::recursive::hll_leaf::{B, prove_hll_leaf};

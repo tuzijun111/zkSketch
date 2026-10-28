@@ -1,57 +1,6 @@
 #!/usr/bin/env python3
-"""Fetch + process the real datasets used by S³ (paper YuS3StreamingMPC2026)
-into a canonical 32-bit-key stream the zkSketch circuits consume.
-
-**This reproduces S³'s *exact* key derivation** so our keys match theirs for
-direct comparability. The recipe is copied from S³'s own data generator,
-`mpc4j-work-db-sketch/.../utils/{TestDataGenerator,DataGenerator}.java`
-(Apache-2.0; https://github.com/alibaba-edu/mpc4j), which uses `bitLen = 32`
-(so the key domain is `[2^32]`) and `mask = 2^32 - 1`:
-
-  • AOL  — the AOL search-query log (2006). For each line, S³ extracts the
-           first URL via the regex `https?://\\S+` (this is the *ClickURL*
-           column — the website the user actually clicked), normalises it
-           (lowercase; strip scheme; strip leading `www.`; strip trailing
-           `/`), and sets key = `CRC32(normalised) & mask`. Java's
-           `java.util.zip.CRC32` is the IEEE-802.3 CRC-32, identical to
-           Python's `zlib.crc32`, so our keys match S³'s bit-for-bit.
-           Source: archive.org `aolsearchdata2006` (the user-ct collection,
-           NOT the access-log mislabelled in `AOL-user-ct-collection`).
-
-  • Netflix-Prize — for each line S³ takes the first integer `\\b(\\d+)\\b`
-           and sets key = `value & mask`. On the rating files the first
-           integer of a rating line is the *CustomerID* (= the user ID the
-           paper keys on); we extract exactly that from rating lines.
-           Source: archive.org `nf_prize_dataset.tar`.
-
-Note: the synthetic streams (Gaussian μ=2^31 σ=2^13, Uniform, Zipf) are
-generated in `src/dataset.rs` to match S³'s `genGaussianData`/`genUniformData`
-— there is nothing to *download* for them. They are materialized (frozen,
-deterministically) by the Rust generator, NOT by this Python script, to keep a
-single source of truth and avoid re-implementation drift:
-
-    cargo run --release --example gen_synthetic   # → data/{gaussian,uniform,zipf}.keys + manifest
-
-All `data/*.keys` ship with the repo (git-tracked): the synthetic files are
-deterministic/non-copyright, and the real AOL/Netflix files this script produces
-are the derived 32-bit key streams only (not the raw corpora). The
-`data/stream/synthetic_data.dat` committed in mpc4j belongs to a *different*
-(DP-streaming) module, not S³'s sketches, so we do not use it.
-
-Output: `data/<name>.keys`, a flat little-endian `u32` stream (4 bytes/key);
-the Rust loader (`src/dataset.rs`) reads `file_len / 4` keys. Downloads are
-**streamed** and **capped** (env-overridable) so only a small prefix is
-pulled for testing rather than the full multi-hundred-MB corpora.
-
-Usage:
-    python3 scripts/fetch_datasets.py                 # both, default caps
-    python3 scripts/fetch_datasets.py aol             # just AOL
-    python3 scripts/fetch_datasets.py netflix
-    AOL_MAX_KEYS=200000 NETFLIX_MAX_KEYS=200000 python3 scripts/fetch_datasets.py
-    python3 scripts/fetch_datasets.py --force         # re-download
-
-Idempotent: skips a dataset whose `data/<name>.keys` already exists (force
-with `--force`).
+"""Download the AOL and Netflix prefixes and write data/{aol,netflix}.keys (little-endian u32, S³'s key recipe).
+Usage: python3 scripts/fetch_datasets.py [aol] [netflix] [--force]   (AOL_MAX_KEYS, NETFLIX_MAX_KEYS; default 2^20)
 """
 import os
 import re

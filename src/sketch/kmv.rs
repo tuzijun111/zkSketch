@@ -1,172 +1,5 @@
-//! **KMV / bottom-`k` distinct-counting leaf (`kmv`)** — a Pattern-B
-//! (verified sorted reduction) instance: the k-minimum-values sketch of
-//! Bar-Yossef et al. (KMV) / Cohen–Kaplan (bottom-`k`).
-//!
-//! ## Sketch semantics
-//!
-//! * **Hash.** `h(x) = Poseidon2(k0, k1, k2, k3)[0] mod 2^HASH_BITS` over
-//!   the key's four exact 16-bit limbs ([`crate::sketch::bind::key_limbs`],
-//!   the `Semantic` CM/HLL `omc` key encoding), `HASH_BITS = 27`.
-//! * **State.** The `k` smallest DISTINCT hash values over every key seen,
-//!   stored in ascending order in `k` rows `(h, act)`. Fewer than `k`
-//!   distinct values ⇒ the tail rows are inactive sentinels `(0, 0)` (an
-//!   inactive row is always canonical: `act = 0 ⇒ h = 0`).
-//! * **Batch rule.** `S_t = bottom_k(S_{t-1} ∪ {h(x) : x a real record of
-//!   B_t})`, where `bottom_k(X)` is the set of the `k` smallest elements of
-//!   the set `X` (all of `X` when `|X| < k`). Dummy records (`act = 0`)
-//!   contribute nothing.
-//! * **Estimate.** With `D` active values: `D` (exact) when `D < k`, else
-//!   `floor((k − 1)·2^HASH_BITS / v_k)`, `v_k` = the `k`-th smallest value.
-//!
-//! **Batch rule = per-record insertion.** Per-record insertion is
-//! `S ← bottom_k(S ∪ {h(x)})`. For sets `X, Y`: every element of
-//! `bottom_k(X ∪ Y)` that lies in `X` has at most as many smaller elements in
-//! `X` as in `X ∪ Y`, so it lies in `bottom_k(X)`; hence `bottom_k(X ∪ Y) ⊆
-//! bottom_k(X) ∪ Y ⊆ X ∪ Y`, and `bottom_k` of any set squeezed between
-//! `bottom_k(Z)` and `Z` is `bottom_k(Z)`. So `bottom_k(bottom_k(X) ∪ Y) =
-//! bottom_k(X ∪ Y)`, and by induction over the records of a batch, inserting
-//! them one at a time (in any order, with any repetitions) gives the batch
-//! rule ([`kmv_insert_each`] vs [`kmv_advance`], `tests::batch_rule_equals_per_record`).
-//!
-//! ## Hash width (`HASH_BITS = 27`)
-//!
-//! * **Sound comparisons.** Every hash value is `< 2^27` and every order check
-//!   range-checks a difference into `[0, 2^27)`. A "negative" difference
-//!   `−δ` (`0 < δ < 2^27`) is the field element `p − δ ≥ p − 2^27 = 14·2^27 + 1
-//!   ≫ 2^27`, so it cannot pass (BabyBear `p = 15·2^27 + 1`). This works for
-//!   any width with `2^(b+1) < p`, i.e. `b ≤ 29`.
-//! * **Canonical, near-uniform extraction.** `2^27 | p − 1`, so the digest
-//!   limb splits uniquely as `limb = h + 2^27·hi` with `h < 2^27`, `hi ≤ 15`,
-//!   and `hi = 15 ⇒ h = 0` (`p − 1 = 15·2^27`): one canonical split, no
-//!   `x + p` alias (`tests::attack_noncanonical_split_rejected`). `27` is the
-//!   widest such width (`2^28 ∤ p − 1`). Each value
-//!   `< 2^27` has 15 preimages in `[0, p)` (value 0 has 16), so `h` is
-//!   uniform up to an excess mass `1/p` on the single value 0.
-//! * **Collisions among the `k` smallest at `n = 2^20` distinct keys.**
-//!   KMV estimates the number of distinct HASH values; two keys whose hashes
-//!   collide count once. The expected number of colliding pairs among the
-//!   keys whose hashes fall in the bottom-`k` region (`≈ k·2^b/n` values,
-//!   holding `≈ k` keys) is `≈ k²/(2·k·2^b/n) = k·n/2^(b+1)`, a relative
-//!   undercount of `n/2^(b+1)`. At `b = 27`, `n = 2^20`: `2^-8 ≈ 0.39%`
-//!   (4 pairs at `k = 1024`, 16 at `k = 4096`), 4–8× below KMV's own
-//!   standard error `1/√(k−2)` (3.1% at `k = 1024`, 1.6% at `k = 4096`). The
-//!   aligned alternative `b = 24` would give `3.1%` (32 / 128 pairs), as large
-//!   as the sampling error. Ties are well defined either way: equal hash values
-//!   are one distinct value (`tests::circuit_matches_native_*` uses a real
-//!   27-bit collision between two distinct keys).
-//! * **Range-check exactness.** Order checks only need SOME bound below
-//!   `p − 2^27`, so they use one `add_range_bits(·, 27)` (exact on the pinned
-//!   fork, which looks the top byte up unshifted and shifted —
-//!   `bind::probe::fork_binds_range_top_byte`; `< 2^27 + 2^24` on the older
-//!   rev, still sound). The hash split, which binds `h` to the key, uses the
-//!   two-sided [`range_hash_exact`] (`x` and `2^27 − 1 − x` both in 27 bits),
-//!   exact on either rev.
-//!
-//! ## The certificate (fixed shape, `n = k + m` rows)
-//!
-//! ```text
-//!   U = S_{t-1} rows ⊎ {(act·h(x), act) : records}       (old state ⊎ batch)
-//!   V = U sorted (actives ascending by h, then (0,0))    (prover-supplied)
-//!   op 1: U → V  (Permute, tag SORT)
-//!   V: act non-increasing; act_{r+1}·(h_{r+1} − h_r) ∈ [0, 2^27)
-//!   f_r  = [h_r ≠ h_{r−1}] (f_0 = 1)  — exact is-equal gadget (tag + inverse)
-//!   df_r = act_r·f_r,  rank_r = Σ_{j≤r} df_j,  D = rank_{n−1}
-//!   w    = boolean, non-increasing,  keep_r = df_r·w_r,  K = Σ keep_r
-//!   K = min(k, D):  k − K ≥ 0,  D − K ≥ 0,  (k − K)(D − K) = 0
-//!   op 2: {keep_r·(h_r, rank_r)} ⊎ … → {act'_j·(S_t[j], j + 1)}_{j<k} ⊎ 0^m
-//!         (Permute, tag COMPACT)
-//! ```
-//!
-//! `V` is the unique sorted arrangement of `U` (equal elements are equal
-//! values), `f` is forced by the is-equal gadget, the kept rows are the first
-//! `K = min(k, D)` distinct active values (a monotone `w` cuts a prefix of the
-//! `df` rows, the count pins where), and op 2 places the rank-`j` kept value in
-//! slot `j − 1`: the active slots are exactly `0..K`, in ascending order, and
-//! every other slot is the canonical sentinel. The union is never trusted to
-//! be grouped by the prover: grouping is FORCED by sortedness, which is what
-//! closes the fragmentation break the SpaceSaving circuit once had (a
-//! scattered key re-enters as a "new" distinct value; `tests::attack_unsorted_union_rejected`).
-//!
-//! **Shared PermuteBus.** The fork's Permute ops of one circuit share one bus
-//! with no op id, so what is proven is `op1_in ⊎ op2_in = op1_out ⊎ op2_out`.
-//! Every op-1 element is `(h, act, SORT_OP_TAG, 1)`, every op-2 element is
-//! `(h, rank, COMPACT_OP_TAG, 1)` or the zero dummy, all coordinates
-//! base-pinned, so counting each tag class separately restores the two
-//! per-op equalities. Without the tags a rank-1 compaction element
-//! `(v, 1, ·, 1)` equals the sort element of an active `v`, and a prover can
-//! trade the two to drop the smallest value
-//! (`tests::attack_cross_permute_exchange_rejected` mounts it).
-//!
-//! The old state need not be well formed for this to hold: the union is
-//! re-sorted, so the transition is `bottom_k` over the SET of its active
-//! values, and every state the leaf commits is well formed (ascending,
-//! distinct, sentinel tail) by construction.
-//!
-//! **Dummies.** A record with `act = 0` must have all key limbs 0 (canonical,
-//! so `Com(B_t)` is a function of the real records), and it enters `U` as the
-//! sentinel `(0, 0)`: it can never be kept.
-//!
-//! ## Commitments and statement
-//!
-//! * `Com(S) = MyHash([TAG_KMV_STATE, k, 0, 0] ‖ p_0 … p_{k−1})`, `p_j = h_j +
-//!   2^27·act_j` (four per extension element). The family tag `"KMVS"`
-//!   separates it from every other family's state digest.
-//! * `Com(B) = MyHash([TAG_KMV_BATCH, m, 0, 0] ‖ rec_0 … rec_{m−1})`, `rec =
-//!   [k0, k1, k2, k3 + 2^16·act]` (the `bloom_omc` record encoding): the
-//!   batch commitment absorbs the key limbs and the activity flags in-circuit.
-//! * The statement layouts are those of every other leaf ([`Expose`]); the
-//!   Interval layout is [`statement::expose_leaf_interval`] over the
-//!   in-circuit batch digest with [`IndexPin::Range`].
-//!
-//! ## Hiding commitments (revision B2)
-//!
-//! [`build_kmv_leaf_commit`] takes a [`CommitMode`]. `Plain` is the leaf
-//! above op for op (no new op, same VK: [`build_kmv_leaf_expose`] delegates
-//! to it). Under `Hiding` the three commitments absorb the prefix `[kind,
-//! family, 0, 0, ρ_0..ρ_11]` of [`crate::commitment::hiding`] (tag
-//! `TAG_STATE` / `TAG_BATCH`, family [`CommitFamily::Kmv`] = 6) before the
-//! same header and rows / records, with the three salts (init, final, batch)
-//! the FIRST private inputs; natively [`commit_kmv_state_with`],
-//! [`commit_kmv_rows_with`] and [`kmv_batch_commit_with`]. The salts are
-//! witnesses (each gets an ALU creator, [`hiding::alloc_salt_targets`]),
-//! hashed with the leaf's own sponge under its binding
-//! ([`hiding::commit_hash`]), so binding holds for every `ρ`. A hiding leaf
-//! is proved with [`KmvLeafCircuit::prove_epoch_commit`] (or
-//! [`KmvLeafCircuit::prove_records_commit`]) and the prover's openings of
-//! leaf `t`; `prove_epoch_at` / `prove_records_at` refuse to run on it, and
-//! the one zero-salt path, [`KmvLeafCircuit::prove_records_public_zero`],
-//! accepts only the public no-op input of the VK-derivation leaf (the empty
-//! state and an all-dummy batch at `t = 1`). The decoder twin is
-//! [`crate::decode::kmv::prove_kmv_decode_commit`].
-//!
-//! ## Binding
-//!
-//! The state values, records and certificate tables are base-pinned private
-//! inputs recomposed through the ALU, so nothing here depends on the fork
-//! binding decomposition coefficients — except the routing digest's limb 0,
-//! read through [`bind::decompose`] exactly as the `hll_omc` leaf reads it
-//! (`Semantic`: the merged fork binds it; `Bound`: ALU re-binding plus base
-//! pins). There is no pre-fix (`Legacy`) KMV circuit: the family was written
-//! after the binding fixes, so [`kmv_binding`] builds `Binding::Legacy` (e.g.
-//! a `ZKSKETCH_BINDING=legacy` side-by-side run) as the `Semantic` circuit,
-//! with a one-time stderr note, instead of panicking. The leaf's
-//! [`KmvLeafCircuit::binding`] reports the binding actually built, and a
-//! "legacy" KMV number is the `Semantic` cost.
-//!
-//! ## Cost
-//!
-//! Two Permute ops over `n = k + m` elements, per row a constant number of
-//! range checks (two 27-bit), ALU rows and two element encodings, the two
-//! state sponges (`≈ k/8` permutations each), and per record one key-hash
-//! permutation plus half a batch-sponge permutation: **`Θ(k + m)`** rows.
-//!
-//! Measured (2026-10-08, `tests::kmv_measure`, shared 64-core box under load
-//! (load average ≈ 30), release profile, `Semantic`, Interval statement, one
-//! epoch from a full prior state): `k = m = 1024` → 206,848 trace rows, prove
-//! ≈ 0.8 s, proof ≈ 588 KB; `k = m = 4096` → 824,320 rows, ≈ 2.4–2.8 s,
-//! ≈ 654 KB; `k = m = 16384` → 3,294,208 rows, ≈ 7.3 s, ≈ 725 KB (verify
-//! ≈ 20 ms throughout). The ALU (`2^17 / 2^19 / 2^21` rows) and Range
-//! (`2^16 / 2^18 / 2^20`) tables dominate; the Permute table is `2n` rows.
+//! KMV (bottom-k) distinct-count leaf: sort the old state with the batch hashes and keep
+//! the k smallest distinct values.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -204,7 +37,7 @@ use crate::sketch::bind::{self, Binding};
 
 const LOG_FINAL_POLY_LEN: usize = 6;
 
-/// Hash width `b`: values live in `[0, 2^27)` (see the module doc).
+/// Hash width `b`: values live in `[0, 2^27)`; 27 is the widest `b` with `2^b | p − 1`.
 pub const HASH_BITS: usize = 27;
 /// `2^HASH_BITS`.
 const HASH_RANGE: u64 = 1 << HASH_BITS;
@@ -352,7 +185,7 @@ impl KmvState {
         }
     }
 
-    /// The distinct-count estimate (module doc).
+    /// The distinct-count estimate ([`kmv_estimate`]).
     pub fn estimate(&self) -> u64 {
         kmv_estimate(self)
     }
@@ -368,7 +201,7 @@ pub fn kmv_advance(state: &KmvState, keys: &[u64]) -> KmvState {
     KmvState { k: state.k, vals: all }
 }
 
-/// Reference per-record insertion (equals [`kmv_advance`]; module doc).
+/// Reference per-record insertion (equals [`kmv_advance`], `tests::batch_rule_equals_per_record`).
 pub fn kmv_insert_each(state: &KmvState, keys: &[u64]) -> KmvState {
     let mut s = state.clone();
     for &x in keys {
@@ -885,7 +718,7 @@ pub fn build_kmv_leaf(params: KmvParams, expose_boundary: bool) -> KmvLeafCircui
 
 /// The binding a KMV circuit (leaf or decoder) is built with: `binding`
 /// itself, except `Legacy`, which selects `Semantic` (there is no pre-fix KMV
-/// circuit; module doc), printing a note to stderr once per process.
+/// circuit), printing a note to stderr once per process.
 pub fn kmv_binding(binding: Binding) -> Binding {
     match binding {
         Binding::Legacy => {
@@ -912,12 +745,11 @@ pub fn build_kmv_leaf_expose(params: KmvParams, expose: Expose, binding: Binding
     build_kmv_leaf_commit(params, expose, binding, CommitMode::Plain)
 }
 
-/// [`build_kmv_leaf_expose`] under the commitment mode `mode` (revision B2,
-/// module doc "Hiding commitments"). `Plain` is the pre-B2 circuit op for op
-/// (same VK). `Hiding` allocates the three salts (init, final, batch) as the
-/// first private inputs and absorbs them, behind the kind/family tag, into
-/// `Com(S_{t-1})`, `Com(S_t)` and `Com(B_t)`; prove it with
-/// [`KmvLeafCircuit::prove_epoch_commit`].
+/// [`build_kmv_leaf_expose`] under the commitment mode `mode` (revision B2).
+/// `Plain` is the pre-B2 circuit op for op (same VK). `Hiding` allocates the
+/// three salts (init, final, batch) as the first private inputs and absorbs
+/// them, behind the kind/family tag, into `Com(S_{t-1})`, `Com(S_t)` and
+/// `Com(B_t)`; prove it with [`KmvLeafCircuit::prove_epoch_commit`].
 pub fn build_kmv_leaf_commit(
     params: KmvParams,
     expose: Expose,

@@ -1,99 +1,5 @@
-//! **Streaming-forest total-time runner** — fixed total stream size `N`, over a
-//! real (or synthetic) dataset, swept over batch size `m` and core count `k`,
-//! for the `omc` and `merkle` Count-Min leaf provers at an arbitrary `(d, w)`
-//! sketch shape.
-//!
-//! Unlike E6 (`exp_e6`, which fixes the epoch count `t`, the shape `(4, 8)`, and
-//! synthetic keys), this runner fixes the **total number of stream records** `N`
-//! (e.g. 2^16) and derives `t = ⌈N/m⌉`, draws the keys from a chosen dataset,
-//! and measures — in a **single run** (no warm-up, no trials, no target rate) —
-//! the **total wall-clock to prove the whole stream**.
-//!
-//! **Distributed parallelism model.** `k` (= `EXP_STREAM_CORES`) is the number
-//! of leaf proofs run **concurrently** (think `k` machines), and each one is
-//! pinned to its own `⌊total_cores / k⌋`-thread pool — so the fixed core budget
-//! is split `k` ways. `k=1` proves one leaf at a time on all cores; `k=total`
-//! proves `total` leaves at once, 1 core each. Wall-clock ≈
-//! `⌈t/k⌉ × per-leaf(⌊total/k⌋ cores)`. (Use `run_experiments.sh e1` with
-//! `EXP_CORES=c` to measure a single leaf at `c` cores and predict this.)
-//!
-//! It reuses the run_experiments.sh `e1` vocabulary (`EXP_DATASET`, `EXP_D`,
-//! `EXP_W`, `EXP_CM_VARIANT`) for the sketch shape + dataset, plus its own
-//! `EXP_STREAM_*` knobs for the stream geometry.
-//!
-//! Run:    cargo run --release --example exp_stream
-//! Config: EXP_STREAM_N=2^16              total stream records (default 65536; `2^k` ok)
-//!         EXP_STREAM_BATCHES=64,256,1024 batch sizes m (default; `2^k` tokens ok)
-//!         EXP_STREAM_CORES=1,2,4,8,16,32,64  k = #concurrent leaf proofs (each gets ⌊total/k⌋ cores; clamped to avail)
-//!         EXP_DATASET=uniform            uniform|gaussian|zipf|aol|netflix|comma-list (default uniform)
-//!         EXP_D=4                        Count-Min depth d (1..=8)
-//!         EXP_W=8                        Count-Min width w (power of two ≥ 2)
-//!         EXP_CM_VARIANT=omc,merkle   leaf prover(s): one_hot|omc|merkle
-//!                                        (EXP_STREAM_CM_VARIANT also accepted)
-//!         EXP_STREAM_MERGE=digest        digest | per_batch | chain | recursive | recursive_bound (default digest)
-//!         EXP_STREAM_PROOF_DIR           folder the `per_batch` mode stores proofs under (default results/per_batch_proofs)
-//!
-//! Composition model: the three modes of the paper's §Streaming Proof
-//! Composition, plus the cheap `digest` proxy.
-//! `per_batch` = the **per-batch proof chain**: one independent proof per batch,
-//! NO fold; every proof is serialized into `EXP_STREAM_PROOF_DIR` and the
-//! verifier holds all `t` of them — `proof_bytes` is their sum (`Θ(t)`) and
-//! `verify_ms` is the `t` leaf verifications + the `t-1` boundary equalities +
-//! anchor (`Θ(t)`). `chain` = the **recursive linear chain** and `recursive` =
-//! the **streaming forest** (both fold the same leaves into one `O(1)` root, so
-//! `proof_bytes`/`verify_ms` are the single root's).
-//!
-//! Merge model: `digest` (default) folds leaf boundary commitments with cheap
-//! Poseidon2 hashing (the §4.2 composition — each leaf is verified once at
-//! creation; merge_ms is ~µs). `recursive` uses the §4.3(c) fold
-//! (`prove_countmin_forest_v9`) where **every merge recursively verifies its two
-//! children in-circuit** — merge_ms is then the real (large) verification cost.
-//! `recursive_bound` additionally binds `left.final == right.initial`
-//! **in-circuit** via the Expose NPO (`expose_forest::prove_forest_over`),
-//! closing the NPO-public-value gap so the root surfaces a bound
-//! `(Com(S_0), Com(S_E))` — supports all three variants (one_hot/omc/merkle).
-//! `chain` folds the same leaves with the **linear §4.3 chain**
-//! (`prove_countmin_chain_v9`, `Π^(t)=merge(Π^(t-1),π_t)`) instead of the
-//! Bentley–Saxe tree — the comparison baseline (O(t)-depth left-leaning fold vs
-//! the tree's O(log t)); same in-circuit child verification per merge.
-//! Recursive/chain modes prove leaves SEQUENTIALLY (proofs are !Send) and do one
-//! pass per (dataset, variant, m); the distributed `k`/EXP_STREAM_CORES sweep is
-//! ignored. Use small N/few leaves — each merge is a full recursive proof.
-//!
-//! The omc leaf requires `d·w % 4 == 0` (Challenge packing); the
-//! `merkle` leaf requires `w` a power of two. Real datasets must be fetched
-//! first (`python3 scripts/fetch_datasets.py`) — a missing one is skipped.
-//!
-//! Output: results/stream_forest.csv with columns
-//!   dataset,variant,d,w,n,m,t,k,cores_per_leaf,merge_mode,total_time_ms,leafgen_ms,merge_ms,verify_ms,proof_bytes,records_per_sec,speedup,peak_rss_mb,status
-//! `total_time_ms = leafgen_ms + merge_ms` (leaf proving vs the forest fold);
-//! `verify_ms` + `proof_bytes` are the verifier-facing cost: `Θ(t)` for
-//! `per_batch` (sum of the t leaf proofs / verifications), `O(1)` for the
-//! composed roots (`chain`/`recursive`/`recursive_bound`).
-//! `merge_mode` is `digest` (merge ~µs), `per_batch` (no fold),
-//! `recursive`/`recursive_bound`/`chain` (merge = real in-circuit child
-//! verification). `k` = concurrent leaf proofs,
-//! `cores_per_leaf` = ⌊total/k⌋ (both = 1/all in the sequential modes); `n` is the actual
-//! records proven (`t·m`, ≥ requested N when m∤N); `speedup` is vs the smallest k
-//! per (dataset, variant, m); `status` is `ok` or `too_large` (capacity panic —
-//! the sweep continues).
-//!
-//! Runtime: total work ≈ N records of proving; at k cores ≈ (N·per-record)/k,
-//! so the smallest-k cells dominate. For N=2^16 a k=1 cell can take tens of
-//! minutes — set EXP_STREAM_CORES to a high-core subset for a quick run.
-//!
-//! Commitments (revision B2): this runner proves the pre-B2 PLAIN leaves only;
-//! hiding commitments are not wired into `e6_forest`. Every row of
-//! `stream_forest.csv` is therefore plain, and env.json records `commit=plain`.
-//! An explicit `ZKSKETCH_COMMIT=hiding` is refused (exit 2) rather than
-//! silently measured as plain; unset/empty/`plain` run as plain and say so.
-//! Compare these rows only with `exp_compose` rows whose `commit` column is
-//! `plain` (`ZKSKETCH_COMMIT=plain scripts/run_compose.sh`).
-//!
-//! Count ceiling: the leaf circuits range-check each cell count to a fixed bit
-//! width (c_merkle uses `COUNT_BITS=24`, max 2^24−1 per cell). With `value=1`
-//! per record a single cell can accumulate up to ~N increments worst-case, so
-//! keep `N < ~2^24` (16M). The default 2^16 is far under it.
+//! Count-Min whole-stream prove time over batch size m and k concurrent leaf proofs; writes results/stream_forest.csv.
+//! Usage: [EXP_STREAM_N=65536 EXP_STREAM_BATCHES=64,256,1024 EXP_STREAM_MERGE=digest] cargo run --release --example exp_stream
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -330,7 +236,7 @@ fn main() {
         cores.push(1);
     }
 
-    // Merge model: `digest` (default — the cheap §4.2 commitment fold) or
+    // Merge mode: `digest` (default — the cheap §4.2 commitment fold) or
     // `recursive` (the real §4.3(c) fold whose every merge verifies its two
     // children in-circuit). Recursive mode proves leaves sequentially and does
     // ONE pass per (dataset, variant, m) — the distributed `k` split and the
@@ -618,8 +524,8 @@ fn main() {
                 // Digest merge (default): the distributed k-sweep.
                 let mut base_time: Option<f64> = None; // smallest k (per dataset×variant×m)
                 for &k in &cores {
-                    // Distributed model: k workers share the fixed core budget, so
-                    // each concurrent leaf proof gets ⌊total/k⌋ cores.
+                    // k leaf proofs run concurrently on the fixed core budget,
+                    // each with ⌊total/k⌋ cores.
                     let cpl = (avail / k).max(1);
                     match measure_guarded(k, cpl, variant, d, w, &batches, cfg) {
                         Some(cell) => {

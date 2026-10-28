@@ -1,41 +1,4 @@
-//! In-circuit **offline-memory-checking HyperLogLog leaf (`omc`)** (plonky2 / SNARK).
-//! Port of `../src/sketch/hll_omc.rs` — the max-update analogue of
-//! [`super::countmin_omc`].
-//!
-//! HLL keeps `m = 2^b` registers; a record routes to `idx = digest[0] mod m` and
-//! contributes a rank `ρ = 1 + trailing_zeros(digest[1])`. The per-register update
-//! is a **max** (`S_t[idx] = max(S_{t-1}[idx], ρ)`), not the additive patch of
-//! Count-Min — the one semantic difference from `countmin_omc`, and the reason the
-//! rebind needs a **time coordinate**.
-//!
-//! ## The check (offline memory checking with a `ts` coordinate)
-//!
-//! Each multiset element is `(addr, val, ts, tag)`. The rebind is one grand-product
-//! multiset equality between a write set and a read set:
-//!
-//! ```text
-//!   WS = {(a, S_{t-1}[a], 0, 1)}  ⊎  active·{(idx, N_z, 1, 1)}   (init writes ⊎ update writes)
-//!   RS = {(a, S_t[a], ft_a, 1)}   ⊎  active·{(idx, O_z, 0, 1)}   (final reads ⊎ update reads)
-//!   WS == RS   (as multisets)
-//! ```
-//!
-//! The `ts` breaks the max-degenerate pairing (`N_z = O_z`): at a touched register
-//! the `ts=0` init write can only cancel the `ts=0` update read, forcing
-//! `O_z == S_{t-1}[a]` (the genuinely committed old value); the `ts=1` update write
-//! then forces `S_t[a] == N_z`. Untouched registers (`ft_a=0`) pin `S_{t-1}[u] =
-//! S_t[u]`. The `tag` column (1 on real rows) keeps a real `(0,0,0,·)` element
-//! disjoint from the `(0,0,0,0)` dummies inactive update rows produce. A companion
-//! **max gate** (`prove_max`) explains each touched value.
-//!
-//! ## plonky2 vs plonky3
-//! plonky3 routes the rebind through a `PermuteAir` with an explicit `sigma`;
-//! plonky2's [`assert_perm_cols`] grand-product is **sigma-free** (proves multiset
-//! equality of the column-sets directly), so both the register sort and the
-//! `WS==RS` check are a single `assert_perm_cols`.
-//!
-//! ## Cost `Θ(m + batch)` — dense commit/decompose of both ends + one grand-product
-//! over `m + batch` tagged rows + `Θ(batch)` sort/hash. Flat in the batch's
-//! register sparsity (unlike the `Θ(t_max·log m)` sparse-Merkle leaf).
+//! HyperLogLog `omc` leaf: offline memory checking with a timestamp column, needed because the update is a max.
 
 use std::sync::Arc;
 

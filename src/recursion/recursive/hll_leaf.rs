@@ -1,63 +1,5 @@
-//! CircuitBuilder-based HyperLogLog update leaf for the §4.2 recursive merge.
-//!
-//! Verifies one epoch of the HyperLogLog sketch (paper §5.3 Pattern A *max*,
-//! Appendix F), staged as the §5.1-style strawman: per-register max-update
-//! enforced via bit-decomposition + product-of-differences constraints, with
-//! the in-circuit Poseidon2 hash binding the per-epoch state commitments.
-//! Parameters `(b, batch)` are runtime-supplied so the workload sweep can
-//! scan a grid without recompilation.
-//!
-//! `m = 2^b` must be a multiple of the Challenge extension degree (4) so the
-//! off-circuit `commit_hll` and the in-circuit `add_hash_slice` produce
-//! identical 8-element base-field digests. `HllLeafParams::validate` enforces
-//! this and `b ≥ 2` guarantees it.
-//!
-//! ### Public inputs (Challenge field elements)
-//!
-//! 1. `initial_commit[0..2]` — `[Val; 8]` digest packed into 2 Challenge PIs.
-//! 2. `final_commit[0..2]`   — same shape for the post-update state.
-//! 3. For each record `k`: `(key_k, register_idx_k, lead_run_k)`, each as one
-//!    PI. The caller computes the register index / leading-run pair via
-//!    `sketch::hyperloglog::hash_register` and exposes them as PIs; the leaf
-//!    verifier (or downstream merge verifier) is responsible for cross-checking
-//!    them against a native recomputation if it doesn't trust the leaf prover.
-//!
-//! ### Private inputs
-//!
-//! - Packed initial registers (`m/4` Challenge entries) decomposed in-circuit
-//!   into `m` base-embedded register values.
-//! - Packed final registers (same shape).
-//! - Per record `k`: `selectors[k][0..m]` — `m` base-embedded indicators
-//!   forming a one-hot vector pointing at `register_idx_k`.
-//! - Per register `r`: `REGISTER_WIDTH` bits for `initial[r]` and `REGISTER_WIDTH`
-//!   bits for `final[r]` (range proofs).
-//! - Per `(r, candidate)` pair: `REGISTER_WIDTH` bits for the non-negative
-//!   difference `final[r] - candidate` (range proof for `final[r] ≥ candidate`).
-//!
-//! ### Constraints
-//!
-//! 1. `hash(initial_packed) == initial_commit` (in-circuit Poseidon2).
-//! 2. `hash(final_packed)   == final_commit`.
-//! 3. For each record `k`: every selector entry is boolean (`(1 - s) * s = 0`),
-//!    `sum(s[0..m]) == 1`, and `sum_r(s[r] * r) == register_idx_k`.
-//!    **Gotcha**: the equivalent form `s * s = s` looks identical mathematically
-//!    but trips the `WitnessChecks` lookup-bus check inside `BatchStarkProver`.
-//!    The ALU AIR treats `mul(x, x)` as a single reader on the bus, so the
-//!    multiplicity disagrees with the public AIR's count and verify fails with
-//!    `LookupError("GlobalCumulativeMismatch(None): WitnessChecks")`. Use the
-//!    `(1 - x) * x = 0` formulation everywhere a boolean check is needed.
-//! 4. Bit decomposition: every bit is boolean and the weighted sum equals
-//!    the corresponding register value (initial and final).
-//! 5. For each register `r`, build the candidate set
-//!    `{initial[r], initial[r] + s[k][r] * (lead[k] - initial[r]) : k ∈ batch}`.
-//!    Records not touching `r` collapse to `initial[r]` so the set is exactly
-//!    `{initial[r]} ∪ {lead[k] : s[k][r] = 1}`.
-//!    - **Product**: `Π(final[r] - candidate) = 0` — `final[r]` equals one
-//!      of the candidates.
-//!    - **Range**: for each candidate `c`, `final[r] - c` is a non-negative
-//!      `REGISTER_WIDTH`-bit integer.
-//!    Together these enforce `final[r] = max(candidate_set)`, the §5.3
-//!    Pattern A max invariant.
+//! HyperLogLog update leaf: per-register max update via one-hot selectors, bit
+//! decomposition and a product-of-differences check; `2^b` must be a multiple of 4.
 
 use std::rc::Rc;
 
@@ -370,7 +312,8 @@ pub fn prove_hll_leaf_with_params(
     for k in 0..batch_size {
         let s = &selectors[k];
 
-        // Each selector entry is boolean: (1 - s[r]) * s[r] = 0.
+        // Each selector entry is boolean: (1 - s[r]) * s[r] = 0. Not s * s = s:
+        // mul(x, x) counts as a single bus read and fails WitnessChecks.
         for &sr in s {
             let one_minus = b_c.sub(one, sr);
             let prod = b_c.mul(one_minus, sr);

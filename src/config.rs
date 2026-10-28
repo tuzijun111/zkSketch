@@ -1,185 +1,5 @@
-//! BabyBear + Poseidon2 + two-adic FRI StarkConfig for leaf STARKs.
-//!
-//! The Poseidon2 permutation is the canonical
-//! `p3_baby_bear::default_babybear_poseidon2_16` — same round constants the
-//! recursive verifier circuit uses. Earlier versions of this file used a
-//! `SmallRng`-seeded permutation; that produced a different set of round
-//! constants from the recursive verifier's hardcoded `Poseidon2Config::
-//! BABY_BEAR_D4_W16`, and the mismatch broke the §4.2 in-circuit aggregation
-//! (the verifier circuit recomputed leaf hashes under the canonical constants
-//! and disagreed with the leaf proof, surfacing as `WitnessConflict` at the
-//! first compared witness).
-//!
-//! ### Zero knowledge (the `zk` feature, on by default)
-//!
-//! The default build is **hiding**: the `zk` Cargo feature (a default
-//! feature; `--no-default-features` gives the plain `TwoAdicFriPcs`) swaps
-//! in `HidingFriPcs` over the
-//! SAME plain `MerkleTreeMmcs`, with the OS-seeded `ZkRng`
-//! ([`crate::zk_rng`]) as its mask RNG and `NUM_RANDOM_CODEWORDS` random
-//! codewords per commitment. Every leaf, merge, root and query proof is then
-//! produced by the hiding PCS (the whole crate uses this one `Pcs`; the
-//! recursion side follows in `recursion::recursive::config`). Degrees are
-//! unchanged but every committed trace doubles (`is_zk`), so a table fits
-//! only while its base height is `<= 2^24` (for `lq <= LOG_BLOWUP`; see
-//! `experiments::table_probe`).
-//!
-//! Salted Merkle leaves are NOT used. `HidingFriPcs` documents that both
-//! MMCSs "must also be hiding" (`MerkleTreeHidingMmcs`), but that MMCS draws
-//! fresh salts for EVERY commitment, the preprocessed one included, so each
-//! build of a circuit gets a different VK: the no-op-leaf VK derivation
-//! (`expose_forest::root_vk_deriver`, derived root VK == real root VK) and
-//! the auditor's root-VK pin both break. Shipping salted leaves needs a
-//! setup/prove config split (a fixed-public-salt instance for every
-//! `ProverData::from_airs_and_degrees`, an OS-seeded one for proving, and a
-//! bypass of the fork's single-config `prove_aggregation_layer`), which is not
-//! implemented. With the plain MMCS, each committed leaf row still carries
-//! its `NUM_RANDOM_CODEWORDS` random-codeword values (about 124 bits of
-//! randomness on BabyBear), which play the salt's role for the unopened
-//! Merkle siblings in a random-oracle argument; that argument is a heuristic
-//! of ours, not an upstream guarantee.
-//!
-//! ### LogUp sums: masked per global interaction
-//!
-//! A batch proof reveals one LogUp cumulative sum per GLOBAL INTERACTION
-//! (one `LookupData` in `BatchProof::global_lookup_data` per
-//! `push_interaction` on a global bus, so several per table), not one per
-//! table. Unmasked, each sum is a deterministic function of the witness and
-//! of the lookup challenges, which anyone can recompute by replaying the
-//! transcript, so a verifier could test witness guesses against it
-//! (`tests/zk_logup_blinding.rs` runs that replay). Under `zk`, the Plonky3
-//! core fork this crate builds against (branch `zk-logup-mask`, with the
-//! matching `zk-logup-mask` branch of the recursion fork; README, "Zero
-//! knowledge") masks every revealed sum:
-//!
-//! - each global interaction gets an extension-field mask `ρ`, whose
-//!   `[Challenge : Val] = 4` base coefficients are appended to its table's
-//!   main trace as constant columns (so 4 extra main columns per global
-//!   interaction), committed in the main commitment strictly BEFORE the lookup
-//!   challenges are sampled;
-//! - the masks are drawn from the hiding PCS's RNG (the OS-seeded [`ZkRng`],
-//!   which reseeds on clone) so that the masks of each bus sum to zero over
-//!   the batch (a bus with one member gets `ρ = 0`);
-//! - the proof reveals `c' = ρ + c` instead of the true sum `c`, the
-//!   last-row LogUp constraint reads the mask, `(c' − ρ − s[n−1])·den − num
-//!   = 0`, and the per-bus check `Σ c' = 0` is unchanged. For a bus with `t`
-//!   members, the revealed sums are uniform on `{x ∈ EF^t : Σ x = 0}`,
-//!   independent of the witness and of the challenges;
-//! - every verifier (native, and the fork's in-circuit verifier) derives
-//!   the masked main width from its own rebuilt lookups and its own `Pcs::ZK`,
-//!   never from the proof.
-//!
-//! The non-ZK build (`--no-default-features`) does not mask; its proofs and
-//! VKs are those of the unforked core (the forks' own tests pin that byte
-//! identity; here the unchanged non-ZK VK pins evidence it).
-//!
-//! What the masks change, and what they do not:
-//!
-//! - A leaf or decoder VK (preprocessed commitment + proof shape) does NOT
-//!   depend on them: the mask columns live in the main trace, which no VK
-//!   commits to, and every verifier derives the masked width itself. The
-//!   `#[cfg(feature = "zk")]` VK pin tables differ from the non-ZK ones only
-//!   because the hiding PCS commits the preprocessed traces on its doubled
-//!   domain; they would pass on an unmasked hiding build as well, so they
-//!   pin the hiding PCS, not the masks.
-//! - Every merge and root circuit does depend on them (the in-circuit
-//!   verifier opens the wider main traces and checks the masked last-row
-//!   constraint), hence so does every derived root VK.
-//! - The masks themselves are checked by `tests::leaf_opens_logup_mask_columns`
-//!   (a real leaf's opened main widths are AIR width + `D` per global
-//!   interaction; fails on an unmasked build) and `tests/zk_logup_blinding.rs`
-//!   (fresh sums per proof, per-bus zero sum, guess-and-check replay, and,
-//!   with `--features test-hooks,p3-circuit-prover/test-hooks`, a zero-mask
-//!   positive control showing the replay is exact under `zk`).
-//!
-//! ### Building against the masking forks (compile-time guard)
-//!
-//! Under `zk` this module names two fork-only items outside any test,
-//! `p3_lookup::lookup_mask_width` (core fork) and
-//! `TablePacking::zk_hiding_budget` (recursion fork; [`ZK_HIDING_BUDGET`]),
-//! so a `zk` build against the unforked Plonky3 / Plonky3_RangeAir pins does
-//! not compile at all (library, binaries, examples and tests alike) instead of
-//! proving with a hiding PCS whose LogUp sums are unmasked. The non-ZK build
-//! names neither and still builds against the upstream pins. Experiment
-//! output records the result: [`pcs_label`] and [`logup_mask_label`] land in
-//! every `env.json` and in the `pcs` / `logup_mask` columns of the
-//! `exp_compose` and `exp_e0` CSVs.
-//!
-//! ### Hiding budget (precondition)
-//!
-//! A randomized column of base height `n` stays hidden only while `n`
-//! exceeds the number of linear functionals the verifier learns about it:
-//! `D = 4` coefficients at each of the 2 out-of-domain points (`ζ`, `gζ`)
-//! plus one value per FRI query, `q + 2D`. The fork requires the margin
-//! `2(q + 2D)` rounded up to a power of two, `2(54 + 8) = 124 → 128`, and its
-//! prover refuses a ZK proof whose packing pads tables to fewer rows
-//! (`BatchStarkProverError::ZkTraceHeightBelowHidingBudget`). The pinned
-//! `HidingFriPcs` does not check this itself. Every zkSketch circuit proved
-//! through the circuit prover (all sketch leaves, merges, roots and decoders)
-//! pads every table to at least `2^(6 + LOG_BLOWUP + 1) = 512` rows
-//! (`TablePacking::with_fri_params(6, LOG_BLOWUP)`), and the fork's guard
-//! assumes 54 FRI queries, the value of [`num_queries`]; a `const` assertion
-//! on [`ZK_HIDING_BUDGET`] and `tests::hiding_budget_*` keep both in step. A
-//! smaller `log_final_poly_len`, `LOG_BLOWUP` or security level must re-check
-//! it. The one exception is the Phase-1 toy `FibAir` leaf
-//! (`prover::prove_fib_leaf`, a plain uni-stark proof used by tests and the
-//! `chain_two` example at 16-64 rows): it bypasses the circuit prover and its
-//! guard, runs below the budget, and its proofs are not claimed to hide
-//! anything.
-//!
-//! ### Cost of the masks (measured 2026-10-10)
-//!
-//! The masks cost little at the leaf and much more in the recursion layer,
-//! because every merge circuit re-verifies its children's masked proofs
-//! in-circuit. Same zkSketch tree, both builds hiding, masked (the forks) vs
-//! unmasked (the unforked pins with this module's fork references stubbed
-//! out), on a shared 64-thread Threadripper PRO 9975WX:
-//!
-//! - Leaf (`exp_e0` `E0_COST`, m = 1024, 2 runs each): 4 extra main
-//!   columns per global interaction; prove time +9-11% (CM d=4 w=1024 7.17 s
-//!   vs 6.47 s, HLL b=10 3.67 vs 3.29 s, SS, GK, Bloom alike), proof +46 KB
-//!   (+5-6%), peak RSS +11-12%.
-//! - One merge of two CM leaves (same run): prove 5.73 s vs 3.81 s (+51%),
-//!   peak RSS +42%, proof +6.8%; its largest table doubles (degree bits 19 vs
-//!   18).
-//! - Why: the in-circuit verifier grows ~14%. The L1 merge's ALU table goes
-//!   from 117,612 to 134,028 rows over small leaves and from 118,260 to
-//!   134,676 over paper-geometry children (m = 4096, CM d=7 w=16384, HLL
-//!   b=14, SS cap 16384, GK cap 2048 s=73), for all four families alike
-//!   (`exp_e0` `E0_MERGE=only`), crossing 2^17 = 131,072, so it is padded to
-//!   2^18 rows (fill 0.51). L2/L3 merges grow 102,276 -> 116,100 ALU rows and
-//!   stay at 2^17 (fill 0.89); Poseidon2 rows +4-7% (HLL L1 crosses 2^15),
-//!   recompose rows +12%.
-//! - End to end (`exp_compose`, procs, forest, 1 machine): N = 32, m = 8
-//!   (t = 4), 16 cores: CM 29.0-29.3 s vs 20.7-21.1 s (+40%), HLL 29.0-29.5 s
-//!   vs 18.5-19.1 s (+55%), peak RSS 4.9 vs 3.4 GB (+46%), root proof 791 KB
-//!   vs 753 KB (+5%). At the six-sketch comparison shape (N = 16,384, m = 2,048,
-//!   t = 8, 32 cores, a query after every batch; one run each), where leaves
-//!   dominate: CM 124.2 vs 107.3 s (+16%), HLL 116.1 vs 98.8 s (+18%), peak RSS
-//!   +11-12%, query proofs +6% bytes.
-//!
-//! Stored `zk` numbers measured before the masks (e.g. the `zk2_*` rows under
-//! `scripts/baselines/zka/results/`) are therefore optimistic. The 2^17
-//! crossing depends on the circuit shape; packing the merge circuits'
-//! ALU table more densely under `zk` (more `alu_lanes`) could avoid the
-//! doubling, but would change every merge/root VK and is not done.
-//!
-//! ### What is still not hidden, or only heuristic
-//!
-//! - Upstream calls `HidingFriPcs` only statistically zero-knowledge, and the
-//!   plain-MMCS argument above is our heuristic, not an upstream guarantee.
-//! - The masking is our construction on a fork, not upstream code; its
-//!   argument assumes the opened functionals are independent on the random
-//!   rows (the budget's factor 2 is a margin, not a proven tight bound).
-//! - Table heights (`degree_bits`), hence operation and batch counts, are
-//!   public; so are every Expose / NPO public value of a proof.
-//! - Statement-level guess-and-check: with `ZKSKETCH_COMMIT=plain` the
-//!   published state and batch commitments are unsalted Poseidon2 hashes.
-//! - Masks share the PCS RNG: a seeded test RNG (or any RNG that replays on
-//!   clone) must never be used for real proofs.
-//! - Masking leaves LogUp soundness as it was, including the upstream gap
-//!   that net multiplicities only balance mod `p` (an interaction's
-//!   `count_weight` is not enforced); it neither creates nor fixes it.
+//! BabyBear + Poseidon2 + two-adic FRI StarkConfig.
+//! The default `zk` feature uses `HidingFriPcs` with masked LogUp sums (zk-logup-mask forks).
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear, default_babybear_poseidon2_16};
 use p3_challenger::DuplexChallenger;
@@ -210,7 +30,7 @@ pub type Dft = Radix2DitParallel<Val>;
 /// Non-hiding PCS (`--no-default-features`).
 #[cfg(not(feature = "zk"))]
 pub type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-/// Hiding PCS (the default `zk` feature; see the module docs).
+/// Hiding PCS (the default `zk` feature).
 #[cfg(feature = "zk")]
 pub type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, ZkRng>;
 
@@ -234,9 +54,10 @@ pub use crate::zk_rng::ZkRng;
 /// FRI height carries at least `[Challenge : Val]` random columns whatever
 /// this constant is. What it buys here is the entropy of each committed
 /// Merkle leaf row: 4 random BabyBear values (about 124 bits) per row of every
-/// trace, permutation and quotient matrix, which the plain-MMCS argument in
-/// the module docs uses in place of a salt. The cost is 4 extra columns per
-/// matrix (and `R` gets `4 + 4`), negligible next to the traces.
+/// trace, permutation and quotient matrix, which plays the role of a salt for
+/// the unsalted Merkle MMCS (our heuristic, not an upstream guarantee). The
+/// cost is 4 extra columns per matrix (and `R` gets `4 + 4`), negligible next
+/// to the traces.
 #[cfg(feature = "zk")]
 pub const NUM_RANDOM_CODEWORDS: usize =
     <Challenge as p3_field::BasedVectorSpace<Val>>::DIMENSION;
@@ -316,14 +137,14 @@ pub fn logup_mask_label() -> &'static str {
 #[cfg(feature = "zk")]
 pub const ZK_HIDING_BUDGET: usize = zk_fork::HIDING_BUDGET;
 
-/// Every non-test reference to the LogUp-mask forks (module docs, "Building
-/// against the masking forks"): without them a `zk` build does not compile.
+/// Every non-test reference to the LogUp-mask forks: without them a `zk`
+/// build does not compile.
 #[cfg(feature = "zk")]
 mod zk_fork {
     // An unresolved `lookup_mask_width` or `TablePacking::zk_hiding_budget`
     // here means a `zk` (default) build against the unforked Plonky3 /
     // Plonky3_RangeAir pins, which would prove with unmasked LogUp sums. Wire
-    // in the `zk-logup-mask` forks (README, "Zero knowledge";
+    // in the `zk-logup-mask` forks (docs/build.md, "Zero knowledge";
     // `.cargo/config.toml.example`, Option 3) or build `--no-default-features`.
     use p3_circuit_prover::TablePacking;
     use p3_lookup::{Kind, Lookup, lookup_mask_width};
@@ -393,9 +214,9 @@ mod tests {
         logup_mask_cols_per_interaction, logup_mask_label, num_queries, pcs_label,
     };
 
-    /// Hiding budget of the ZK LogUp masks and of the hiding PCS (see the
-    /// module docs): `2(q + 2D) <= 2^(6 + LOG_BLOWUP + 1)`, the height every
-    /// table is padded to, on BabyBear (`D = 4`: 124 <= 512).
+    /// Hiding budget of the ZK LogUp masks and of the hiding PCS:
+    /// `2(q + 2D) <= 2^(6 + LOG_BLOWUP + 1)`, the height every table is padded
+    /// to, on BabyBear (`D = 4`: 124 <= 512).
     #[test]
     fn hiding_budget_fits_the_padded_table_height() {
         let d = <Challenge as BasedVectorSpace<Val>>::DIMENSION;
@@ -441,7 +262,7 @@ mod tests {
     /// does) plus `D = 4` columns per global interaction under `zk`, and
     /// exactly the AIR width without it; one revealed sum per global
     /// interaction. A `zk` build against unmasked forks would open the bare
-    /// AIR width (it does not compile against them; see the module docs), so
+    /// AIR width (it does not compile against them), so
     /// this is the lib suite's own check of the masks; the VK pins are not
     /// one.
     #[test]

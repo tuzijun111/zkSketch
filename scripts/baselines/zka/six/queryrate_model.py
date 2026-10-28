@@ -1,41 +1,10 @@
 #!/usr/bin/env python3
-"""Model the query-rate experiment of the six-sketch comparison (run with python3 -I).
+"""Query-rate tables of the six-sketch comparison from a queryrate.sh results directory (run with python3 -I).
 
-Usage: queryrate_model.py <results dir> [--out-csv F] [--out-md F]
-
-Input: a directory written by queryrate.sh --
-  manifest.txt                       N=, Q=, cores=, Eq=, Tq=, ... (key=value tokens)
-  qr_zks_<group>_q<Q>.csv            zkSketch exp_compose rows (one per family) of the run at Q
-                                     (Q = 0: the query-free baseline); group a = cm,hll,bloom,
-                                     b = ss,kmv, c = gk
-  zka_epoch_E<Q>/six_zka_<fam>_exec.csv   zk-Analytics executor row of epoch 0 at E = Q records
-  zka_epoch_E<Q>/six_zka_<fam>_prove.csv  its real aggregation proof, when proved
-  zka_query_E<Eq>_T<Tq>/six_zka_<fam>_qexec.csv  query executor rows at n = 1, 2, 4, ... epochs
-  zka_query_E<Eq>_T<Tq>/six_zka_<fam>_prove.csv  real query proofs at the calibration points n
-Output: queryrate.csv (one row per family x Q, every quantity plus a provenance string) and
-queryrate_table.md (per Q a table, families as rows, under a header that states the model).
-
-The model of the zk-Analytics side (it answers a query only at an epoch end, by a query
-proof that merges the n epoch summaries published so far):
-  k      = sum(prove_s) / sum(padded_cycles / 2^20) over ALL real zk-Analytics proofs of the
-           run (epoch and query proofs): seconds per 2^20 padded cycles
-  A(Q)   = the real aggregation proof's prove_s at E = Q when proved, else
-           padded_cycles(epoch 0 at E = Q) / 2^20 x k ('estimated')
-  q(n)   = a + b n, least squares over the measured n of the query executor rows, each
-           valued padded_cycles / 2^20 x k (the real proofs at the calibration points are
-           reported next to them with their relative error); b >= 0. It is measured at
-           Eq-record epochs (the directory name) and used for every Q: the KMV summary (and
-           the older SpaceSaving port's) holds min(distinct keys, capacity) entries, the
-           Misra-Gries port's at most that many, fewer after its decrement steps, so q(n)
-           depends on the epoch size (disclosed in the header and per Q)
-  T      = floor(N / Q) queries = epochs, U = N - T updates
-  total  = T x A(Q) + a T + b T (T + 1) / 2 seconds ('extrapolated' when T exceeds the
-           largest measured n); amortized = total / U x 1000 ms per update
-zkSketch: measured. Its total = total_time_ms (the update makespan, incl. the leaves
-sealed early and padded at the queries) + query_prove_ms (the sum over the queries);
-amortized = total / (n - n_queries) x 1000 ms per update record.
-Standard library only.
-"""
+Usage: queryrate_model.py <results dir> [--out-csv F] [--out-md F] [--tail charge|skip]
+zk-Analytics total for T = N // Q queries = T x A(Q) + sum_{n=1..T} (a + b n) + (N - T Q) x A(Q) / Q s (--tail skip drops the
+last term); A(Q) = proved epoch time, else padded cycles / 2^20 x k; a + b n = least-squares fit to the query executor's padded
+cycles / 2^20 x k; k = s per 2^20 padded cycles of the run's proofs."""
 import argparse
 import csv
 import glob
@@ -169,7 +138,7 @@ def calibrate(d):
 
 
 def epoch_cost(d, fam, q, k):
-    """A(Q) of one family: (seconds, cycles, source) with source measured | estimated | None."""
+    """A(Q) of one family: (seconds, cycles, source) with source measured | cycles | None."""
     sub = os.path.join(d, f'zka_epoch_E{q}')
     aggr = [r for r in rows(os.path.join(sub, f'six_zka_{fam}_prove.csv'))
             if step_of(r) == 'aggr' and r.get('epoch_index') == '0' and fnum(r.get('prove_s'))]
@@ -183,7 +152,7 @@ def epoch_cost(d, fam, q, k):
     if ex:
         c = fnum(ex[0].get('padded_cycles'))
         if c is not None and k is not None:
-            return c / SEG * k, c, 'estimated'
+            return c / SEG * k, c, 'cycles'
         return None, c, None
     return None, None, None
 
@@ -239,7 +208,10 @@ def main():
     ap.add_argument('results')
     ap.add_argument('--out-csv')
     ap.add_argument('--out-md')
+    ap.add_argument('--tail', choices=('charge', 'skip'), default='charge',
+                    help='charge the N - T Q records after the last query at A(Q) / Q each (default), or skip them')
     a = ap.parse_args()
+    charge_tail = a.tail == 'charge'
     d = os.path.abspath(a.results)
     if not os.path.isdir(d):
         sys.exit(f'{d}: no such directory')
@@ -293,7 +265,7 @@ def main():
     cols = ['family', 'q', 'n_total', 'zka_epochs_T', 'updates_U',
             'zka_A_s', 'zka_A_source', 'zka_A_padded_cycles',
             'zka_q_a_s', 'zka_q_b_s', 'zka_q_n_measured', 'zka_q_n_max', 'zka_q_epoch_records', 'zka_query_sum_s',
-            'zka_total_s', 'zka_total_flag', 'zka_ms_per_update',
+            'zka_tail_records', 'zka_tail_s', 'zka_total_s', 'zka_total_flag', 'zka_ms_per_update',
             'zks_group', 'zks_leaf_m', 'zks_t_leaves', 'zks_n_queries', 'zks_update_makespan_s',
             'zks_query_sum_s', 'zks_total_s', 'zks_ratio_vs_q0', 'zks_ms_per_update',
             'zks_split_leaves', 'zks_pad_records', 'zks_pad_fraction', 'zks_variant', 'zks_status',
@@ -352,7 +324,7 @@ def main():
                     rec.update(zka_q_n_measured='|'.join(str(x) for x in ns), zka_q_n_max=ns[-1])
                 if A is not None:
                     rec['zka_A_s'] = f'{A:.3f}'
-                    prov.append(f'zkA A(Q) {Asrc} (zka_epoch_E{q})')
+                    prov.append(f'zkA A(Q) {"from padded cycles" if Asrc == "cycles" else Asrc} (zka_epoch_E{q})')
                 else:
                     prov.append(f'zkA A(Q) unavailable (zka_epoch_E{q}: {"no executor row" if Ac is None else "no calibration"})')
                 if qc['a'] is not None:
@@ -373,13 +345,19 @@ def main():
                     prov.append(f"zkA q(n) unavailable ({qc['note']})")
                 if A is not None and qc['a'] is not None:
                     qsum = qc['a'] * T + qc['b'] * T * (T + 1) / 2.0
-                    tot = T * A + qsum
-                    flag = 'extrapolated' if (n_max[f] is None or T > n_max[f]) else 'within'
-                    rec.update(zka_query_sum_s=f'{qsum:.3f}', zka_total_s=f'{tot:.3f}', zka_total_flag=flag,
+                    tail = n_total - T * q   # records after the last query
+                    tail_s = tail * A / q if charge_tail else 0.0
+                    tot = T * A + qsum + tail_s
+                    beyond = n_max[f] is None or T > n_max[f]
+                    flag = 'beyond_measured_n' if beyond else 'within'
+                    rec.update(zka_query_sum_s=f'{qsum:.3f}', zka_tail_records=tail, zka_tail_s=f'{tail_s:.3f}',
+                               zka_total_s=f'{tot:.3f}', zka_total_flag=flag,
                                zka_ms_per_update=f'{tot / U * 1000.0:.4f}' if U > 0 else '')
                     rec['_zka_total'] = tot
-                    prov.append(f'T = {T} epochs {flag} the measured n'
+                    prov.append(f'T = {T} epochs, {"beyond" if beyond else "within"} the measured n'
                                 + (f' (max {n_max[f]})' if n_max[f] else ''))
+                    prov.append(f'{tail} records after the last query ' +
+                                ('charged at A(Q) / Q each' if charge_tail else 'not charged (--tail skip)'))
                     if '_zks_total' in rec and rec['_zks_total'] > 0:
                         rec['ratio_zka_over_zks'] = f'{tot / rec["_zks_total"]:.2f}'
             rec['provenance'] = '; '.join(prov)
@@ -396,7 +374,7 @@ def main():
     L = []
     cores = man.get('cores') or man.get('nproc') or '?'
     qlist = ', '.join(f'{q:,}' for q in qs if q)
-    L.append('# Query rate: one query every Q stream positions, zkSketch measured, zk-Analytics modeled')
+    L.append('# Query rate: one query every Q stream positions, zkSketch measured, zk-Analytics computed from its proofs')
     L.append('')
     zk_note = ('zero-knowledge on both sides' if zks_zk else
                'zkSketch rows NOT all from the zk build' if zks else 'no zkSketch rows')
@@ -408,18 +386,21 @@ def main():
              f"GK {man.get('leaf_c', '512')} (capacity {man.get('gk_cap', '768')}); zkSketch {man.get('zksketch', '?')[:9]}, "
              f"zk-Analytics {man.get('zka', '?')[:7]}; {man.get('started', '')}._")
     L.append('')
-    L.append('**The zk-Analytics side is a MODEL built from measured parts, not a run.** zk-Analytics answers a query only '
+    L.append('**The zk-Analytics side is computed from measured parts, not run end to end.** zk-Analytics answers a query only '
              'at an epoch end, by a query proof that merges the n epoch summaries published so far, so a query every Q '
              'positions means epochs of Q records and N / Q query proofs whose cost grows with n. Its total for a Q is')
     L.append('')
-    L.append('    total(Q) = T x A(Q) + a T + b T (T + 1) / 2   seconds,   T = floor(N / Q) queries = epochs, U = N - T updates')
+    L.append('    total(Q) = T x A(Q) + a T + b T (T + 1) / 2' + (' + (N - T Q) x A(Q) / Q' if charge_tail else '')
+             + '   seconds,   T = floor(N / Q) queries = epochs, U = N - T updates')
     L.append('')
-    L.append('with these assumptions: (1) epochs of exactly Q records, every epoch at the cost of epoch 0 at E = Q '
+    L.append('with these rules: (1) epochs of exactly Q records, every epoch at the cost of epoch 0 at E = Q '
              '(A(Q): the real aggregation proof when it was proved, else its executor padded cycles / 2^20 x k, marked '
-             'estimated); the stream tail after the last query is not proved; (2) the query proof cost is linear in the '
+             'cyc); the N - T Q records after the last query are '
+             + ('charged at A(Q) / Q each' if charge_tail else 'not charged (--tail skip)')
+             + '; (2) the query proof cost is linear in the '
              'number n of merged epoch summaries, q(n) = a + b n, fitted by least squares over the measured n of the '
              f"query executor run (Eq = {eq if eq is not None else '?'}-record epochs, n up to {man.get('Tq', '?')}), each valued "
-             'padded cycles / 2^20 x k, and EXTRAPOLATED beyond the largest measured n (rows say so); the KMV summaries '
+             'padded cycles / 2^20 x k, and also used beyond the largest measured n (rows say so); the KMV summaries '
              '(and those of the older SpaceSaving port) hold min(distinct keys, capacity 1,024) entries, so their q(n) depends '
              f"on the epoch size and is the one of Eq = {eq if eq is not None else '?'}-record epochs for every Q (on AOL they are "
              f'saturated from about {AOL_SAT_E:,} records on: an Eq at or above that carries over to every Q >= Eq and overstates '
@@ -438,10 +419,10 @@ def main():
         L.append(f'**Calibration.** k = {k:.3f} s per 2^20 padded cycles over {nk} real zk-Analytics proof(s) of this run '
                  f'({", ".join(kjobs)}).')
     else:
-        L.append('**Calibration.** No real zk-Analytics proof in this run: no zk-Analytics quantity could be derived.')
+        L.append('**Calibration.** No real zk-Analytics proof in this run: no zk-Analytics quantity could be computed.')
     L.append('')
     # A(E)
-    L.append('**zk-Analytics epoch proof A(E)** (epoch 0 at E records, noroot; estimated = padded cycles / 2^20 x k)')
+    L.append('**zk-Analytics epoch proof A(E)** (epoch 0 at E records, noroot; cycles = padded cycles / 2^20 x k, no receipt)')
     L.append('')
     L.append('| sketch | ' + ' | '.join(f'E = {q:,}' for q in qs if q) + ' |')
     L.append('|---|' + '---|' * len([q for q in qs if q]))
@@ -504,7 +485,7 @@ def main():
                 eq_note = (f'; MG / KMV q(n) is the one of {eq:,}-record epochs (KMV: {sat}; MG: its size varies '
                            f'with the decrement steps)')
         L.append(f'**Q = {q:,}: T = {T:,} queries / epochs, U = {n_total - T:,} updates** '
-                 '(zkA = zk-Analytics, modeled; zkS = zkSketch, measured; ratio = zkA / zkS, above 1 zkSketch is faster; '
+                 '(zkA = zk-Analytics, computed from its proofs and cycle counts; zkS = zkSketch, measured; ratio = zkA / zkS, above 1 zkSketch is faster; '
                  f'zkS pad fraction = padded record slots / proved record slots; x Q=0 = zkS total over the baseline makespan{eq_note})')
         L.append('')
         L.append('| sketch | zkA epochs T | A(Q) (s) | q(n) = a + b n (s) [measured n] | zkA queries (s) | zkA total (h) | '
@@ -513,11 +494,12 @@ def main():
         L.append('|---|' + '---|' * 14)
         for f in FAMS:
             r = by[(f, q)]
-            A = f"{fmt(fnum(r['zka_A_s']), 1)}{' est' if r['zka_A_source'] == 'estimated' else ''}" if r['zka_A_s'] else '-'
+            A = f"{fmt(fnum(r['zka_A_s']), 1)}{' cyc' if r['zka_A_source'] in ('cycles', 'estimated') else ''}" if r['zka_A_s'] else '-'
             fit = (f"{float(r['zka_q_a_s']):.1f} + {float(r['zka_q_b_s']):.2f} n [{r['zka_q_n_measured'].replace('|', ',')}]"
                    if r['zka_q_a_s'] else '-')
             tot = fnum(r['zka_total_s'])
-            tot_s = (f"{tot / 3600:.2f}{' extrap.' if r['zka_total_flag'] == 'extrapolated' else ''}" if tot is not None else '-')
+            past = f" (n > {r['zka_q_n_max']})" if r['zka_total_flag'] in ('beyond_measured_n', 'extrapolated') else ''
+            tot_s = f'{tot / 3600:.2f}{past}' if tot is not None else '-'
             leaves = f"{r['zks_t_leaves']} ({r['zks_split_leaves']})" if r['zks_t_leaves'] != '' else '-'
             ratio = f"{float(r['ratio_zka_over_zks']):,.0f}x" if r['ratio_zka_over_zks'] else '-'
             L.append(f"| {LABEL[f]} | {r['zka_epochs_T']} | {A} | {fit} | {fmt(fnum(r['zka_query_sum_s']), 0)} | {tot_s} | "

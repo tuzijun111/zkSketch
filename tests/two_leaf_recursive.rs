@@ -1,9 +1,4 @@
-//! Integration test for the Phase 1.5 §4.2 recursive merge path.
-//!
-//! Mirrors `two_leaf_chain.rs` but uses the recursive API: two CircuitBuilder
-//! Fibonacci leaves proven via `BatchStarkProver`, aggregated into a single
-//! recursive batch-STARK by `p3_recursion::build_and_prove_aggregation_layer`,
-//! and verified with `BatchStarkProver::verify_all_tables`.
+//! Two toy Fibonacci leaves aggregated into one recursive proof and verified.
 
 use zksketch::prover::Boundary;
 use zksketch::recursion::recursive::{merge_two, prove_leaf, verify_chain};

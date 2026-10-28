@@ -1,25 +1,4 @@
-//! **E6 — streaming forest: cores × batch size** (EVAL_SPEC §2 E6). The
-//! parallel-ingest story: a streaming forest proves independent epoch leaves in
-//! parallel (the `t/k` term of the work–depth `O(t/k + log t)`), then folds them
-//! with `O(log t)` cheap merges.
-//!
-//! Unlike E5 (leaf-shape-agnostic, synthetic leaves), E6 must measure **real
-//! proving** to expose core scaling — the §4 composition merges are a handful of
-//! single-threaded Poseidon2 hashes and don't parallelise, so the only thing the
-//! core count moves is leaf-proof generation. We use the cheapest real family
-//! (Count-Min) as the leaf:
-//!
-//! 1. Precompute the epoch state sequence `S₀ → S₁ → … → S_t` **natively**
-//!    (cheap) so every leaf's boundary commitments are known up front.
-//! 2. Prove the `t` independent transition leaves `S_{i-1} → S_i` **in parallel**
-//!    on a `k`-thread pool ([`with_pool`]) — this is the part core count moves.
-//! 3. Ingest the (boundary-consistent) leaves into a [`StreamingForest`] and
-//!    finalise — `O(log t)` cheap merges.
-//!
-//! `forest_completion_ms` = parallel leaf-gen + forest fold; `speedup_vs_1core`
-//! = `completion(k=1) / completion(k)`; `v` = the **sustained** insert rate
-//! (`t / completion`, inserts/sec) — the prototype reports the rate it can
-//! actually achieve rather than throttling to a synthetic target.
+//! E6: streaming-forest completion time vs cores and batch size, with real Count-Min leaf proofs.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -260,10 +239,10 @@ pub fn measure(k: usize, m: usize, t: usize, variant: CmLeaf, cfg: BenchCfg) -> 
     measure_batches(k, 1, variant, CM_D, CM_W, &batches, cfg)
 }
 
-/// Prove the `t` leaves with `workers` proofs running concurrently, **each
-/// pinned to its own `cores_per_leaf`-thread pool** — the distributed model.
-/// Models a cluster of `workers` machines × `cores_per_leaf` cores: leaves are
-/// pulled work-stealing from a shared counter, so wall-clock ≈
+/// Prove the `t` leaves with `workers` proofs running concurrently on this
+/// host, **each pinned to its own `cores_per_leaf`-thread pool** (each worker
+/// stands in for one `cores_per_leaf`-core machine). Leaves are pulled
+/// work-stealing from a shared counter, so wall-clock ≈
 /// `⌈t/workers⌉ × per-leaf(cores_per_leaf)`. Confining each leaf's internal
 /// rayon to its own pool is the whole point — otherwise one leaf's prover would
 /// grab the global pool and starve the others.
@@ -313,13 +292,13 @@ fn prove_leaves_distributed(
 }
 
 /// Measure forest completion for a caller-supplied sequence of `batches` at the
-/// `(d, w)` sketch shape, in the **distributed** parallelism model: `workers`
-/// leaf proofs run concurrently, each on its own `cores_per_leaf`-thread pool.
+/// `(d, w)` sketch shape, with `workers` leaf proofs running concurrently on
+/// this host, each on its own `cores_per_leaf`-thread pool.
 ///
 /// Generalises [`measure`] to arbitrary `d`/`w` and arbitrary (e.g. real
 /// dataset) keys — the dataset-driven stream runner (`exp_stream`) calls this
-/// with `workers = k`, `cores_per_leaf = ⌊total_cores / k⌋` to model `k`
-/// machines sharing a fixed core budget. Every batch must have the same length
+/// with `workers = k`, `cores_per_leaf = ⌊total_cores / k⌋` (`k` concurrent
+/// provers sharing a fixed core budget). Every batch must have the same length
 /// `m`. The Merkle `t_max` is computed **exactly** as the largest number of
 /// distinct touched cells in any (batch, row) — sound (the realised maximum,
 /// always ≤ `w`) and tight. Caller must validate the shape is legal for

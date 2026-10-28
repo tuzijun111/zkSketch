@@ -1,65 +1,5 @@
-# Sourced by the six-sketch scripts (run_all.sh, run_zks.sh, run_zka.sh, prof_exec.sh).
-# Adds to ../common.sh (HERE, ZKS, BASELINE_DIR, ZKA, RESULTS, PATH):
-#   RESULTS     default <repo>/results/six/manual (git-ignored). The six-sketch scripts refuse
-#               a directory that holds git-tracked files, such as the committed reference
-#               results in scripts/baselines/zka/results (override: SIX_ALLOW_TRACKED=1).
-#   SIX_M       records per epoch / batch       (default 2048)
-#   SIX_T       epochs / batches                (default 8, or SIX_N / SIX_M when only SIX_N is set)
-#   SIX_N       records in all = SIX_M x SIX_T  (default 16384)
-#   SIX_QNS     query points n of the zk-Analytics side (default: powers of two <= T)
-#   SIX_M_<FAM> records per epoch of one family (FAM = CM HLL SS GK BLOOM KMV; default SIX_M), e.g.
-#               SIX_M_GK=2048 next to SIX_M=16384: each family is its own comparison, with SIX_T
-#               epochs of its own size on both sides (the memory-matched shape, run_all.sh memmatch)
-#   SIX_LEAF, SIX_LEAF_<FAM>  records per zkSketch LEAF (default: the family's epoch, one leaf per
-#               epoch). A smaller leaf proves each epoch as k = epoch / leaf leaves plus their k - 1
-#               merges in exp_compose's forest (EXP_COMPOSE_BATCHES = leaf, EXP_COMPOSE_N = epoch x
-#               SIX_T, a query after every leaf); zk-Analytics still proves one receipt per epoch.
-#               The leaf must divide the epoch. The zkSketch log records the shape ("# shape:" line),
-#               which assemble.py reads: zkSketch's "1 epoch" is then k leaves + k - 1 merges and the
-#               query at zk-Analytics point n is zkSketch's query after leaf n x k
-#   SIX_GK_CAP  zkSketch GK capacity            (default 2048)
-#   SIX_GK_ROUNDS  stable (default) | sorted: the zkSketch GK leaf's round certification
-#               (exp_compose EXP_GK_ROUNDS, M3). stable = the G1 stable-compaction circuit;
-#               sorted = the pre-M3 bm2 circuit (per-round sorted copy). Same batch rule
-#               (apply_batch2), commitments and decoder, different leaf/merge/root VKs; the
-#               run's CSV records it (variant gk_bandmerge2_stable, column gk_rounds).
-#   SIX_BLOOM_VARIANT  packed (default, since M2) | omc: the zkSketch Bloom leaf (exp_compose
-#               EXP_BLOOM_VARIANT, M2). omc = the bit-array leaf (one field element per filter bit);
-#               packed = the packed-byte B1 leaf (zksketch::sketch::bloom_packed: per-access
-#               timestamped memory checking over bytes, commitment family 7; needs 7 x SIX_M < 2^16).
-#               Same filter, same answers; different leaf/decode/merge/root VKs; the run's CSV
-#               records it (variant bloom_omc | bloom_packed).
-#   SIX_ZKA_GK  matched (default) | textbook: the zk-Analytics side's GK. matched = our port
-#               of zkSketch's GK rule (two-sided band-merge, apply_batch2) in their pipeline
-#               (../gk_matched): the SAME algorithm as the zkSketch side, with zkSketch's
-#               capacity SIX_GK_CAP, s = 51 and leaf size SIX_GK_MSUB, the state carried from
-#               epoch to epoch. textbook = Greenwald-Khanna 2001 rebuilt per epoch with a
-#               query-time merge (../gk): a DIFFERENT algorithm, kept as a labelled reference
-#               (the committed 2026-10-09 rows are textbook).
-#   SIX_GK_MSUB records per zkSketch GK leaf on the zk-Analytics side (default: the zkSketch GK
-#               leaf, SIX_LEAF_GK / SIX_LEAF, else the GK epoch). The matched zk-Analytics GK applies
-#               each epoch as epoch / SIX_GK_MSUB successive apply_batch2 steps: exactly zkSketch's
-#               leaves. Leave it unset: set SIX_LEAF_GK instead, which sets both sides (the old way,
-#               a zk-Analytics-only run with SIX_GK_MSUB against a zkSketch run of other SIX_M / SIX_T,
-#               still works; assemble.py flags a GK leaf that differs from it as CONFIG MISMATCH).
-#   SIX_ZKA_GK_IMPL  literal (default) | tuned | fast | fixed_linear: the matched GK guest's
-#               implementation of the one transition (same state). literal = zkSketch's GK
-#               algorithm as its original code (apply_batch2 statement for statement): the
-#               baseline. tuned / fast / fixed_linear are our rewrites of it (they compact the
-#               survivors instead of re-sorting, the insight of zkSketch's planned stable-
-#               compaction circuit), kept as labelled sensitivity rows only.
-#   SIX_CORES   zkSketch EXP_COMPOSE_CORES      (default: physical cores, at most 32)
-#   SIX_ZKA_ROOTS  root variants of the zk-Analytics aggregation proofs, a comma list of
-#               designed | noroot | legacy (default noroot, the headline): the variants
-#               `run_zka.sh exec` executes (and `jobs.py --roots` plans). ../README.md,
-#               "Root variants of the zk-Analytics aggregation proofs", says what they are.
-#   SIX_ZKA_CM_REF  1 (default) or 0. 1: their shipped CM aggregation (variant designed, their
-#               aggr_cm unchanged, incl. its per-row Merkle roots) is also run, as a REFERENCE,
-#               unless SIX_ZKA_ROOTS already has designed or legacy (both are that same guest):
-#               `run_zka.sh exec` then also executes designed, for all six families (executor
-#               only, cheap: it gives the reference's cycle counts and the root-work table), and
-#               `jobs.py --cm-ref 1` plans cm:aggr:<e>:designed at the proved epochs.
-# The defaults are the paper configuration.
+# Settings shared by the six-sketch scripts (sourced, on top of ../common.sh): run shape (SIX_M, SIX_T, SIX_LEAF*,
+# SIX_GK_*), zk-Analytics variants (SIX_ZKA_*) and SIX_CORES, with defaults; docs/six_sketch_comparison.md describes them.
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${RESULTS:=$(cd "$HERE6/../../../.." && pwd)/results/six/manual}"
 source "$HERE6/../common.sh"
@@ -128,7 +68,7 @@ six_roots_ok() {  # six_roots_ok <list>: a comma list of distinct designed|noroo
 six_roots_ok "$SIX_ZKA_ROOTS" || six_die "SIX_ZKA_ROOTS=$SIX_ZKA_ROOTS must be a comma list of distinct designed, noroot, legacy"
 SIX_ZKA_CM_REF=${SIX_ZKA_CM_REF:-1}
 [[ $SIX_ZKA_CM_REF == [01] ]] || six_die "SIX_ZKA_CM_REF=$SIX_ZKA_CM_REF must be 0 or 1"
-# six_cm_ref_on: their shipped CM runs as a reference next to SIX_ZKA_ROOTS (see above)
+# six_cm_ref_on: their shipped CM (variant designed) also runs as a reference, unless SIX_ZKA_ROOTS has designed or legacy
 six_cm_ref_on() { [[ $SIX_ZKA_CM_REF == 1 && ,$SIX_ZKA_ROOTS, != *,designed,* && ,$SIX_ZKA_ROOTS, != *,legacy,* ]]; }
 SIX_ZKA_EXEC_ROOTS=$SIX_ZKA_ROOTS   # the variants `run_zka.sh exec` executes
 if six_cm_ref_on; then SIX_ZKA_EXEC_ROOTS+=,designed; fi
@@ -186,7 +126,7 @@ six_prepare_results() {
 
 # Drop inherited settings that would silently change a run: exp_compose / zkSketch knobs
 # (EXP_*, ZKSKETCH_*, RAYON_NUM_THREADS) and RISC Zero prover selection (Bonsai, dev mode).
-# EXP_VERIFY_REPEATS is kept: run_zks.sh documents it.
+# EXP_VERIFY_REPEATS is kept: run_zks.sh passes it to exp_compose (default 5).
 six_clean_env() {
   local v dropped=()
   for v in $(compgen -e); do

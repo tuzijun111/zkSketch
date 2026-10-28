@@ -1,63 +1,5 @@
-//! SpaceSaving **top-`c` query** decode circuit (E3, plonky3/STARK).
-//!
-//! Implements the paper's *SpaceSaving Top-`c` Query Circuit* (zk1.tex
-//! §SpaceSaving Query Circuit). A top-`c` query returns the first `c` active
-//! rows of the committed summary under the declared count/key order; \sys
-//! answers queries against the closed (committed) state `S_t`. This is the
-//! STARK-backend counterpart of the plonky2 `decode::spacesaving` relation.
-//!
-//! The committed state is an [`SsFullState`] (the same row table the
-//! `ss_final_full` update circuit recommits). Its rows are kept in
-//! `(active asc, count asc)` order (dummies first, then actives by **ascending**
-//! count), so the **top heavy hitters** (highest counts) are the *last* active
-//! rows. This decode is unchanged by the update circuit's Misra-Gries
-//! `(s+1)`-th-value subtraction: subtracting a constant `τ` from every retained
-//! count preserves the count order and the dummies-first layout. The counts it
-//! returns (and any released top-`c` mass) are therefore the summary's
-//! Misra-Gries **under-estimates** (per-key deficit `≤ N/s`), not exact grouped
-//! sums; a `Threshold(θ)` release is evaluated against that under-estimated mass.
-//! Each row packs into one `Challenge` as the 4 base coefficients
-//! `[key_lo, key_hi, count, active]`, and `commit_ss_state` is the flat
-//! Poseidon2 over those rows; `pack_cells` here reproduces that exact
-//! flattening so the in-circuit `add_hash_slice` binds the opened cells to the
-//! published digest.
-//!
-//! ### Verification target (paper)
-//!
-//! Public input is the query size `c`. With `#active = #{active rows}` and
-//! `k = min(c, #active)`, the released result table `res` is the first `k`
-//! rows of `S_t` under the declared (top-count-first) order, with canonical
-//! dummy rows beyond position `k`. For the identity release policy the circuit
-//! binds the published answer to `res` (here: the released top-`c` mass
-//! `Σ res[z].count`, a deterministic function of the fully-pinned `res`).
-//!
-//! ### Checks
-//!
-//! 1. **State opening** — re-hash the `capacity` packed rows, bind to the
-//!    committed digest (the `Θ(s)` cost).
-//! 2. **Active-prefix structure** — active flags are monotone (here a
-//!    contiguous *suffix*: dummies first, actives last).
-//! 3. **Distinct-key** — adjacent active rows carry distinct keys (the
-//!    grouped summary has no duplicate retained keys); witnessed inverse.
-//! 4. **Sortedness** — counts are non-decreasing along the stored order
-//!    (range-checked adjacent diff); equivalently the top heavy hitters are
-//!    the trailing rows.
-//! 5. **Top-`c` selection** — a monotone 0/1 selector `sel` marks exactly
-//!    `k = min(c, #active)` rows as released: a *suffix* of the row array
-//!    (the highest-count actives), each selected row active, and
-//!    `Σ sel = min(c, #active)`.
-//! 6. **Release binding** — for identity release `answer = Σ sel·count`
-//!    (the released top-`c` mass); for `Threshold(θ)` the mass is gated by
-//!    `mass ≥ θ` (same `≥` semantics as the other decode leaves).
-//!
-//! Scope: keys must fit in one BabyBear limb (`key_hi = 0`, `key < 2^31`),
-//! matching `ss_final_full`. Counts/mass fit in `DIFF_BITS − 1` bits at
-//! prototype scale. The query size `c` is a verifier-supplied public input.
-//!
-//! Hiding commitments (revision B2): [`prove_ss_decode_commit`] opens
-//! `Com(S_t; ρ)` ([`crate::sketch::ss_final_full::commit_ss_state_with`]),
-//! with the salt as the first private input, and is pinned to
-//! [`ss_decode_vk_commit`]; the pre-B2 entry points stay `Plain`.
+//! SpaceSaving top-`c` decode circuit: releases the top-`c` mass of the committed summary.
+//! Counts are the summary's Misra-Gries counts (deficit ≤ N/s per key), not exact sums.
 
 use p3_baby_bear::default_babybear_poseidon2_16;
 use p3_circuit::ops::{
@@ -915,9 +857,8 @@ mod tests {
     /// `Semantic`/`Bound` the decoder exposes the hiding commitment (not the
     /// plain one), the pinned verifier accepts it under the Hiding VK and
     /// rejects cross-mode proofs. A query at version `t` opened with `ρ^S_t`
-    /// exposes exactly the final commitment of the hiding leaf `t` (the lemma
-    /// in `crate::commitment::hiding`); a wrong salt still proves, but exposes
-    /// a commitment that is not the log's.
+    /// exposes exactly the final commitment of the hiding leaf `t`; a wrong
+    /// salt still proves, but exposes a commitment that is not the log's.
     #[test]
     fn hiding_decode_exposes_hiding_commit() {
         use crate::recursion::recursive::statement::Expose;

@@ -1,30 +1,4 @@
-//! In-circuit **boundary-bound** recursive streaming forest, via the Expose NPO.
-//!
-//! [`countmin_forest_v9`](super::countmin_forest_v9) already folds the
-//! intermediates away (O(1) root, no `Com(S_i)` exposed) but binds the *outer*
-//! boundaries natively. This module closes that gap: each leaf surfaces its
-//! `(Com_before, Com_after)` via the Expose NPO, and each merge
-//!
-//! 1. recursively verifies both children in-circuit,
-//! 2. reads the children's surfaced boundaries as `air_public_targets`,
-//! 3. binds `left.final == right.initial` **in-circuit** (`connect`),
-//! 4. re-exposes only `(left.initial, right.final)` via its *own* Expose NPO.
-//!
-//! Composed in a Bentley–Saxe cascade, the single root proof's public values
-//! are exactly `(Com(S_0), Com(S_E))` — bound to the verified leaves, with the
-//! intermediates neither exposed nor natively trusted.
-//!
-//! The leaf here ([`prove_boundary_leaf`]) is a *minimal* leaf that exposes a
-//! claimed `(initial, final)` boundary — it demonstrates the binding mechanism
-//! independent of any sketch's internal update logic. Any real leaf (e.g. the
-//! v9 Count-Min leaf) participates by adding the same `add_expose` of its
-//! boundary commitments; the merge/forest below compose it unchanged.
-//!
-//! Goldilocks (D = 2, Poseidon2 width-8) port of
-//! [`crate::recursion::recursive::expose_forest`] (BabyBear D = 4). The
-//! algorithmic body is identical; only the config/leaf bindings and the
-//! digest width (`[Val; 4]`, so `COMMIT_LEN = 4`, D = 2 base coeffs per wire)
-//! change.
+//! Goldilocks (D = 2, Poseidon2 width 8) version of `expose_forest`.
 
 use std::rc::Rc;
 

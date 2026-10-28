@@ -1,26 +1,6 @@
 #!/usr/bin/env bash
-# HyperLogLog in zk-Analytics' architecture (our port, see README.md): EXECUTOR ONLY.
-#
-#   aggregation guest hll_aggr on epoch(s) AGGR_EPOCHS (default 0 = the first 16,384
-#   AOL records = our matched CM epoch)
-#   query guest hll_query over n populated epochs, n in QUERY_EPOCHS (default 1 4 16 64)
-#   query guest hll_query_words, same n (sensitivity: registers in serde's default
-#   Vec<u8> encoding, one zkVM word each; same computation and journal)
-#
-# Every row: journal == native, independent reference check, exact distinct count,
-# user/padded cycles, segments, guest phase split, and MODELED prove time
-# (segments x 30.1 s, envelope 29.73-30.79 s: the CM-guest CPU anchors, not measured).
-#
-# Usage: ./run_exec.sh
-# Env:   SKIP_BUILD=1               use the existing binary
-#        AGGR_EPOCHS="0"            epoch indices for the aggregation guest ("" = none)
-#        QUERY_EPOCHS="1 4 16 64"   n for the query guests ("" = none)
-#        WORDS=1                    also run hll_query_words (0 = skip)
-#        EPOCH_SIZE=16384 BATCH=8
-#        OUT=$RESULTS/zka_hll_exec.csv   appended (header written once); raw log next to it
-#
-# Runs no prover. Touches no process it did not start (the executor spawns and reaps
-# its own r0vm per run).
+# HLL port of zk-Analytics, executor only: hll_aggr and hll_query(_words) rows appended to OUT.
+# Usage: [AGGR_EPOCHS="0"] [QUERY_EPOCHS="1 4 16 64"] [WORDS=1] [EPOCH_SIZE=16384] ./run_exec.sh
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/hll_common.sh"
 refuse_dev_mode

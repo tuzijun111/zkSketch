@@ -1,27 +1,5 @@
-//! E5 composition ladder with **real recursive STARK proofs** (not boundary
-//! digests). The default E5 runner (`exp_e5` over `e5_ladder.rs`) models the
-//! ladder with option-(i) boundary-digest "merges", so its absolute verify-ms
-//! and root-proof-bytes are *digest* costs. This runner closes that gap: for
-//! each window `E` it builds `E` real Count-Min leaves and folds them with the
-//! **real aggregation prover** (`CountMinChainState::init`/`extend`), then
-//! reports the **real** chain verify time and **real** recursive-proof size.
-//!
-//! Two rungs per window make the §4.1→§4.2 verifier story concrete with actual
-//! proofs:
-//!   - `no_composition`   — verifier re-checks all E leaf proofs:
-//!                          verifier_checks = E, bytes = Σ leaf-proof bytes,
-//!                          verify_ms = Σ per-leaf self-verify (Θ(E)).
-//!   - `recursive_linear` — one folded batch-STARK: verifier_checks = 1,
-//!                          bytes = recursive-proof bytes, verify_ms = one
-//!                          chain verify (O(1) in E).
-//!
-//! Each real merge runs the aggregation prover (~seconds), so E is kept small
-//! (the verifier trend is already visible at E ∈ {2,4,8}); the per-batch leaf
-//! prove cost itself is the E1 metric and is not the point here.
-//!
-//! Run:    cargo run --release --example exp_e5_real
-//! Config: EXP_E5R_WINDOWS=2,4,8
-//! Output: results/e5_real.csv
+//! E5 with real recursive proofs: E Count-Min leaves verified one by one vs folded into one proof.
+//! Usage: [EXP_E5R_WINDOWS=2,4,8] cargo run --release --example exp_e5_real
 
 use std::time::{Duration, Instant};
 

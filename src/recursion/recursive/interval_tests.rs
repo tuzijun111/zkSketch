@@ -1,13 +1,5 @@
-//! B6(b) end-to-end tests: the Interval composition statement binds WHICH
-//! batches a composed root covers. Real family leaves at small shapes
-//! (Count-Min `omc` and SpaceSaving `ss_final_full`, Pattern A + Pattern B),
-//! composed by the real hiding merge, checked by the auditor path
-//! (`verify_bound_stark_proof_against_log`: derived root VK + batch log).
-//!
-//! Every attack test also runs the PRE-B6(b) auditor check on the same root
-//! (`legacy_auditor`: the derived root-VK pin plus `init/final` against the
-//! log, i.e. everything the harnesses checked before) and asserts it ACCEPTS,
-//! which documents the hole; the new check must REJECT.
+//! End-to-end tests of the Interval statement on real leaves. Batch-log attacks run against
+//! both auditors: the old boundary-only one accepts them, the interval one rejects them.
 
 use p3_circuit_prover::BatchStarkProof;
 use p3_recursion::RecursionOutput;

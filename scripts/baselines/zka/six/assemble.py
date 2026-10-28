@@ -1,107 +1,6 @@
 #!/usr/bin/env python3
-"""Assemble six_sketch_comparison.csv from the raw six-sketch files (run with python3 -I).
-
-Usage:
-  assemble.py <results dir> <aol.keys> [--out CSV]
-      the committed 2026-10-09 layout (scripts/baselines/zka/results): zk-Analytics `six_zka`
-      (+ `six_zka_vt`), zkSketch `six_zksketch_r2` (primary, run r2), `six_zksketch_zk` (zk)
-      and `six_zksketch` (r1)
-  assemble.py <results dir> <aol.keys> --zka PFX --zks PFX [--label main] [--plan FILE] [--out CSV]
-      one new run (what `run_all.sh` writes): zk-Analytics prefix PFX (+ PFX_vt if present),
-      zkSketch prefix PFX with full instrumentation, its rows labelled run=<label>.
-      --plan FILE: the planned zk-Analytics jobs, one per line. A planned job without a proof
-      is ESTIMATED: prove_s = padded_cycles / 2^20 x k, where padded_cycles comes from the
-      executor (<zka>_<fam>_exec.csv for aggregation epochs, the row of the job's root
-      variant; <zka>_<fam>_qexec.csv for queries) and k = the seconds per 2^20 padded cycles
-      measured over THIS run's proofs (all variants); verify_ms and proof_bytes = the mean of
-      this run's measured receipts; no RSS. Such rows say ESTIMATED in `provenance`.
-  --out defaults to <results dir>/six_sketch_comparison.csv. A git-tracked output (the
-  committed scripts/baselines/zka/results/six_sketch_comparison.csv, which the 6cac471
-  version of this script produced) is refused: pass --out to write elsewhere.
-
-Inputs (all in <results dir>):
-  zk-Analytics side (`run_zka.sh`)
-    <zka>_<fam>_exec.csv         executor rows, all aggregation epochs (bloom/kmv: + query executes)
-    <zka>_<fam>_prove.csv        proved rows (aggregation epochs 0 and T-1; queries n = 1, 2, 4, 8)
-    <zka>_jobs.csv               one line per proved job, same order (gate, load, r0vm peak RSS);
-                                 jobs with rc != 0 are skipped (and reported)
-    <zka>_<fam>_qexec.csv        (--plan) executor rows of the planned queries, <zka>_qexec_jobs.csv
-    six_zka_vt_<fam>_prove.csv   re-proofs for the verify protocol (query n = 1, HLL epoch 0); their
-    six_zka_vt_<fam>_prove.log   logs carry VERIFY_TIMES_MS (all 5 verify calls + bincode decode)
-    six_zka_vt_jobs.csv
-  zkSketch side (`run_zks.sh`), one exp_compose run per tag and run set:
-    six_zksketch_r2_<tag>.csv/.log   default build of 2026-10-09, before the `zk` feature became the
-                                     default: the PRIMARY zkSketch numbers of the committed set
-                                     (not zero-knowledge)
-    six_zksketch_zk_<tag>.csv/.log   `--features zk` build (HidingFriPcs), measured before the
-                                     LogUp-mask forks (revealed LogUp sums unmasked)
-    six_zksketch_<tag>.csv/.log      the first run (r1), default build, kept as a repeat
-    <set>_runs.csv                   gate, load, RSSTREE peaks per run (the last line of a tag wins)
-Records per epoch M and epochs T are read from the zkSketch CSV (m, t) and checked against
-the zk-Analytics executor (epoch_records). Exact answers are recomputed here from the same
-M x T AOL records.
-
-Memory-matched forest (`run_all.sh memmatch`; six_common.sh SIX_LEAF*, SIX_M_<FAM>): a family's
-zkSketch run may prove each epoch of M records as k = M / m leaves of m records, and families
-may have epochs of their own (GK 2,048 next to 16,384). The zkSketch log's "# shape:" line
-(run_zks.sh) gives the epoch and k; its CSV's m is the leaf and t = k x T the leaves. Without
-that line (runs before it) m is the epoch, k = 1, and every family must share one (m, t), as
-before. Per family the zk-Analytics executor's epoch_records must equal its epoch. With k > 1:
-  update_per_epoch            zkSketch's ONE EPOCH = its k leaves + k - 1 merges: the measured
-                              total_time_ms when the forest is one epoch (T = 1), else
-                              k x leaf_s + (k - 1) x merge_s with leaf_s = leafgen_seq_ms / t and
-                              merge_s = (total_time_ms - leafgen_seq_ms) / (t - 1) (the memmatch
-                              method, scripts/baselines/zka/results/memmatch-20261014/README.md;
-                              merge_s carries the run's other prover work, e.g. the worker spawn);
-                              proof_bytes = the live peak(s) after leaf k (the epoch's proof)
-  update_per_epoch_amortized  total_time_ms / T; update_stream_<T>_epochs = total_time_ms
-  query_n<n>, accept_n<n>     zkSketch's query after leaf n x k (= after epoch n, over the first
-                              n x M records), next to zk-Analytics' query over n epochs; zkSketch's
-                              queries after the other leaves are not reported here
---extended appends, after `variant` and `root_construction`, the columns
-  epoch_records, zks_leaf_records, zks_leaves_per_epoch   the family's shape (every row of it)
-  zks_variant, zks_gk_rounds, zks_shape                    the zkSketch CSV's variant, gk_rounds
-                              and shape (zkSketch rows; '-' elsewhere): a SIX_GK_ROUNDS=sorted or
-                              SIX_BLOOM_VARIANT=omc run says so
-  coord_peak_rss_mb           next to peak_rss_mb (zkSketch: the procs-engine worker; zk-Analytics:
-                              r0vm): zkSketch's coordinator process (exp_compose: VK derivation,
-                              audit, queries) over the run; zk-Analytics' host driver of that proof
-  combined_peak_rss_mb        the whole process tree at once (rss_tree.sh tree_peak_rss_mb: VmRSS
-                              summed over the processes per 0.5 s sample): zkSketch coordinator +
-                              worker, zk-Analytics driver + r0vm; blank for logs without it
-It is implied when some family has k > 1; without it (and k = 1) the output is the previous one.
-
-Root variants (zk-Analytics aggregation proofs; ../README.md, "Root variants of the
-zk-Analytics aggregation proofs"): every zk-Analytics update row (update_*, accept_*) carries
-the `variant` of its aggregation guest (designed / noroot / legacy / a sensitivity variant)
-and its `root_construction`, both read from the driver rows' root_variant / root_construction
-columns. A `run_all.sh` run proves noroot (the headline) and, as a reference, their shipped
-CM (variant designed); the CM designed update / accept rows say so in `note`. Driver rows without those columns (the committed 2026-10-09 set) are `legacy`:
-CM cm_rows+cm+heap (their shipped roots), SS samples64, GK pertuple, HLL / Bloom / KMV none.
-Query proofs do not depend on the variant (query guests read no root): query rows say `-`, as
-do all zkSketch rows. Checked here: an aggregation job's variant equals its proved row's; per
-(family, epoch) every executor and proved aggregation row of every variant has the same
-state_commit, with journal_eq_native and variants_agree true. The CSV's first 18 columns are
-those of the previous version; `variant` and `root_construction` are appended (for the
-committed set, dropping the two gives the previous output byte for byte).
-
-GK on the zk-Analytics side: the rows of a `run_all.sh` run come from the MATCHED port
-(../gk_matched, SIX_ZKA_GK=matched: zkSketch's own GK batch rule inside their pipeline; its
-driver rows say algorithm=bm2): those rows are labelled system 'zk-Analytics arch. (port †,
-zkSketch GK rule)' and their `note` names the GK configuration; when a zkSketch GK CSV is
-present its capacity, s and leaf size are checked against the port's (a mismatch is reported
-on stderr and in `note`, and table.py then labels the GK row CONFIG MISMATCH, not "same rule
-both sides"). Rows of the textbook port (../gk, SIX_ZKA_GK=textbook, and the
-committed 2026-10-09 set) keep the system name 'zk-Analytics arch. (port †)'; in a new run
-their `note` says they are textbook GK, a reference (the committed set's output is unchanged).
-Rows of both ports in one results directory (exec, qexec, prove and vt files together) are
-refused, as are matched rows of several configurations.
-
-Verify protocol (both sides): `verify_ms` = the best of 5 in-process verify calls of the same
-proof (zk-Analytics: their drivers' loop; zkSketch: EXP_VERIFY_REPEATS=5). Deserialisation is
-excluded on both sides and reported separately (`decode_ms`). `verify_first_ms` / `verify_median_ms`
-are the first call and the median of the 5 where they were logged.
-"""
+"""Build six_sketch_comparison.csv from the raw files of a six-sketch run (run with python3 -I).
+Usage: assemble.py <results dir> <aol.keys> [--zka PFX --zks PFX] [--label L] [--plan FILE] [--extended] [--out CSV]"""
 import argparse
 import collections
 import csv
@@ -277,7 +176,7 @@ OUT = []
 COLS = ['family', 'system', 'run', 'operation', 'n', 'prove_s', 'verify_ms', 'verify_first_ms', 'verify_median_ms',
         'decode_ms', 'proof_bytes', 'peak_rss_mb', 'rss_scope', 'answer', 'exact', 'provenance', 'note', 'detail',
         'variant', 'root_construction']
-# --extended (implied by a forest of k > 1 leaves): see the docstring
+# --extended (implied by a forest of k > 1 leaves): the family's shape, the zkSketch variant and the memory columns
 COLS_EXT = ['epoch_records', 'zks_leaf_records', 'zks_leaves_per_epoch', 'zks_variant', 'zks_gk_rounds', 'zks_shape',
             'coord_peak_rss_mb', 'combined_peak_rss_mb']
 
@@ -491,7 +390,8 @@ for f in FAMS:
     for r in prove[f]:
         r['_est'] = False
 
-# --plan: estimate the planned jobs that were not proved, from executor cycle counts
+# --plan: a planned job without a proof gets prove_s = k x its executor's padded cycles / 2^20, where k is
+# the seconds per 2^20 padded cycles over this run's proofs; verify_ms and receipt_bytes are the means of those proofs
 EST_NOTE = ''
 if A.plan:
     plan = [ln.strip() for ln in open(A.plan) if ln.strip() and not ln.startswith('#')]
@@ -500,14 +400,14 @@ if A.plan:
     todo = [j for j in plan if j not in proved]
     if todo:
         if not measured:
-            sys.exit('--plan: no measured zk-Analytics proof in this run to calibrate the estimate from')
+            sys.exit('--plan: no measured zk-Analytics proof in this run to compute k from')
         k = sum(num(r['prove_s']) for r in measured) / sum(int(r['padded_cycles']) / 2 ** 20 for r in measured)
         mv = statistics.mean(num(r['verify_ms']) for r in measured)
         mb = statistics.mean(int(r['receipt_bytes']) for r in measured)
-        EST_NOTE = (f'ESTIMATED (padded_cycles x k={k:.3f} s per 2^20 cycles, calibrated from {len(measured)} '
+        EST_NOTE = (f'FROM CYCLES (padded_cycles x k={k:.3f} s per 2^20 cycles, k from {len(measured)} '
                     f'proof(s) of this run)')
-        print(f'estimate: k = {k:.3f} s per 2^20 padded cycles from {len(measured)} proof(s) '
-              f'({" ".join(sorted(proved))}); {len(todo)} job(s) estimated', file=sys.stderr)
+        print(f'k = {k:.3f} s per 2^20 padded cycles from {len(measured)} proof(s) '
+              f'({" ".join(sorted(proved))}); {len(todo)} job(s) computed from padded cycles', file=sys.stderr)
         qex = attach_jobs(ZKA, 'qexec', f'{ZKA}_qexec_jobs.csv')
         qex_by_job = {r['_job']['job']: r for f in FAMS for r in qex[f]}
         for job in todo:
@@ -628,16 +528,16 @@ for f in FAMS:
                if ex else 'no executor rows')
         emit(family=f, system=sysname, run='main', operation='update_per_epoch', prove_s=mp, verify_ms=mv,
              proof_bytes=round(mb), peak_rss_mb=rss, rss_scope=rscope,
-             answer='-', exact='-', provenance='sampled (incl. ESTIMATED epochs)' if anyest else 'sampled',
+             answer='-', exact='-', provenance='sampled (incl. FROM CYCLES epochs)' if anyest else 'sampled',
              note=ref_note(f, var),
-             detail=f"mean of {'proved/ESTIMATED' if anyest else 'proved'} epochs "
+             detail=f"mean of {'proved and FROM CYCLES' if anyest else 'proved'} epochs "
                     f"{and_join(r['epoch_index'] for r in aggr)}; {exd}", **vk, **zmx)
         emit(family=f, system=sysname, run='main', operation='update_per_epoch_amortized', prove_s=mp,
-             answer='-', exact='-', provenance='sampled (incl. ESTIMATED epochs)' if anyest else 'sampled',
+             answer='-', exact='-', provenance='sampled (incl. FROM CYCLES epochs)' if anyest else 'sampled',
              note=ref_note(f, var), detail='no composition on this side: equals update_per_epoch', **vk)
         emit(family=f, system=sysname, run='main', operation=f'update_stream_{T}_epochs', prove_s=T * mp,
              peak_rss_mb=rss, rss_scope=rscope, answer='-', exact='-',
-             provenance='derived (incl. ESTIMATED epochs)' if anyest else 'derived', note=ref_note(f, var),
+             provenance='computed (incl. FROM CYCLES epochs)' if anyest else 'computed', note=ref_note(f, var),
              detail=f'{T} x sampled per-epoch prove time; {T} receipts are kept (no composition)', **vk, **zmx)
     qrows = {}
     for r in [r for r in prove[f] if r['_job']['op'] == 'query']:
@@ -664,18 +564,18 @@ for f in FAMS:
                 r = qrows.get((n, suf))
                 if r:
                     v, b, how = num(r['verify_ms']), int(r['receipt_bytes']), \
-                        'query receipt ESTIMATED' if r['_est'] else 'query receipt measured'
+                        'query receipt FROM CYCLES' if r['_est'] else 'query receipt measured'
                 else:
                     v, b = zka_query_mean[f]
                     how = (f'query receipt at n={n} not proved: mean of the {len(qv)} measured query receipts '
                            f'({v:.3f} ms, {b:.0f} B)')
                 est = aest or (r is not None and r['_est'])
-                parts = ['incl. ESTIMATED receipts'] if est else []
+                parts = ['incl. FROM CYCLES receipts'] if est else []
                 if r is None and A.zks:   # (the committed 2026-10-09 set: provenance as before)
                     parts.append(f'query receipt at n={n} not proved: SAMPLED, the mean of the measured ones')
                 emit(family=f, system=sysname, run='main', operation=f'accept_n{n}{suf}', n=n,
                      verify_ms=n * mv + v, proof_bytes=round(n * mb + b), answer='', exact='',
-                     provenance='derived' + (f' ({"; ".join(parts)})' if parts else ''), note=ref_note(f, var),
+                     provenance='computed' + (f' ({"; ".join(parts)})' if parts else ''), note=ref_note(f, var),
                      detail=f'verifier work to accept the answer, best-of-5 per receipt: {n} aggregation receipts '
                             f'(sampled mean {mv:.3f} ms, {mb:.0f} B each) + 1 query receipt ({how})',
                      variant=var, root_construction=con)
@@ -808,16 +708,17 @@ for pfx, sysname, run, full in ZKS_SETS:
                 emit(family=f, system=sysname, run=run, operation='update_per_epoch',
                      prove_s=float(row['leafgen_seq_ms']) / t / 1000, proof_bytes=int(b[1]['ib']),
                      peak_rss_mb=worker_rss, rss_scope='procs-engine worker (RSSTREE sampler)', answer='-', exact='-',
-                     provenance='derived',
+                     provenance='computed',
                      detail=f"EXCLUDING composition: leafgen_seq_ms/t = {row['leafgen_seq_ms']}/{t} (sum of the {t} "
                             f"measured leaf proofs); proof_bytes = leaf-1 proof as shipped for query binding; "
                             f"exp_compose's own worker peak_rss_mb = {row['peak_rss_mb']}; {gate}", **zx, **zmem_)
                 emit(family=f, system=sysname, run=run, operation='update_per_epoch_amortized',
-                     prove_s=float(row['total_time_ms']) / t / 1000, answer='-', exact='-', provenance='derived',
+                     prove_s=float(row['total_time_ms']) / t / 1000, answer='-', exact='-', provenance='computed',
                      detail=f"INCLUDING composition: total_time_ms/t = {row['total_time_ms']}/{t} ({t} leaves + "
                             f"{row['merges_local']} merges, 1 machine x {row['cores']} cores)", **zx)
             elif tag == ZKS_TAGS[f][0]:
-                # one epoch = k leaves + (k - 1) merges (the memmatch method; see the docstring)
+                # one epoch = k leaves + (k - 1) merges: the measured total when the run is one epoch,
+                # else k x leaf_s + (k - 1) x merge_s
                 tot = float(row['total_time_ms']) / 1000
                 leaf_s = float(row['leafgen_seq_ms']) / t / 1000
                 merge_s = (tot - leaf_s * t) / (t - 1)
@@ -827,7 +728,7 @@ for pfx, sysname, run, full in ZKS_SETS:
                      prove_s=tot if te == 1 else k * leaf_s + (k - 1) * merge_s,
                      proof_bytes=sum(int(x) for x in b[k]['ib'].split(';')),
                      peak_rss_mb=worker_rss, rss_scope='procs-engine worker (RSSTREE sampler)', answer='-', exact='-',
-                     provenance='measured' if te == 1 else 'derived',
+                     provenance='measured' if te == 1 else 'computed',
                      detail=f"ONE EPOCH = {k} leaves of {leaf} records + {k - 1} merges: {how}; leaf_s = "
                             f"leafgen_seq_ms/t = {row['leafgen_seq_ms']}/{t} ms, merge_s = (total_time_ms - "
                             f"leafgen_seq_ms)/(t - 1) = ({row['total_time_ms']} - {row['leafgen_seq_ms']})/{t - 1} ms "
@@ -837,7 +738,7 @@ for pfx, sysname, run, full in ZKS_SETS:
                             f"shipped for query binding; exp_compose's own worker peak_rss_mb = {row['peak_rss_mb']}; "
                             f"{gate}", **zx, **zmem_)
                 emit(family=f, system=sysname, run=run, operation='update_per_epoch_amortized',
-                     prove_s=tot / te, answer='-', exact='-', provenance='derived',
+                     prove_s=tot / te, answer='-', exact='-', provenance='computed',
                      detail=f"INCLUDING composition: total_time_ms/T = {row['total_time_ms']}/{te} ({t} leaves of "
                             f"{leaf} records + {row['merges_local']} merges, 1 machine x {row['cores']} cores)", **zx)
             if tag == ZKS_TAGS[f][0]:
@@ -884,7 +785,7 @@ for pfx, sysname, run, full in ZKS_SETS:
                          verify_ms=pmin + parts['check'] + mn, verify_first_ms=pfirst + parts['check'] + first,
                          verify_median_ms=pmed + parts['check'] + med, decode_ms=sum(parts['dec']),
                          proof_bytes=sum(ib) + int(qq['bytes']), answer='', exact='', **zx,
-                         provenance='derived (sum of measured parts)',
+                         provenance='computed (sum of measured parts)',
                          detail=f"{bb['ctx']} live peak(s) [{bb['iv']}] verified against pinned VKs (per part, best "
                                 f"of 5: {'+'.join(f'{min(v):.3f}' for v in parts['ver'])} ms) + statement checks "
                                 f"{parts['check']:.3f} ms + query proof (best of 5 {mn:.3f} ms); postcard decode "

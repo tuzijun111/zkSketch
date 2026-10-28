@@ -1,22 +1,5 @@
-//! Backend-agnostic measurement harness for the EVAL_SPEC §1 metrics.
-//!
-//! Pure-std (no proof-system types), so the **identical** harness is mirrored in
-//! the plonky3 crate (`../src/experiments/metrics.rs`); both stacks report the
-//! same columns the spec mandates:
-//!
-//! - `witness_gen_ms`, `prove_ms`, `prove_total_ms`, `verify_ms` — wall-clock,
-//!   split per phase (the experiment times each phase inside its `run` closure).
-//! - `peak_rss_mb` — peak resident memory **during** the run, sampled by a
-//!   background thread polling `/proc/self/status:VmRSS` (per-run max; VmHWM is
-//!   a process-lifetime high-water mark and can't be reset, so we sample
-//!   current RSS and take the max — the honest per-run peak).
-//! - `proof_size_bytes`, `trace_rows`, `num_columns`, `constraint_count` —
-//!   deterministic, single value (constraint_count = trace_rows·num_columns,
-//!   the backend-independent trace-cell measure).
-//!
-//! Timing protocol: [`bench`] can aggregate `warmup + trials` runs to median/p95
-//! internally, but the emitted CSV ([`AggRow::header`]/[`AggRow::fields`]) reports
-//! a **single value per metric** (E1 runs each config once).
+//! Measurement helpers: per-phase wall-clock time, proof size, trace size, peak RSS (VmRSS sampled by a
+//! background thread), and CSV / env.json output.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;

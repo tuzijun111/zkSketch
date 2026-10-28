@@ -1,57 +1,8 @@
 #!/usr/bin/env python3
 """Plan the zk-Analytics prove jobs of the six-sketch comparison (run with python3 -I).
 
-Usage:
-  jobs.py --keys <aol.keys> --m M --t T [--aggr 0,7] [--qns 1,2,4,8] [--roots noroot] [--cm-ref 1]
-          [--fam-m FAM=M,...] [--leaf [FAM=]m,...]
-          [--logs DIR [--prefix six_zksketch]] [--select SEL,...] [--lines]
-
-A job is `<fam>:aggr:<epoch>:<variant>` or `<fam>:query:<n>[:<arg>]` (the argument syntax
-of `run_zka.sh prove`; there an aggregation job without a variant means legacy). The plan
-lists, in this order: the aggregation jobs of every family (cm hll ss gk bloom kmv; per
-family each epoch of --aggr, per epoch each root variant of --roots), then the queries of
-cm, hll, gk, bloom (inserted key), bloom (absent key), kmv and ss at every n in --qns, then
-(--cm-ref 1) their shipped CM aggregation as a REFERENCE, `cm:aggr:<e>:designed` at each
-epoch of --aggr, unless --roots already has designed or legacy (both are their unchanged
-aggr_cm). The reference comes last, so a run stopped early still has the headline.
-Query proofs do not depend on the root variant (query guests read no root), so each query
-is planned once. Defaults: --aggr 0,T-1, --qns = the powers of two <= T, --roots noroot
-(the headline) and --cm-ref 1, i.e. 2 x 6 = 12 aggregation + 28 query + 2 CM reference = 42
-jobs at T = 8 (40 with --cm-ref 0; 52 with --roots designed,noroot, the reference then being
-the designed CM jobs; 40 with --roots legacy, the plan of the committed 2026-10-09 run).
-
-Run shape: M (--m) records per epoch, T (--t) epochs; --fam-m gives a family its own epoch
-(e.g. gk=2048 next to --m 16384), --leaf the zkSketch leaf size (a bare number: every family;
-FAM=m: one family; default: the epoch, one leaf per epoch). With leaves of m records an epoch is
-k = M / m zkSketch leaves, and zk-Analytics query point n (after n epochs) is zkSketch's query
-after leaf j = n*k (QLOG_KEY at_leaf=j, over the first n*M records).
-
-Two query arguments must equal what zkSketch probed at n, so both sides answer the
-same query:
-  GK rank value     the most frequent 21-bit value (key & 0x1FFFFF) of the first n*M
-                    records, ties to the smaller value (zkSketch EXP_QUERY_KEY_MODE=hot)
-  Bloom absent key  splitmix64(j ^ 0xD1B54A32D192ED03) & 0xFFFFFFFF, re-hashed with
-                    splitmix64(c) & 0xFFFFFFFF (up to 128 times) while c is in the
-                    first n*M records (zkSketch EXP_QUERY_KEY_MODE=absent)
-(src/experiments/stream_compose.rs, select_query_key). With --logs they are READ from
-the QLOG_KEY lines of <prefix>_gk.log and <prefix>_bloom_absent.log in DIR (zkSketch's
-own record of what it probed) and cross-checked against the derivation above, if
---keys is given (exit 1 on any difference). Without --logs they are derived.
-The inserted Bloom key: with one leaf per epoch (k = 1) it needs no argument, `first` is
-the first record of batch n on both sides. With k > 1 zkSketch probes the first record of
-leaf j = n*k (key index (j-1)*m), not of epoch n, so the job names it, `bloom:query:<n>:key:<k>`
-(read from <prefix>_bloom.log with --logs, cross-checked as above).
-
-The plan does not depend on which zk-Analytics GK runs (`run_zka.sh` picks it: the matched
-port of zkSketch's GK rule by default, SIX_ZKA_GK=matched, or the textbook reference): both
-answer rank(v) at the same v. The matched port has no `legacy` aggregation guest, so with
---roots legacy its gk:aggr jobs are refused by run_zka.sh (use SIX_ZKA_GK=textbook).
-
---select keeps only the jobs equal to a selector or starting with '<selector>:', e.g.
-`cm:aggr:0:noroot,kmv:aggr:0:noroot,gk:query:1,bloom:query:1:key` (`cm:aggr:0` selects
-every planned variant of that epoch, the CM reference included); a selector that matches no
-job is reported on stderr, and no match at all is an error. Output: one line, jobs separated by spaces (--lines: one job per line).
-"""
+Usage: jobs.py --keys <aol.keys> --m M --t T [--aggr 0,7] [--qns 1,2,4,8] [--roots noroot] [--cm-ref 1]
+       [--fam-m FAM=M,...] [--leaf [FAM=]m,...] [--logs DIR [--prefix six_zksketch]] [--select SEL,...] [--lines]"""
 import argparse
 import collections
 import os
@@ -180,9 +131,9 @@ def main():
             if bad:
                 def two(x):   # the message of one leaf per epoch, as before
                     return x[:2] if x[2] is None else x
-                sys.exit('zkSketch logs and the native derivation disagree at n = '
+                sys.exit('zkSketch logs and the values computed from the keys disagree at n = '
                          + ', '.join(f'{n} (log gk/absent{"" if args[n][2] is None else "/inserted"} '
-                                     f'{two(args[n])}, derived {two(nat[n])})' for n in bad)
+                                     f'{two(args[n])}, computed {two(nat[n])})' for n in bad)
                          + f'; check --m (M={a.m})'
                          + (', --fam-m / --leaf' if any(shape[f] != (a.m, 1) for f in FAMS) else '')
                          + ' and the keys file')

@@ -1,24 +1,5 @@
-//! E4 — scalability sweeps for the **plonky3 (STARK)** backend (EVAL_SPEC E4).
-//! Four sub-sweeps over the certified Count-Min leaf, each isolating one axis of
-//! the cost model:
-//!
-//! - **e4a** batch size `m` (all keys distinct) → prove/witness grow ~linearly
-//!   in `m` (the no-dedup worst case). (`constraint_count` on plonky3 is the
-//!   summed FRI log-degree, so it grows only ~logarithmically — the linear
-//!   signal is in `prove_total_ms`.)
-//! - **e4c** state size `s = d·w` at fixed `m` → with the prototype's **flat**
-//!   whole-state Poseidon2 commit, cost grows ~linearly in `s` (recorded via the
-//!   `commit_mode` column; the sublinear-in-`s` claim needs a sparse-opening
-//!   commit — Phase-10 future work).
-//! - **e4d** **stream length** `n` ingested as consecutive batches (state
-//!   threaded) → per-batch `prove_total` is **flat in `n`** (history-independent
-//!   transitions) and the per-leaf self-verify is constant. The O(1)-in-`n` root
-//!   verify is the E5 composition result.
-//!
-//! Run:    cargo run --release --example exp_e4
-//! Config: EXP_E4A_M=16,32,64  EXP_E4B_DB=8,16,32  EXP_E4C_W=8,16,32
-//!         EXP_E4D_EPOCHS=8     EXP_TRIALS=2  EXP_WARMUP=1
-//! Output: results/e4_scaling.csv
+//! E4: Count-Min leaf cost vs batch size m, width w and number of batches; writes results/e4_scaling.csv.
+//! Usage: [EXP_E4A_M=16,32,64 EXP_E4C_W=4,8,16 EXP_E4D_EPOCHS=8 EXP_WARMUP=1 EXP_TRIALS=2] cargo run --release --example exp_e4
 
 use zksketch::experiments::families::cm_empty;
 use zksketch::experiments::metrics::{

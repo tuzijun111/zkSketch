@@ -1,30 +1,6 @@
 #!/usr/bin/env bash
-# zkSketch side of the six-sketch comparison: one exp_compose run per family (+ a second
-# Bloom run for the absent-key probe), sequential, each behind the quiet-box gate.
-#   forest, procs engine, 1 machine x SIX_CORES cores, N = SIX_T x SIX_M AOL records in SIX_T
-#   batches of SIX_M, a query after every batch (n = 1..T), default (hiding) commitments.
-#   Paper configuration (the defaults): 32 cores, N = 16,384, m = 2,048 (t = 8).
-#   With a zkSketch leaf smaller than the epoch (SIX_LEAF / SIX_LEAF_<FAM>, per-family epochs
-#   SIX_M_<FAM>; six_common.sh): N = SIX_T x epoch records in leaves of `leaf` records (t = SIX_T x
-#   epoch / leaf leaves), a query after every leaf; the log's "# shape:" line records the epoch.
+# zkSketch side of the six-sketch comparison: one exp_compose forest run per sketch, plus a Bloom absent-key run.
 # Usage: run_zks.sh [tag ...]   (default: cm hll ss gk bloom bloom_absent kmv)
-# Env (see six_common.sh for RESULTS, SIX_M, SIX_T, SIX_N, SIX_M_<FAM>, SIX_LEAF, SIX_LEAF_<FAM>, SIX_GK_CAP,
-#   SIX_GK_ROUNDS, SIX_BLOOM_VARIANT, SIX_CORES; gate.sh for GATE_*):
-#   ZKS_BIN          exp_compose binary (default: this checkout's target/release/examples/exp_compose;
-#                    build it in THIS checkout: exp_compose finds data/ and results/ through the
-#                    checkout it was compiled in)
-#   ZKS_FEATURES     label for the binary's Cargo features (default "default"); the pcs and
-#                    logup_mask the binary reports are appended to it in <prefix>_runs.csv
-#   SIX_ZKS_PREFIX   output file prefix (default six_zksketch): <prefix>_<tag>.csv/.log, <prefix>_runs.csv
-#   SIX_WORK         scratch for per-batch proofs, deleted after each run (default $RESULTS/work)
-#   EXP_VERIFY_REPEATS  passed through (default 5): extra warm verifies, logged only (QLOG_VERIFY/QLOG_BINDV)
-#   SIX_FAIL_FAST=1  stop at the first failed run
-#   EXP_FOREST_RETAIN_PREP, EXP_MALLOC_TRIM, EXP_EXIT_BEFORE_AUDIT, EXP_MERGE_CACHE,
-#   EXP_MERGE_CACHE_ENTRIES  M0 harness switches, passed through (all other EXP_* are dropped);
-#                    unset = the new default. Pre-M0 behaviour: EXP_FOREST_RETAIN_PREP=1
-#                    EXP_MALLOC_TRIM=0 EXP_EXIT_BEFORE_AUDIT=0 EXP_MERGE_CACHE=0.
-#                    EXP_MALLOC_TRIM=idle trims only before a process idles, not between proofs
-# Exit status 0 only if every run exited 0 and wrote a CSV row with status=ok.
 set -uo pipefail
 HERE6="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ALL_TAGS=(cm hll ss gk bloom bloom_absent kmv)
@@ -66,13 +42,13 @@ BIN_MD5=$(md5sum < "$BIN" | cut -c1-12)
 dirty() { git -C "$WT" status --porcelain -- . ":(exclude)scripts/baselines/zka/results" | wc -l; }
 
 declare -A FAM KM ENVS
-FAM[cm]=cm;            KM[cm]=hot;      ENVS[cm]="EXP_D=3 EXP_W=1024"
+FAM[cm]=cm;            KM[cm]=hot;      ENVS[cm]="EXP_D=3 EXP_W=$SIX_CM_W"
 FAM[hll]=hll;          KM[hll]=first;   ENVS[hll]="EXP_HLL_B=14"
-FAM[ss]=ss;            KM[ss]=first;    ENVS[ss]="EXP_SS_CAP=1024"
+FAM[ss]=ss;            KM[ss]=first;    ENVS[ss]="EXP_SS_CAP=$SIX_SS_CAP"
 FAM[gk]=gk;            KM[gk]=hot;      ENVS[gk]="EXP_GK_CAP=$SIX_GK_CAP EXP_GK_S=51 EXP_GK_ROUNDS=$SIX_GK_ROUNDS"
 FAM[bloom]=bloom;      KM[bloom]=first; ENVS[bloom]="EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=$SIX_BLOOM_VARIANT"
 FAM[bloom_absent]=bloom; KM[bloom_absent]=absent; ENVS[bloom_absent]="EXP_BLOOM_K=7 EXP_BLOOM_LOGW=14 EXP_BLOOM_VARIANT=$SIX_BLOOM_VARIANT"
-FAM[kmv]=kmv;          KM[kmv]=first;   ENVS[kmv]="EXP_KMV_K=1024"
+FAM[kmv]=kmv;          KM[kmv]=first;   ENVS[kmv]="EXP_KMV_K=$SIX_KMV_K"
 
 # Ctrl-C / TERM: stop the running exp_compose (rss_tree.sh stops its process group) and exit.
 CHILD=

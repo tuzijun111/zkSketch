@@ -1,16 +1,5 @@
-//! Input-commitment + history-fold over real batches (plonky3). For each family
-//! it ingests `n` real batches — each leaf binds the batch's records to `Com(B_t)`
-//! in circuit (the prove time is the **input-binding** cost) — then folds the
-//! real `Com(B_t)` into a single history root `R(t)` via the streaming forest
-//! (the merge count is the **fold** cost). This is the end-to-end tie between the
-//! input commitment and the root that E5/E6 (composition only, synthetic leaves)
-//! don't exercise.
-//!
-//! Run:    cargo run --release --example exp_inputfold
-//! Config: EXP_IF_BATCHES=8   EXP_IF_M=16
-//! Output: results/input_fold.csv
-//!   phase=ingest rows (one per real batch): leaf_prove_ms, proof_size_bytes
-//!   phase=fold rows (one per family): fold_merges, verifier_checks, root size
+//! Input-commitment binding and history fold over real batches, per family; writes results/input_fold.csv.
+//! Usage: [EXP_IF_BATCHES=8 EXP_IF_M=16] cargo run --release --example exp_inputfold
 
 use zksketch::experiments::families::{
     cm_empty, cm_epoch, gk_empty, gk_epoch, hll_empty, hll_epoch, ss_empty, ss_epoch, EpochOutcome,

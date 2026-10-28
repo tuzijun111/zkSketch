@@ -1,22 +1,7 @@
 #!/usr/bin/env python3
-"""Small-scale driver: a ZoKrates HyperLogLog operator following zkStream's
-stateful-operator design ("replay": commit-in, batch digest, textbook per-record
-update, commit-out). OUR circuit in zkStream's toolchain (ZoKrates 0.8.8, Groth16 over
-BN254) -- never report it as "zkStream".
-
-For each (s, k): generate the operator and its witness helper, compile both (under a
-45-minute / 150 GB cap; a refused compile is recorded, not retried), set up the
-operator once, then prove a chain of C chunks over AOL keys. Each chunk opens the
-previous chunk's state commitment. Every chunk's helper state and commitments are
-checked against the native reference (native.py, which reimplements Poseidon), and the
-operator is given the helper's statement. With --tamper, forged statements and inputs
-at chunk 1 must be rejected by compute-witness, and a proof with a modified public input
-must fail verification.
-
-One CSV row per measured step -> $RESULTS/zkstream_hll.csv (appended); the console is
-mirrored to $RESULTS/zkstream_hll_<run>.log.
-
-  run_hll.py --s 16 64 256 1024 --k 4 16 64 --chunks 4 --tamper --prune
+"""HyperLogLog replay operator following zkStream's design (our ZoKrates 0.8.8 / Groth16 circuit, not zkStream):
+proves C chained chunks over AOL keys, each checked against native.py; one row per step in $RESULTS/zkstream_hll.csv.
+Usage: run_hll.py --s 16 64 256 1024 --k 4 16 64 --chunks 4 --tamper --prune
 """
 import argparse, csv, json, os, re, secrets, subprocess, sys, time
 from datetime import datetime

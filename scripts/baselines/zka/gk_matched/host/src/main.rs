@@ -1,71 +1,5 @@
-// zk-Analytics-architecture GREENWALD-KHANNA arm with zkSketch's GK ALGORITHM: our
-// guests (aggr_gkm, querier_gkm) run in zk-Analytics' own epoch pipeline on REAL AOL
-// records, and the summary update is zkSketch's two-sided band-merge batch rule
-// (apply_batch2, src/sketch/gk_bandmerge.rs), not textbook GK. Both systems then compute
-// the same sketch state from the same records, so the comparison is the cost of the
-// same work (../README.md; the textbook port ../../gk stays as a labelled reference).
-//
-// Records (as ../../gk): data/aol.keys (flat little-endian u32). Epoch e holds keys
-// [e*B, (e+1)*B), B = --epoch-size.
-//   key_id = Event::make_key_id(0, key)   (zkvm-common/src/lib.rs:76)
-//   value  = key & 0x1F_FFFF              (zkSketch's gk_vals_of mask; the guest applies
-//                                          gk_vals_of again, which keeps these values)
-//   ts     = global record index
-// Batches: source 0, stream order, --batch records each (default 8, their
-// --commit-batch-size default); SHA-256 batch chain, source_batch_seq and
-// prev_source_chain_tips carried across epochs as their aggregator host does. Epoch e's
-// prev_chain_hash is epoch e-1's final_chain_hash, and epoch e's guest takes S_{e-1}
-// (checked against epoch e-1's state_commit through that link).
-// GK configuration (zkSketch's GkbParams of the run being matched):
-//   --capacity C   (default 2048; EXP_GK_CAP / SIX_GK_CAP)
-//   --m-sub M      (default = --epoch-size; zkSketch's leaf size: each epoch is applied as
-//                   B / M successive apply_batch2 steps. B must be a multiple of M, so the
-//                   steps are exactly zkSketch's leaves)
-//   --s S          (default 51; EXP_GK_S)
-//   --impl tuned|fast|fixed_linear|literal   (default literal: zkSketch's apply_batch2 as
-//                   written, the baseline; the guest's implementation of the one transition:
-//                   tuned = ../core apply_epoch_tuned, our rewrite, sensitivity only;
-//                   the others ../../gk_bm2/README.md; same state, different cycles)
-// A capacity overflow is a HARD ERROR: the native reference detects it first and the
-// driver exits 3 without running a guest; the guest itself also panics on one.
-// zk-Analytics epochs are never padded, so the guest's gk_vals_of PAD_KEY strip is a no-op
-// here (the driver masks value = key & 0x1FFFFF): the driver refuses a dataset with a key
-// equal to PAD_KEY (u32::MAX) in the epochs it runs, where zkSketch would strip that record.
-//
-// Modes:
-//   --mode aggr [--epoch-index i] [--root designed|noroot|pertuple] [--emit-state] [--prove]
-//        chain epochs 0..i natively, execute (and with --prove prove) aggr_gkm on epoch i.
-//        Root variants as ../../gk's aggr_gk_root (designed = 64-bucket samples-pattern
-//        root, noroot = none (default), pertuple = one leaf per tuple); `legacy` (the
-//        committed textbook-GK guest) does not exist here and is refused.
-//        Checks: journal == native (journal_eq_native); the native state == zkSketch's
-//        own apply_batch2 chain over the same records, tuple by tuple
-//        (state_eq_zksketch; with --emit-state also the guest's emitted state); every
-//        root variant and every implementation gives the same state, commitment and link
-//        (variants_agree).
-//   --mode query --epochs n --query rank --rank-value v [--prove]
-//        chain epochs 0..n-1 natively, execute (prove) querier_gkm on the latest state.
-//        Checks: journal == native; the answer's bounds == zkSketch's
-//        Gk2State::rank_interval on zkSketch's own chain (query_eq_zksketch).
-//   --mode check --epochs K [--impl all|<list>]
-//        equivalence sweep: for every epoch e < K and implementation, execute aggr_gkm
-//        WITH the new state emitted and compare it tuple by tuple with zkSketch's native
-//        chain; execute querier_gkm at n = e+1 on the hot value (the most frequent masked
-//        value of the prefix, the zkSketch EXP_QUERY_KEY_MODE=hot rule) and compare with
-//        zkSketch's rank_interval. One row per (epoch, implementation).
-//   --mode certify --epochs K [--commit hiding|plain] [--seed N]
-//        zkSketch's OWN leaf circuit on the same records: build the GK band-merge leaf
-//        exactly as exp_compose does (build_gkb2_leaf_commit(params, composition_expose(),
-//        default_binding(), mode)) and prove every m_sub-record leaf of epochs 0..K-1
-//        (global batch index t, openings of a ProverCommit with the public test seed N),
-//        and check that each epoch's last leaf exposes Com(S) of the state the zk-Analytics
-//        guest computed (emitted by aggr_gkm, executed); also prove zkSketch's GK decoder on
-//        that state at the hot value and compare its answer with querier_gkm's. Heavy
-//        (real STARK proofs; ~6 s per cap-384/128 leaf). One row per epoch.
-//   --header
-//   common: [--keys PATH] [--epoch-size 2048] [--batch 8]
-// Nothing runs in RISC0_DEV_MODE. Exit status: 0 ok; 1 a check failed (row printed);
-// 2 bad arguments; 3 capacity overflow.
+// Host driver for the matched GK guests (aggr_gkm, querier_gkm): zkSketch's GK rule in zk-Analytics' pipeline.
+// Usage: gk_matched --mode aggr|query|check|certify [--epoch-index I | --epochs N] [--capacity C] [--m-sub M]
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -84,8 +18,9 @@ use zksketch::sketch::gk_bandmerge::{apply_batch2, try_apply_batch2, Gk2State, G
 use zkvm_common::Event;
 
 const VALUE_MASK: u32 = 0x001F_FFFF;
-/// MODELED prove time: segments x 30.1 s, envelope 29.73 .. 30.79 s/segment (the four
-/// CPU CM anchors in ../../README.md "Modeled prove time and the anchors behind it").
+/// MODELED_prove_s = segments x S_PER_SEG (computed, not measured), from the four CPU-proved CM guest runs
+/// in scripts/baselines/zka/README.md: S_PER_SEG is aggr_cm T=100, n=512 (661.3 s / 22 segments = 30.06 s)
+/// rounded; _lo/_hi use 29.73 and 30.79 s, the lowest and highest s/segment of the four.
 const S_PER_SEG: f64 = 30.1;
 const S_PER_SEG_LO: f64 = 29.73;
 const S_PER_SEG_HI: f64 = 30.79;

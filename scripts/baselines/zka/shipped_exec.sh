@@ -1,30 +1,7 @@
 #!/usr/bin/env bash
-# Step 3, arm A: zk-Analytics' OWN shipped epoch summaries (samples, histogram, cm)
-# on REAL AOL records, for the query classes zkSketch covers. EXECUTOR ONLY.
-#
-#   aggregation guests on ONE epoch (the first 16,384 AOL records = our matched CM epoch):
-#       samples, histogram (CM_TOPK_SLOTS=100 and =1, as a T-independence check),
-#       cm at CM_TOPK_SLOTS=1 and =100
-#   query guests over n populated epochs of 16,384 consecutive AOL records (n=64 is all 2^20):
-#       samples SumTopk{limit}   heavy hitters (exact)          T=100
-#       histogram P90            quantile (log2 bins)           T=100
-#       histogram P90, --key-id const (steelman: one per-key histogram per epoch)
-#       cm Estimate{heaviest key}, cm Topk{limit}                T=100
-#       cm Estimate                                              T=1 (the TOPK=1 update arm's query)
-#
-# Every row carries MODELED prove-time columns = segments x s/segment. They are a
-# MODEL, not a measurement: the four CPU prove anchors behind it are all CM guests
-# (see README "Shipped-structure arm"); samples/histogram guests need their own
-# proved anchor before their modeled seconds can be printed as anything but a model.
-#
-# Usage: ./shipped_exec.sh [n1 n2 ...]         (default epochs: 1 4 16 64)
-# Env:   SKIP_BUILD=1    use the existing shipped binaries
-#        LIMIT=10        SumTopk / Topk limit (their bench_queries default)
-#        OUT=...         default $RESULTS/zka_shipped_exec.csv (overwritten; previous copy kept as .prev)
-#        S_PER_SEG=30.1  central s/segment; LO/HI envelope 29.73 / 30.79 (per-anchor min/max)
-#
-# Runs no prover and touches no process it did not start: the executor spawns its
-# own short-lived single-threaded r0vm per run, which exits with the run.
+# zk-Analytics' shipped summaries (samples, histogram, cm) on AOL records, executor only. MODELED_prove_s is
+# segments x S_PER_SEG (30.1 s; 29.73-30.79 over four CPU proofs of their CM guest), not a proved time.
+# Usage: ./shipped_exec.sh [n1 n2 ...]   (default 1 4 16 64; env: SKIP_BUILD=1, LIMIT, OUT, S_PER_SEG)
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"   # RESULTS ZKA build_cyc cyc_target
 

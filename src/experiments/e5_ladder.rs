@@ -1,29 +1,5 @@
-//! **E5 — composition ladder** (EVAL_SPEC §2 E5). The composition story's
-//! headline: as you climb the ladder, the *auditor's* cost falls from `Θ(E)` to
-//! `O(1)` while the prover's online merge cost stays amortised `O(1)`.
-//!
-//! Four settings over an audit window of `E` epochs:
-//! - `no_composition` — every epoch is an independent proof; the auditor must
-//!   re-verify all `E` of them (`verifier_checks = E`, no online merges).
-//! - `per_batch_chain` — each batch links to the previous; the auditor still
-//!   walks the whole `E`-long boundary chain (`verifier_checks = E`), but the
-//!   prover does one `merge_atom` per insert.
-//! - `recursive_linear` — the linear chain is folded into a single root
-//!   ([`compose_chain`]); the auditor checks **one** root digest
-//!   (`verifier_checks = 1`).
-//! - `streaming_forest` — the MMR forest ([`StreamingForest`]); amortised
-//!   `O(1)` online merges (`< 1` per insert), worst-case `⌈log₂E⌉` cascade, and
-//!   the finalised root is **one** digest (`verifier_checks = 1`).
-//!
-//! **Leaf-shape-agnostic** (the paper states composition is): we drive it with
-//! cheap synthetic, boundary-consistent epoch leaves to reach larger windows.
-//!
-//! **Honest caveat (option (i)).** This prototype has no in-circuit recursive
-//! verifier (Phase 1.5), so a "merge"/"root check" is a Poseidon2 boundary
-//! digest, **not** a full recursive-SNARK fold. The `verifier_checks` /
-//! `root_proof_bytes` columns therefore report the **composition-layer**
-//! structure (`Θ(E)→O(1)`); the absolute byte/ms numbers are the lightweight
-//! digest cost, not STARK-proof sizes. The structural collapse is the signal.
+//! E5 composition ladder over `E` epochs: none, per-batch chain, recursive chain, forest.
+//! Synthetic leaves; a merge here is a Poseidon2 boundary digest, not a recursive STARK fold.
 
 use std::hint::black_box;
 

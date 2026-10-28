@@ -1,38 +1,4 @@
-//! **Evaluation harness — the experiments behind `latex/zk1.tex` §Evaluation.**
-//!
-//! This module turns the paper's Evaluation *plan* (RQ1–RQ4, the end-to-end
-//! case study, and cost-model validation) into runnable, small-scale
-//! experiments over the four sketch circuits (`countmin_final`,
-//! `gk_final_full`, `hll_final_full`, `ss_final_full`) and the §4 composition
-//! framework. Each research question is its own submodule; each returns a
-//! [`Table`] of results that the example runners (`examples/exp_*.rs`) write to
-//! `results/<name>.csv` for the plotting scripts (`scripts/plot_experiments.py`).
-//!
-//! ## What is *measured* vs *analytical*
-//!
-//! The prototype proves real STARKs, so prover time, proof size, correctness,
-//! and tamper-rejection are **measured**. A few experiments in the paper need
-//! baselines this prototype does not implement (RISC0/SP1 zkVMs, a Merkle exact
-//! ZK index, in-circuit constraint introspection); those rows are produced
-//! **analytically** from the cost model and are clearly flagged as such in the
-//! `note`/`kind` column. The §4 framework composes via the paper's *option (i)*
-//! lifting (boundary-digest binding, not an in-circuit recursive verifier), so
-//! RQ4's per-merge cost is the lightweight composition cost, not a full
-//! recursive-SNARK fold — again flagged in the output.
-//!
-//! ## Running
-//!
-//! ```bash
-//! cargo run --release --example exp_rq1        # capability
-//! cargo run --release --example exp_rq2        # scalability
-//! cargo run --release --example exp_rq3        # optimisations
-//! cargo run --release --example exp_rq4        # topology + policy
-//! cargo run --release --example exp_casestudy  # end-to-end on AOL/Netflix
-//! python3 scripts/plot_experiments.py          # render results/figures/*.pdf
-//! ```
-//!
-//! Scale is deliberately small (the paper notes the camera-ready will use the
-//! full sweeps); override the default thread pool with `V3_SWEEP_THREADS=k`.
+//! Experiment runners behind `examples/exp_*.rs`; results go to `results/`.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

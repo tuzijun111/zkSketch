@@ -82,12 +82,12 @@ CARGO_TARGET_DIR=~/ext-baselines/build/hll cargo test --release --locked -p zka-
   - `prof`: the guest's cycle split per phase, from `env::cycle_count()` marks written to
     STDOUT, not to the journal.
 
-## Results (2026-09-26; executor unless stated; MODELED = segments x 30.1 s, NOT measured)
+## Results (2026-09-26; executor unless stated; prove time = segments x 30.1 s, not measured)
 
 **Aggregation, one epoch** (16,384 records, 8,433 distinct keys):
 
 - 82,646,548 user cycles (5,044 per record), 85 segments, 88.6M padded cycles.
-- MODELED 2,558 s (envelope 2,527-2,617 s).
+- Prove time at 30.1 s per segment: 2,558 s (envelope 2,527-2,617 s); not proved.
 - Their `aggr_cm` at T=1 on the same epoch takes 100.4M cycles and 104 segments.
 
 | phase | cycles | share | per record |
@@ -100,7 +100,7 @@ CARGO_TARGET_DIR=~/ext-baselines/build/hll cargo test --release --locked -p zka-
 
 **Query over n epochs** (merge + estimate):
 
-| n | records | exact distinct | estimate (rel. err) | `hll_query` cycles | segs | MODELED | `hll_query_words` cycles | segs | MODELED |
+| n | records | exact distinct | estimate (rel. err) | `hll_query` cycles | segs | segs x 30.1 s | `hll_query_words` cycles | segs | segs x 30.1 s |
 |---|---|---|---|---|---|---|---|---|---|
 | 1 | 16,384 | 8,433 | 8,472 (+0.46%, LC) | 387,064 | 1 (po2 19) | 30 s | 2,843,086 | 3 | 90 s |
 | 4 | 65,536 | 29,390 | 29,330 (-0.20%, LC) | 1,013,846 | 2 | 60 s | 10,837,880 | 11 | 331 s |
@@ -203,11 +203,11 @@ equal to the native output.
 - **The query cost excludes aggregation receipts.** Every query also needs the n per-epoch
   aggregation receipts, verified separately. Their tree has no `env::verify`, so the
   aggregation rows recur once per epoch.
-- **MODELED is a model.**
-  - It is `segments x 30.1 s`, with the envelope from the four CM anchors
+- **Prove times are computed, not measured.**
+  - They are `segments x 30.1 s`, with the envelope from the four CM anchors
     (`../README.md`).
-  - The one HLL anchor measured 30.19 s/segment, which supports but does not prove the model
-    for the larger runs.
+  - The one HLL anchor measured 30.19 s/segment, which supports but does not prove that
+    rate for the larger runs.
   - At n=1 the single query segment is po2 19 (half size), so 30 s overstates it.
   - The anchor ran on a shared box with other users' jobs; the load before starting was 11.4.
 - **The probes add a few hundred cycles.** The guests read `env::cycle_count()` 7-8 times

@@ -1,7 +1,4 @@
-//! Integration test for the §4.3 recursive chain over Count-Min epochs.
-//!
-//! Mirrors `tests/two_leaf_countmin.rs` (§4.2 two-leaf merge) but exercises
-//! `CountMinChainState::extend` to grow the chain past two leaves.
+//! Count-Min recursive chain extended past two leaves (CountMinChainState::extend).
 
 use zksketch::recursion::recursive::countmin_chain::CountMinChainState;
 use zksketch::recursion::recursive::countmin_leaf::{D, W, prove_countmin_leaf};

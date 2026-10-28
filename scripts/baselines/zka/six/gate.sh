@@ -1,10 +1,5 @@
-# Quiet-box gate for TIMED runs (sourced).
-#   quiet := 1-minute load <= GATE_MAX_LOAD (default: CPUs / 8, i.e. 8 on a 64-thread box; 2 below 16 CPUs)
-#            AND no r0vm / exp_compose / procs-engine worker / cargo / rustc of ANY user
-#            AND < GATE_MAX_BUSY (default 4) cores busy over a 2 s /proc/stat window.
-# Polls every 30 s for up to GATE_WAIT_S (default 1800 s); then the run starts anyway and its
-# row records gate=busy:<why>. GATE_WAIT_S=0 checks once and never waits (smoke runs).
-# Sets GATE_L0, GATE_WAITED_S, GATE_BUSY, GATE_WHY. Only reads /proc; never signals anything.
+# Quiet-box gate for timed runs (sourced): gate() waits up to GATE_WAIT_S for load <= GATE_MAX_LOAD, no prover or
+# compiler of any user and fewer than GATE_MAX_BUSY busy cores; after that the run starts anyway, marked busy.
 GATE_NCPU=$(grep -c '^cpu[0-9]' /proc/stat)
 GATE_MAX_LOAD=${GATE_MAX_LOAD:-$(( GATE_NCPU >= 16 ? GATE_NCPU / 8 : 2 ))}
 GATE_MAX_BUSY=${GATE_MAX_BUSY:-4}

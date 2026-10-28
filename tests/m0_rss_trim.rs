@@ -1,24 +1,5 @@
-//! M0 harness memory fix (`EXP_MALLOC_TRIM` + bare forest peaks): while a
-//! prover folds a Bentley–Saxe forest, its resident set between proofs
-//! returns to within [`SLACK_MB`] of the level right after the first leaf,
-//! once freed heap pages are handed back (`malloc_trim(0)`) and the peaks
-//! keep bare proofs only (`ForestCascade::with_options(_, false, None)`).
-//!
-//! With the default one-entry merge cache (`EXP_MERGE_CACHE`), the cascade
-//! keeps that entry's prover data on purpose (plan §4.1 criterion, restated
-//! for the cache): between proofs the resident set stays within
-//! [`SLACK_MB`] of the post-first-leaf level PLUS the one entry, measured as
-//! the level after the merge that filled it (`t = 2`); it never grows past
-//! that, and the cache never holds more than its one entry.
-//!
-//! A test binary of its own (one test, one process), so no other test's
-//! allocations share the measured `VmRSS`:
-//!
-//! ```bash
-//! cargo test --release --test m0_rss_trim -- --nocapture
-//! ```
-//!
-//! glibc only (`malloc_trim`); elsewhere the test only reports.
+//! Resident set between forest proofs stays flat with malloc_trim and bare peaks (glibc only).
+//! Run: cargo test --release --test m0_rss_trim -- --nocapture
 
 use zksketch::experiments::metrics::{read_vmrss_kb, trim_heap_now};
 use zksketch::recursion::recursive::expose_forest::{ForestCascade, MergeCache};

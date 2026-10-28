@@ -1,16 +1,5 @@
-# Sourced by every script here. Resolves locations so the scripts run from any
-# cwd and from any checkout (a worktree measures its own zkSketch sources).
-#
-#   HERE          this directory (harness sources, tracked)
-#   ZKS           the zkSketch checkout containing HERE (ourcm/ and zksq/ path-dep it)
-#   BASELINE_DIR  external clones; default ~/ext-baselines, the same default as
-#                 ../fetch_baselines.sh. zk-Analytics-side builds go under it:
-#                 build/ (cyc-t<T>, ourcm, zksq, shaccel), nb-target-<T> (accuracy.sh
-#                 native) and zka/target (a234.sh, compare.sh). zkSketch-side runs
-#                 (compare.sh S1/S2, our_query.sh Q1) build exp_compose in $ZKS/target.
-#   ZKA           zk-Analytics clone @ d4a5a9a (../fetch_baselines.sh)
-#   RESULTS       CSV/log destination; default results/ next to this file
-# BASELINE_DIR and RESULTS are made absolute: several scripts cd before they build or write.
+# Sourced by the scripts here: HERE, ZKS (this checkout), BASELINE_DIR (default ~/ext-baselines),
+# ZKA (the zk-Analytics clone), RESULTS (default results/ next to this file) and the cyc/ build helpers.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZKS="$(cd "$HERE/../../.." && pwd)"
 BASELINE_DIR="$(realpath -m -- "${BASELINE_DIR:-$HOME/ext-baselines}")"
@@ -40,3 +29,5 @@ build_cyc() {  # build_cyc <topk> [cargo args...]
   ( cd "$HERE/cyc" && CM_TOPK_SLOTS=$t CARGO_TARGET_DIR="$(cyc_target "$t")" RISC0_BUILD_LOCKED=1 \
       cargo build --release --locked "$@" )
 }
+
+source "$HERE/sizes.sh"   # SIX_SIZES: the sketch sizes of the comparison (SIX_CM_W, SIX_SS_CAP, SIX_KMV_K, SIX_KMV_SUFFIX)

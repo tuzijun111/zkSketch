@@ -1,23 +1,6 @@
 #!/usr/bin/env bash
-# zk-Analytics-architecture Greenwald-Khanna arm on REAL AOL records. EXECUTOR ONLY.
-#
-#   1. aggregation guest aggr_gk on ONE epoch (the first 16,384 AOL records)
-#   2. the profiling guest on the same epoch (phase split; never a reported cost)
-#   3. aggr_gk on a few other epochs ($DD_EPOCHS): the cycle count is data-dependent
-#   4. query guest querier_gk over n populated epochs, n in "$@" (default 1 4 16 64),
-#      queries: rank(2^20), p50, p90, p99 -- one guest run (one proof) per query
-#
-# Every row: journal == native, accuracy vs the exact answer over the covered values,
-# the native checks min_kept / q_named / q_sweep_1001 / q_ok (see README.md here,
-# "Accuracy columns"; a failed check exits 1 and keeps the row out of the CSV),
-# and MODELED prove time = segments x 30.1 s (envelope 29.73 .. 30.79 s from the
-# four CM CPU anchors in ../README.md). MODELED is not measured.
-#
-# Appends to $RESULTS/zka_gk_exec.csv (header written once; refuses a foreign header)
-# and $RESULTS/zka_gk_exec.log. Runs no prover. The executor starts its own
-# short-lived r0vm per run; this script signals no process.
-#
-# Env: SKIP_BUILD=1, KEYS=..., OUT=..., DD_EPOCHS="1 16 63"
+# Executor runs of the GK guests on AOL epochs (aggregation, profiling, queries) -> $RESULTS/zka_gk_exec.csv.
+# Usage: gk_exec.sh [n_epochs ...]   (default 1 4 16 64; env: SKIP_BUILD=1 KEYS OUT DD_EPOCHS)
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common_gk.sh"
 

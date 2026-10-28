@@ -1,7 +1,5 @@
-//! RQ3 — Pattern-A / Pattern-B optimisation runner (paper §Evaluation `sec:rq3`).
-//!
-//! `cargo run --release --example exp_rq3`
-//! Knob: `V3_SWEEP_THREADS`. Writes `results/rq3*.csv`.
+//! RQ3 Pattern-A/Pattern-B optimisation runner; writes results/rq3*.csv.
+//! Usage: [V3_SWEEP_THREADS=..] cargo run --release --example exp_rq3
 
 use zksketch::experiments::{resolve_threads, rq3_optimisations, with_pool};
 

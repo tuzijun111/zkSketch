@@ -1,12 +1,5 @@
-//! E7 — maintenance-policy × query-rate runner (EVAL_SPEC E7). Structural
-//! simulation of the lazy/eager/smoothed finalisation trade-off on the streaming
-//! forest, driven by the measured per-merge cost `τ` and root-verify cost
-//! (option-(i) composition; the merge *counts* are the signal, not the absolute
-//! ms — same caveat as RQ4/E5).
-//!
-//! Run:    cargo run --release --example exp_e7
-//! Config: EXP_E7_STREAM=65535  EXP_E7_V=100
-//! Output: results/e7_policy.csv
+//! E7: lazy/eager/smoothed forest maintenance vs query rate, simulated from the measured merge and root-verify times.
+//! Usage: [EXP_E7_STREAM=65535 EXP_E7_V=100 EXP_E7_REAL=1] cargo run --release --example exp_e7
 
 use zksketch::experiments::e7_policy::{
     agg, measure_merge_us, measure_real_merge_ms, measure_root_verify_us, query_with_backlog_ms,

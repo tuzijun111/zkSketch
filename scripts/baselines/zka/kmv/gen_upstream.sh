@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
-# Regenerates (default) or checks (--check) core/src/upstream_verbatim.rs: the
-# zk-Analytics functions this port needs that are PRIVATE in their crates, so they
-# cannot be imported through a path dependency. Each block is cut byte-for-byte from
-# the clone at d4a5a9a by line range; nothing is edited. lib.rs include!s the file,
-# so the private `fn` items keep their upstream visibility inside the core crate.
-#
-# Same blocks as ../hll/gen_upstream.sh (the generated file is byte-identical to
-# ../hll/core/src/upstream_verbatim.rs); this script is shared by bloom/ and kmv/ in
-# the sense that each directory holds an identical copy that writes its own core/.
-#
-# Public upstream items (Event, make_key_id, BatchInput, CmAggrInput, EpochChainLink,
-# batch_chain_hash, key_to_u64, CM_SEEDS, MIN_SUPPORT) are imported by path instead.
+# Regenerate core/src/upstream_verbatim.rs (zk-Analytics' private functions, cut verbatim from d4a5a9a) or --check it.
+# Usage: ./gen_upstream.sh [--check]
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"   # ZKA
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

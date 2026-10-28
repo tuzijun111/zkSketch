@@ -1,31 +1,5 @@
-//! **The PROVER's commitment context** for the measurement harness (revision
-//! B2, [`crate::commitment::hiding`]).
-//!
-//! A [`ProverCommit`] is the commitment mode of a run plus, under
-//! [`CommitMode::Hiding`], the prover's salt seed. It is read ONCE per run
-//! ([`ProverCommit::from_env`]: `ZKSKETCH_COMMIT`, then `ZKSKETCH_SALT_SEED`
-//! or the OS RNG) and handed explicitly to the prover-side code: the leaf
-//! provers (openings of leaf `t`), the query decoders (the state randomizer of
-//! version `t`), the published batch log (`Com(S_T; ρ_T)`, every
-//! `Com(B_t; ρ^B_t)`) and the distributed engine's workers (the seed crosses
-//! the coordinator → worker socket inside `ToWorker::Task`, the prover's own
-//! machines only).
-//!
-//! Who holds the seed: the prover (the coordinator and its workers). The
-//! auditor never does: every auditor entry point
-//! ([`crate::experiments::audit`]) takes the published log, the proofs and
-//! public parameters (the commitment MODE is public, since it changes the
-//! VKs), never a `ProverCommit`. The seed is never printed; only its SOURCE
-//! (`env` / `os`) is reported ([`ProverCommit::seed_label`]).
-//!
-//! Every stream the harness proves is the GENESIS history of the run's seed
-//! (`Openings::for_leaf(seed, family, t)` at the global 1-based batch index
-//! `t` of the interval statement; `ρ^S_0 = 0`, so the auditor recomputes
-//! `Com(S_0; 0)` itself). A sweep re-proves the same stream under several
-//! modes/core counts (identical commitments, by design) and proves distinct
-//! streams (datasets, batch sizes) under the same `(seed, family, t)`; that
-//! reuse is fine for a benchmark (no privacy claim across its cells), while
-//! a deployment runs one history per stream under its seed.
+//! Prover-side commitment context: the commit mode and, under `Hiding`, the salt seed.
+//! Read once per run from `ZKSKETCH_COMMIT` and `ZKSKETCH_SALT_SEED` (else an OS-random seed).
 
 use crate::commitment::hiding::{
     commit_mode_from_env, rho_batch_bb, rho_batch_gl, rho_state_bb, rho_state_gl, CommitFamily,

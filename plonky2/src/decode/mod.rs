@@ -1,19 +1,4 @@
-//! E3 decode/query circuits — prove `answer = decode(committed state)`.
-//!
-//! Unlike the update leaves (which prove a transition), a decode circuit proves
-//! a **query answer against a committed state**: it re-hashes the whole state
-//! in-circuit (binding it to the published `Com(S_t)`), then proves the query
-//! relation over the witnessed cells. Cost is therefore `Θ(s)` in the state
-//! size (the whole-state re-hash) plus the small per-query relation — exactly
-//! the EVAL_SPEC E3 dependence on `s`, not on stream length.
-//!
-//! Decode proofs are **self-contained** (not chained), so they return a
-//! [`DecodeProof`] rather than a recursion `Node`.
-//!
-//! Families: [`countmin`] (point-frequency = min of `d` cells), [`spacesaving`]
-//! (heavy-hitter frequency), [`greenwald_khanna`] (rank/quantile). An optional
-//! [`ReleasePolicy`] post-processes the answer in-circuit (identity / threshold
-//! suppression) and the proof certifies the *released* value.
+//! Decode (query) circuits: prove a query answer against a committed sketch state.
 
 pub mod countmin;
 pub mod greenwald_khanna;

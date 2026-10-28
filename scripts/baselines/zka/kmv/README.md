@@ -162,8 +162,8 @@ the native estimate of the committed epoch state:
   standard errors (1/sqrt(1022) = 3.13%). One hash draw; no seed spread was run.
 - With full epoch states (2,048 records) `kmv_query` costs ~145K cycles per epoch
   (read ~45K, commit recomputation ~67K, merge ~22-29K) and `kmv_query_words` ~416K
-  (read ~315K). Linear extrapolation to the planned n = 8 gives ~1.2M cycles (2
-  segments) for `kmv_query`; that is an extrapolation, not a run.
+  (read ~315K). At ~145K per epoch, `kmv_query` would reach ~1.2M cycles (2
+  segments) at the planned n = 8 (n = 1 plus 7 epochs); that is arithmetic, not a run.
 - The single-guest modes (`MODE=aggr EPOCH_INDEX=1`, `MODE=query EPOCHS=2`) reproduce
   the pipeline's rows exactly (11,104,526, 296,524 and 837,466 cycles).
 
@@ -230,7 +230,7 @@ proved journal was asserted equal to the native output:
   chain; commitments are unsalted hashes (no hiding).
 - **The query cost excludes aggregation receipts** (verified separately, once per
   epoch, as for every port here).
-- **MODELED is a model** (`segments x 30.1 s`, see `../README.md`).
+- **`MODELED_prove_s` is not measured** (`segments x 30.1 s`, see `../README.md`).
 - **ELF md5s and image IDs depend on the absolute source path**; cycle counts do not.
   The validation rows were built from a worktree path.
 - **Cycle counts do depend on the build.** Adding the words types to the core crate

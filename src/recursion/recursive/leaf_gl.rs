@@ -1,11 +1,5 @@
-//! Shared Goldilocks leaf-config + digest-packing helpers for the `_gl`
-//! SpaceSaving / Greenwald-Khanna circuits.
-//!
-//! Goldilocks analog of the helpers in
-//! [`crate::recursion::recursive::countmin_leaf`] (BabyBear): `make_leaf_config`,
-//! `DIGEST_PACKING`, `pack_commit_to_challenge`. The Goldilocks digest is
-//! `[Val; 4]` (width-8 Poseidon2) rather than `[Val; 8]`, and one `Challenge`
-//! packs `CELL_ALIGNMENT = 2` base elements (D = 2) rather than 4.
+//! Goldilocks leaf config, digest packing and hiding-salt helpers shared by the `_gl`
+//! leaf circuits (CM/HLL omc, SpaceSaving, GK).
 
 use p3_circuit::CircuitBuilder;
 use p3_field::BasedVectorSpace;

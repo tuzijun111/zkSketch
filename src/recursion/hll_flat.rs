@@ -1,14 +1,4 @@
-//! §4.1 flat proof chain for HyperLogLog update epochs.
-//!
-//! Companion to `recursion::countmin_flat` (Count-Min's §4.1 path) and the
-//! §4.2 recursive merge in `recursion::recursive::hll_merge`. The flat
-//! `ChainProof` simply bundles two `HllLeafProof`s; `verify_chain_flat_hll`
-//! re-verifies each leaf natively via `BatchStarkProver::verify_all_tables`
-//! and checks the shared-boundary equality from the carried commits.
-//!
-//! Verifier cost scales as `Θ(E)` in the number of leaves; contrast the
-//! `O(1)` of the recursive merge. `examples/hll_chain_two.rs` measures both
-//! on the same two leaves.
+//! Flat proof chain for HyperLogLog epochs: keeps both leaf proofs and re-verifies each one.
 
 use core::fmt;
 

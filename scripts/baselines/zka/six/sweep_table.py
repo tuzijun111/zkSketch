@@ -1,28 +1,6 @@
 #!/usr/bin/env python3
-"""Cross-size tables of a batch-size sweep (sweep.sh; run with python3 -I).
-
-Usage: sweep_table.py <sweep results dir> [--out-csv F] [--out-md F]
-
-Reads every m<EE>/six_sketch_comparison.csv under the sweep directory (one per batch size
-m = 2^EE, written by assemble.py for that size), the zkSketch raw CSVs next to it
-(m<EE>/six_zksketch_<fam>.csv: the `variant` column, e.g. bloom_packed / bloom_omc, and the
-shape check m, t) and the sweep's manifest.txt (`sizes=`: the planned sizes), and writes
-  sweep.csv        one row per family x m: m, zka_prove_s, zks_prove_s, zka_ms_per_record,
-                   zks_ms_per_record, speedup (= zka_prove_s / zks_prove_s), zka_verify_ms,
-                   zks_verify_ms, zka_proof_bytes, zks_proof_bytes, zka_peak_rss_mb, zks_peak_rss_mb,
-                   zks_variant, provenance (+ family, size_dir, zka_variant, zka_system, zks_verify_kind:
-                   best = best of the run's EXP_VERIFY_REPEATS calls, first = a single call)
-  sweep_table.md   one cross-size table of the prove-time ratio zkA / zkS (sizes x families), then per
-                   family a table with m as rows and those metrics as columns, ratios zkA / zkS
-Per size the rows are the `update_per_epoch` rows (zkA: the epoch-0 aggregation receipt of the
-headline root variant, noroot when present; zkS: the single leaf, k = 1); zkS verify is the
-leaf's / root's verify (`update_stream_<T>_epochs`: verify_ms, the best of the run's repeated
-calls, else verify_first_ms, the single call of a log without QLOG_ROOTV, marked `1st`), as
-table.py's "verify, 1 epoch". The cores and the verify repeats of the conventions line come
-from the runs (the zkSketch CSVs' `cores`, the manifest's cores= / verify_repeats=). Missing
-sizes or failed rows show '-'; `est` marks a zkA value assemble.py ESTIMATED (not proved);
-Bloom rows that ran the omc leaf are marked. Standard library only.
-"""
+"""Cross-size tables of a batch-size sweep (sweep.sh): sweep.csv and sweep_table.md (run with python3 -I).
+Usage: sweep_table.py <sweep results dir> [--out-csv F] [--out-md F]"""
 import argparse
 import csv
 import os
@@ -30,8 +8,8 @@ import re
 import sys
 
 FAMS = ['cm', 'hll', 'ss', 'gk', 'bloom', 'kmv']
-NAME = {'cm': 'Count-Min 3x1024', 'hll': 'HLL b=14 †', 'ss': 'MG s=1,024 †', 'gk': 'GK eps=1/51 †',
-        'bloom': 'Bloom 7x2^14 †', 'kmv': 'KMV k=1,024 †'}
+NAME = {'cm': 'Count-Min', 'hll': 'HLL b=14 †', 'ss': 'MG †', 'gk': 'GK eps=1/51 †',
+        'bloom': 'Bloom 7x2^14 †', 'kmv': 'KMV †'}   # the sizes: the manifest's sketch_sizes= line (printed below)
 VORDER = {v: i for i, v in enumerate(['noroot', 'designed', 'legacy', 'buckets1024', 'perkey', 'pertuple'])}
 COLS = ['family', 'm', 'zka_prove_s', 'zks_prove_s', 'zka_ms_per_record', 'zks_ms_per_record', 'speedup',
         'zka_verify_ms', 'zks_verify_ms', 'zka_proof_bytes', 'zks_proof_bytes', 'zka_peak_rss_mb',
@@ -65,6 +43,7 @@ def rows(path):
 sizes = set()
 MAN_CORES = None      # the manifest's cores= (SIX_CORES), a fallback for the zkSketch CSVs' cores column
 VREPEATS = None       # the manifest's verify_repeats= (EXP_VERIFY_REPEATS of the zkSketch runs)
+SKETCH_SIZES = "zka (Count-Min 3x1024, MG and KMV s=1024, HLL b=14, GK cap 2048 s=51, Bloom 7x2^14; runs before the sketch_sizes= manifest line)"
 manifest = os.path.join(R, 'manifest.txt')
 if os.path.exists(manifest):
     for line in open(manifest):
@@ -77,6 +56,9 @@ if os.path.exists(manifest):
         m = re.search(r'(?:^|\s)verify_repeats=(\d+)(?:\s|$)', line)
         if m and VREPEATS is None:
             VREPEATS = int(m.group(1))
+        m = re.match(r'^sketch_sizes=(.*)', line)
+        if m:
+            SKETCH_SIZES = m.group(1).strip()
 for d in os.listdir(R):
     m = re.fullmatch(r'm(\d\d)', d)
     if m and os.path.isdir(os.path.join(R, d)):
@@ -158,7 +140,7 @@ def size_rows(E):
             zka_variant=(za.get('variant') or 'legacy') if za else '-',
             zka_system=za['system'] if za else '-',
             zks_verify_kind=zks_vk,
-            _est=bool(za) and 'ESTIMATED' in (za.get('provenance') or ''),
+            _est=bool(za) and any(t in (za.get('provenance') or '') for t in ('FROM CYCLES', 'ESTIMATED')),
             _zks_note=(zs.get('detail') or '') if zs else '',
         )
     return out
@@ -218,7 +200,7 @@ def ratio(a, b):
 
 
 def est(r):
-    return ' est' if r['_est'] else ''
+    return ' cyc' if r['_est'] else ''
 
 
 def vfirst(r):  # the zkS verify was a single call (no QLOG_ROOTV in that run's log)
@@ -245,6 +227,8 @@ rep_txt = f'best of {VREPEATS}' if VREPEATS else 'best of the run\'s EXP_VERIFY_
 any_first = any(DATA[E][f]['zks_verify_kind'] == 'first' for E in SIZES for f in FAMS)
 first_txt = ('; `1st` = that run\'s log has no QLOG_ROOTV line, so its verify is the one call exp_compose made' if any_first
              else '')
+L.append(f'_Sketch sizes: {SKETCH_SIZES}._')
+L.append('')
 L.append('_Conventions. zkA = zk-Analytics side: ONE aggregation receipt per m-record epoch (epoch 0 proved; root '
          f'variant {", ".join(zvars) or "noroot"}: their guest without the unused per-bucket Merkle root when noroot; '
          '† = our port of the sketch into their RISC Zero pipeline, zk-Analytics ships only Count-Min), no shipped-CM '
@@ -256,7 +240,7 @@ L.append('_Conventions. zkA = zk-Analytics side: ONE aggregation receipt per m-r
          'proof = its bytes; peak '
          'RSS = zkA the r0vm process, zkS the procs-engine worker (coordinator and combined peaks: '
          f'm<EE>/six_sketch_comparison.csv). GK: {gk_txt}. Ratios are zkA / zkS: above 1, zkSketch is faster / '
-         'smaller / lighter. `est` = a zkA value assemble.py ESTIMATED (not proved in that size); `-` = not run or '
+         'smaller / lighter. `cyc` = a zkA value computed from padded cycles (not proved at that size); `-` = not run or '
          'failed. zkS variant = the zkSketch circuit of that run; a Bloom row marked (omc) ran the bit-array leaf '
          'because the packed leaf needs 7 x m < 2^16. KB = 10^3 bytes, GB = 2^30 bytes._\n')
 

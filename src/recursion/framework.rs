@@ -1,50 +1,5 @@
-//! **zkSketch Framework §4: Verifiable Streaming Sketch Maintenance.**
-//!
-//! The proof-orchestration layer that sits *above* the per-family update
-//! circuits of §5 (the four sketches in `crate::sketch::*_final[_full]`).
-//! It is **sketch-agnostic**: it composes per-epoch transition proofs into
-//! a single auditable root, independent of whether the leaves are
-//! Count-Min, GK, HLL, or SpaceSaving.
-//!
-//! ### What this module realizes (paper §4)
-//!
-//! - **§4.1 Per-epoch transition proof chain.** Each closed epoch `B_i`
-//!   yields a leaf with public boundary `(D_i, Com(S_{i-1}), C_{B_i},
-//!   Com(S_i), M)`. Consecutive leaves are *chained* through their
-//!   boundary commitments: `Com(S_i)` (leaf `i`'s output) must equal
-//!   leaf `i+1`'s input. [`verify_epoch_chain`] is the direct Θ(E)
-//!   verifier this leaves open.
-//!
-//! - **§4.2 Interval proofs + the merge atom.** An [`IntervalProof`]
-//!   `Π[i,j]` certifies `Com(S_{i-1}) --b_i..b_j--> Com(S_j)` with public
-//!   boundary `(i, j, Com(S_{i-1}), Com(S_j), H[i,j])`. [`merge_atom`]
-//!   composes two **adjacent** interval proofs: it checks the shared
-//!   boundary `Com(S_m)` agrees (left output = right input), combines the
-//!   ordered-epoch digests via `H[i,j] = H(i, m, j, H[i,m], H[m+1,j])`
-//!   (the existing [`combine_digest`]), and emits the parent — absorbing
-//!   the intermediate `Com(S_m)`.
-//!
-//! - **§4.3 Composition topologies.** Three *schedules* over the same
-//!   merge atom: [`compose_chain`] (linear accumulating chain),
-//!   [`compose_tree`] (balanced binary tree, power-of-two history), and
-//!   [`StreamingForest`] (Bentley–Saxe / Merkle-Mountain-Range cascade for
-//!   live streams, finalizable to one root on demand).
-//!
-//! - **Root `R(t)`.** [`root_commitment`] packages an interval proof's
-//!   boundary into the `O(1)`-size digest `R(t) = H(1, t, Com(S_0),
-//!   Com(S_t), H[1,t], M)` the verifier checks.
-//!
-//! ### Realization model (what the merge atom checks here)
-//!
-//! The per-family leaves of §5 self-verify their STARK proof at creation.
-//! This framework layer adds the **composition soundness** §4 is about:
-//! contiguity (`j+1 = lo` of the next), boundary agreement (`Com(S_m)`),
-//! and order-binding via the digest. The merge digest is *shape-dependent*
-//! (it encodes the split `m`), exactly as the paper defines it; the
-//! verifier recomputes it by replaying the same schedule (topology).
-//! Re-ordering, dropping, or tampering an epoch changes the digest and/or
-//! breaks a boundary, so it is rejected — see the per-technique soundness
-//! tests below.
+//! Sketch-agnostic composition of epoch proofs: the epoch chain, the merge atom, the
+//! chain / tree / streaming-forest schedules, and the root commitment `R(t)`.
 
 use p3_field::PrimeCharacteristicRing;
 use p3_symmetric::CryptographicHasher;

@@ -1,10 +1,8 @@
 #![no_main]
 #![no_std]
 
-// PROFILING twin of aggr_ss: the same ss-core code, with env::cycle_count()
-// (host-reported, unconstrained) recorded after each phase. Journal = the
-// aggr_ss journal followed by the (phase, cycle_count) marks. Used only for the
-// phase breakdown; aggr_ss is the measured guest.
+// aggr_ss plus env::cycle_count() marks (host-reported, unconstrained) after each phase, for
+// the phase breakdown only. Journal: the aggr_ss journal, then the (phase, cycles) marks.
 
 extern crate alloc;
 
