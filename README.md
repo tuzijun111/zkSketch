@@ -44,13 +44,7 @@ tests/            # Integration tests
 | Bloom | k = 7 slices of 2^14 bits | Membership |
 | KMV | s = 2^14 | Distinct count |
 
-Figure 6 uses the default sizes with batches of m = 2^14. Tables 2-5 and Figure 5 use zk-Analytics'
-sizes (Count-Min 3 x 1024, s = 1024 for MG and KMV, GK capacity 768, the others as above) and keep
-zkSketch within zk-Analytics' 9 GiB of prover memory: an epoch of 2^14 records (2^11 for GK) is proved
-as leaves of 1,024 records (Count-Min, HLL, Bloom), 4,096 (MG, KMV) or 512 (GK) and their compositions.
-The stream is N = 2^20 AOL records (2^17 for Table 3). zk-Analytics' side runs its own Count-Min and our ports inside its
-pipeline: textbook HLL, Bloom and KMV, SpaceSaving for the MG row (`SIX_ZKA_HH=spacesaving`; new runs
-default to the Misra-Gries port in `scripts/baselines/zka/mg`), and zkSketch's GK batch rule.
+
 
 Datasets: **AOL** (default) and **Netflix** (2^20 keys each, in `data/`), and synthetic
 **Uniform** and **Gaussian** streams.
