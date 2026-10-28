@@ -89,17 +89,13 @@ scripts/baselines/zka/six/run_all.sh quick    # ~10 min smoke test of the compar
 SIX_ZKA_HH=spacesaving taskset -c 0-31 scripts/baselines/zka/six/run_all.sh memmatch
 ```
 
-**2. Query rate**. zk-Analytics' cost per Q is computed from its epoch and query
-proofs and their cycle counts by `six/queryrate_model.py`, which the command runs:
+**2. Query rate**. 
 
 ```bash
 SIX_ZKA_HH=spacesaving taskset -c 0-31 scripts/baselines/zka/six/run_all.sh queryrate
 ```
 
-**3. Batch size**. The sweep proves one batch of m = 2^6 .. 2^14 records per size on both
-systems (~20 h; Figure 5 uses its zk-Analytics receipts); `batches.sh` proves zkSketch's batch of every
-size in Table 2's setting and one zk-Analytics GK receipt at capacity 768 (~1.5 h); `sweep_memmatch.py`
-joins them with item 1's run:
+**3. Batch size**. T
 
 ```bash
 SIX_ZKA_HH=spacesaving taskset -c 0-31 scripts/baselines/zka/six/run_all.sh sweep
@@ -115,8 +111,7 @@ RAYON_NUM_THREADS=32 taskset -c 0-31 cargo run --release --example exp_operator
 python3 scripts/plot_operator.py
 ```
 
-**5. Stream length, machine count and datasets**, computed from item 1's run with
-the speedups of item 6 and the per-dataset ratios of item 7:
+**5. Stream length, machine count and datasets**, 
 
 ```bash
 python3 scripts/forest_tables.py
@@ -135,7 +130,7 @@ EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16
 EXP_DATASET=uniform,gaussian,netflix EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_datasets_plonky3.csv
 ```
 
-**8. Fully concurrent machines** (appendix): all M machines live at once, and one machine next to a busy neighbour:
+**8. Fully concurrent machines**
 
 ```bash
 for M in 2 3 4; do EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=$M EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_${M}machine_plonky3_coresident.csv; done
