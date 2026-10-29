@@ -63,11 +63,6 @@ Datasets: **AOL** (default) and **Netflix** (2^20 keys each, in `data/`), and sy
   rzup install r0vm 3.0.6 && rzup default r0vm 3.0.6
   ```
 
-- `python3` (>= 3.8), plus `matplotlib` for the figures.
-- Hardware: items 1-4 ran on a 32-core AMD Threadripper PRO 9975WX, items 6 and 7 on an AMD EPYC 9555
-  server (two sockets, four NUMA nodes; each "machine" is one process pinned to the 32 cores of one
-  node). Items 1 and 2 need 16 GiB of RAM, item 3 about 80 GiB, item 4 about 64 GiB, and items 6 and 7 about
-  75 GiB per machine.
 
 ### Build
 
