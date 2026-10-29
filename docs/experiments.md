@@ -60,6 +60,8 @@ scripts/run_decode.sh                 # decode/query circuits (tests + table)
 | `EXP_COMPOSE_MACHINES` / `_CORES` | machine count / cores per machine, comma-list on plonky3 | `1` / all |
 | `EXP_COMPOSE_EXEC` | `procs` (real pinned processes + socket IPC) \| `sim` (one process proves every leaf in turn; with M machines the leaf time is the largest of M contiguous sums of the measured leaf times). **Defaults to `procs` only when machines > 1** — pass it explicitly at `MACHINES=1` to get real process measurements | `procs` iff machines > 1 |
 | `EXP_COMPOSE_NODES` | explicit NUMA-node assignment, e.g. `0,2` (one machine per socket) | round-robin |
+| `EXP_COMPOSE_NODE_OFFSET` | shifts the default round-robin node assignment (the busy-sibling dummy runs at offset 1); ignored when `EXP_COMPOSE_NODES` is set | `0` |
+| `EXP_BLOOM_VARIANT` | Bloom leaf: `packed` (bytes; needs `k m < 2^16`, so it exits 2 at `m = 16384`) \| `omc` (one field element per bit) | `packed` |
 | `EXP_COMPOSE_WAVE_SIZE` | staged-wave execution: run machines in time-shifted waves of this size (see the paper's staged-wave methodology). **plonky3 BabyBear + `forest` only**, and needs `wave_size < machines`; ignored otherwise | off |
 | `EXP_NET_MBPS`, `EXP_NET_RTT_MS` | link bandwidth (Mb/s) and per-message RTT (ms) for the `comm_model_ms` column: the **measured** bytes of each critical-path transfer x 8 / bandwidth, plus the RTT | `200` / `0.2` |
 | `EXP_COMPOSE_QUERY_EVERY_OPS` | **mixed operation stream** (the paper's workload): every `Q`-th stream *position* is a query. plonky3 only | `0` (off) |
@@ -166,8 +168,9 @@ EXP_DATASET=aol EXP_FAMILY=gk EXP_GK_CAP=2048 EXP_GK_VARIANT=bandmerge2 \
 python3 scripts/plot_eval.py        # -> latex/pics/zkSketch_eval_batch.pdf if latex/pics/ exists, else results/
 ```
 
-**The deployed reference run** — one command feeds five artifacts: the forest
-column of `tab:compose-schedules`, the measured `M=1` runs behind `tab:compose-scale` (CM at `d = 7`), the
+**The deployed reference run** (four sketches, Count-Min at `d = 7`; `scripts/forest_tables.py` uses it only
+when the six-sketch files of README items 6-7 are absent) — one command fed five artifacts: the forest
+column of `tab:compose-schedules`, the measured `M=1` runs behind `tab:compose-scale`, the
 `2^20` Plonky3 row of `tab:stream-scale`, the AOL column of `tab:eval-datasets`,
 and the Plonky3 (BabyBear) rows of `tab:p2-forest`. Run it first:
 
@@ -213,9 +216,10 @@ counts); `results/frame_out_{2,3,4}machine_plonky3.csv` are that file split by
 machine count. (`tab:eval-datasets`' M = 4 memory column, removed 2026-10-26, read the `M=4` rows.)
 
 **Six-family version of `tab:compose-scale`** (adds the Bloom filter and KMV; current
-circuits, zero knowledge on by default). One knob beyond the four-family command:
+circuits, zero knowledge on by default; README item 6). Beyond the four-family command it sets
 `EXP_BLOOM_VARIANT=omc`, because the default packed Bloom leaf needs `7 m < 2^16` and
-`exp_compose` exits 2 at `m = 16384`. GK's `1/eps` needs no knob: `exp_compose` sets
+`exp_compose` exits 2 at `m = 16384`, `EXP_KMV_K=16384` (the default is 1024) and Count-Min
+at `EXP_D=3`. GK's `1/eps` needs no knob: `exp_compose` sets
 `s = floor(cap / (2 ceil(log2 N)))`, which is 51 at `N = 2^20`, the paper's value and how the
 published `tab:compose-scale` rows got `cap2048_s51` (`EXP_GK_S` overrides it). One command covers
 M = 1, 2, 3, 4 (M = 1 runs on node 0, as it would without the node list, and ignores the wave size):
@@ -240,8 +244,9 @@ and every family at its deployed shape on one 32-core machine, two 2^14-record l
 one composition (`results/smoke_forest6_deployed_n2e15.csv`, GK at `s = 51` in
 `results/smoke_forest6_deployed_gk_s51.csv`; Count-Min at `d = 3` in
 `results/smoke_forest6_deployed_cm_d3.csv`). Count-Min runs at `d = 3` (`EXP_D=3`), its
-default size; at `d = 7` it costs twice as much. The paper's Table 4 is not this run: it is
-computed in Table 2's setting by `scripts/forest_tables.py`. Per-machine peak
+default size; at `d = 7` it costs twice as much. `scripts/forest_tables.py` applies this run's
+M = 2, 3, 4 speedups to Table 2's whole-stream time (Bloom's from the `omc` leaf, since Table 2's
+packed leaf cannot run at `m = 2^14`). Per-machine peak
 memory at the deployed shapes: GK 74 GiB, Bloom 60, CM 58 (117 at `d = 7`), SS 53, HLL 51,
 KMV 29 GiB (two machines live at once under the waves). Leaf times there: GK 94 s, Bloom 72,
 CM 67 (134 at `d = 7`), SS 61, HLL 57, KMV 35 s, a composition 5-8 s. At these times the M = 1
@@ -360,8 +365,18 @@ done
 
 
 
-**Table `tab:eval-datasets` — dataset sensitivity.** Three datasets here; the
-AOL column is the deployed reference run above.
+**Table `tab:eval-datasets` — dataset sensitivity.** Three datasets here. Six sketches (README item 7);
+the AOL denominator is the `M=1` rows of `frame_out_m1234_plonky3_6fam.csv` (README item 6):
+
+```bash
+EXP_DATASET=uniform,gaussian,netflix EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
+EXP_D=3 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_KMV_K=16384 EXP_BLOOM_VARIANT=omc \
+EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest \
+EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs \
+scripts/run_compose.sh frame_out_1machine_datasets_plonky3_6fam.csv
+```
+
+The archived four-sketch run (Count-Min at `d = 7`; its AOL column is the deployed reference run above):
 
 ```bash
 EXP_DATASET=uniform,gaussian,netflix EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 \
@@ -394,13 +409,13 @@ k is the seconds per 2^20 padded cycles over all real proofs of the run.
 | --- | --- |
 | `fig:eval-batch` (removed from the paper 2026-10-26) | `{cm,hll}_batch_{one_hot,merkle,omc}.csv`, `{ss,gk}_batch_{naive,certified}.csv` (plotted by `scripts/plot_eval.py`) |
 | `tab:compose-schedules` | `frame_out_1machine_plonky3_perbatch.csv` (per-batch) + `frame_out_1machine_plonky3.csv` (forest) |
-| `tab:compose-scale` | computed by `scripts/forest_tables.py` -> `results/forest_tables.md`, in Table 2's setting: M=1 = zkSketch's whole-stream time of `tab:zka` (the same computation; it reproduces Table 2's hours); M=2,3,4 = M=1 divided by the measured speedups of `frame_out_staged_m234_plonky3.csv` vs `frame_out_1machine_plonky3.csv` (Bloom/KMV at the four-family mean); six-sketch command: `frame_out_m1234_plonky3_6fam.csv` |
+| `tab:compose-scale` | computed by `scripts/forest_tables.py` -> `results/forest_tables.md`, in Table 2's setting: M=1 = zkSketch's whole-stream time of `tab:zka` (the same computation; it reproduces Table 2's hours); M=2,3,4 = M=1 divided by the measured speedups of `frame_out_m1234_plonky3_6fam.csv` (README item 6: six sketches, Count-Min d = 3) when present, else of the archived `frame_out_staged_m234_plonky3.csv` vs `frame_out_1machine_plonky3.csv` (four sketches, d = 7; Bloom/KMV at their mean). `results/forest_tables.md` lists the source of every family |
 | `tab:stream-scale` | computed by `scripts/forest_tables.py` -> `results/forest_tables.md`, in Table 2's setting: zkSketch's time for N = 2^16..2^20 records = t = N/L memory-matched leaves + t-1 compositions with the time per leaf and remaining time per composition of `scripts/baselines/zka/results/memmatch-20261022-205419/` (the N=2^20 column is Table 2's whole-stream time). The earlier default-size runs `forest_plonky3_1machine_verify_2e{16..19}.csv` + `frame_out_1machine_plonky3.csv` are no longer in the paper; six-sketch command: `forest_plonky3_1machine_6fam_2e{16..20}.csv` |
 | `tab:mixed` | `scripts/baselines/zka/results/queryrate-20261023-230106/queryrate.csv` (+ `queryrate_table.md`, `qr_zks_{a,b,c}_q{0,1000,10000,100000}.csv`, `zka_epoch_E*/`, `zka_query_E4096_T64/`); the four-family `s3_plonky3_1machine_mixed_q{1000,10000,100000,1000000}.csv` files are superseded |
-| `tab:eval-datasets` | computed by `scripts/forest_tables.py` -> `results/forest_tables.md`, in Table 2's setting: AOL = zkSketch's whole-stream time of `tab:zka`, the other datasets = AOL x the measured ratios of `frame_out_1machine_datasets_plonky3.csv` to `frame_out_1machine_plonky3.csv` (Bloom/KMV at the four-family mean). No memory columns since 2026-10-26 |
+| `tab:eval-datasets` | computed by `scripts/forest_tables.py` -> `results/forest_tables.md`, in Table 2's setting: AOL = zkSketch's whole-stream time of `tab:zka`, the other datasets = AOL x the measured ratios of `frame_out_1machine_datasets_plonky3_6fam.csv` (README item 7) to the M=1 rows of `frame_out_m1234_plonky3_6fam.csv` when present, else of the archived `frame_out_1machine_datasets_plonky3.csv` to `frame_out_1machine_plonky3.csv` (Bloom/KMV at the four-family mean). No memory columns |
 | `tab:zka` | `scripts/baselines/zka/results/memmatch-20261022-205419/` (`six_sketch_table.md`, `six_sketch_comparison.csv`) |
 | `fig:eval-sweep` | `scripts/baselines/zka/results/sweep-memmatch/sweep_memmatch.csv` (+ `.md`, `manifest.txt`), written by `scripts/sweep_memmatch.py`: zkSketch from `batches-20261028-153827/` (`six/batches.sh`: every batch size 2^6..2^14 in Table 2's setting, 54 runs) and, at Table 2's epochs, `memmatch-20261022-205419/`; zk-Analytics receipts from `sweep-20261024-195453/` and `memmatch-20261022-205419/`, GK at capacity 768 from `sweep-gk768-20261028-143107/` (its m=2^6 receipt; the GK sizes other than 2^6 and Table 2's 2^11 are not proved: padded executor cycles / 2^20 x the seconds per 2^20 padded cycles of those two receipts, marked in the `zka_basis` column); plotted by `scripts/plot_sweep.py` |
-| appendix staged-wave controls | `frame_out_{2,3,4}machine_plonky3_coresident.csv`, `frame_out_1machine_plonky3_busysib.csv` (SS row only) |
+| appendix staged-wave controls (not in the README) | archived four-sketch runs: `frame_out_{2,3,4}machine_plonky3_coresident.csv`, `frame_out_1machine_plonky3_busysib.csv` (SS row only) |
 | `tab:p2-forest` (earlier drafts; not in the current paper) | `frame_out_1machine_plonky3.csv`, `frame_out_1machine_Goldilocks.csv`, `frame_out_1machine_plonky2.csv` |
 
 > **Superseded** (kept for provenance; no current table reads them): the `_old`
@@ -413,7 +428,8 @@ k is the seconds per 2^20 padded cycles over all real proofs of the run.
 > and `frame_out_1machine_plonky3_busysib.csv` are the co-residency controls
 > behind the appendix's staged-wave fidelity argument (the ~6% package-sharing
 > penalty). `scripts/run_m1_busy_sibling.sh` produces the `_busysib` file (one M=1
-> forest per family next to a busy sibling node); the `_coresident` files are plain
+> forest per family next to a busy sibling node, each family in its own file, then merged). The
+> `_coresident` files are plain
 > `run_compose.sh` forest runs at M=2,3,4 without `EXP_COMPOSE_NODES` /
 > `EXP_COMPOSE_WAVE_SIZE` (the default, socket-unaware placement):
 >

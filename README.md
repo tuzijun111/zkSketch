@@ -25,7 +25,6 @@ scripts/
   plot_sweep.py         # Figure 5
   plot_operator.py      # Figure 6
   forest_tables.py      # Tables 4 and 5 from the Table 2 run
-  run_m1_busy_sibling.sh  # One machine next to a busy neighbour (appendix)
   baselines/zka/        # zk-Analytics baseline (RISC Zero); six/run_all.sh runs the comparison
 data/             # Key streams: AOL and Netflix (real), synthetic streams
 docs/             # Long-form notes: build details, circuits, every experiment knob
@@ -65,10 +64,10 @@ Datasets: **AOL** (default) and **Netflix** (2^20 keys each, in `data/`), and sy
   ```
 
 - `python3` (>= 3.8), plus `matplotlib` for the figures.
-- Hardware: items 1-4 ran on a 32-core AMD Threadripper PRO 9975WX, items 6-8 on an AMD EPYC 9555
+- Hardware: items 1-4 ran on a 32-core AMD Threadripper PRO 9975WX, items 6 and 7 on an AMD EPYC 9555
   server (two sockets, four NUMA nodes; each "machine" is one process pinned to the 32 cores of one
-  node). Items 1 and 2 need 16 GiB of RAM, item 3 about 80 GiB, item 4 about 64 GiB, and items 6-8 up
-  to ~120 GiB per machine.
+  node). Items 1 and 2 need 16 GiB of RAM, item 3 about 80 GiB, item 4 about 64 GiB, and items 6 and 7 about
+  75 GiB per machine.
 
 ### Build
 
@@ -111,7 +110,7 @@ RAYON_NUM_THREADS=32 taskset -c 0-31 cargo run --release --example exp_operator
 python3 scripts/plot_operator.py
 ```
 
-**5. Stream length, machine count and datasets**: 
+**5. Stream length, machine count and datasets** (after items 1, 6 and 7): 
 
 ```bash
 python3 scripts/forest_tables.py
@@ -120,21 +119,12 @@ python3 scripts/forest_tables.py
 **6. Forest on M = 1-4 machines**:
 
 ```bash
-EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_plonky3.csv
-EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=2,3,4 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs EXP_COMPOSE_NODES=0,2 EXP_COMPOSE_WAVE_SIZE=2 scripts/run_compose.sh frame_out_staged_m234_plonky3.csv
+EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=3 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_KMV_K=16384 EXP_BLOOM_VARIANT=omc EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1,2,3,4 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs EXP_COMPOSE_NODES=0,2 EXP_COMPOSE_WAVE_SIZE=2 scripts/run_compose.sh frame_out_m1234_plonky3_6fam.csv
 ```
 
 **7. Datasets**:
 
 ```bash
-EXP_DATASET=uniform,gaussian,netflix EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_datasets_plonky3.csv
+EXP_DATASET=uniform,gaussian,netflix EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=3 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_KMV_K=16384 EXP_BLOOM_VARIANT=omc EXP_COMPOSE_FAMILY=cm,hll,ss,gk,bloom,kmv EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=1 EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_1machine_datasets_plonky3_6fam.csv
 ```
-
-**8. Fully concurrent machines**:
-
-```bash
-for M in 2 3 4; do EXP_DATASET=aol EXP_COMPOSE_N=1048576 EXP_COMPOSE_BATCHES=16384 EXP_D=7 EXP_W=16384 EXP_HLL_B=14 EXP_SS_CAP=16384 EXP_GK_CAP=2048 EXP_COMPOSE_FAMILY=cm,hll,ss,gk EXP_COMPOSE_MODE=forest EXP_COMPOSE_MACHINES=$M EXP_COMPOSE_CORES=32 EXP_COMPOSE_EXEC=procs scripts/run_compose.sh frame_out_${M}machine_plonky3_coresident.csv; done
-scripts/run_m1_busy_sibling.sh frame_out_1machine_plonky3_busysib.csv ss
-```
-
 
