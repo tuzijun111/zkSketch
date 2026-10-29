@@ -70,7 +70,6 @@ Datasets: **AOL** (default) and **Netflix** (2^20 keys each, in `data/`), and sy
 cargo build --release
 scripts/baselines/zka/six/run_all.sh check    # checks the tools above
 scripts/baselines/zka/six/run_all.sh build    # clones zk-Analytics into ~/ext-baselines and builds both systems
-scripts/baselines/zka/six/run_all.sh quick    # ~10 min smoke test of the comparison at tiny scale
 ```
 
 
